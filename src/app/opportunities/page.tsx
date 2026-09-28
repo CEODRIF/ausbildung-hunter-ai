@@ -32,7 +32,7 @@ export default async function OpportunitiesPage() {
           </Link>
         </div>
         <div className="mt-8">
-          <OpportunitySearch initialGoal={profile.selected_goal ?? "arbeit"} />
+          <OpportunitySearch defaultGoal={profile.selected_goal ?? "arbeit"} />
         </div>
       </div>
     </main>

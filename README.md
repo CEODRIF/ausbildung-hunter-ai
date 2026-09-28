@@ -2,7 +2,7 @@
 
 A production SaaS that helps people in Germany find and apply for **Ausbildung** (vocational training) and **Arbeit** (jobs). Users connect their own Gmail/Outlook account, compose and send applications in bulk with a fair daily quota, use an AI assistant for application support, scan their own documents for fit, and search real German vacancies with a deterministic match score.
 
-> **Status:** this repository is a checkpoint of the project **before the opportunities search was finished**. Everything up to and including the Bewerbung Scanner is complete and passing checks. The opportunities search code (Step 9) is present in this snapshot but was **interrupted and not yet verified** — treat it as work-in-progress (see "Roadmap").
+> **Status:** everything up to and including the Bewerbung Scanner is complete and passing checks. The opportunities system (Step 9) is **in progress**: the BA provider, data model, caching, and saved-opportunities are hardened, live-verified against the BA API, and covered by unit tests (Phase 2 done). Search UX polish and the explainable matching engine follow (see "Roadmap").
 
 ## Implemented
 
@@ -16,15 +16,15 @@ A production SaaS that helps people in Germany find and apply for **Ausbildung**
 | **Email sending engine**       | Campaigns + individual messages, **atomic quota reservation** (`FOR UPDATE` on `daily_usage`), idempotent message claims (`FOR UPDATE SKIP LOCKED`), external worker endpoint secured by `EMAIL_WORKER_SECRET`, campaign monitor UI at `/applications/campaign/[id]`, usage page at `/settings/usage`        |
 | **AI assistant**               | `/ai` — conversation history, streaming responses, private file uploads (`ai-files` bucket), generated file downloads, **atomic AI usage limit of 100 requests/day**, server-only prompt hardening, strict Zod validation of all AI output                                                                   |
 | **Bewerbung Scanner**          | `/bewerbung-scanner` — CV/document upload (PDF/DOCX), strict Zod candidate profile, AI-generated scan results, editable result page, rescan + history, counts against the AI limit                                                                                                                           |
-| **Opportunities search (WIP)** | `/opportunities` — Bundesagentur für Arbeit Jobsuche API provider (Ausbildung + Arbeit), normalized opportunity schema, deterministic match engine (skills 50%, role 25%, location 15%, goal 10%), detail pages, saved opportunities. **Present in this snapshot but not completed/verified — see Roadmap.** |
+| **Opportunities (in progress)**  | `/opportunities` — BA Jobsuche provider hardened (live-verified v6 search + v4 details, authoritative Ausbildung/Arbeit classification, salary/education/contact/section extraction, explicit freshness handling, bounded server-side filters), user-independent versioned cache, server-derived saved opportunities, deterministic match engine, detail + saved pages. Search UX polish + explainable matching follow (Roadmap). |
 
 ## Not implemented (Roadmap)
 
-- **Finish + verify the opportunities search** (Step 9): complete the interrupted implementation, add real end-to-end tests, and finalize caching/deduplication behavior.
+- **Opportunities Phase 3+** (Step 9): search UX polish (pagination, sorting, richer filters), explainable per-dimension matching engine (education/eligibility, languages, experience, relocation), opportunity → application prefill.
 - Automatic applications from saved opportunities (explicitly out of scope so far — every email is composed and sent by the user).
 - Additional vacancy providers (only the Bundesagentur für Arbeit is wired up).
 - Payments, billing, and multi-tenant admin.
-- Test suites, CI, and deployment pipelines.
+- CI and deployment pipelines (unit test suite exists: `npm test`).
 
 ## Tech stack
 
@@ -48,7 +48,7 @@ src/
     bewerbung-scanner/     # scanner upload + results
     dashboard/
     login/  register/  verify/  onboarding/
-    opportunities/         # WIP: search, detail, saved
+     opportunities/         # search, detail, saved
     settings/
       email/               # OAuth account connection management
       usage/               # quota + AI usage overview
@@ -57,7 +57,7 @@ src/
       bewerbung-scanner/   # files, scan, results
       email/               # OAuth connect + callback
       internal/email-worker/ # worker endpoint (EMAIL_WORKER_SECRET)
-      opportunities/       # WIP: search + save
+       opportunities/       # search + save (server-derived saves)
   components/              # UI components (server + client)
   lib/
     ai-provider.ts         # OpenAI-compatible client (server-only key)
@@ -72,12 +72,14 @@ src/
     email-oauth.ts         # Google + Microsoft OAuth flows
     email-providers.ts     # provider adapters
     oauth-state.ts         # signed OAuth state
-    opportunities/         # WIP: types, match engine, BA provider
+     opportunities/         # types, match engine, BA provider, saved
     supabase/              # server/client/service-role clients
   proxy.ts                 # session refresh middleware
+tests/
+  opportunities/           # provider, cache, and saved-opportunities unit tests
 supabase/
   config.toml
-  migrations/              # 8 SQL migrations (see below)
+  migrations/              # 9 SQL migrations (see below)
 ```
 
 ## Getting started
@@ -109,7 +111,8 @@ Run the migrations in order (they are self-contained):
 20260927030000_email_sending_engine.sql
 20260927040000_ai_assistant.sql
 20260927050000_bewerbung_scanner.sql
-20260927060000_opportunities.sql   # belongs to the WIP step
+20260927060000_opportunities.sql
+20260928000000_opportunities_phase2.sql   # cache schema versioning + saved snapshot fields
 ```
 
 Via the CLI: `npx supabase db push` (or paste into the SQL editor). The migrations create all tables, RLS policies, storage buckets, triggers, and the invitation seeds.
@@ -141,6 +144,7 @@ Create the two private storage buckets if not created by a migration: `applicati
 npm run dev        # development server
 npm run build      # production build
 npm run start      # serve the production build
+npm test           # vitest unit tests (provider, cache, saved)
 npm run lint       # eslint
 npm run typecheck  # tsc --noEmit
 npm run format     # prettier --write .
@@ -170,7 +174,8 @@ npm run format     # prettier --write .
 ## Known limitations
 
 1. **Email sending needs a durable worker** (see above) — in development, call the worker endpoint manually or via a local cron.
-2. **Opportunities search is WIP** — present but unverified in this checkpoint.
-3. No automated tests, CI, or deployment configuration yet.
-4. Only one vacancy provider (Bundesagentur für Arbeit).
-5. Quota upgrades are invitation-code based only; no self-serve billing.
+2. **Opportunities search UX + explainable matching are still in progress** (Phase 3+ in the Roadmap). The BA API surface that works was live-verified: `v6/jobs` search, `v4/jobdetails`, `wo`/`umkreis`/`was`/`angebotsart`, and `veroeffentlichtseit=1` (today). The REST API does **not** support remote (`arbeitszeit`), free-text role (`beruf`), or company (`arbeitgeber`) filters — those are applied server-side on the normalized source data via a bounded scan instead.
+3. BA job references expire — saved opportunities keep a server-derived snapshot so they remain useful; the detail page shows a clear "no longer available" state for stale refs.
+4. No CI or deployment configuration yet (unit test suite exists: `npm test`).
+5. Only one vacancy provider (Bundesagentur für Arbeit).
+6. Quota upgrades are invitation-code based only; no self-serve billing.

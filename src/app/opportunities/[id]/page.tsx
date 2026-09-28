@@ -1,17 +1,101 @@
 import Link from "next/link";
-import { getOpportunityDetails } from "@/lib/opportunities/search";
+import { redirect } from "next/navigation";
+import { SaveOpportunityButton } from "@/components/opportunity-save-button";
+import { getCurrentUserAndProfile } from "@/lib/auth";
+import {
+  getOpportunityDetails,
+  OpportunityNotFoundError,
+} from "@/lib/opportunities/search";
+import { listSavedOpportunities } from "@/lib/opportunities/saved";
+import type { Opportunity } from "@/lib/opportunities/types";
+
 export const dynamic = "force-dynamic";
+
+const GOAL_LABELS: Record<Opportunity["goal"], string> = {
+  ausbildung: "Ausbildung",
+  arbeit: "Arbeit",
+};
+
+const EDUCATION_LABELS: Record<string, string> = {
+  basic: "Basic secondary education (Hauptschulabschluss)",
+  intermediate: "Intermediate secondary education (Mittlerer Schulabschluss)",
+  advanced: "Advanced secondary education (Fachabitur)",
+  university: "University entrance qualification (Abitur)",
+  unknown: "See source (not classified)",
+};
+
+function formatDay(iso: string | null): string | null {
+  if (!iso) return null;
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime())
+    ? null
+    : parsed.toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+}
+
 export default async function OpportunityDetailsPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ goal?: "ausbildung" | "arbeit" }>;
 }) {
-  const opportunity = await getOpportunityDetails(
-    decodeURIComponent((await params).id),
-    (await searchParams).goal || "arbeit",
-  );
+  const { user, profile } = await getCurrentUserAndProfile();
+  if (!user || !profile || profile.account_status !== "active")
+    redirect("/login");
+
+  const id = decodeURIComponent((await params).id);
+  let details: Awaited<ReturnType<typeof getOpportunityDetails>> | null = null;
+  let stateError: string | null = null;
+  try {
+    details = await getOpportunityDetails(id, { userId: user.id });
+  } catch (error) {
+    if (error instanceof OpportunityNotFoundError) {
+      stateError = error.message;
+    } else {
+      stateError =
+        "The opportunity source could not be reached right now. Please try again in a moment.";
+    }
+  }
+  const savedKeys = stateError
+    ? new Set<string>()
+    : new Set(
+        (await listSavedOpportunities(user.id)).map(
+          (row) => row.opportunity_key,
+        ),
+      );
+
+  if (stateError || !details) {
+    return (
+      <main className="min-h-screen bg-[#f6f8fb] px-5 py-8 sm:px-8 lg:px-10">
+        <div className="mx-auto max-w-3xl">
+          <Link
+            href="/opportunities"
+            className="text-sm font-semibold text-[#2f6fed]"
+          >
+            ← Back to opportunities
+          </Link>
+          <div className="mt-8 rounded-2xl border border-[#e7ecf3] bg-white p-10 text-center">
+            <h1 className="text-xl font-bold text-[#10203b]">
+              Opportunity unavailable
+            </h1>
+            <p className="mt-3 text-sm leading-6 text-[#71819a]">
+              {stateError}
+            </p>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const opportunity = details.opportunity;
+  const match = opportunity.match;
+  const applyHref = opportunity.application_url ?? opportunity.source_url;
+  const applyLabel = opportunity.application_url
+    ? "Apply at the company →"
+    : "Open in the Jobbörse →";
+
   return (
     <main className="min-h-screen bg-[#f6f8fb] px-5 py-8 sm:px-8 lg:px-10">
       <div className="mx-auto max-w-4xl">
@@ -22,49 +106,196 @@ export default async function OpportunityDetailsPage({
           ← Back to opportunities
         </Link>
         <article className="mt-8 rounded-2xl border border-[#e7ecf3] bg-white p-6 sm:p-8">
-          <span className="rounded-lg bg-[#edf3ff] px-2 py-1 text-[10px] font-bold uppercase text-[#2f6fed]">
-            {opportunity.goal}
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-lg bg-[#edf3ff] px-2 py-1 text-[10px] font-bold uppercase text-[#2f6fed]">
+              {GOAL_LABELS[opportunity.goal]}
+            </span>
+            {opportunity.training_type && (
+              <span className="rounded-lg bg-[#f0e9fb] px-2 py-1 text-[10px] font-bold uppercase text-[#6b46c1]">
+                {opportunity.training_type.toLowerCase().replaceAll("_", " ")}
+              </span>
+            )}
+            {opportunity.salary?.label && (
+              <span className="rounded-lg bg-[#e8f5ee] px-2 py-1 text-[10px] font-bold text-[#177a55]">
+                {opportunity.salary.label}
+              </span>
+            )}
+            {opportunity.home_office === true && (
+              <span className="rounded-lg bg-[#f2f4f8] px-2 py-1 text-[10px] font-bold text-[#546783]">
+                Home office possible
+              </span>
+            )}
+          </div>
           <h1 className="mt-4 text-3xl font-bold tracking-[-0.04em] text-[#10203b]">
             {opportunity.title}
           </h1>
           <p className="mt-2 text-sm text-[#71819a]">
             {opportunity.company_name || "Company not listed"} ·{" "}
             {opportunity.location || "Location not listed"}
+            {opportunity.distance_km !== null &&
+              opportunity.distance_km !== undefined && (
+                <span> · {opportunity.distance_km} km from your search</span>
+              )}
           </p>
+
           <div className="mt-6 grid gap-3 sm:grid-cols-3">
             <Info label="Source" value={opportunity.source_name} />
             <Info
               label="Posted"
-              value={opportunity.posted_at || "Not provided"}
+              value={formatDay(opportunity.posted_at) || "Not provided"}
             />
             <Info
-              label="Start date"
-              value={opportunity.start_date || "Not provided"}
+              label="Updated"
+              value={formatDay(opportunity.updated_at) || "Not provided"}
             />
+            <Info
+              label="Planned start"
+              value={formatDay(opportunity.valid_from) || "Not provided"}
+            />
+            <Info
+              label="Working time"
+              value={opportunity.employment_type || "Not specified"}
+            />
+            <Info
+              label="Occupation (source)"
+              value={opportunity.profession || "Not specified"}
+            />
+            {opportunity.goal === "ausbildung" && (
+              <Info
+                label="Required education"
+                value={
+                  opportunity.education_requirement
+                    ? (EDUCATION_LABELS[
+                        opportunity.education_requirement.level
+                      ] ?? opportunity.education_requirement.raw)
+                    : "No requirement documented"
+                }
+              />
+            )}
+            {opportunity.career_change_friendly === true && (
+              <Info label="Career changer" value="Explicitly suitable" />
+            )}
           </div>
+
+          {details.match_available && match && (
+            <div className="mt-8 rounded-2xl border border-[#dce9ff] bg-[#f7faff] p-5">
+              <div className="flex items-center justify-between gap-4">
+                <h2 className="text-sm font-bold uppercase tracking-[0.08em] text-[#10203b]">
+                  Your match
+                </h2>
+                <span className="text-2xl font-bold text-[#2f6fed]">
+                  {match.match_score}%
+                </span>
+              </div>
+              <ul className="mt-3 space-y-1.5 text-sm text-[#546783]">
+                {match.explanation.map((line, index) => (
+                  <li key={index}>{line}</li>
+                ))}
+              </ul>
+              {(match.matching_skills.length > 0 ||
+                match.missing_skills.length > 0) && (
+                <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+                  <div>
+                    <p className="font-bold text-[#177a55]">Matching</p>
+                    <p className="mt-1 text-[#546783]">
+                      {match.matching_skills.join(", ") || "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="font-bold text-[#b4543c]">Missing</p>
+                    <p className="mt-1 text-[#546783]">
+                      {match.missing_skills.join(", ") || "—"}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {opportunity.description && (
             <div className="mt-8 whitespace-pre-wrap text-sm leading-7 text-[#546783]">
               {opportunity.description}
             </div>
           )}
+
+          {(opportunity.tasks.length > 0 ||
+            opportunity.requirements.length > 0) && (
+            <div className="mt-8 grid gap-6 sm:grid-cols-2">
+              {opportunity.tasks.length > 0 && (
+                <section>
+                  <h3 className="text-xs font-bold uppercase tracking-[0.08em] text-[#10203b]">
+                    Tasks (from source)
+                  </h3>
+                  <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-[#546783]">
+                    {opportunity.tasks.map((task) => (
+                      <li key={task}>{task}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {opportunity.requirements.length > 0 && (
+                <section>
+                  <h3 className="text-xs font-bold uppercase tracking-[0.08em] text-[#10203b]">
+                    Requirements (from source)
+                  </h3>
+                  <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-[#546783]">
+                    {opportunity.requirements.map((requirement) => (
+                      <li key={requirement}>{requirement}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </div>
+          )}
+
+          {opportunity.contact && (
+            <div className="mt-8 rounded-2xl bg-[#f7f9fc] p-5">
+              <h3 className="text-xs font-bold uppercase tracking-[0.08em] text-[#10203b]">
+                Contact (from source)
+              </h3>
+              <p className="mt-2 text-sm text-[#546783]">
+                {[
+                  opportunity.contact.person,
+                  opportunity.contact.phone,
+                  opportunity.contact.email,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            </div>
+          )}
+
           <p className="mt-8 text-xs text-[#8290a4]">
-            Retrieved:{" "}
+            Retrieved from source:{" "}
             {new Date(opportunity.retrieved_at).toLocaleString("en-GB")}
           </p>
-          <a
-            href={opportunity.source_url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-6 inline-flex rounded-xl bg-[#10203b] px-5 py-3 text-sm font-semibold text-white"
-          >
-            Apply on original website →
-          </a>
+
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <a
+              href={applyHref}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex rounded-xl bg-[#10203b] px-5 py-3 text-sm font-semibold text-white"
+            >
+              {applyLabel}
+            </a>
+            <Link
+              href="/applications/new"
+              className="inline-flex rounded-xl bg-[#edf3ff] px-5 py-3 text-sm font-semibold text-[#2f6fed]"
+            >
+              Prepare application
+            </Link>
+            <SaveOpportunityButton
+              opportunityKey={opportunity.id}
+              initialSaved={savedKeys.has(opportunity.id)}
+            />
+          </div>
         </article>
       </div>
     </main>
   );
 }
+
 function Info({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl bg-[#f7f9fc] p-3">
