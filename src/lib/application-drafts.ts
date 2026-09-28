@@ -196,6 +196,30 @@ export async function assertSenderOwnership(userId: string, accountId: string) {
   return account;
 }
 
+/** Phase 18 — minimal safe view of the drafts currently using a sender
+ *  account (the reassignment UI on the email settings page). Both
+ *  `user_id` and `sender_email_account_id` are enforced server-side; only
+ *  display fields are returned. */
+export async function listDraftsBySender(
+  userId: string,
+  senderAccountId: string,
+): Promise<Array<{ id: string; subject: string; goal: ApplicationGoal }>> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("application_drafts")
+    .select("id, subject, goal")
+    .eq("user_id", userId)
+    .eq("sender_email_account_id", senderAccountId)
+    .order("updated_at", { ascending: false })
+    .limit(50);
+  if (error) throw new Error("Unable to load drafts.");
+  return (data ?? []) as Array<{
+    id: string;
+    subject: string;
+    goal: ApplicationGoal;
+  }>;
+}
+
 export function safeAccountList(accounts: SafeEmailAccount[]) {
   return accounts.map(
     ({
