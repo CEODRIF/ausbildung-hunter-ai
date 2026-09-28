@@ -1,0 +1,49 @@
+# Phase 9 — continuous integration.
+#
+# Runs the full validation gate on every push to main and on pull requests:
+# typecheck → lint → unit tests → production build.
+#
+# The production build deliberately requires NO environment variables
+# (all configuration is applied at runtime), so this workflow needs no
+# secrets. If a future change makes the build depend on env vars, this
+# workflow must start failing loudly — do not "fix" it by adding dummy
+# values without documenting why.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: typecheck · lint · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build

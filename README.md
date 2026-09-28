@@ -23,7 +23,6 @@ A production SaaS that helps people in Germany find and apply for **Ausbildung**
 - Automatic applications from saved opportunities (explicitly out of scope so far — every email is composed and sent by the user).
 - Additional vacancy providers (only the Bundesagentur für Arbeit is wired up).
 - Payments, billing, and multi-tenant admin.
-- CI and deployment pipelines (unit test suite exists: `npm test`).
 
 ## Tech stack
 
@@ -147,11 +146,28 @@ Create the two private storage buckets if not created by a migration: `applicati
 npm run dev        # development server
 npm run build      # production build
 npm run start      # serve the production build
-npm test           # vitest unit tests (provider, cache, saved, search UX, matching, prefill)
+npm test           # vitest unit tests (provider, cache, saved, search UX, matching, prefill, CI integrity)
 npm run lint       # eslint
 npm run typecheck  # tsc --noEmit
 npm run format     # prettier --write .
 ```
+
+### 6. CI & Deployment (Phase 9)
+
+**Continuous integration** (`.github/workflows/ci.yml`): every push to `main` and every pull request runs the full validation gate — `npm ci` → `npm run typecheck` → `npm run lint` → `npm test` → `npm run build` — on Node 22. **CI needs no secrets**: the production build intentionally works with zero environment variables (all configuration is applied at runtime), which the workflow documents and a test suite (`tests/ci.test.ts`) guards:
+
+- every `process.env` variable used in `src/` must be documented in `.env.example` (no silent config drift),
+- `.env.example` may contain placeholders only — real-looking secrets fail the build,
+- the CI workflow must keep the full gate and the Node major pinned,
+- `package.json` `engines.node` must match the workflow's Node major.
+
+**Deployment checklist** (any Node ≥ 22 host — Vercel, Render, self-hosted):
+
+1. **Supabase first**: apply all migrations in `supabase/migrations/` in order (Section 3) — tables, RLS, storage buckets, triggers, seeds.
+2. **Environment variables**: set every variable from Section 4 (`.env.example` is the source of truth). Server-only keys (`SUPABASE_SERVICE_ROLE_KEY`, OAuth client secrets, `EMAIL_TOKEN_ENCRYPTION_KEY`, `EMAIL_WORKER_SECRET`, `AI_API_KEY`) must never be exposed as public/`NEXT_PUBLIC_` variables.
+3. **Build & run**: `npm ci && npm run build && npm run start` (or the host's equivalent).
+4. **Email worker**: the external worker polls `POST /api/internal/email-worker` authenticated with `EMAIL_WORKER_SECRET`; it must point at the deployed host. Sending is worker-driven — the app never sends from the web process.
+5. **Never commit `.env*`** (gitignored). Secrets live only in the host's environment/secret store.
 
 ## How the key systems work
 
