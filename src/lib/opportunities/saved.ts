@@ -2,7 +2,7 @@ import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { candidateProfileSchema } from "@/lib/bewerbung-schema";
-import { matchOpportunity } from "@/lib/opportunities/match";
+import { computeMatch } from "@/lib/opportunities/matching";
 import {
   OpportunityNotFoundError,
   OpportunityProviderError,
@@ -30,13 +30,19 @@ export interface SavedOpportunityRow {
   education_requirement: string | null;
   contact_email: string | null;
   notes: string | null;
+  /** Saved-at snapshot of the per-user match (server-computed at save time).
+   *  Stays historical: the CURRENT match is computed live on the detail
+   *  page and may differ after profile updates. */
   match_score: number | null;
+  /** "complete" | "incomplete" — null when no profile existed at save time
+   *  (never "unavailable" is persisted; that state simply stores nulls). */
+  match_status: string | null;
   saved_at: string;
   updated_at: string;
 }
 
 const SAVED_SELECT =
-  "id, user_id, opportunity_key, provider, goal, title, company_name, location, source_url, source_name, source_external_id, posted_at, salary_label, training_type, education_requirement, contact_email, notes, match_score, saved_at, updated_at";
+  "id, user_id, opportunity_key, provider, goal, title, company_name, location, source_url, source_name, source_external_id, posted_at, salary_label, training_type, education_requirement, contact_email, notes, match_score, match_status, saved_at, updated_at";
 
 function assertValidKey(opportunityKey: string) {
   parseOpportunityKey(opportunityKey); // throws on malformed/foreign keys
@@ -57,8 +63,12 @@ export async function saveOpportunityFromKey(
   const opportunity = await resolveOpportunity(opportunityKey);
   const admin = createAdminClient();
 
-  // Optional server-computed match snapshot (never client-supplied).
+  // Optional server-computed match snapshot at save time (never
+  // client-supplied, never written to the shared opportunity cache).
+  // The snapshot stays historical — the current live match is recomputed
+  // on the detail page and may differ after the profile changed.
   let matchScore: number | null = null;
+  let matchStatus: string | null = null;
   try {
     const { data } = await admin
       .from("candidate_profiles")
@@ -69,12 +79,18 @@ export async function saveOpportunityFromKey(
       .maybeSingle();
     if (data?.profile_json) {
       const parsed = candidateProfileSchema.safeParse(data.profile_json);
-      if (parsed.success)
-        matchScore =
-          matchOpportunity(parsed.data, opportunity).match?.match_score ?? null;
+      if (parsed.success) {
+        const match = computeMatch(parsed.data, opportunity);
+        matchScore = match.score; // null when incomplete — never a guess
+        matchStatus =
+          match.status === "complete" || match.status === "incomplete"
+            ? match.status
+            : null;
+      }
     }
   } catch {
     matchScore = null; // snapshot is best-effort and never blocks saving
+    matchStatus = null;
   }
 
   const row = {
@@ -95,6 +111,7 @@ export async function saveOpportunityFromKey(
     contact_email: opportunity.contact?.email ?? null,
     notes: notes?.trim() ? notes.trim().slice(0, 500) : null,
     match_score: matchScore,
+    match_status: matchStatus,
   };
   const { data, error } = await admin
     .from("saved_opportunities")

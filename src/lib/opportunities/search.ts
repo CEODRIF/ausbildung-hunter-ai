@@ -3,19 +3,21 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { candidateProfileSchema } from "@/lib/bewerbung-schema";
+import {
+  candidateProfileSchema,
+  type CandidateProfile,
+} from "@/lib/bewerbung-schema";
 import {
   OpportunityNotFoundError,
   OpportunityProviderError,
   fetchOpportunityWindow,
   resolveOpportunity,
 } from "@/lib/opportunities/providers/arbeitsagentur";
-import { matchOpportunity } from "@/lib/opportunities/match";
+import { applyMatch } from "@/lib/opportunities/matching";
 import {
   OPPORTUNITY_SCHEMA_VERSION,
   opportunitySchema,
   usesScanWindow,
-  type CandidateForMatch,
   type Opportunity,
   type OpportunitySearchParams,
   type OpportunitySearchResponse,
@@ -32,6 +34,8 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
  * v3: `mode` distinguishes true upstream pagination (window = one page) from
  * bounded server-side windows (window = filtered/sorted set, page-independent,
  * so turning pages never re-hits the provider).
+ * v4: payload shape unchanged — `match` stays null in the shared window; the
+ * explainable MatchResult is attached only in-memory, per user.
  */
 const cachePayloadSchema = z.object({
   mode: z.enum(["upstream", "scan"]),
@@ -135,9 +139,11 @@ async function fetchWindow(
   return payload;
 }
 
+/** The authenticated user's latest VALIDATED candidate profile, fetched
+ *  server-side (never browser-supplied). Invalid/foreign JSON → null. */
 async function getCandidateProfile(
   userId: string,
-): Promise<CandidateForMatch | null> {
+): Promise<CandidateProfile | null> {
   const admin = createAdminClient();
   const { data } = await admin
     .from("candidate_profiles")
@@ -152,12 +158,34 @@ async function getCandidateProfile(
 }
 
 /**
+ * `sort=match` ordering (documented, deterministic):
+ * - complete matches first, by score descending (ties by stable id);
+ * - incomplete matches after all complete ones (stable id order) — an
+ *   incomplete match carries NO score and is never ranked as a perfect
+ *   match;
+ * - (match: null cannot occur here — a candidate profile exists.)
+ */
+function compareByMatch(a: Opportunity, b: Opportunity): number {
+  const aComplete = a.match?.status === "complete";
+  const bComplete = b.match?.status === "complete";
+  if (aComplete !== bComplete) return aComplete ? -1 : 1;
+  if (aComplete && bComplete) {
+    const diff = (b.match?.score ?? 0) - (a.match?.score ?? 0);
+    if (diff !== 0) return diff;
+  }
+  if (a.id === b.id) return 0;
+  return a.id < b.id ? -1 : 1;
+}
+
+/**
  * Server-side opportunity search for an authenticated user.
  *
- * Flow: read/write the shared (user-independent) window → compute the
- * per-user match (never written back to the cache) → slice the requested
- * page. `sort=match` sorts the whole window by per-user score before
- * slicing; `relevance`/`newest`/... sorting is deterministic and cached.
+ * Flow: provider → shared (user-independent) cache → normalized window →
+ * authenticated candidate profile → matching engine → user-specific
+ * results. The per-user match is computed AFTER the cache read and is
+ * never written back to the cache. `sort=match` reorders the whole window
+ * by the documented match order before slicing; the other sorts are
+ * deterministic and cached.
  */
 export async function searchOpportunities(
   params: OpportunitySearchParams,
@@ -170,16 +198,9 @@ export async function searchOpportunities(
 
   let window = payload.window;
   if (matchAvailable && params.sort === "match") {
-    // Per-user ordering: match the whole window, sort by score desc
-    // (no score → last), stable id tiebreak. In-memory only.
     window = window
-      .map((opportunity) => matchOpportunity(candidate, opportunity))
-      .sort((a, b) => {
-        const as = a.match?.match_score ?? -1;
-        const bs = b.match?.match_score ?? -1;
-        if (bs !== as) return bs - as;
-        return a.id < b.id ? -1 : 1;
-      });
+      .map((opportunity) => applyMatch(candidate, opportunity))
+      .sort(compareByMatch);
   }
 
   const start =
@@ -187,9 +208,7 @@ export async function searchOpportunities(
   const results = window.slice(start, start + params.pageSize);
   if (matchAvailable && params.sort !== "match") {
     return {
-      results: results.map((opportunity) =>
-        matchOpportunity(candidate, opportunity),
-      ),
+      results: results.map((opportunity) => applyMatch(candidate, opportunity)),
       total: payload.total,
       scan_truncated: payload.scan_truncated,
       mode: payload.mode,
@@ -224,7 +243,7 @@ export async function getOpportunityDetails(
   const candidate = await getCandidateProfile(auth.userId);
   if (!candidate) return { opportunity, match_available: false };
   return {
-    opportunity: matchOpportunity(candidate, opportunity),
+    opportunity: applyMatch(candidate, opportunity),
     match_available: true,
   };
 }

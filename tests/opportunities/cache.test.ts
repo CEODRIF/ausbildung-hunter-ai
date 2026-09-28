@@ -175,7 +175,9 @@ describe("shared cache content (user-independent, no match data)", () => {
     });
     expect(response.match_available).toBe(true);
     expect(response.results[0].match).not.toBeNull();
-    expect(response.results[0].match?.match_score).toBeGreaterThanOrEqual(0);
+    expect(response.results[0].match?.status).toBe("complete");
+    expect(response.results[0].match?.score).not.toBeNull();
+    expect((response.results[0].match?.score ?? -1) >= 0).toBe(true);
     // Cache hit path must not write anything back.
     expect(
       adminMock.calls.filter(
@@ -242,6 +244,24 @@ describe("shared cache content (user-independent, no match data)", () => {
       vi.fn(async () => jsonResponse(searchArbeit)),
     );
     setAdminMock({ maybeSingleData: () => null });
+    const response = await searchOpportunities(baseParams({ match: true }), {
+      userId: "user-1",
+    });
+    expect(response.match_available).toBe(false);
+    expect(response.results.every((row) => row.match === null)).toBe(true);
+  });
+
+  it("treats an invalid stored profile as unavailable (no match, no crash)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(searchArbeit)),
+    );
+    setAdminMock({
+      maybeSingleData: (table) =>
+        table === "candidate_profiles"
+          ? { profile_json: { nonsense: true } } // fails candidateProfileSchema
+          : null,
+    });
     const response = await searchOpportunities(baseParams({ match: true }), {
       userId: "user-1",
     });
@@ -379,16 +399,24 @@ describe("sorting + pagination semantics (search layer)", () => {
     );
   });
 
-  it("sort=match orders the window by the user's per-user score (in-memory only)", async () => {
+  it("sort=match orders the window: complete by score desc, incomplete after (documented)", async () => {
     stubWindow(windowItems);
     const response = await searchOpportunities(
       baseParams({ sort: "match", match: true, pageSize: 10 }),
       { userId: "user-1" },
     );
     expect(response.match_available).toBe(true);
-    const scores = response.results.map((o) => o.match?.match_score ?? -1);
-    for (let i = 1; i < scores.length; i++) {
-      expect(scores[i - 1]).toBeGreaterThanOrEqual(scores[i]);
+    const tiers = response.results.map((o) =>
+      o.match?.status === "complete" ? 0 : 1,
+    );
+    for (let i = 1; i < tiers.length; i++) {
+      expect(tiers[i - 1]).toBeLessThanOrEqual(tiers[i]);
+    }
+    const completeScores = response.results
+      .filter((o) => o.match?.status === "complete")
+      .map((o) => o.match?.score ?? -1);
+    for (let i = 1; i < completeScores.length; i++) {
+      expect(completeScores[i - 1]).toBeGreaterThanOrEqual(completeScores[i]);
     }
   });
 

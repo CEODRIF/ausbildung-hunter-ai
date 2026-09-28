@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { matchResultSchema } from "./matching/types";
 
 /**
  * Bump when the normalized opportunity shape changes so previously cached
@@ -9,8 +10,12 @@ import { z } from "zod";
  * full result `window` for scan mode (page-independent) and `exhausted`, so
  * server-side sorting/filtering can paginate without re-hitting the provider
  * on every page turn.
+ * v4 (Phase 5): the per-user `match` field changed from a flat heuristics
+ * blob to the explainable `MatchResult` (status/score/dimensions). Match
+ * data is still computed AFTER the cache read and never cached; the bump
+ * only discards v3 payloads.
  */
-export const OPPORTUNITY_SCHEMA_VERSION = 3;
+export const OPPORTUNITY_SCHEMA_VERSION = 4;
 
 /**
  * The BA source only exposes its first ~10,000 listings per query (verified:
@@ -32,8 +37,11 @@ export type OpportunitySort =
  *   documented salary sort last (never guessed).
  * - distance: by the source's distance in km from the searched location;
  *   items without a documented distance sort last. Requires a location.
- * - match: by the user's per-user match score (computed after the cache
- *   read; falls back to relevance when no candidate profile exists).
+ * - match: by the user's per-user match (computed after the cache read by
+ *   the deterministic matching engine). Documented order: complete matches
+ *   by score descending (ties by stable id), then incomplete matches (no
+ *   score; stable id order). Unknown data is never ranked as a perfect
+ *   match. Falls back to relevance when no candidate profile exists.
  * All non-relevance sorts operate on a bounded server-side window because
  * the BA REST API has no sort parameters for these fields.
  */
@@ -375,18 +383,12 @@ export const contactSchema = z.object({
   phone: z.string().max(64).nullable(),
 });
 
-export const matchSchema = z.object({
-  match_score: z.number().min(0).max(100),
-  matching_skills: z.array(z.string()),
-  missing_skills: z.array(z.string()),
-  matching_languages: z.array(z.string()),
-  missing_languages: z.array(z.string()),
-  education_match: z.boolean().nullable(),
-  experience_match: z.boolean().nullable(),
-  location_match: z.boolean().nullable(),
-  role_match: z.boolean().nullable(),
-  explanation: z.array(z.string()),
-});
+/** Per-user explainable match (Phase 5 matching engine). Shape defined in
+ *  `matching/types.ts` — status (complete/incomplete/unavailable), score
+ *  (null unless complete), per-dimension verdicts with evidence, and
+ *  consolidated missing information. */
+export const matchSchema = matchResultSchema;
+export type MatchResult = z.infer<typeof matchResultSchema>;
 
 export const opportunityLocationDetailSchema = z.object({
   city: z.string().max(160).nullable(),
@@ -492,22 +494,7 @@ export interface OpportunitySearchResponse {
   match_available: boolean;
 }
 
-export type CandidateForMatch = {
-  goal: "ausbildung" | "arbeit";
-  target_roles: Array<{ role: string }>;
-  education: Array<Record<string, unknown>>;
-  training: Array<{ name: string }>;
-  experience: Array<{ job_title: string; responsibilities: string[] }>;
-  skills: {
-    technical: string[];
-    software_tools: string[];
-    marketing: string[];
-    it: string[];
-    soft: string[];
-  };
-  languages: Array<{ language: string; level: string | null }>;
-  preferences: {
-    preferred_locations: string[];
-    preferred_job_titles: string[];
-  };
-};
+// NOTE (Phase 5): the matching engine consumes the full validated
+// `CandidateProfile` (candidateProfileSchema) server-side. There is no
+// client-facing candidate projection anymore — the client only ever
+// receives the per-opportunity MatchResult, never profile internals.

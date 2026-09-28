@@ -6,6 +6,13 @@ import {
   getOpportunityDetails,
   OpportunityNotFoundError,
 } from "@/lib/opportunities/search";
+import {
+  DIMENSION_LABELS,
+  MATCH_STATUS_LABELS,
+  STATUS_LABELS,
+  formatMatchScore,
+  type MatchResult,
+} from "@/lib/opportunities/matching";
 import { listSavedOpportunities } from "@/lib/opportunities/saved";
 import {
   sanitizeSearchUrlState,
@@ -186,40 +193,7 @@ export default async function OpportunityDetailsPage({
             )}
           </div>
 
-          {details.match_available && match && (
-            <div className="mt-8 rounded-2xl border border-[#dce9ff] bg-[#f7faff] p-5">
-              <div className="flex items-center justify-between gap-4">
-                <h2 className="text-sm font-bold uppercase tracking-[0.08em] text-[#10203b]">
-                  Your match
-                </h2>
-                <span className="text-2xl font-bold text-[#2f6fed]">
-                  {match.match_score}%
-                </span>
-              </div>
-              <ul className="mt-3 space-y-1.5 text-sm text-[#546783]">
-                {match.explanation.map((line, index) => (
-                  <li key={index}>{line}</li>
-                ))}
-              </ul>
-              {(match.matching_skills.length > 0 ||
-                match.missing_skills.length > 0) && (
-                <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
-                  <div>
-                    <p className="font-bold text-[#177a55]">Matching</p>
-                    <p className="mt-1 text-[#546783]">
-                      {match.matching_skills.join(", ") || "—"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="font-bold text-[#b4543c]">Missing</p>
-                    <p className="mt-1 text-[#546783]">
-                      {match.missing_skills.join(", ") || "—"}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          {details.match_available && match && <MatchSection match={match} />}
 
           {opportunity.description && (
             <div className="mt-8 whitespace-pre-wrap text-sm leading-7 text-[#546783]">
@@ -312,6 +286,88 @@ function Info({ label, value }: { label: string; value: string }) {
         {label}
       </p>
       <p className="mt-1 text-xs font-semibold text-[#1d3458]">{value}</p>
+    </div>
+  );
+}
+
+const STATUS_ICONS: Record<
+  MatchResult["dimensions"][number]["status"],
+  { icon: string; className: string }
+> = {
+  match: { icon: "✓", className: "text-[#177a55]" },
+  partial: { icon: "△", className: "text-[#a3611c]" },
+  mismatch: { icon: "✕", className: "text-[#b4543c]" },
+  unknown: { icon: "?", className: "text-[#8290a4]" },
+  not_applicable: { icon: "–", className: "text-[#9aa7b8]" },
+};
+
+/** Dedicated, fully data-backed match explanation (German). No percentage is
+ *  shown unless the match is complete — an incomplete match is labeled as
+ *  such and explains exactly what is missing. */
+function MatchSection({ match }: { match: MatchResult }) {
+  const isComplete = match.status === "complete";
+  return (
+    <div className="mt-8 rounded-2xl border border-[#dce9ff] bg-[#f7faff] p-5">
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-sm font-bold uppercase tracking-[0.08em] text-[#10203b]">
+          {MATCH_STATUS_LABELS[match.status]}
+        </h2>
+        {isComplete && match.score !== null && (
+          <span className="text-2xl font-bold text-[#2f6fed]">
+            {formatMatchScore(match.score)}
+          </span>
+        )}
+      </div>
+      {!isComplete && (
+        <p className="mt-2 text-sm text-[#546783]">
+          Für eine Prozentangabe fehlen essentielle Angaben – es wird daher
+          bewusst kein Score berechnet. Unten steht, was noch fehlt.
+        </p>
+      )}
+      {isComplete && match.cap && (
+        <p className="mt-2 rounded-xl bg-[#fdeee8] p-3 text-xs font-medium text-[#b4543c]">
+          {match.cap.reason} (Score auf {match.cap.max_score} % begrenzt.)
+        </p>
+      )}
+      <h3 className="mt-4 text-xs font-bold uppercase tracking-[0.08em] text-[#10203b]">
+        Warum dieses Ergebnis?
+      </h3>
+      <ul className="mt-2 space-y-2.5">
+        {match.dimensions.map((dimension) => {
+          const style = STATUS_ICONS[dimension.status];
+          return (
+            <li key={dimension.id} className="text-sm text-[#546783]">
+              <span
+                className={`mr-2 inline-block w-4 text-center font-bold ${style.className}`}
+                aria-hidden
+              >
+                {style.icon}
+              </span>
+              <span className="font-semibold text-[#1d3458]">
+                {DIMENSION_LABELS[dimension.id]}:
+              </span>{" "}
+              {STATUS_LABELS[dimension.status]}
+              {dimension.evidence.length > 0 && (
+                <span className="mt-0.5 block pl-6 text-xs leading-5 text-[#71819a]">
+                  {dimension.evidence.slice(0, 2).join(" ")}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {match.missing_information.length > 0 && (
+        <>
+          <h3 className="mt-4 text-xs font-bold uppercase tracking-[0.08em] text-[#10203b]">
+            Fehlende Informationen
+          </h3>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#546783]">
+            {match.missing_information.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }

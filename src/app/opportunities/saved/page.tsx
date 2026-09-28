@@ -71,10 +71,22 @@ function SavedCard({ item }: { item: SavedOpportunityRow }) {
               </span>
             )}
             {item.match_score !== null && (
-              <span className="rounded-lg bg-[#f7faff] px-2 py-1 text-[10px] font-bold text-[#2f6fed]">
-                Match at save: {item.match_score}%
+              <span
+                className="rounded-lg bg-[#f7faff] px-2 py-1 text-[10px] font-bold text-[#2f6fed]"
+                title="Match-Snapshot zum Zeitpunkt des Speicherns"
+              >
+                Match bei Speicherung: {item.match_score} %
               </span>
             )}
+            {item.match_score === null &&
+              item.match_status === "incomplete" && (
+                <span
+                  className="rounded-lg bg-[#fff4e5] px-2 py-1 text-[10px] font-bold text-[#a3611c]"
+                  title="Zum Speichern fehlten essentielle Profilangaben"
+                >
+                  Match bei Speicherung: unvollständig
+                </span>
+              )}
           </div>
           <h2 className="mt-3 text-lg font-bold text-[#1d3458]">
             {item.title || "Untitled opportunity"}
@@ -97,6 +109,10 @@ function SavedCard({ item }: { item: SavedOpportunityRow }) {
               {item.notes}
             </p>
           )}
+          <p className="mt-2 text-[11px] text-[#8290a4]">
+            Aktueller Match wird auf der Detailseite live berechnet — nach
+            Profiländerungen kann er vom Snapshot abweichen.
+          </p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">
           <Link

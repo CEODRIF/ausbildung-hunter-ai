@@ -51,6 +51,7 @@ function detailsSingleRow(): Record<string, unknown> {
     contact_email: "wedding.service@perzukunft.de",
     notes: null,
     match_score: null,
+    match_status: null,
     saved_at: "2026-09-28T12:00:00.000Z",
     updated_at: "2026-09-28T12:00:00.000Z",
   };
@@ -129,6 +130,7 @@ describe("saveOpportunityFromKey (server-derived data only)", () => {
           "contact_email",
           "notes",
           "match_score",
+          "match_status",
         ].includes(key),
     );
     expect(unexpected).toEqual([]);
@@ -148,8 +150,39 @@ describe("saveOpportunityFromKey (server-derived data only)", () => {
       (call) => call.table === "saved_opportunities" && call.op === "upsert",
     );
     const payload = upsert?.args[0] as Record<string, unknown>;
+    // Profile exists → a complete snapshot with a real score (Servicekraft
+    // job: goal + location match, role mismatch for this fixture profile).
     expect(payload.match_score).toBeTypeOf("number");
     expect((payload.match_score as number) >= 0).toBe(true);
+    expect(payload.match_status).toBe("complete");
+  });
+
+  it("stores match_status=incomplete (null score) when the profile lacks essentials", async () => {
+    adminMock = createAdminMock({
+      singleData: () => detailsSingleRow(),
+      maybeSingleData: (table) =>
+        table === "candidate_profiles"
+          ? {
+              profile_json: {
+                ...candidateProfileFixture(),
+                target_roles: [],
+                preferences: {
+                  ...candidateProfileFixture().preferences,
+                  preferred_job_titles: [],
+                },
+              },
+            }
+          : null,
+    });
+    vi.mocked(createAdminClient).mockReturnValue(adminMock.admin as never);
+    await saveOpportunityFromKey("user-1", `arbeitsagentur:${DETAILS_REF}`);
+    const upsert = adminMock.calls.find(
+      (call) => call.table === "saved_opportunities" && call.op === "upsert",
+    );
+    const payload = upsert?.args[0] as Record<string, unknown>;
+    // No documented target roles → role dimension unknown → incomplete, no score.
+    expect(payload.match_score).toBeNull();
+    expect(payload.match_status).toBe("incomplete");
   });
 
   it("rejects malformed or foreign keys before any network call", async () => {

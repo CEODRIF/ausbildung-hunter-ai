@@ -27,7 +27,7 @@ const SORT_OPTIONS: Array<{ value: SearchUrlState["sort"]; label: string }> = [
   { value: "oldest", label: "Oldest first" },
   { value: "salary", label: "Highest salary first" },
   { value: "distance", label: "Closest distance first" },
-  { value: "match", label: "Best match for me" },
+  { value: "match", label: "Bester Match für mich" },
 ];
 
 const FRESHNESS_OPTIONS = [
@@ -435,7 +435,7 @@ export function OpportunitySearch({
               }
               className="h-4 w-4 accent-[#2f6fed]"
             />
-            Show my match score
+            Meinen Match anzeigen
           </label>
           <div className="flex items-center gap-2">
             {hasActiveFilters && (
@@ -491,8 +491,8 @@ export function OpportunitySearch({
                   href="/bewerbung-scanner"
                   className="rounded-xl bg-[#fff4e5] px-3 py-2 text-xs font-bold text-[#a3611c]"
                 >
-                  Match not available yet — run the Bewerbung Scanner to enable
-                  matching
+                  Match noch nicht verfügbar — Bewerbung Scanner ausführen, um
+                  Matching zu aktivieren
                 </Link>
               )}
             </div>
@@ -573,16 +573,33 @@ export function OpportunitySearch({
                       </p>
                       {opportunity.match && (
                         <div className="mt-3 rounded-xl bg-[#f7faff] p-3">
-                          <p className="text-xs font-bold text-[#2f6fed]">
-                            Match: {opportunity.match.match_score}%
-                          </p>
-                          <ul className="mt-1 space-y-0.5 text-xs text-[#546783]">
-                            {opportunity.match.explanation
-                              .slice(0, 3)
-                              .map((line, index) => (
-                                <li key={index}>{line}</li>
-                              ))}
-                          </ul>
+                          {opportunity.match.status === "complete" ? (
+                            <>
+                              <p className="text-xs font-bold text-[#2f6fed]">
+                                Match: {opportunity.match.score} %
+                              </p>
+                              <ul className="mt-1 space-y-0.5 text-xs text-[#546783]">
+                                {opportunity.match.reasons
+                                  .slice(0, 3)
+                                  .map((line, index) => (
+                                    <li key={index}>✓ {line}</li>
+                                  ))}
+                              </ul>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-xs font-bold text-[#a3611c]">
+                                Match unvollständig
+                              </p>
+                              <ul className="mt-1 space-y-0.5 text-xs text-[#546783]">
+                                {opportunity.match.missing_information
+                                  .slice(0, 2)
+                                  .map((line, index) => (
+                                    <li key={index}>△ {line}</li>
+                                  ))}
+                              </ul>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
