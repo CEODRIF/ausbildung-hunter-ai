@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { AI_DAILY_REQUEST_LIMIT } from "@/lib/ai-service";
+import { getEntitlements } from "@/lib/billing/entitlements";
 import { createAIProvider } from "@/lib/ai-provider";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { buildFileContext } from "@/lib/ai-file-context";
@@ -72,9 +72,11 @@ export async function runScan(scanId: string) {
     .update({ status: "analyzing", error_message: null })
     .eq("id", scanId)
     .eq("user_id", user.id);
+  // Plan-aware AI limit, resolved server-side (free users: unchanged).
+  const entitlements = await getEntitlements(user.id);
   const { error: usageError } = await admin.rpc("reserve_ai_request", {
     target_user_id: user.id,
-    max_requests: AI_DAILY_REQUEST_LIMIT,
+    max_requests: entitlements.aiPerDay,
   });
   if (usageError)
     throw new Error(

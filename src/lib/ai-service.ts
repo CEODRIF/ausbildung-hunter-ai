@@ -2,6 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getEntitlements } from "@/lib/billing/entitlements";
 import { createAIProvider, type AIMessage } from "@/lib/ai-provider";
 import { buildFileContext } from "@/lib/ai-file-context";
 import { getCurrentUserAndProfile } from "@/lib/auth";
@@ -176,16 +177,19 @@ export async function deleteAIFile(fileId: string) {
     .eq("user_id", user.id);
 }
 
-/** Shared AI daily request limit (single source of truth — used by the
- *  quota RPCs and displayed by the dashboard; the dashboard must never
- *  trust browser-provided usage values). */
+/** Free-plan AI daily request limit (Phase 10). Subscription plans raise
+ *  the effective limit — `getEntitlements` resolves it server-side and
+ *  passes it to the quota RPC, which remains the single enforcement
+ *  point. The dashboard must never trust browser-provided usage values. */
 export const AI_DAILY_REQUEST_LIMIT = 100;
 
 async function reserveAIUsage(userId: string) {
   const admin = createAdminClient();
+  // Server-side entitlement (plan-aware; falls back to the free limit).
+  const entitlements = await getEntitlements(userId);
   const { error } = await admin.rpc("reserve_ai_request", {
     target_user_id: userId,
-    max_requests: AI_DAILY_REQUEST_LIMIT,
+    max_requests: entitlements.aiPerDay,
   });
   if (error)
     throw new Error(

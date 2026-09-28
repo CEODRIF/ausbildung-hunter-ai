@@ -32,7 +32,14 @@ export default async function UsageSettingsPage({
           </h1>
           <p className="mt-2 text-sm text-[#71819a]">
             Daily sending capacity is calculated server-side using UTC calendar
-            days.
+            days. Plan details:{" "}
+            <Link
+              href="/settings/billing"
+              className="font-semibold text-[#2f6fed]"
+            >
+              Billing
+            </Link>
+            .
           </p>
         </div>
         {params.activated && <Notice>100 emails/day activated.</Notice>}
