@@ -8,16 +8,20 @@ import {
   evalGoal,
   evalLanguages,
   evalLocation,
+  evalPreferences,
+  evalRelocation,
   evalRemote,
   evalRole,
   evalSkills,
+  evalTrainingType,
 } from "./dimensions";
 import { normalizeCandidate } from "./profile-normalizer";
 import { assembleMatch } from "./scorer";
 import { MATCHER_VERSION, matchResultSchema, type MatchResult } from "./types";
 
 /**
- * Phase 5 — server-side matching service.
+ * Server-side matching service (Phase 5 foundation, Phase 7 production
+ * dimension set — matcher v2).
  *
  * Usage (server-only, after the shared opportunity cache has been read):
  *
@@ -55,8 +59,11 @@ export function computeMatch(
     evalExperience(candidate, opportunity),
     evalLanguages(candidate, opportunity),
     evalLocation(candidate, opportunity),
+    evalRelocation(candidate, opportunity),
     evalRemote(candidate, opportunity),
     evalEmployment(candidate, opportunity),
+    evalTrainingType(candidate, opportunity),
+    evalPreferences(candidate, opportunity),
   ]);
 }
 

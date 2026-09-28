@@ -14,8 +14,11 @@ export const DIMENSION_LABELS: Record<DimensionId, string> = {
   experience: "Erfahrung",
   languages: "Sprachen",
   location: "Standort",
+  relocation: "Umzugsbereitschaft",
   remote: "Home Office",
   employment: "Arbeitszeit",
+  training_type: "Ausbildungsform",
+  preferences: "Branchenpräferenz",
 };
 
 export const STATUS_LABELS: Record<DimensionStatus, string> = {

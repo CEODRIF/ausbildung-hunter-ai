@@ -2,9 +2,14 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import { MATCHER_VERSION } from "@/lib/opportunities/matching";
 import {
+  evaluateSnapshotStaleness,
+  formatSnapshotDate,
+  getProfileRevision,
   listSavedOpportunities,
   type SavedOpportunityRow,
+  type SnapshotStaleness,
 } from "@/lib/opportunities/saved";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +31,18 @@ export default async function SavedOpportunitiesPage() {
   if (!user || !profile || profile.account_status !== "active")
     redirect("/login");
   const saved = await listSavedOpportunities(user.id);
+  // Best-effort current profile revision (server-side) so each saved
+  // snapshot can be labeled fresh or stale — never silently current.
+  const profileRevision = await getProfileRevision(user.id);
+  const stalenessByRow = new Map(
+    saved.map((row) => [
+      row.id,
+      evaluateSnapshotStaleness(row, {
+        profileUpdatedAt: profileRevision,
+        matcherVersion: MATCHER_VERSION,
+      }),
+    ]),
+  );
 
   return (
     <main className="min-h-screen bg-[#f6f8fb] px-5 py-8 sm:px-8 lg:px-10">
@@ -42,7 +59,11 @@ export default async function SavedOpportunitiesPage() {
         <div className="mt-8 space-y-3">
           {saved.length ? (
             saved.map((item: SavedOpportunityRow) => (
-              <SavedCard key={item.id} item={item} />
+              <SavedCard
+                key={item.id}
+                item={item}
+                staleness={stalenessByRow.get(item.id) ?? null}
+              />
             ))
           ) : (
             <div className="rounded-2xl border border-dashed border-[#dfe6f0] bg-white p-10 text-center text-sm text-[#8290a4]">
@@ -56,7 +77,14 @@ export default async function SavedOpportunitiesPage() {
   );
 }
 
-function SavedCard({ item }: { item: SavedOpportunityRow }) {
+function SavedCard({
+  item,
+  staleness,
+}: {
+  item: SavedOpportunityRow;
+  staleness: SnapshotStaleness | null;
+}) {
+  const snapshotStand = formatSnapshotDate(item.saved_at);
   return (
     <article className="rounded-2xl border border-[#e7ecf3] bg-white p-5">
       <div className="flex items-start justify-between gap-4">
@@ -72,10 +100,15 @@ function SavedCard({ item }: { item: SavedOpportunityRow }) {
             )}
             {item.match_score !== null && (
               <span
-                className="rounded-lg bg-[#f7faff] px-2 py-1 text-[10px] font-bold text-[#2f6fed]"
-                title="Match-Snapshot zum Zeitpunkt des Speicherns"
+                className={`rounded-lg px-2 py-1 text-[10px] font-bold ${
+                  staleness?.stale
+                    ? "bg-[#f0f2f6] text-[#8290a4]"
+                    : "bg-[#f7faff] text-[#2f6fed]"
+                }`}
+                title={`Match-Snapshot vom ${snapshotStand ?? "unbekanntem Datum"} (Matcher v${item.matcher_version ?? "?"})`}
               >
                 Match bei Speicherung: {item.match_score} %
+                {snapshotStand ? ` · Stand ${snapshotStand}` : ""}
               </span>
             )}
             {item.match_score === null &&
@@ -87,6 +120,14 @@ function SavedCard({ item }: { item: SavedOpportunityRow }) {
                   Match bei Speicherung: unvollständig
                 </span>
               )}
+            {staleness?.stale && (
+              <span
+                className="rounded-lg bg-[#fff4e5] px-2 py-1 text-[10px] font-bold text-[#a3611c]"
+                title={staleness.reasons.join(" ")}
+              >
+                Snapshot veraltet
+              </span>
+            )}
           </div>
           <h2 className="mt-3 text-lg font-bold text-[#1d3458]">
             {item.title || "Untitled opportunity"}
@@ -113,6 +154,13 @@ function SavedCard({ item }: { item: SavedOpportunityRow }) {
             Aktueller Match wird auf der Detailseite live berechnet — nach
             Profiländerungen kann er vom Snapshot abweichen.
           </p>
+          {staleness?.stale && (
+            <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[11px] text-[#a3611c]">
+              {staleness.reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          )}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">
           <Link

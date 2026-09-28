@@ -22,8 +22,11 @@ import { z } from "zod";
  */
 
 /** Matcher version. Bump when scoring/semantics change (provenance only —
- *  match results are never cached, so no cache invalidation is needed). */
-export const MATCHER_VERSION = 1;
+ *  match results are never cached, so no cache invalidation is needed).
+ *  v2 (Phase 7): production dimension set (12 dimensions incl. relocation,
+ *  training type, preferences), re-weighted model, and structured
+ *  candidate/opportunity evidence quotes per dimension. */
+export const MATCHER_VERSION = 2;
 
 /** Overall match status.
  * - complete: every essential dimension was evaluated → a score exists.
@@ -45,8 +48,11 @@ export type DimensionId =
   | "experience"
   | "languages"
   | "location"
+  | "relocation"
   | "remote"
-  | "employment";
+  | "employment"
+  | "training_type"
+  | "preferences";
 
 /** Per-dimension verdict.
  * - match: documented facts on both sides are compatible.
@@ -56,7 +62,9 @@ export type DimensionId =
  * - unknown: one side does not document the needed information. Never
  *   treated as 0 and never as a match.
  * - not_applicable: the source documents no requirement for this dimension,
- *   so there is nothing to evaluate (not a pass, not a fail). */
+ *   so there is nothing to evaluate (not a pass, not a fail) — or the
+ *   evaluation is deliberately delegated to a sibling dimension
+ *   (documented per dimension, e.g. location → relocation). */
 export const dimensionStatusSchema = z.enum([
   "match",
   "partial",
@@ -89,8 +97,11 @@ export const matchDimensionSchema = z.object({
     "experience",
     "languages",
     "location",
+    "relocation",
     "remote",
     "employment",
+    "training_type",
+    "preferences",
   ]),
   status: dimensionStatusSchema,
   /** Whether this dimension must be evaluated for a score to exist, for
@@ -102,6 +113,12 @@ export const matchDimensionSchema = z.object({
   /** What is missing on either side (German). */
   missing: z.array(z.string().max(300)).max(12),
   quality: dataQualitySchema,
+  /** Short raw quote of the documented candidate-side value (display
+   *  evidence; null when the candidate side documents nothing). */
+  candidate: z.string().max(200).nullable(),
+  /** Short raw quote of the documented opportunity-side value (display
+   *  evidence; null when the source documents nothing). */
+  opportunity: z.string().max(200).nullable(),
 });
 export type MatchDimension = z.infer<typeof matchDimensionSchema>;
 
@@ -135,16 +152,26 @@ export type MatchResult = z.infer<typeof matchResultSchema>;
  * unknown and not_applicable weights are removed from the denominator, so a
  * missing dimension neither inflates nor destroys the score.
  */
+/**
+ * v2 weight model (12 dimensions, must sum to 1.0). Relocation got its own
+ * dimension (split out of location); training type and user preferences
+ * are low-weight, honest dimensions that are usually `not_applicable` or
+ * `unknown` because the BA source / profile schema do not document the
+ * needed values.
+ */
 export const DIMENSION_WEIGHTS: Record<DimensionId, number> = {
-  goal: 0.2,
+  goal: 0.18,
   role: 0.2,
   education: 0.2,
-  skills: 0.15,
-  experience: 0.1,
-  languages: 0.1,
-  location: 0.03,
+  skills: 0.14,
+  experience: 0.09,
+  languages: 0.09,
+  location: 0.04,
+  relocation: 0.02,
   remote: 0.01,
   employment: 0.01,
+  training_type: 0.01,
+  preferences: 0.01,
 };
 
 /** Status contribution to a dimension's weight. */

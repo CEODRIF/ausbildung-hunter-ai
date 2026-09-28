@@ -9,11 +9,17 @@ import {
 import {
   DIMENSION_LABELS,
   MATCH_STATUS_LABELS,
+  MATCHER_VERSION,
   STATUS_LABELS,
   formatMatchScore,
   type MatchResult,
 } from "@/lib/opportunities/matching";
-import { listSavedOpportunities } from "@/lib/opportunities/saved";
+import {
+  evaluateSnapshotStaleness,
+  formatSnapshotDate,
+  getProfileRevision,
+  listSavedOpportunities,
+} from "@/lib/opportunities/saved";
 import {
   sanitizeSearchUrlState,
   type Opportunity,
@@ -77,13 +83,8 @@ export default async function OpportunityDetailsPage({
         "The opportunity source could not be reached right now. Please try again in a moment.";
     }
   }
-  const savedKeys = stateError
-    ? new Set<string>()
-    : new Set(
-        (await listSavedOpportunities(user.id)).map(
-          (row) => row.opportunity_key,
-        ),
-      );
+  const savedRows = stateError ? [] : await listSavedOpportunities(user.id);
+  const savedKeys = new Set(savedRows.map((row) => row.opportunity_key));
 
   if (stateError || !details) {
     return (
@@ -110,6 +111,32 @@ export default async function OpportunityDetailsPage({
 
   const opportunity = details.opportunity;
   const match = opportunity.match;
+
+  // Saved-snapshot provenance (server-side): labels the stored snapshot as
+  // historical and states explicitly when the profile/engine changed since.
+  let snapshotLines: string[] | null = null;
+  const savedRow = savedRows.find(
+    (row) => row.opportunity_key === opportunity.id,
+  );
+  if (savedRow && match) {
+    const profileRevision = await getProfileRevision(user.id);
+    const staleness = evaluateSnapshotStaleness(savedRow, {
+      profileUpdatedAt: profileRevision,
+      matcherVersion: MATCHER_VERSION,
+    });
+    if (staleness.hasSnapshot) {
+      const stand = formatSnapshotDate(savedRow.saved_at);
+      const scoreLabel =
+        savedRow.match_score !== null
+          ? `${savedRow.match_score} %`
+          : "unvollständig";
+      snapshotLines = [
+        `Gespeicherter Snapshot: ${scoreLabel} · Stand ${stand ?? "unbekannt"} (Matcher v${savedRow.matcher_version ?? "?"}) — historischer Wert, kein aktueller Match.`,
+        ...staleness.reasons,
+      ];
+    }
+  }
+
   const applyHref = opportunity.application_url ?? opportunity.source_url;
   const applyLabel = opportunity.application_url
     ? "Apply at the company →"
@@ -193,7 +220,9 @@ export default async function OpportunityDetailsPage({
             )}
           </div>
 
-          {details.match_available && match && <MatchSection match={match} />}
+          {details.match_available && match && (
+            <MatchSection match={match} snapshotLines={snapshotLines} />
+          )}
 
           {opportunity.description && (
             <div className="mt-8 whitespace-pre-wrap text-sm leading-7 text-[#546783]">
@@ -303,8 +332,15 @@ const STATUS_ICONS: Record<
 
 /** Dedicated, fully data-backed match explanation (German). No percentage is
  *  shown unless the match is complete — an incomplete match is labeled as
- *  such and explains exactly what is missing. */
-function MatchSection({ match }: { match: MatchResult }) {
+ *  such and explains exactly what is missing. A saved-snapshot note (when
+ *  present) is explicitly labeled as historical. */
+function MatchSection({
+  match,
+  snapshotLines,
+}: {
+  match: MatchResult;
+  snapshotLines: string[] | null;
+}) {
   const isComplete = match.status === "complete";
   return (
     <div className="mt-8 rounded-2xl border border-[#dce9ff] bg-[#f7faff] p-5">
@@ -318,6 +354,13 @@ function MatchSection({ match }: { match: MatchResult }) {
           </span>
         )}
       </div>
+      {snapshotLines && snapshotLines.length > 0 && (
+        <ul className="mt-2 space-y-1 rounded-xl bg-[#f0f4fb] p-3 text-xs leading-5 text-[#546783]">
+          {snapshotLines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
       {!isComplete && (
         <p className="mt-2 text-sm text-[#546783]">
           Für eine Prozentangabe fehlen essentielle Angaben – es wird daher
@@ -350,6 +393,13 @@ function MatchSection({ match }: { match: MatchResult }) {
               {dimension.evidence.length > 0 && (
                 <span className="mt-0.5 block pl-6 text-xs leading-5 text-[#71819a]">
                   {dimension.evidence.slice(0, 2).join(" ")}
+                </span>
+              )}
+              {(dimension.candidate || dimension.opportunity) && (
+                <span className="mt-0.5 block pl-6 text-[11px] leading-4 text-[#8290a4]">
+                  {dimension.candidate && `Profil: ${dimension.candidate}`}
+                  {dimension.candidate && dimension.opportunity && " · "}
+                  {dimension.opportunity && `Angebot: ${dimension.opportunity}`}
                 </span>
               )}
             </li>

@@ -683,7 +683,7 @@ describe("dimension: location", () => {
     expect(dimension(result, "location").status).toBe("match");
   });
 
-  it("different location + relocation accepted → partial", () => {
+  it("different location: identity is delegated to the relocation dimension", () => {
     const result = computeMatch(
       profile({
         goal: "arbeit",
@@ -691,31 +691,10 @@ describe("dimension: location", () => {
       }),
       arbeitOpp({ location: "20095 Hamburg" }),
     );
-    expect(dimension(result, "location").status).toBe("partial");
-  });
-
-  it("different location + relocation declined → mismatch", () => {
-    const result = computeMatch(
-      profile({
-        goal: "arbeit",
-        preferences: { ...profile().preferences, willing_to_relocate: false },
-      }),
-      arbeitOpp({ location: "20095 Hamburg" }),
-    );
-    expect(dimension(result, "location").status).toBe("mismatch");
-  });
-
-  it("different location + relocation unknown → unknown, NOT mismatch", () => {
-    const result = computeMatch(
-      profile({
-        goal: "arbeit",
-        preferences: { ...profile().preferences, willing_to_relocate: null },
-      }),
-      arbeitOpp({ location: "20095 Hamburg" }),
-    );
-    const location = dimension(result, "location");
-    expect(location.status).toBe("unknown");
-    expect(result.status).toBe("complete"); // non-essential
+    // v2 split: location only scores identity; the documented difference is
+    // evaluated by the relocation dimension.
+    expect(dimension(result, "location").status).toBe("not_applicable");
+    expect(dimension(result, "relocation").status).toBe("partial");
   });
 
   it("no opportunity location → not_applicable", () => {
@@ -735,6 +714,69 @@ describe("dimension: location", () => {
       arbeitOpp(),
     );
     expect(dimension(result, "location").status).toBe("unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Relocation preference (v2: own dimension, split out of location)
+// ---------------------------------------------------------------------------
+
+describe("dimension: relocation", () => {
+  const relocate = (willing: boolean | null) =>
+    profile({
+      goal: "arbeit",
+      preferences: { ...profile().preferences, willing_to_relocate: willing },
+    });
+
+  it("different location + relocation accepted → partial (never a full match)", () => {
+    const result = computeMatch(
+      relocate(true),
+      arbeitOpp({ location: "20095 Hamburg" }),
+    );
+    expect(dimension(result, "relocation").status).toBe("partial");
+    expect(dimension(result, "relocation").evidence.join(" ")).toContain(
+      "Umzug laut Profil möglich",
+    );
+  });
+
+  it("different location + relocation declined → mismatch", () => {
+    const result = computeMatch(
+      relocate(false),
+      arbeitOpp({ location: "20095 Hamburg" }),
+    );
+    expect(dimension(result, "relocation").status).toBe("mismatch");
+  });
+
+  it("different location + relocation unknown → unknown, NOT mismatch", () => {
+    const result = computeMatch(
+      relocate(null),
+      arbeitOpp({ location: "20095 Hamburg" }),
+    );
+    const relocation = dimension(result, "relocation");
+    expect(relocation.status).toBe("unknown");
+    expect(relocation.essential).toBe(false);
+    expect(result.status).toBe("complete"); // non-essential
+  });
+
+  it("same location → not_applicable (no move required)", () => {
+    const result = computeMatch(relocate(true), arbeitOpp());
+    expect(dimension(result, "relocation").status).toBe("not_applicable");
+  });
+
+  it("no opportunity location → not_applicable", () => {
+    const result = computeMatch(relocate(true), arbeitOpp({ location: null }));
+    expect(dimension(result, "relocation").status).toBe("not_applicable");
+  });
+
+  it("no candidate location → not_applicable (nothing to move from)", () => {
+    const result = computeMatch(
+      profile({
+        goal: "arbeit",
+        preferences: { ...profile().preferences, preferred_locations: [] },
+      }),
+      arbeitOpp(),
+    );
+    expect(dimension(result, "relocation").status).toBe("not_applicable");
   });
 });
 
@@ -904,7 +946,7 @@ describe("scoring model", () => {
     expect(Math.round(sum * 1000) / 1000).toBe(1);
   });
 
-  it("score is renormalized over evaluated dimensions only (goal match + explicit role mismatch → 50)", () => {
+  it("score is renormalized over evaluated dimensions only (goal match + explicit role mismatch → 47 under v2 weights)", () => {
     const result = computeMatch(
       profile({
         goal: "arbeit",
@@ -914,7 +956,9 @@ describe("scoring model", () => {
       arbeitOpp({ location: null }), // only goal + role evaluated
     );
     expect(result.status).toBe("complete");
-    expect(result.score).toBe(50);
+    // v2: goal 0.18 (match) + role 0.20 (mismatch) over 0.38 → 47.37 → 47
+    expect(result.score).toBe(Math.round((100 * 0.18) / (0.18 + 0.2)));
+    expect(result.score).toBe(47);
   });
 
   it("partial contributes 50% (goal match + role partial → 75)", () => {
@@ -940,8 +984,12 @@ describe("scoring model", () => {
         location: null,
       }),
     );
-    // goal match (0.2) + role partial (0.1) + education match (0.2) over 0.6
-    expect(result.score).toBe(Math.round((100 * (0.2 + 0.1 + 0.2)) / 0.6));
+    // v2: goal 0.18 (match) + role 0.20×0.5 (partial) + education 0.20
+    // (match) over 0.58 → 82.76 → 83
+    expect(result.score).toBe(
+      Math.round((100 * (0.18 + 0.1 + 0.2)) / (0.18 + 0.2 + 0.2)),
+    );
+    expect(result.score).toBe(83);
   });
 
   it("score is always an integer in 0..100 when present", () => {
@@ -1089,7 +1137,8 @@ describe("determinism and edge cases", () => {
     );
     expect(result.status).toBe("complete");
     expect(result.score).not.toBeNull();
-    expect(result.dimensions.length).toBe(9);
+    // v2: twelve production dimensions
+    expect(result.dimensions.length).toBe(12);
   });
 
   it("malformed raw profile is rejected by the schema (search layer treats it as unavailable)", () => {
@@ -1160,5 +1209,142 @@ describe("determinism and edge cases", () => {
     // A's result must not be influenced by B's data and vice versa.
     expect(computeMatch(profileA, opp())).toEqual(resultA);
     expect(computeMatch(profileB, opp())).toEqual(resultB);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v2 production dimensions (Phase 7)
+// ---------------------------------------------------------------------------
+
+describe("dimension: training_type (v2)", () => {
+  it("no training type documented by the source → not_applicable", () => {
+    const result = computeMatch(profile({ goal: "arbeit" }), arbeitOpp());
+    const training = dimension(result, "training_type");
+    expect(training.status).toBe("not_applicable");
+    expect(training.essential).toBe(false);
+  });
+
+  it("documented type without a candidate preference → unknown, never blocking", () => {
+    const result = computeMatch(profile({ goal: "ausbildung" }), opp());
+    const training = dimension(result, "training_type");
+    expect(training.status).toBe("unknown");
+    expect(training.essential).toBe(false);
+    expect(training.missing.join(" ")).toContain("Ausbildungsform");
+    expect(training.opportunity).toBe("AUSBILDUNG");
+    expect(result.status).toBe("complete"); // non-essential → still scored
+  });
+});
+
+describe("dimension: preferences (v2)", () => {
+  it("no industry preference documented → not_applicable", () => {
+    const result = computeMatch(profile({ goal: "arbeit" }), arbeitOpp());
+    expect(dimension(result, "preferences").status).toBe("not_applicable");
+  });
+
+  it("documented preference but the source documents no industry → unknown, never a negative", () => {
+    const result = computeMatch(
+      profile({
+        goal: "arbeit",
+        preferences: {
+          ...profile().preferences,
+          preferred_industries: ["Handwerk"],
+        },
+      }),
+      arbeitOpp(),
+    );
+    const preferences = dimension(result, "preferences");
+    expect(preferences.status).toBe("unknown");
+    expect(preferences.essential).toBe(false);
+    expect(preferences.candidate).toBe("handwerk");
+    expect(preferences.opportunity).toBeNull();
+    expect(preferences.missing.join(" ")).toContain("Branche");
+    expect(result.status).toBe("complete");
+  });
+});
+
+describe("structured evidence (v2 candidate/opportunity quotes)", () => {
+  it("education carries the documented raw values from both sides", () => {
+    const result = computeMatch(
+      profile({
+        goal: "ausbildung",
+        target_roles: [explicitRole("Mechatroniker")],
+        preferences: { ...profile().preferences, preferred_job_titles: [] },
+        education: [
+          {
+            school: null,
+            university: null,
+            degree: null,
+            field_of_study: null,
+            graduation_year: null,
+            education_level: "Abitur",
+            source: "user_provided",
+          },
+        ],
+      }),
+      opp(),
+    );
+    const education = dimension(result, "education");
+    expect(education.candidate).toBe("Abitur");
+    expect(education.opportunity).toBe("HAUPTSCHULABSCHLUSS");
+  });
+
+  it("goal quotes both documented sides", () => {
+    const result = computeMatch(profile({ goal: "ausbildung" }), opp());
+    const goal = dimension(result, "goal");
+    expect(goal.candidate).toBe("Ausbildung");
+    expect(goal.opportunity).toBe("Ausbildung");
+  });
+
+  it("location difference quotes the documented locations from both sides", () => {
+    const result = computeMatch(
+      profile({
+        goal: "arbeit",
+        preferences: { ...profile().preferences, willing_to_relocate: true },
+      }),
+      arbeitOpp({ location: "20095 Hamburg" }),
+    );
+    const location = dimension(result, "location");
+    expect(location.candidate).toBe("Berlin");
+    expect(location.opportunity).toBe("20095 Hamburg");
+    expect(dimension(result, "relocation").opportunity).toBe("20095 Hamburg");
+  });
+
+  it("undocumented sides stay null (no invented evidence)", () => {
+    const result = computeMatch(profile({ goal: "arbeit" }), arbeitOpp());
+    const preferences = dimension(result, "preferences");
+    expect(preferences.candidate).toBeNull();
+    expect(preferences.opportunity).toBeNull();
+  });
+});
+
+describe("v2 dimension set completeness", () => {
+  it("all twelve production dimensions are present and ordered", () => {
+    const result = computeMatch(profile({ goal: "ausbildung" }), opp());
+    expect(result.dimensions.map((d) => d.id)).toEqual([
+      "goal",
+      "role",
+      "education",
+      "skills",
+      "experience",
+      "languages",
+      "location",
+      "relocation",
+      "remote",
+      "employment",
+      "training_type",
+      "preferences",
+    ]);
+  });
+
+  it("relocation never blocks completeness (unknown willingness → scored)", () => {
+    const result = computeMatch(
+      profile({
+        goal: "arbeit",
+        preferences: { ...profile().preferences, willing_to_relocate: null },
+      }),
+      arbeitOpp({ location: "20095 Hamburg" }),
+    );
+    expect(result.status).toBe("complete");
+    expect(result.score).not.toBeNull();
   });
 });

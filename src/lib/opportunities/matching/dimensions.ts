@@ -15,14 +15,25 @@ import type { DimensionId, MatchDimension } from "./types";
 import type { DataQuality, DimensionStatus } from "./types";
 
 /**
- * The nine independent dimension evaluators. Each is a pure function of
- * (normalized candidate, opportunity) and returns a factual verdict.
- * Verdicts here are RAW: the inferred-data cap (inferred evidence is never
- * scored more confidently than explicit evidence) is applied once, in the
- * assembly step — see scorer.ts.
+ * The twelve independent dimension evaluators (Phase 7 production set).
+ * Each is a pure function of (normalized candidate, opportunity) and returns
+ * a factual verdict. Verdicts here are RAW: the inferred-data cap (inferred
+ * evidence is never scored more confidently than explicit evidence) is
+ * applied once, in the assembly step — see scorer.ts.
+ *
+ * Every verdict carries short raw quotes of the documented candidate-side
+ * and opportunity-side values (`candidate` / `opportunity`) for display.
+ * Quotes are truncated documented values, never synthesized text.
  */
 
 type CandidateSideQuality = "explicit" | "inferred" | "missing";
+
+function quote(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, 200);
+}
 
 function dim(
   id: DimensionId,
@@ -31,6 +42,8 @@ function dim(
   evidence: string[],
   missing: string[],
   quality: DataQuality,
+  candidate: string | null,
+  opportunity: string | null,
 ): MatchDimension {
   return {
     id,
@@ -39,6 +52,8 @@ function dim(
     evidence: evidence.slice(0, 12).map((line) => line.slice(0, 300)),
     missing: missing.slice(0, 12).map((line) => line.slice(0, 300)),
     quality,
+    candidate: quote(candidate),
+    opportunity: quote(opportunity),
   };
 }
 
@@ -48,7 +63,8 @@ const GOAL_LABEL: Record<"ausbildung" | "arbeit", string> = {
 };
 
 // ---------------------------------------------------------------------------
-// 1. Goal compatibility (always essential; both sides always documented)
+// 1. Goal compatibility / eligibility (always essential; both sides always
+//    documented — Ausbildung profile vs. Arbeit offer is a real mismatch)
 // ---------------------------------------------------------------------------
 
 export function evalGoal(
@@ -65,6 +81,8 @@ export function evalGoal(
       ],
       [],
       "explicit",
+      GOAL_LABEL[candidate.goal],
+      GOAL_LABEL[opportunity.goal],
     );
   }
   return dim(
@@ -76,6 +94,8 @@ export function evalGoal(
     ],
     [],
     "explicit",
+    GOAL_LABEL[candidate.goal],
+    GOAL_LABEL[opportunity.goal],
   );
 }
 
@@ -111,6 +131,8 @@ export function evalRole(
       [],
       ["Keine Zielberufe im Profil dokumentiert."],
       "missing",
+      null,
+      opportunity.title,
     );
   }
   const oppTexts = [
@@ -127,6 +149,8 @@ export function evalRole(
 
   let status: "match" | "partial" | "mismatch" = "mismatch";
   const evidence: string[] = [];
+  let matchedRoleText: string | null = null;
+  let matchedOppText: string | null = null;
   for (const role of candidate.roles) {
     const roleNorm = normalizeText(role.text);
     if (!roleNorm) continue;
@@ -138,11 +162,15 @@ export function evalRole(
         evidence.push(
           `Zielberuf „${role.text}“ entspricht dem Beruf des Angebots („${opp.raw}“).`,
         );
+        matchedRoleText = role.text;
+        matchedOppText = opp.raw;
         break;
       }
       if (opp.norm.includes(roleNorm) || roleNorm.includes(opp.norm)) {
         status = better(status, "match");
         evidence.push(`Zielberuf „${role.text}“ kommt in „${opp.raw}“ vor.`);
+        matchedRoleText = role.text;
+        matchedOppText = opp.raw;
         break;
       }
       if (roleTokens.length > 0) {
@@ -152,6 +180,10 @@ export function evalRole(
           evidence.push(
             `Gemeinsame Begriffe mit „${opp.raw}“: ${shared.slice(0, 4).join(", ")}.`,
           );
+          if (!matchedRoleText) {
+            matchedRoleText = role.text;
+            matchedOppText = opp.raw;
+          }
         }
       }
     }
@@ -161,11 +193,20 @@ export function evalRole(
   )
     ? "explicit"
     : "inferred";
-  return dim("role", true, status, evidence, [], quality);
+  return dim(
+    "role",
+    true,
+    status,
+    evidence,
+    [],
+    quality,
+    matchedRoleText ?? candidate.roles[0]?.text ?? null,
+    matchedOppText ?? opportunity.title,
+  );
 }
 
 // ---------------------------------------------------------------------------
-// 3. Education / Ausbildung eligibility (essential for Ausbildung)
+// 3. Education requirement (essential for Ausbildung — eligibility)
 // ---------------------------------------------------------------------------
 
 export function evalEducation(
@@ -181,6 +222,8 @@ export function evalEducation(
       [],
       ["Kein Schulabschluss im Profil dokumentiert."],
       "missing",
+      null,
+      opportunity.education_requirement?.raw ?? null,
     );
   }
   const requirement = opportunity.education_requirement;
@@ -194,6 +237,8 @@ export function evalEducation(
       ],
       [],
       "source_documented",
+      candidate.education.raw,
+      null,
     );
   }
   if (requirement.level === "unknown") {
@@ -208,6 +253,8 @@ export function evalEducation(
         `Anforderung „${requirement.raw}“ ist nicht der Bildungsabschluss-Hierarchie zuordenbar – nicht verifizierbar.`,
       ],
       "source_documented",
+      candidate.education.raw,
+      requirement.raw,
     );
   }
   const candidateRank = EDUCATION_RANK[candidate.education.level];
@@ -222,6 +269,8 @@ export function evalEducation(
       ],
       [],
       candidate.education.quality,
+      candidate.education.raw,
+      requirement.raw,
     );
   }
   return dim(
@@ -233,6 +282,8 @@ export function evalEducation(
     ],
     [],
     candidate.education.quality,
+    candidate.education.raw,
+    requirement.raw,
   );
 }
 
@@ -250,6 +301,7 @@ export function evalSkills(
   const preferred = [
     ...new Set(opportunity.preferred_skills.map(normalizeText).filter(Boolean)),
   ];
+  const oppQuote = required.length > 0 ? required : preferred;
   if (required.length === 0 && preferred.length === 0) {
     return dim(
       "skills",
@@ -258,6 +310,8 @@ export function evalSkills(
       ["Die Quelle dokumentiert keine Skills."],
       [],
       "source_documented",
+      null,
+      null,
     );
   }
   if (candidate.skills.length === 0) {
@@ -268,6 +322,8 @@ export function evalSkills(
       [],
       ["Keine Skills im Profil dokumentiert."],
       "missing",
+      null,
+      oppQuote.slice(0, 4).join(", ") || null,
     );
   }
   const matches = (term: string) =>
@@ -307,7 +363,16 @@ export function evalSkills(
         `Wunsch-Skills erfüllt: ${matchedPreferred.slice(0, 6).join(", ")}.`,
       );
   }
-  return dim("skills", false, status, evidence, [], "inferred");
+  return dim(
+    "skills",
+    false,
+    status,
+    evidence,
+    [],
+    "inferred",
+    candidate.skills.slice(0, 4).join(", ") || null,
+    oppQuote.slice(0, 4).join(", ") || null,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +398,8 @@ export function evalExperience(
       ["Keine konkrete Erfahrungsanforderung dokumentiert."],
       [],
       "source_documented",
+      null,
+      null,
     );
   }
   if (candidate.experience.length === 0) {
@@ -343,6 +410,8 @@ export function evalExperience(
       [],
       ["Keine Berufserfahrung im Profil dokumentiert."],
       "missing",
+      null,
+      `${requiredYears} Jahre`,
     );
   }
   const dated = candidate.experience.filter((item) => item.startMs !== null);
@@ -354,6 +423,8 @@ export function evalExperience(
       [],
       ["Dokumentierte Erfahrung ohne auswertbare Zeiträume."],
       "missing",
+      `${candidate.experience.length} Einträge`,
+      `${requiredYears} Jahre`,
     );
   }
   const reference = Date.parse(opportunity.retrieved_at);
@@ -365,6 +436,8 @@ export function evalExperience(
       [],
       ["Referenzdatum des Angebots nicht auswertbar."],
       "source_documented",
+      `${candidate.experience.length} Einträge`,
+      `${requiredYears} Jahre`,
     );
   }
   let total = 0;
@@ -392,6 +465,8 @@ export function evalExperience(
     ],
     [],
     quality,
+    `${years} Jahre`,
+    `${requiredYears} Jahre`,
   );
 }
 
@@ -413,6 +488,20 @@ export function evalLanguages(
       (value): value is { raw: string; name: string; cefr: CefrLevel | null } =>
         value !== null,
     );
+  const oppQuote =
+    requirements.length > 0
+      ? requirements
+          .map((r) => r.raw)
+          .slice(0, 3)
+          .join(", ")
+      : null;
+  const candQuote =
+    candidate.languages.length > 0
+      ? candidate.languages
+          .map((l) => l.raw)
+          .slice(0, 3)
+          .join(", ")
+      : null;
   if (requirements.length === 0) {
     return dim(
       "languages",
@@ -421,6 +510,8 @@ export function evalLanguages(
       ["Die Quelle dokumentiert keine Sprachanforderungen."],
       [],
       "source_documented",
+      candQuote,
+      null,
     );
   }
   let status: "match" | "partial" | "mismatch" | "unknown" = "match";
@@ -470,12 +561,37 @@ export function evalLanguages(
       : involved.every((q) => q === "inferred")
         ? "inferred"
         : "explicit";
-  return dim("languages", true, status, evidence, missing, quality);
+  return dim(
+    "languages",
+    true,
+    status,
+    evidence,
+    missing,
+    quality,
+    candQuote,
+    oppQuote,
+  );
 }
 
 // ---------------------------------------------------------------------------
-// 7. Location (relocation unknown → unknown, never incompatible)
+// 7. Location (identity only — a documented difference is evaluated by the
+//    dedicated relocation dimension, not here)
 // ---------------------------------------------------------------------------
+
+function sameDocumentedLocation(
+  candidate: NormalizedCandidate,
+  opportunity: Opportunity,
+): boolean {
+  const oppTokens = new Set(contentTokens(opportunity.location as string));
+  const oppPlz = postalToken(opportunity.location as string);
+  for (const location of candidate.locations) {
+    if (contentTokens(location).some((token) => oppTokens.has(token)))
+      return true;
+    const plz = postalToken(location);
+    if (plz && plz === oppPlz) return true;
+  }
+  return false;
+}
 
 export function evalLocation(
   candidate: NormalizedCandidate,
@@ -489,6 +605,8 @@ export function evalLocation(
       ["Kein Standort im Angebot dokumentiert."],
       [],
       "source_documented",
+      null,
+      null,
     );
   }
   if (candidate.locations.length === 0) {
@@ -499,23 +617,11 @@ export function evalLocation(
       [],
       ["Kein Standort im Profil dokumentiert."],
       "missing",
+      null,
+      opportunity.location,
     );
   }
-  const oppTokens = new Set(contentTokens(opportunity.location));
-  const oppPlz = postalToken(opportunity.location);
-  let same = false;
-  for (const location of candidate.locations) {
-    if (contentTokens(location).some((token) => oppTokens.has(token))) {
-      same = true;
-      break;
-    }
-    const plz = postalToken(location);
-    if (plz && plz === oppPlz) {
-      same = true;
-      break;
-    }
-  }
-  if (same) {
+  if (sameDocumentedLocation(candidate, opportunity)) {
     return dim(
       "location",
       false,
@@ -525,21 +631,94 @@ export function evalLocation(
       ],
       [],
       "explicit",
+      candidate.locations[0],
+      opportunity.location,
+    );
+  }
+  // Documented difference — the severity is decided by the relocation
+  // dimension (willingness), not by location identity alone.
+  return dim(
+    "location",
+    false,
+    "not_applicable",
+    [
+      `Angebots-Standort (${opportunity.location}) weicht vom dokumentierten Standort ab – Bewertung über die Dimension „Umzugsbereitschaft“.`,
+    ],
+    [],
+    "explicit",
+    candidate.locations[0],
+    opportunity.location,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 8. Relocation preference (only when a move is required: documented
+//    different locations. Unknown willingness → unknown, never incompatible)
+// ---------------------------------------------------------------------------
+
+export function evalRelocation(
+  candidate: NormalizedCandidate,
+  opportunity: Opportunity,
+): MatchDimension {
+  if (!opportunity.location) {
+    return dim(
+      "relocation",
+      false,
+      "not_applicable",
+      ["Kein Standort im Angebot dokumentiert."],
+      [],
+      "source_documented",
+      null,
+      null,
+    );
+  }
+  if (candidate.locations.length === 0) {
+    return dim(
+      "relocation",
+      false,
+      "not_applicable",
+      ["Kein Umzug zu bewerten – kein Standort im Profil dokumentiert."],
+      [],
+      "source_documented",
+      null,
+      opportunity.location,
+    );
+  }
+  const willingnessQuote =
+    candidate.relocation === true
+      ? "Umzug möglich"
+      : candidate.relocation === false
+        ? "Umzug nicht gewünscht"
+        : null;
+  if (sameDocumentedLocation(candidate, opportunity)) {
+    return dim(
+      "relocation",
+      false,
+      "not_applicable",
+      [
+        "Kein Umzug erforderlich – der Angebots-Standort entspricht dem Profil.",
+      ],
+      [],
+      "explicit",
+      willingnessQuote,
+      opportunity.location,
     );
   }
   if (candidate.relocation === true) {
     return dim(
-      "location",
+      "relocation",
       false,
       "partial",
       [`Andere Stadt (${opportunity.location}); Umzug laut Profil möglich.`],
       [],
       "explicit",
+      willingnessQuote,
+      opportunity.location,
     );
   }
   if (candidate.relocation === false) {
     return dim(
-      "location",
+      "relocation",
       false,
       "mismatch",
       [
@@ -547,10 +726,12 @@ export function evalLocation(
       ],
       [],
       "explicit",
+      willingnessQuote,
+      opportunity.location,
     );
   }
   return dim(
-    "location",
+    "relocation",
     false,
     "unknown",
     [
@@ -558,11 +739,13 @@ export function evalLocation(
     ],
     ["Umzugsbereitschaft nicht dokumentiert."],
     "explicit",
+    null,
+    opportunity.location,
   );
 }
 
 // ---------------------------------------------------------------------------
-// 8. Remote (only when the source documents home office; missing = unknown)
+// 9. Remote (only when the source documents home office; missing = unknown)
 // ---------------------------------------------------------------------------
 
 export function evalRemote(
@@ -580,8 +763,13 @@ export function evalRemote(
       ["Die Quelle dokumentiert keine Home-Office-Angabe."],
       [],
       "source_documented",
+      null,
+      null,
     );
   }
+  const oppQuote = opportunity.home_office
+    ? "Home Office möglich"
+    : "Kein Home Office";
   if (candidate.remotePreference === null) {
     return dim(
       "remote",
@@ -590,6 +778,8 @@ export function evalRemote(
       [],
       ["Keine Home-Office-Präferenz im Profil dokumentiert."],
       "missing",
+      null,
+      oppQuote,
     );
   }
   if (candidate.remotePreference === "remote") {
@@ -601,6 +791,8 @@ export function evalRemote(
           ["Home Office möglich – entspricht Ihrer Präferenz."],
           [],
           "inferred",
+          "Remote",
+          oppQuote,
         )
       : dim(
           "remote",
@@ -609,6 +801,8 @@ export function evalRemote(
           ["Kein Home Office dokumentiert – weicht von Ihrer Präferenz ab."],
           [],
           "inferred",
+          "Remote",
+          oppQuote,
         );
   }
   if (candidate.remotePreference === "hybrid") {
@@ -622,6 +816,8 @@ export function evalRemote(
           ],
           [],
           "inferred",
+          "Hybrid",
+          oppQuote,
         )
       : dim(
           "remote",
@@ -630,6 +826,8 @@ export function evalRemote(
           ["Kein Home Office dokumentiert – Hybrid nicht möglich."],
           [],
           "inferred",
+          "Hybrid",
+          oppQuote,
         );
   }
   return dim(
@@ -639,12 +837,14 @@ export function evalRemote(
     ["Vor-Ort-Arbeit mit dem Angebot vereinbar."],
     [],
     "inferred",
+    "Vor Ort",
+    oppQuote,
   );
 }
 
 // ---------------------------------------------------------------------------
-// 9. Employment (the candidate profile documents no working-time preference
-//    field today → always unknown, never a negative)
+// 10. Employment (the candidate profile documents no working-time preference
+//     field today → always unknown when the source documents a type)
 // ---------------------------------------------------------------------------
 
 export function evalEmployment(
@@ -659,6 +859,8 @@ export function evalEmployment(
       ["Keine Arbeitszeitform im Angebot dokumentiert."],
       [],
       "source_documented",
+      null,
+      null,
     );
   }
   void candidate;
@@ -669,5 +871,81 @@ export function evalEmployment(
     [`Angebot: ${opportunity.employment_type}.`],
     ["Keine Präferenz zur Arbeitszeitform im Profil dokumentiert."],
     "missing",
+    null,
+    opportunity.employment_type,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 11. Training type (documented by the source for Ausbildung offers; the
+//     profile schema has no training-type preference field today → unknown,
+//     never a negative, never blocking)
+// ---------------------------------------------------------------------------
+
+export function evalTrainingType(
+  candidate: NormalizedCandidate,
+  opportunity: Opportunity,
+): MatchDimension {
+  void candidate;
+  if (!opportunity.training_type) {
+    return dim(
+      "training_type",
+      false,
+      "not_applicable",
+      ["Die Quelle dokumentiert keine Ausbildungsform."],
+      [],
+      "source_documented",
+      null,
+      null,
+    );
+  }
+  return dim(
+    "training_type",
+    false,
+    "unknown",
+    [`Angebot: Ausbildungsform „${opportunity.training_type}“ dokumentiert.`],
+    ["Keine Präferenz zur Ausbildungsform im Profil dokumentiert."],
+    "missing",
+    null,
+    opportunity.training_type,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 12. User preferences (industry preferences vs. the opportunity's industry.
+//     The BA source documents no industry field today → unknown when the
+//     candidate documents preferences, not_applicable otherwise)
+// ---------------------------------------------------------------------------
+
+export function evalPreferences(
+  candidate: NormalizedCandidate,
+  opportunity: Opportunity,
+): MatchDimension {
+  void opportunity;
+  if (candidate.industries.length === 0) {
+    return dim(
+      "preferences",
+      false,
+      "not_applicable",
+      ["Keine Branchenpräferenz im Profil dokumentiert."],
+      [],
+      "source_documented",
+      null,
+      null,
+    );
+  }
+  return dim(
+    "preferences",
+    false,
+    "unknown",
+    [
+      `Dokumentierte Branchenpräferenz: ${candidate.industries.slice(0, 3).join(", ")}.`,
+    ],
+    [
+      "Die Quelle dokumentiert keine Branche für das Angebot – keine Bewertung möglich.",
+    ],
+    "missing",
+    candidate.industries.slice(0, 3).join(", "),
+    null,
   );
 }

@@ -23,7 +23,10 @@ const {
   saveOpportunityFromKey,
   removeSavedOpportunity,
   updateSavedOpportunityNotes,
+  evaluateSnapshotStaleness,
+  formatSnapshotDate,
 } = await import("@/lib/opportunities/saved");
+const { MATCHER_VERSION } = await import("@/lib/opportunities/matching");
 const { OpportunityNotFoundError, OpportunityProviderError } =
   await import("@/lib/opportunities/providers/arbeitsagentur");
 
@@ -52,6 +55,8 @@ function detailsSingleRow(): Record<string, unknown> {
     notes: null,
     match_score: null,
     match_status: null,
+    matcher_version: null,
+    match_profile_updated_at: null,
     saved_at: "2026-09-28T12:00:00.000Z",
     updated_at: "2026-09-28T12:00:00.000Z",
   };
@@ -131,6 +136,8 @@ describe("saveOpportunityFromKey (server-derived data only)", () => {
           "notes",
           "match_score",
           "match_status",
+          "matcher_version",
+          "match_profile_updated_at",
         ].includes(key),
     );
     expect(unexpected).toEqual([]);
@@ -141,7 +148,10 @@ describe("saveOpportunityFromKey (server-derived data only)", () => {
       singleData: () => detailsSingleRow(),
       maybeSingleData: (table) =>
         table === "candidate_profiles"
-          ? { profile_json: candidateProfileFixture() }
+          ? {
+              profile_json: candidateProfileFixture(),
+              updated_at: "2026-09-20T09:00:00.000Z",
+            }
           : null,
     });
     vi.mocked(createAdminClient).mockReturnValue(adminMock.admin as never);
@@ -155,6 +165,10 @@ describe("saveOpportunityFromKey (server-derived data only)", () => {
     expect(payload.match_score).toBeTypeOf("number");
     expect((payload.match_score as number) >= 0).toBe(true);
     expect(payload.match_status).toBe("complete");
+    // Snapshot provenance (v2 metadata): engine version + profile revision
+    // at snapshot time, both server-derived.
+    expect(payload.matcher_version).toBe(MATCHER_VERSION);
+    expect(payload.match_profile_updated_at).toBe("2026-09-20T09:00:00.000Z");
   });
 
   it("stores match_status=incomplete (null score) when the profile lacks essentials", async () => {
@@ -359,5 +373,83 @@ describe("save route contract", () => {
       }),
     );
     expect(response.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Snapshot staleness (profile changes must not masquerade as current data)
+// ---------------------------------------------------------------------------
+
+describe("snapshot staleness (v2 metadata)", () => {
+  const baseRow = {
+    match_score: 72,
+    match_status: "complete" as string | null,
+    matcher_version: 1,
+    match_profile_updated_at: "2026-09-20T09:00:00.000Z",
+    saved_at: "2026-09-20T09:00:00.000Z",
+  };
+
+  it("fresh snapshot (same profile revision, current matcher) is not stale", () => {
+    const result = evaluateSnapshotStaleness(
+      { ...baseRow, matcher_version: MATCHER_VERSION },
+      {
+        profileUpdatedAt: "2026-09-20T09:00:00.000Z",
+        matcherVersion: MATCHER_VERSION,
+      },
+    );
+    expect(result.hasSnapshot).toBe(true);
+    expect(result.stale).toBe(false);
+    expect(result.reasons).toEqual([]);
+  });
+
+  it("profile updated after the snapshot → stale, with a factual reason", () => {
+    const result = evaluateSnapshotStaleness(baseRow, {
+      profileUpdatedAt: "2026-10-01T09:00:00.000Z",
+      matcherVersion: 1,
+    });
+    expect(result.stale).toBe(true);
+    expect(result.reasons.join(" ")).toContain("Profil");
+  });
+
+  it("matcher version advanced after the snapshot → stale", () => {
+    const result = evaluateSnapshotStaleness(baseRow, {
+      profileUpdatedAt: "2026-09-20T09:00:00.000Z",
+      matcherVersion: MATCHER_VERSION,
+    });
+    expect(result.stale).toBe(true);
+    expect(result.reasons.join(" ")).toContain("Matcher-Version");
+  });
+
+  it("no snapshot (null status) is never presented as stale or current", () => {
+    const result = evaluateSnapshotStaleness(
+      { ...baseRow, match_score: null, match_status: null },
+      {
+        profileUpdatedAt: "2026-10-01T09:00:00.000Z",
+        matcherVersion: MATCHER_VERSION,
+      },
+    );
+    expect(result.hasSnapshot).toBe(false);
+    expect(result.stale).toBe(false);
+    expect(result.reasons).toEqual([]);
+  });
+
+  it("incomplete snapshots can be stale too (they are snapshots)", () => {
+    const result = evaluateSnapshotStaleness(
+      { ...baseRow, match_score: null, match_status: "incomplete" },
+      {
+        profileUpdatedAt: "2026-10-01T09:00:00.000Z",
+        matcherVersion: 1,
+      },
+    );
+    expect(result.hasSnapshot).toBe(true);
+    expect(result.stale).toBe(true);
+  });
+
+  it("formatSnapshotDate renders a German date and tolerates nulls", () => {
+    expect(formatSnapshotDate("2026-09-20T09:00:00.000Z")).toMatch(
+      /^\d{2}\.\d{2}\.\d{4}$/,
+    );
+    expect(formatSnapshotDate(null)).toBeNull();
+    expect(formatSnapshotDate("not-a-date")).toBeNull();
   });
 });

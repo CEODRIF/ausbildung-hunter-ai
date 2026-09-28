@@ -49,8 +49,11 @@ const DIMENSION_ORDER: DimensionId[] = [
   "experience",
   "languages",
   "location",
+  "relocation",
   "remote",
   "employment",
+  "training_type",
+  "preferences",
 ];
 
 function dimensionOrder(dimensions: MatchDimension[]): MatchDimension[] {

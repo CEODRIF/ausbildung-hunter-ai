@@ -1,6 +1,7 @@
+import Link from "next/link";
 import { Card } from "@/components/ui";
 import { Icon } from "@/components/app-shell";
-import type { DashboardData } from "@/lib/dashboard";
+import type { DashboardData, MatchingSummary } from "@/lib/dashboard";
 import { getProfileCompletion } from "@/lib/dashboard";
 import { EmailAccountCard } from "@/components/email-account-card";
 
@@ -12,6 +13,7 @@ export function DashboardContent({ data }: { data: DashboardData }) {
     activities,
     emailAccount,
     hasCompletedScan,
+    matching,
   } = data;
   const isAusbildung = profile.selected_goal === "ausbildung";
   const goalLabel = isAusbildung ? "Ausbildung" : "Arbeit";
@@ -91,6 +93,8 @@ export function DashboardContent({ data }: { data: DashboardData }) {
         />
         <ProfileCard completion={completion} />
       </section>
+
+      <MatchingCard matching={matching} />
 
       <section className="mt-8 grid gap-5 xl:grid-cols-[1.3fr_0.7fr]">
         <Card className="overflow-hidden" as="section">
@@ -377,4 +381,98 @@ function formatActivityDate(value: string) {
     month: "short",
     day: "numeric",
   }).format(date);
+}
+
+/** Safe matching summary (Phase 7): only the user's own saved-opportunity
+ *  snapshots are shown — counts plus the top complete snapshots. An
+ *  incomplete profile produces a warning, never a fake ranking. */
+function MatchingCard({ matching }: { matching: MatchingSummary }) {
+  if (!matching.hasCandidateProfile) {
+    return (
+      <section className="mt-8">
+        <Card className="p-5 sm:p-6" as="section">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="font-bold text-[#1d3458]">Opportunity matching</h2>
+              <p className="mt-1 text-xs text-[#8b9ab0]">
+                No candidate profile yet — match scores are unavailable until
+                you scan a document.
+              </p>
+            </div>
+            <Link
+              href="/bewerbung-scanner"
+              className="rounded-xl bg-[#edf3ff] px-4 py-2 text-xs font-semibold text-[#2f6fed]"
+            >
+              Scan your profile →
+            </Link>
+          </div>
+        </Card>
+      </section>
+    );
+  }
+  return (
+    <section className="mt-8">
+      <Card className="p-5 sm:p-6" as="section">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="font-bold text-[#1d3458]">Opportunity matching</h2>
+            <p className="mt-1 text-xs leading-5 text-[#8b9ab0]">
+              Server-computed snapshots of your saved opportunities. The current
+              match is always calculated live on the detail page — after profile
+              changes a snapshot may be stale.
+            </p>
+          </div>
+          <Link
+            href="/opportunities/saved"
+            className="rounded-xl bg-[#edf3ff] px-4 py-2 text-xs font-semibold text-[#2f6fed]"
+          >
+            All saved →
+          </Link>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-xl bg-[#f7f9fc] p-3">
+            <p className="text-xs font-semibold text-[#71819a]">Saved</p>
+            <p className="mt-1 text-2xl font-bold text-[#10203b]">
+              {matching.savedTotal}
+            </p>
+          </div>
+          <div className="rounded-xl bg-[#eaf8f3] p-3">
+            <p className="text-xs font-semibold text-[#1b9b70]">
+              Matched (snapshot)
+            </p>
+            <p className="mt-1 text-2xl font-bold text-[#10203b]">
+              {matching.completeCount}
+            </p>
+          </div>
+          <div className="rounded-xl bg-[#fff4e5] p-3">
+            <p className="text-xs font-semibold text-[#a3611c]">
+              Incomplete profile data
+            </p>
+            <p className="mt-1 text-2xl font-bold text-[#10203b]">
+              {matching.incompleteCount}
+            </p>
+          </div>
+        </div>
+        {matching.top.length > 0 && (
+          <ul className="mt-4 divide-y divide-[#edf0f4]">
+            {matching.top.map((item) => (
+              <li key={item.opportunity_key} className="py-2.5">
+                <Link
+                  href={`/opportunities/${encodeURIComponent(item.opportunity_key)}`}
+                  className="text-sm font-semibold text-[#1d3458] hover:text-[#2f6fed]"
+                >
+                  {item.title || "Untitled opportunity"}
+                </Link>
+                <span className="ml-2 text-xs text-[#8b9ab0]">
+                  {item.location || "Location not listed"} · snapshot{" "}
+                  {item.match_score} % · saved{" "}
+                  {formatActivityDate(item.saved_at)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </section>
+  );
 }

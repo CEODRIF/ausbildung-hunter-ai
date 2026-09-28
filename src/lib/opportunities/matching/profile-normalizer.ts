@@ -63,6 +63,8 @@ export interface NormalizedCandidate {
   /** null = not documented. Never assumed. */
   relocation: boolean | null;
   remotePreference: "remote" | "hybrid" | "onsite" | null;
+  /** Documented industry preferences (normalized, deduped). */
+  industries: string[];
 }
 
 function roleQuality(source: string): CandidateQuality {
@@ -181,6 +183,15 @@ export function normalizeCandidate(
       remotePreference = "onsite";
   }
 
+  const seenIndustries = new Set<string>();
+  const industries: string[] = [];
+  for (const item of profile.preferences.preferred_industries) {
+    const key = normalizeText(item);
+    if (!key || seenIndustries.has(key)) continue;
+    seenIndustries.add(key);
+    industries.push(key);
+  }
+
   return {
     goal: profile.goal,
     roles,
@@ -192,5 +203,6 @@ export function normalizeCandidate(
     locations,
     relocation: profile.preferences.willing_to_relocate,
     remotePreference,
+    industries,
   };
 }
