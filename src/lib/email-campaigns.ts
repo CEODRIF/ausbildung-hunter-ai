@@ -193,7 +193,9 @@ async function getCampaignContext(userId: string, campaignId: string) {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("email_campaigns")
-    .select("id, user_id, draft_id, email_account_id, usage_date, status")
+    .select(
+      "id, user_id, draft_id, email_account_id, usage_date, status, started_at, created_at",
+    )
     .eq("id", campaignId)
     .eq("user_id", userId)
     .single<{
@@ -203,9 +205,102 @@ async function getCampaignContext(userId: string, campaignId: string) {
       email_account_id: string;
       usage_date: string;
       status: CampaignStatus;
+      started_at: string | null;
+      created_at: string;
     }>();
   if (error || !data) throw new Error("Campaign not found.");
   return data;
+}
+
+/** A message claimed as `sending` without any DB progress for this long is
+ *  treated as lost: the worker that claimed it died (crash, redeploy,
+ *  network partition). 15 minutes is far above any provider round-trip. */
+export const STALE_SENDING_AFTER_MINUTES = 15;
+/** A campaign that was created but never started (still `queued`, no
+ *  `started_at`) is treated as abandoned after this long — its reserved
+ *  capacity belongs to a UTC date that has already passed, so it can never
+ *  be used. 24 hours. */
+export const STALE_QUEUED_AFTER_HOURS = 24;
+
+export interface CampaignRecoveryResult {
+  recovered: boolean;
+  /** In-flight (`sending`) messages re-finalized as failed with the
+   *  deterministic code `worker_stalled`. */
+  stalledMessagesFailed: number;
+  /** A never-started campaign older than the TTL was cancelled (its queued
+   *  messages + reserved capacity released). */
+  staleCampaignCancelled: boolean;
+  /** Campaign status after recovery. */
+  status: CampaignStatus;
+}
+
+/**
+ * Deterministic stale-state recovery for one campaign (session-scoped to
+ * `userId`). Runs server-side with the service role on every campaign
+ * access (monitor page, worker tick). No invented data: stalled in-flight
+ * messages are re-finalized through the existing `finalize_email_message`
+ * RPC (correct counters + capacity release), and a never-started campaign
+ * past the TTL is cancelled through the existing `cancel_queued_campaign`
+ * RPC.
+ */
+export async function recoverStaleCampaigns(
+  userId: string,
+  campaignId: string,
+): Promise<CampaignRecoveryResult> {
+  const admin = createAdminClient();
+  const campaign = await getCampaignContext(userId, campaignId);
+  if (
+    ["completed", "partially_failed", "failed", "cancelled"].includes(
+      campaign.status,
+    )
+  )
+    return {
+      recovered: false,
+      stalledMessagesFailed: 0,
+      staleCampaignCancelled: false,
+      status: campaign.status,
+    };
+
+  let stalledMessagesFailed = 0;
+  const stalledBeforeMs = Date.now() - STALE_SENDING_AFTER_MINUTES * 60_000;
+  const { data: stalled } = await admin
+    .from("email_messages")
+    .select("id")
+    .eq("campaign_id", campaign.id)
+    .eq("user_id", userId)
+    .eq("status", "sending")
+    .lt("updated_at", new Date(stalledBeforeMs).toISOString());
+  for (const message of (stalled ?? []) as Array<{ id: string }>) {
+    const { data } = await admin.rpc("finalize_email_message", {
+      target_message_id: message.id,
+      succeeded: false,
+      provider_id: null,
+      failure_code: "worker_stalled",
+      failure_message:
+        "The sending worker stalled before reporting a result. This message was not confirmed as sent; resend the campaign to retry it.",
+    });
+    if (data === true) stalledMessagesFailed += 1;
+  }
+
+  let staleCampaignCancelled = false;
+  if (campaign.status === "queued" && !campaign.started_at) {
+    const staleBeforeMs = Date.now() - STALE_QUEUED_AFTER_HOURS * 3_600_000;
+    if (new Date(campaign.created_at).getTime() < staleBeforeMs) {
+      const { data, error } = await admin.rpc("cancel_queued_campaign", {
+        target_user_id: userId,
+        target_campaign_id: campaign.id,
+      });
+      if (!error && data === true) staleCampaignCancelled = true;
+    }
+  }
+
+  const status = (await getCampaignContext(userId, campaignId)).status;
+  return {
+    recovered: stalledMessagesFailed > 0 || staleCampaignCancelled,
+    stalledMessagesFailed,
+    staleCampaignCancelled,
+    status,
+  };
 }
 
 export async function processCampaignBatch(
@@ -214,6 +309,9 @@ export async function processCampaignBatch(
   batchSize = 5,
 ) {
   const admin = createAdminClient();
+  // Recover lost in-flight messages / abandoned queued state first, so a
+  // stalled campaign is self-healing on the next worker tick.
+  await recoverStaleCampaigns(userId, campaignId);
   const campaign = await getCampaignContext(userId, campaignId);
   if (
     ["completed", "partially_failed", "failed", "cancelled"].includes(
@@ -311,6 +409,9 @@ export async function processCampaignBatch(
 
 export async function getCampaign(userId: string, campaignId: string) {
   const admin = createAdminClient();
+  // Viewing the monitor also heals stale state (worker died, worker never
+  // configured) so the user sees the real status.
+  await recoverStaleCampaigns(userId, campaignId);
   const campaign = await getCampaignContext(userId, campaignId);
   const [{ data: messages }, usage] = await Promise.all([
     admin

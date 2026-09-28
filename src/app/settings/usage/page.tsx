@@ -38,6 +38,13 @@ export default async function UsageSettingsPage({
               className="font-semibold text-[#2f6fed]"
             >
               Billing
+            </Link>{" "}
+            · Data &amp; privacy:{" "}
+            <Link
+              href="/settings/data"
+              className="font-semibold text-[#2f6fed]"
+            >
+              Data export &amp; deletion
             </Link>
             .
           </p>

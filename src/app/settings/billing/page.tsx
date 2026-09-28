@@ -115,6 +115,13 @@ export default async function BillingSettingsPage() {
               className="font-semibold text-[#2f6fed]"
             >
               Usage &amp; limits
+            </Link>{" "}
+            · Export your data or delete your account under{" "}
+            <Link
+              href="/settings/data"
+              className="font-semibold text-[#2f6fed]"
+            >
+              Data &amp; privacy
             </Link>
             .
           </p>
