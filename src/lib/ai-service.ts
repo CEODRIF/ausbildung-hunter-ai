@@ -176,11 +176,16 @@ export async function deleteAIFile(fileId: string) {
     .eq("user_id", user.id);
 }
 
+/** Shared AI daily request limit (single source of truth — used by the
+ *  quota RPCs and displayed by the dashboard; the dashboard must never
+ *  trust browser-provided usage values). */
+export const AI_DAILY_REQUEST_LIMIT = 100;
+
 async function reserveAIUsage(userId: string) {
   const admin = createAdminClient();
   const { error } = await admin.rpc("reserve_ai_request", {
     target_user_id: userId,
-    max_requests: 100,
+    max_requests: AI_DAILY_REQUEST_LIMIT,
   });
   if (error)
     throw new Error(

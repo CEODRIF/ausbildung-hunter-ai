@@ -1,9 +1,33 @@
 import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { AI_DAILY_REQUEST_LIMIT } from "@/lib/ai-service";
 import type { Profile } from "@/lib/auth";
 import type { SafeEmailAccount } from "@/lib/email-oauth";
-import { listSavedOpportunities } from "@/lib/opportunities/saved";
+import { getUsageSnapshot, type UsageSnapshot } from "@/lib/email-campaigns";
+import {
+  buildRecommendationQuery,
+  evaluateProfileCompleteness,
+  resolveNextAction,
+  type NextAction,
+  type ProfileCompleteness,
+} from "@/lib/dashboard-intelligence";
+import {
+  MATCHER_VERSION,
+  type MatchResult,
+} from "@/lib/opportunities/matching";
+import { searchOpportunities } from "@/lib/opportunities/search";
+import type { Opportunity } from "@/lib/opportunities/types";
+import {
+  evaluateSnapshotStaleness,
+  formatSnapshotDate,
+  listSavedOpportunities,
+} from "@/lib/opportunities/saved";
+import {
+  candidateProfileSchema,
+  type CandidateProfile,
+} from "@/lib/bewerbung-schema";
 
 export type DailyUsage = {
   emails_sent: number;
@@ -39,14 +63,72 @@ export type MatchingSummary = {
   }>;
 };
 
+/** A recent application = the user's own application draft joined with its
+ *  persisted campaign + message state. No synthetic records: every field
+ *  comes from rows that actually exist. */
+export interface RecentApplication {
+  id: string;
+  subject: string;
+  company: string | null;
+  goal: string;
+  opportunity_key: string | null;
+  opportunity_title: string | null;
+  created_at: string;
+  updated_at: string;
+  has_content: boolean;
+  campaign_id: string | null;
+  campaign_status: string | null;
+  sent_at: string | null;
+}
+
+export interface SavedPreviewItem {
+  id: string;
+  opportunity_key: string;
+  title: string | null;
+  company_name: string | null;
+  location: string | null;
+  match_score: number | null;
+  match_status: string | null;
+  saved_at: string;
+  savedAtLabel: string | null;
+  stale: boolean;
+  staleReasons: string[];
+}
+
+export interface RecommendationItem {
+  opportunity: Opportunity;
+  match: MatchResult | null;
+  saved: boolean;
+}
+
+/** The recommendation layer resolves everything server-side from the
+ *  authoritative source (shared cache first, provider on miss) and ranks
+ *  with the EXISTING matcher v2 (`sort=match`). It never invents items:
+ *  `available=false` + a factual reason triggers an explicit empty state. */
+export interface DashboardRecommendations {
+  available: boolean;
+  blockedReason: "no_profile" | "no_keyword" | "search_failed" | null;
+  items: RecommendationItem[];
+}
+
 export type DashboardData = {
   profile: Profile;
   usage: DailyUsage;
+  usageSnapshot: UsageSnapshot;
+  aiLimit: number;
+  /** Count of prepared application drafts (the real data source). */
   applicationsCount: number;
   activities: ActivityLog[];
   emailAccount: SafeEmailAccount | null;
   hasCompletedScan: boolean;
   matching: MatchingSummary;
+  /** The user's latest validated candidate profile (null = none). */
+  candidateProfile: CandidateProfile | null;
+  completeness: ProfileCompleteness | null;
+  nextAction: NextAction;
+  savedPreview: SavedPreviewItem[];
+  recentApplications: RecentApplication[];
+  recommendations: DashboardRecommendations;
 };
 
 export function buildMatchingSummary(
@@ -89,6 +171,7 @@ export function buildMatchingSummary(
 
 export async function getDashboardData(userId: string): Promise<DashboardData> {
   const supabase = await createClient();
+  const admin = createAdminClient();
   const [
     profileResult,
     usageResult,
@@ -98,11 +181,14 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     scanResult,
     candidateProfileResult,
     savedResult,
+    usageSnapshotResult,
   ] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", userId).single<Profile>(),
     supabase.rpc("get_or_create_daily_usage").single<DailyUsage>(),
+    // "Applications prepared" counts real composer drafts (the legacy
+    // `applications` table is never written by the product).
     supabase
-      .from("applications")
+      .from("application_drafts")
       .select("id", { count: "exact", head: true })
       .eq("user_id", userId),
     supabase
@@ -110,7 +196,7 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
       .select("id, activity_type, title, description, metadata, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
-      .limit(5),
+      .limit(8),
     supabase
       .from("email_accounts")
       .select(
@@ -128,10 +214,15 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
       .eq("status", "completed"),
     supabase
       .from("candidate_profiles")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId),
+      .select("profile_json, updated_at")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
     // Best-effort: the dashboard must not fail if the saved list errors.
     listSavedOpportunities(userId).catch(() => []),
+    // Server-side quota (single source of truth — no duplicated logic).
+    getUsageSnapshot(userId).catch(() => null),
   ]);
 
   if (profileResult.error) throw new Error("Unable to load your profile.");
@@ -144,18 +235,236 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
   if (candidateProfileResult.error)
     throw new Error("Unable to load candidate profile status.");
 
+  // Validate the latest profile server-side; an invalid row means "none".
+  let candidateProfile: CandidateProfile | null = null;
+  let profileRevision: string | null = null;
+  if (candidateProfileResult.data?.profile_json) {
+    const parsed = candidateProfileSchema.safeParse(
+      candidateProfileResult.data.profile_json,
+    );
+    if (parsed.success) candidateProfile = parsed.data;
+  }
+  if (typeof candidateProfileResult.data?.updated_at === "string") {
+    profileRevision = candidateProfileResult.data.updated_at;
+  }
+  const completeness = candidateProfile
+    ? evaluateProfileCompleteness(candidateProfile)
+    : null;
+  const saved = savedResult;
+  const savedKeys = new Set(saved.map((row) => row.opportunity_key));
+  const matching = buildMatchingSummary(Boolean(candidateProfile), saved);
+
+  const usageSnapshot = usageSnapshotResult ?? {
+    date: usageResult.data.date,
+    emails_sent: usageResult.data.emails_sent,
+    emails_reserved: 0,
+    daily_limit: 0,
+    remaining: 0,
+  };
+
+  // Recent applications: drafts + their persisted campaign/message state.
+  const recentApplications = await loadRecentApplications(admin, userId);
+  const hasApplicationDraft = recentApplications.some(
+    (draft) => draft.has_content,
+  );
+  const campaign = recentApplications
+    .filter((draft) => draft.campaign_id && draft.campaign_status)
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
+
+  // Saved preview with Phase 7 staleness semantics (never silently current).
+  const savedPreview: SavedPreviewItem[] = saved.slice(0, 5).map((row) => {
+    const staleness = evaluateSnapshotStaleness(row, {
+      profileUpdatedAt: profileRevision,
+      matcherVersion: MATCHER_VERSION,
+    });
+    return {
+      id: row.id,
+      opportunity_key: row.opportunity_key,
+      title: row.title,
+      company_name: row.company_name,
+      location: row.location,
+      match_score: row.match_score,
+      match_status: row.match_status,
+      saved_at: row.saved_at,
+      savedAtLabel: formatSnapshotDate(row.saved_at),
+      stale: staleness.stale,
+      staleReasons: staleness.reasons,
+    };
+  });
+
+  // Recommendations: existing search + matcher v2, server-side only.
+  const recommendations = await loadRecommendations(
+    candidateProfile,
+    userId,
+    savedKeys,
+  );
+
+  const nextAction = resolveNextAction({
+    hasProfile: Boolean(candidateProfile),
+    completeness,
+    savedTotal: saved.length,
+    completeMatchCount: matching.completeCount,
+    hasApplicationDraft,
+    hasEmailAccount: Boolean(emailAccountResult.data),
+    campaign:
+      campaign?.campaign_id && campaign?.campaign_status
+        ? {
+            id: campaign.campaign_id,
+            status: campaign.campaign_status,
+          }
+        : null,
+  });
+
   return {
     profile: profileResult.data,
     usage: usageResult.data,
+    usageSnapshot,
+    aiLimit: AI_DAILY_REQUEST_LIMIT,
     applicationsCount: applicationsResult.count ?? 0,
     activities: (activityResult.data ?? []) as ActivityLog[],
     emailAccount: emailAccountResult.data as SafeEmailAccount | null,
     hasCompletedScan: (scanResult.count ?? 0) > 0,
-    matching: buildMatchingSummary(
-      (candidateProfileResult.count ?? 0) > 0,
-      savedResult,
-    ),
+    matching,
+    candidateProfile,
+    completeness,
+    nextAction,
+    savedPreview,
+    recentApplications,
+    recommendations,
   };
+}
+
+/** Last 5 application drafts (newest first) joined with their recipients,
+ *  campaigns, and sent-message timestamps. All reads are user-scoped. */
+async function loadRecentApplications(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+): Promise<RecentApplication[]> {
+  const { data: drafts, error } = await admin
+    .from("application_drafts")
+    .select(
+      "id, goal, subject, body_text, created_at, updated_at, opportunity_key, opportunity_title, opportunity_company",
+    )
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false })
+    .limit(5);
+  if (error || !drafts || drafts.length === 0) return [];
+
+  const draftIds = drafts.map((draft) => draft.id as string);
+  const [recipientsResult, campaignsResult] = await Promise.all([
+    admin
+      .from("application_draft_recipients")
+      .select("draft_id, email, company_name")
+      .in("draft_id", draftIds),
+    admin
+      .from("email_campaigns")
+      .select("id, draft_id, status, created_at, updated_at")
+      .in("draft_id", draftIds)
+      .order("updated_at", { ascending: false }),
+  ]);
+
+  const campaignRows = (campaignsResult.data ?? []) as Array<{
+    id: string;
+    draft_id: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+  }>;
+  const sentAtByCampaign = new Map<string, string | null>();
+  if (campaignRows.length > 0) {
+    const { data: messages } = await admin
+      .from("email_messages")
+      .select("campaign_id, sent_at")
+      .in(
+        "campaign_id",
+        campaignRows.map((row) => row.id),
+      )
+      .not("sent_at", "is", null);
+    for (const message of (messages ?? []) as Array<{
+      campaign_id: string;
+      sent_at: string;
+    }>) {
+      const current = sentAtByCampaign.get(message.campaign_id) ?? null;
+      if (!current || message.sent_at > current) {
+        sentAtByCampaign.set(message.campaign_id, message.sent_at);
+      }
+    }
+  }
+
+  const recipientsByDraft = new Map<
+    string,
+    Array<{ email: string; company_name: string | null }>
+  >();
+  for (const recipient of (recipientsResult.data ?? []) as Array<{
+    draft_id: string;
+    email: string;
+    company_name: string | null;
+  }>) {
+    const list = recipientsByDraft.get(recipient.draft_id) ?? [];
+    list.push({ email: recipient.email, company_name: recipient.company_name });
+    recipientsByDraft.set(recipient.draft_id, list);
+  }
+
+  const campaignByDraft = new Map<string, (typeof campaignRows)[number]>();
+  for (const row of campaignRows) {
+    if (!campaignByDraft.has(row.draft_id))
+      campaignByDraft.set(row.draft_id, row);
+  }
+
+  return (drafts as Array<Record<string, unknown>>).map((draft) => {
+    const recipients = recipientsByDraft.get(draft.id as string) ?? [];
+    const campaignRow = campaignByDraft.get(draft.id as string);
+    return {
+      id: draft.id as string,
+      subject: String(draft.subject ?? ""),
+      company:
+        (draft.opportunity_company as string | null) ??
+        recipients[0]?.company_name ??
+        null,
+      goal: String(draft.goal ?? ""),
+      opportunity_key: (draft.opportunity_key as string | null) ?? null,
+      opportunity_title: (draft.opportunity_title as string | null) ?? null,
+      created_at: draft.created_at as string,
+      updated_at: draft.updated_at as string,
+      has_content:
+        String(draft.subject ?? "").trim().length > 0 ||
+        String(draft.body_text ?? "").trim().length > 0,
+      campaign_id: campaignRow?.id ?? null,
+      campaign_status: campaignRow?.status ?? null,
+      sent_at: campaignRow
+        ? (sentAtByCampaign.get(campaignRow.id) ?? null)
+        : null,
+    };
+  });
+}
+
+async function loadRecommendations(
+  candidateProfile: CandidateProfile | null,
+  userId: string,
+  savedKeys: Set<string>,
+): Promise<DashboardRecommendations> {
+  if (!candidateProfile) {
+    return { available: false, blockedReason: "no_profile", items: [] };
+  }
+  const query = buildRecommendationQuery(candidateProfile);
+  if (!query) {
+    return { available: false, blockedReason: "no_keyword", items: [] };
+  }
+  try {
+    const response = await searchOpportunities(query, { userId });
+    const items: RecommendationItem[] = response.results
+      .map((opportunity) => ({
+        opportunity,
+        match: opportunity.match ?? null,
+        saved: savedKeys.has(opportunity.id),
+      }))
+      .slice(0, 6);
+    return { available: true, blockedReason: null, items };
+  } catch {
+    // The source may be unavailable — show an explicit empty state instead
+    // of inventing items.
+    return { available: false, blockedReason: "search_failed", items: [] };
+  }
 }
 
 export function getProfileCompletion(profile: Profile) {

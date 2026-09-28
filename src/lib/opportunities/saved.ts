@@ -141,6 +141,12 @@ export async function saveOpportunityFromKey(
     throw new OpportunityProviderError(
       "Unable to save the opportunity right now.",
     );
+  await logActivityBestEffort(admin, userId, {
+    activity_type: "opportunity_saved",
+    title: `Opportunity saved: ${opportunity.title || "Untitled"}`,
+    description: opportunity.company_name ?? null,
+    metadata: { opportunity_key: opportunity.id },
+  });
   return data as SavedOpportunityRow;
 }
 
@@ -160,6 +166,34 @@ export async function removeSavedOpportunity(
     throw new OpportunityProviderError(
       "Unable to remove the saved opportunity right now.",
     );
+  await logActivityBestEffort(admin, userId, {
+    activity_type: "opportunity_removed",
+    title: "Saved opportunity removed",
+    description: null,
+    metadata: { opportunity_key: opportunityKey },
+  });
+}
+
+/** Best-effort activity logging: a failed audit insert must never turn a
+ *  successful user action into an error. */
+async function logActivityBestEffort(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+  entry: {
+    activity_type: string;
+    title: string;
+    description: string | null;
+    metadata: Record<string, unknown>;
+  },
+): Promise<void> {
+  try {
+    await admin.from("activity_logs").insert({
+      user_id: userId,
+      ...entry,
+    });
+  } catch {
+    // intentionally non-fatal
+  }
 }
 
 /** Update notes only — no opportunity fields can be changed this way. */
