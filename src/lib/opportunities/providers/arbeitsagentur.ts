@@ -2,9 +2,10 @@ import "server-only";
 
 import {
   opportunitySchema,
+  usesScanWindow,
   type Opportunity,
   type OpportunitySearchParams,
-  type OpportunitySearchPage,
+  type OpportunityWindow,
 } from "@/lib/opportunities/types";
 
 const SEARCH_URL =
@@ -514,7 +515,7 @@ const foldNorm = (value: string) =>
  * false for items that cannot be verified against the source (no data) rather
  * than guessing.
  */
-function buildMatchers(params: OpportunitySearchParams) {
+export function buildMatchers(params: OpportunitySearchParams) {
   const matchers: Array<(item: Opportunity) => boolean> = [];
   if (params.role) {
     const queryTokens = foldNorm(params.role).split(" ").filter(Boolean);
@@ -549,14 +550,123 @@ function buildMatchers(params: OpportunitySearchParams) {
       item.posted_at ? item.posted_at.slice(0, 10) >= cutoff : false,
     );
   }
+  if (params.employment === "full_time") {
+    matchers.push((item) =>
+      (item.employment_type ?? "").toLowerCase().includes("full-time"),
+    );
+  }
+  if (params.employment === "part_time") {
+    matchers.push((item) =>
+      (item.employment_type ?? "").toLowerCase().includes("part-time"),
+    );
+  }
+  if (params.training_type !== "any") {
+    matchers.push((item) => item.training_type === params.training_type);
+  }
+  if (params.home_office === "yes") {
+    matchers.push((item) => item.home_office === true);
+  }
+  if (params.salary_documented) {
+    matchers.push((item) => item.salary !== null);
+  }
+  if (params.distance_max !== undefined) {
+    const max = params.distance_max;
+    matchers.push(
+      (item) => item.distance_km !== null && item.distance_km <= max,
+    );
+  }
   return matchers;
 }
 
-export async function searchArbeitsagentur(
+/**
+ * Deterministic sorting on structured source values (never on formatted
+ * display strings). Items without the documented value sort last; ties are
+ * broken by stable id so pagination pages never interleave arbitrarily.
+ * `relevance` keeps the source's native order; `match` is applied in the
+ * search layer (it needs per-user scores that must not be cached).
+ */
+export function sortWindow(
+  window: Opportunity[],
+  sort: OpportunitySearchParams["sort"],
+): Opportunity[] {
+  const byId = (a: Opportunity, b: Opportunity) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  const withValueLast = (
+    a: Opportunity,
+    b: Opportunity,
+    value: (item: Opportunity) => number | string | null,
+    compare: (x: number | string, y: number | string) => number,
+  ) => {
+    const av = value(a);
+    const bv = value(b);
+    if (av === null && bv === null) return byId(a, b);
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    const result = compare(av, bv);
+    return result !== 0 ? result : byId(a, b);
+  };
+  switch (sort) {
+    case "newest":
+      return [...window].sort((a, b) =>
+        withValueLast(
+          a,
+          b,
+          (item) => item.posted_at,
+          (x, y) =>
+            String(x) < String(y) ? 1 : String(x) > String(y) ? -1 : 0,
+        ),
+      );
+    case "oldest":
+      return [...window].sort((a, b) =>
+        withValueLast(
+          a,
+          b,
+          (item) => item.posted_at,
+          (x, y) =>
+            String(x) < String(y) ? -1 : String(y) < String(x) ? 1 : 0,
+        ),
+      );
+    case "salary":
+      return [...window].sort((a, b) =>
+        withValueLast(
+          a,
+          b,
+          (item) => item.salary?.amount ?? null,
+          (x, y) => (y as number) - (x as number),
+        ),
+      );
+    case "distance":
+      return [...window].sort((a, b) =>
+        withValueLast(
+          a,
+          b,
+          (item) => item.distance_km,
+          (x, y) => (x as number) - (y as number),
+        ),
+      );
+    case "relevance":
+    case "match":
+    default:
+      return window;
+  }
+}
+
+/**
+ * Fetch the user-independent result window for a search.
+ *
+ * - `upstream` mode (no post-filters, relevance sort): true API pagination —
+ *   one provider call, `total` is the source total, no truncation.
+ * - `scan` mode (role/company/freshness filters or non-relevance sort):
+ *   bounded scan of at most SCAN_MAX_PAGES × SCAN_PAGE_SIZE source items,
+ *   filtered and sorted server-side. `total` is the matched count within the
+ *   scanned window; `scan_truncated` tells the UI the window is smaller than
+ *   the full source. The window is cached page-independently so turning pages
+ *   does not re-hit the provider.
+ */
+export async function fetchOpportunityWindow(
   params: OpportunitySearchParams,
-): Promise<OpportunitySearchPage> {
-  const matchers = buildMatchers(params);
-  if (matchers.length === 0) {
+): Promise<OpportunityWindow> {
+  if (!usesScanWindow(params)) {
     const query = buildSearchQuery({
       goal: params.goal,
       keyword: params.keyword,
@@ -568,25 +678,28 @@ export async function searchArbeitsagentur(
     });
     const raw = await fetchBaJson(`${SEARCH_URL}?${query.toString()}`);
     const items = Array.isArray(raw.ergebnisliste) ? raw.ergebnisliste : [];
-    const results = items
+    const window = items
       .map((item) => normalizeSearchItem(item, params.goal))
       .filter((item): item is Opportunity => item !== null);
     return {
-      results,
-      total: Number(raw.maxErgebnisse) || results.length,
+      mode: "upstream",
+      window,
+      total: Number(raw.maxErgebnisse) || window.length,
       scan_truncated: false,
+      exhausted: true,
     };
   }
 
-  // Bounded scan: the API has no role/company/date-range filters, so we page
-  // through source results (max SCAN_MAX_PAGES × SCAN_PAGE_SIZE) and filter
-  // server-side. `total` is the matched count within the scanned window and
-  // scan_truncated tells the UI the window was smaller than the source.
+  const matchers = buildMatchers(params);
+  // Collect the full bounded window before filtering/sorting. We do NOT stop
+  // early at `page*pageSize`: with a non-relevance sort the items that sort to
+  // the front are not the first items in source (relevance) order, so a
+  // partial collection would sort an incomplete subset. The window is cached
+  // page-independently, so turning pages never re-hits the provider.
   const collected: Opportunity[] = [];
   const seen = new Set<string>();
   let sourceTotal = Number.MAX_SAFE_INTEGER;
   let exhausted = false;
-  const needed = params.page * params.pageSize;
   for (let page = 1; page <= SCAN_MAX_PAGES; page++) {
     const query = buildSearchQuery({
       goal: params.goal,
@@ -614,13 +727,14 @@ export async function searchArbeitsagentur(
       exhausted = true;
       break;
     }
-    if (collected.length >= needed) break;
   }
-  const start = (params.page - 1) * params.pageSize;
+  const sorted = sortWindow(collected, params.sort);
   return {
-    results: collected.slice(start, start + params.pageSize),
-    total: collected.length,
+    mode: "scan",
+    window: sorted,
+    total: sorted.length,
     scan_truncated: !exhausted,
+    exhausted,
   };
 }
 

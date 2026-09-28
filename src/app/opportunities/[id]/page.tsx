@@ -7,7 +7,10 @@ import {
   OpportunityNotFoundError,
 } from "@/lib/opportunities/search";
 import { listSavedOpportunities } from "@/lib/opportunities/saved";
-import type { Opportunity } from "@/lib/opportunities/types";
+import {
+  sanitizeSearchUrlState,
+  type Opportunity,
+} from "@/lib/opportunities/types";
 
 export const dynamic = "force-dynamic";
 
@@ -38,14 +41,23 @@ function formatDay(iso: string | null): string | null {
 
 export default async function OpportunityDetailsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active")
     redirect("/login");
 
   const id = decodeURIComponent((await params).id);
+  // `from` carries the previous search state for the back link. It is
+  // re-sanitized server-side (whitelist + validation) — never trusted raw.
+  const rawFrom = (await searchParams).from;
+  const backQuery = sanitizeSearchUrlState(
+    typeof rawFrom === "string" ? decodeURIComponent(rawFrom) : "",
+  );
+  const backHref = backQuery ? `/opportunities?${backQuery}` : "/opportunities";
   let details: Awaited<ReturnType<typeof getOpportunityDetails>> | null = null;
   let stateError: string | null = null;
   try {
@@ -71,7 +83,7 @@ export default async function OpportunityDetailsPage({
       <main className="min-h-screen bg-[#f6f8fb] px-5 py-8 sm:px-8 lg:px-10">
         <div className="mx-auto max-w-3xl">
           <Link
-            href="/opportunities"
+            href={backHref}
             className="text-sm font-semibold text-[#2f6fed]"
           >
             ← Back to opportunities
@@ -99,10 +111,7 @@ export default async function OpportunityDetailsPage({
   return (
     <main className="min-h-screen bg-[#f6f8fb] px-5 py-8 sm:px-8 lg:px-10">
       <div className="mx-auto max-w-4xl">
-        <Link
-          href="/opportunities"
-          className="text-sm font-semibold text-[#2f6fed]"
-        >
+        <Link href={backHref} className="text-sm font-semibold text-[#2f6fed]">
           ← Back to opportunities
         </Link>
         <article className="mt-8 rounded-2xl border border-[#e7ecf3] bg-white p-6 sm:p-8">

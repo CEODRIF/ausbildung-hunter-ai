@@ -1,11 +1,28 @@
 import Link from "next/link";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { OpportunitySearch } from "@/components/opportunity-search";
+import { sanitizeSearchUrlState } from "@/lib/opportunities/types";
 
 export const dynamic = "force-dynamic";
-export default async function OpportunitiesPage() {
+export default async function OpportunitiesPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { profile } = await getCurrentUserAndProfile();
   if (!profile) return null;
+  const raw = await searchParams;
+  const entries = Object.entries(raw)
+    .filter(([, value]) => value !== undefined)
+    .map(
+      ([key, value]) =>
+        `${key}=${Array.isArray(value) ? (value[0] ?? "") : value}`,
+    )
+    .join("&");
+  // Only validated, whitelisted filter values reach the client; anything else
+  // is dropped server-side.
+  const initialUrlState = sanitizeSearchUrlState(entries);
+  const defaultGoal = profile.selected_goal ?? "arbeit";
   return (
     <main className="min-h-screen bg-[#f6f8fb] px-5 py-8 sm:px-8 lg:px-10">
       <div className="mx-auto max-w-6xl">
@@ -32,7 +49,10 @@ export default async function OpportunitiesPage() {
           </Link>
         </div>
         <div className="mt-8">
-          <OpportunitySearch defaultGoal={profile.selected_goal ?? "arbeit"} />
+          <OpportunitySearch
+            defaultGoal={defaultGoal}
+            initialUrlState={initialUrlState}
+          />
         </div>
       </div>
     </main>

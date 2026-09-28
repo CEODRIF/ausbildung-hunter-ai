@@ -7,17 +7,17 @@ import { candidateProfileSchema } from "@/lib/bewerbung-schema";
 import {
   OpportunityNotFoundError,
   OpportunityProviderError,
+  fetchOpportunityWindow,
   resolveOpportunity,
-  searchArbeitsagentur,
 } from "@/lib/opportunities/providers/arbeitsagentur";
 import { matchOpportunity } from "@/lib/opportunities/match";
 import {
   OPPORTUNITY_SCHEMA_VERSION,
   opportunitySchema,
+  usesScanWindow,
   type CandidateForMatch,
   type Opportunity,
   type OpportunitySearchParams,
-  type OpportunitySearchPage,
   type OpportunitySearchResponse,
 } from "@/lib/opportunities/types";
 
@@ -25,23 +25,26 @@ export { OpportunityNotFoundError, OpportunityProviderError };
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-/** Shared cache payload. MUST stay user-independent: no user ids, no
- *  candidate profiles, no match data — matching happens after the cache read. */
+/**
+ * Shared cache payload. MUST stay user-independent: no user ids, no
+ * candidate profiles, no match data — matching happens after the cache read.
+ *
+ * v3: `mode` distinguishes true upstream pagination (window = one page) from
+ * bounded server-side windows (window = filtered/sorted set, page-independent,
+ * so turning pages never re-hits the provider).
+ */
 const cachePayloadSchema = z.object({
-  results: z.array(opportunitySchema),
+  mode: z.enum(["upstream", "scan"]),
+  window: z.array(opportunitySchema),
   total: z.number().int().min(0),
   scan_truncated: z.boolean(),
+  exhausted: z.boolean(),
   generated_at: z.string(),
 });
 type CachePayload = z.infer<typeof cachePayloadSchema>;
 
-/**
- * Cache key = version + hash of the provider search query only.
- * `match` (and therefore any profile-derived data) is deliberately excluded
- * so the shared cache can never contain or leak user-specific results.
- */
-export function buildCacheKey(params: OpportunitySearchParams): string {
-  const providerQuery = {
+function providerQueryHash(params: OpportunitySearchParams, withPage: boolean) {
+  const providerQuery: Record<string, unknown> = {
     provider: "arbeitsagentur",
     goal: params.goal,
     keyword: params.keyword,
@@ -50,13 +53,31 @@ export function buildCacheKey(params: OpportunitySearchParams): string {
     location: params.location,
     radius: params.radius ?? null,
     freshness: params.freshness,
-    page: params.page,
+    sort: params.sort,
+    employment: params.employment,
+    training_type: params.training_type,
+    home_office: params.home_office,
+    salary_documented: params.salary_documented,
+    distance_max: params.distance_max ?? null,
     pageSize: params.pageSize,
   };
-  const hash = createHash("sha256")
+  if (withPage) providerQuery.page = params.page;
+  return createHash("sha256")
     .update(JSON.stringify(providerQuery))
     .digest("hex");
-  return `v${OPPORTUNITY_SCHEMA_VERSION}:${hash}`;
+}
+
+/**
+ * Cache key = version + mode + hash of the provider search query only.
+ * `match` (and therefore any profile-derived data) is deliberately excluded
+ * so the shared cache can never contain or leak user-specific results.
+ * Upstream mode is per-page; scan mode is page-independent (the window).
+ */
+export function buildCacheKey(params: OpportunitySearchParams): string {
+  const scan = usesScanWindow(params);
+  return scan
+    ? `v${OPPORTUNITY_SCHEMA_VERSION}:scan:${providerQueryHash(params, false)}`
+    : `v${OPPORTUNITY_SCHEMA_VERSION}:page:${providerQueryHash(params, true)}`;
 }
 
 async function readCachedPayload(key: string): Promise<CachePayload | null> {
@@ -98,16 +119,16 @@ async function writeCachedPayload(key: string, payload: CachePayload) {
     console.error("[opportunities] cache write failed:", error.message);
 }
 
-/** Fetch (or read from the shared cache) the user-independent result set. */
-export async function fetchOpportunities(
+/** Fetch (or read from the shared cache) the user-independent window. */
+async function fetchWindow(
   params: OpportunitySearchParams,
-): Promise<OpportunitySearchPage & { generated_at: string }> {
+): Promise<CachePayload> {
   const key = buildCacheKey(params);
   const cached = await readCachedPayload(key);
   if (cached) return cached;
-  const page = await searchArbeitsagentur(params);
+  const window = await fetchOpportunityWindow(params);
   const payload = cachePayloadSchema.parse({
-    ...page,
+    ...window,
     generated_at: new Date().toISOString(),
   });
   await writeCachedPayload(key, payload);
@@ -132,28 +153,54 @@ async function getCandidateProfile(
 
 /**
  * Server-side opportunity search for an authenticated user.
- * The shared cache holds source data only; the per-user match is computed
- * here, after the cache read, and is never written back to the cache.
+ *
+ * Flow: read/write the shared (user-independent) window → compute the
+ * per-user match (never written back to the cache) → slice the requested
+ * page. `sort=match` sorts the whole window by per-user score before
+ * slicing; `relevance`/`newest`/... sorting is deterministic and cached.
  */
 export async function searchOpportunities(
   params: OpportunitySearchParams,
   auth: { userId: string } | null,
 ): Promise<OpportunitySearchResponse> {
-  const page = await fetchOpportunities(params);
-  let matchAvailable = false;
-  if (params.match && auth) {
-    const candidate = await getCandidateProfile(auth.userId);
-    if (candidate) {
-      matchAvailable = true;
-      page.results = page.results.map((opportunity) =>
+  const payload = await fetchWindow(params);
+  const candidate =
+    params.match && auth ? await getCandidateProfile(auth.userId) : null;
+  const matchAvailable = candidate !== null;
+
+  let window = payload.window;
+  if (matchAvailable && params.sort === "match") {
+    // Per-user ordering: match the whole window, sort by score desc
+    // (no score → last), stable id tiebreak. In-memory only.
+    window = window
+      .map((opportunity) => matchOpportunity(candidate, opportunity))
+      .sort((a, b) => {
+        const as = a.match?.match_score ?? -1;
+        const bs = b.match?.match_score ?? -1;
+        if (bs !== as) return bs - as;
+        return a.id < b.id ? -1 : 1;
+      });
+  }
+
+  const start =
+    payload.mode === "upstream" ? 0 : (params.page - 1) * params.pageSize;
+  const results = window.slice(start, start + params.pageSize);
+  if (matchAvailable && params.sort !== "match") {
+    return {
+      results: results.map((opportunity) =>
         matchOpportunity(candidate, opportunity),
-      );
-    }
+      ),
+      total: payload.total,
+      scan_truncated: payload.scan_truncated,
+      mode: payload.mode,
+      match_available: true,
+    };
   }
   return {
-    results: page.results,
-    total: page.total,
-    scan_truncated: page.scan_truncated,
+    results,
+    total: payload.total,
+    scan_truncated: payload.scan_truncated,
+    mode: payload.mode,
     match_available: matchAvailable,
   };
 }

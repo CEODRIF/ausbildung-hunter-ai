@@ -87,6 +87,7 @@ function SavedCard({ item }: { item: SavedOpportunityRow }) {
             {[
               item.source_name ?? "Saved from search",
               item.posted_at ? `Posted ${formatDay(item.posted_at)}` : null,
+              item.saved_at ? `Saved ${formatDay(item.saved_at)}` : null,
             ]
               .filter(Boolean)
               .join(" · ")}

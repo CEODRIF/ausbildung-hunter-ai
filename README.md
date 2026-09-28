@@ -2,25 +2,25 @@
 
 A production SaaS that helps people in Germany find and apply for **Ausbildung** (vocational training) and **Arbeit** (jobs). Users connect their own Gmail/Outlook account, compose and send applications in bulk with a fair daily quota, use an AI assistant for application support, scan their own documents for fit, and search real German vacancies with a deterministic match score.
 
-> **Status:** everything up to and including the Bewerbung Scanner is complete and passing checks. The opportunities system (Step 9) is **in progress**: the BA provider, data model, caching, and saved-opportunities are hardened, live-verified against the BA API, and covered by unit tests (Phase 2 done). Search UX polish and the explainable matching engine follow (see "Roadmap").
+> **Status:** everything up to and including the Bewerbung Scanner is complete and passing checks. The opportunities system (Step 9) is **in progress**: the BA provider, data model, caching, and saved-opportunities are hardened and live-verified against the BA API (Phase 2), and the search UX is complete (Phase 3: real pagination, server-side sorting, provider-backed filters, shareable URL state, truncation awareness, richer cards, detail back-navigation) — all covered by unit tests. The explainable matching engine and application prefill follow (see "Roadmap").
 
 ## Implemented
 
-| Area                           | What works                                                                                                                                                                                                                                                                                                   |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Auth foundation**            | Supabase email + custom verification codes, invitation-code registration, login, email verification, onboarding goal, row-level security throughout                                                                                                                                                          |
-| **Invitation model**           | `DRIF928` — free registration, 0 email quota (AI-assisted setup only). `DRIF089` — 100 email applications per day (records a `user_quota_upgrades` row on activation)                                                                                                                                        |
-| **Dashboard**                  | Real profile data, today's usage bars, application activity, account menu, logout                                                                                                                                                                                                                            |
-| **Email account connection**   | OAuth 2.0 for Gmail (`gmail.send`) and Outlook (Microsoft Graph `Mail.Send`), signed state, **AES-256-GCM encrypted token storage**, connection management UI at `/settings/email`, full token-leakage audit                                                                                                 |
-| **Application composer**       | `/applications/new` — rich-text email editor, recipients with CSV/TXT import, private attachments (Supabase Storage, `user_id`-scoped), per-recipient draft autosave, reusable templates                                                                                                                     |
-| **Email sending engine**       | Campaigns + individual messages, **atomic quota reservation** (`FOR UPDATE` on `daily_usage`), idempotent message claims (`FOR UPDATE SKIP LOCKED`), external worker endpoint secured by `EMAIL_WORKER_SECRET`, campaign monitor UI at `/applications/campaign/[id]`, usage page at `/settings/usage`        |
-| **AI assistant**               | `/ai` — conversation history, streaming responses, private file uploads (`ai-files` bucket), generated file downloads, **atomic AI usage limit of 100 requests/day**, server-only prompt hardening, strict Zod validation of all AI output                                                                   |
-| **Bewerbung Scanner**          | `/bewerbung-scanner` — CV/document upload (PDF/DOCX), strict Zod candidate profile, AI-generated scan results, editable result page, rescan + history, counts against the AI limit                                                                                                                           |
-| **Opportunities (in progress)**  | `/opportunities` — BA Jobsuche provider hardened (live-verified v6 search + v4 details, authoritative Ausbildung/Arbeit classification, salary/education/contact/section extraction, explicit freshness handling, bounded server-side filters), user-independent versioned cache, server-derived saved opportunities, deterministic match engine, detail + saved pages. Search UX polish + explainable matching follow (Roadmap). |
+| Area                            | What works                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Auth foundation**             | Supabase email + custom verification codes, invitation-code registration, login, email verification, onboarding goal, row-level security throughout                                                                                                                                                                                                                                                                               |
+| **Invitation model**            | `DRIF928` — free registration, 0 email quota (AI-assisted setup only). `DRIF089` — 100 email applications per day (records a `user_quota_upgrades` row on activation)                                                                                                                                                                                                                                                             |
+| **Dashboard**                   | Real profile data, today's usage bars, application activity, account menu, logout                                                                                                                                                                                                                                                                                                                                                 |
+| **Email account connection**    | OAuth 2.0 for Gmail (`gmail.send`) and Outlook (Microsoft Graph `Mail.Send`), signed state, **AES-256-GCM encrypted token storage**, connection management UI at `/settings/email`, full token-leakage audit                                                                                                                                                                                                                      |
+| **Application composer**        | `/applications/new` — rich-text email editor, recipients with CSV/TXT import, private attachments (Supabase Storage, `user_id`-scoped), per-recipient draft autosave, reusable templates                                                                                                                                                                                                                                          |
+| **Email sending engine**        | Campaigns + individual messages, **atomic quota reservation** (`FOR UPDATE` on `daily_usage`), idempotent message claims (`FOR UPDATE SKIP LOCKED`), external worker endpoint secured by `EMAIL_WORKER_SECRET`, campaign monitor UI at `/applications/campaign/[id]`, usage page at `/settings/usage`                                                                                                                             |
+| **AI assistant**                | `/ai` — conversation history, streaming responses, private file uploads (`ai-files` bucket), generated file downloads, **atomic AI usage limit of 100 requests/day**, server-only prompt hardening, strict Zod validation of all AI output                                                                                                                                                                                        |
+| **Bewerbung Scanner**           | `/bewerbung-scanner` — CV/document upload (PDF/DOCX), strict Zod candidate profile, AI-generated scan results, editable result page, rescan + history, counts against the AI limit                                                                                                                                                                                                                                                |
+| **Opportunities (in progress)** | `/opportunities` — BA Jobsuche provider hardened (live-verified v6 search + v4 details, authoritative Ausbildung/Arbeit classification, salary/education/contact/section extraction, explicit freshness handling, bounded server-side filters), user-independent versioned cache, server-derived saved opportunities, deterministic match engine, detail + saved pages. **Search UX (Phase 3)**: real pagination respecting the BA 10k bound, server-side sorting (newest/oldest/salary/distance/relevance/match), provider-backed filters (goal, keyword, location, freshness, employment, training type, home office, salary, distance), shareable/validated URL state, truncation awareness, richer null-safe cards, and detail back-navigation. Explainable matching v2 follows (Roadmap). |
 
 ## Not implemented (Roadmap)
 
-- **Opportunities Phase 3+** (Step 9): search UX polish (pagination, sorting, richer filters), explainable per-dimension matching engine (education/eligibility, languages, experience, relocation), opportunity → application prefill.
+- **Opportunities matching + application** (Step 9): explainable per-dimension matching engine v2 (education/eligibility, languages, experience, relocation) and opportunity → application prefill. (Search UX — pagination, sorting, provider-backed filters, shareable URL state, truncation awareness — is done in Phase 3.)
 - Automatic applications from saved opportunities (explicitly out of scope so far — every email is composed and sent by the user).
 - Additional vacancy providers (only the Bundesagentur für Arbeit is wired up).
 - Payments, billing, and multi-tenant admin.
@@ -76,7 +76,7 @@ src/
     supabase/              # server/client/service-role clients
   proxy.ts                 # session refresh middleware
 tests/
-  opportunities/           # provider, cache, and saved-opportunities unit tests
+  opportunities/           # provider, cache, saved-opportunities, and search-UX unit tests
 supabase/
   config.toml
   migrations/              # 9 SQL migrations (see below)
@@ -144,7 +144,7 @@ Create the two private storage buckets if not created by a migration: `applicati
 npm run dev        # development server
 npm run build      # production build
 npm run start      # serve the production build
-npm test           # vitest unit tests (provider, cache, saved)
+npm test           # vitest unit tests (provider, cache, saved, search UX)
 npm run lint       # eslint
 npm run typecheck  # tsc --noEmit
 npm run format     # prettier --write .
@@ -163,6 +163,25 @@ npm run format     # prettier --write .
 
 - One shared `daily_usage.ai_requests` counter, capped at 100/day, reserved atomically before any AI call (assistant, scanner). AI failures do not permanently burn quota; the reservation is released on error.
 
+### Opportunities search (Phase 3)
+
+The search is built around what the BA REST API actually supports, and never pretends otherwise. Two retrieval modes:
+
+- **`upstream`** — true provider pagination. Used for the plain case (goal, keyword, location/radius, `today` freshness, relevance order). The API is asked for exactly one page per request and `total` is the source's own `maxErgebnisse`.
+- **`scan`** — a bounded server-side window (≤ 10 pages × 50 items = 500 listings). Used whenever the request needs a capability the API cannot express: role/company post-filters, `14d`/`30d` freshness, non-relevance sorting, or employment/training-type/home-office/salary/distance filters. The full window is collected **before** filtering/sorting (so the order isn't biased by where a page happens to fall), deduped by stable id, and cached page-independently — turning pages never re-hits the provider. If the 500-item budget ends before the source does, the response is marked `scan_truncated` and the UI says so instead of hiding it.
+
+**Filters** are only offered when backed by real provider data. The BA parameters that were verified non-functional (`arbeitszeit` remote, `beruf` role, `arbeitgeber` company) are **never sent** to the API; role/company are applied server-side on the source's occupation fields, and home-office/employment on the source's flags. Home-office and training-type filters are Ausbildung-only (the source does not document them on job postings); requesting them for Arbeit returns a clear 400. Distance sort / max-distance require a location (400 otherwise).
+
+**Sorting** is deterministic and null-safe: `relevance` = source order; `newest`/`oldest` by source `posted_at`; `salary` by the source's numeric amount; `distance` by the source's km; `match` by the user's per-user score (falls back to relevance when no match is requested or no profile exists). Items missing the sort field sort **last** (never a guessed value), ties broken by stable id.
+
+**Pagination** respects the source's ~10,000-item bound: `page` ≤ 200 and `pageSize` ≤ 50 (200 × 50 = 10,000). Beyond that the API returns empty pages, so the UI shows a "source bound reached" message rather than faking deeper results.
+
+**Freshness** is explicit: `today` is applied by the API itself (`veroeffentlichtseit=1`); `14d`/`30d` are applied server-side on the source's publication date within the scan window; everything else is `any`. Undated listings are excluded from date filters (never guessed).
+
+**Shareable URL state** is a strict whitelist (`goal`, `q`, `role`, `company`, `location`, `radius`, `freshness`, `sort`, `employment`, `training_type`, `home_office`, `salary`, `distance_max`, `page`, `match`). Anything else — including anything resembling an id or token — is dropped; `q` maps to keyword; invalid values normalize to defaults; a missing/invalid `goal` drops the whole state. URL state is only ever used for **filtering**, never for authorization. Detail pages carry a `from` param so "back" returns to the exact search (same filters + page).
+
+**Cache + matching compatibility** (Phase 5-ready, not implemented): the `opportunity_cache` key is fully user-independent (schema version + mode + hash of the provider query; `match` excluded) and stores only normalized source data (a `window`, `total`, `scan_truncated`, `exhausted`). The per-user match is computed **after** the cache read and is never written back, so two users searching the same query share one source row and no user data can leak between them. Match ordering happens in memory on the already-cached window.
+
 ### Security model
 
 - **RLS** on every user table; the app only ever uses the service role for server-side writes that RLS would block (quota counters, encrypted tokens).
@@ -174,7 +193,7 @@ npm run format     # prettier --write .
 ## Known limitations
 
 1. **Email sending needs a durable worker** (see above) — in development, call the worker endpoint manually or via a local cron.
-2. **Opportunities search UX + explainable matching are still in progress** (Phase 3+ in the Roadmap). The BA API surface that works was live-verified: `v6/jobs` search, `v4/jobdetails`, `wo`/`umkreis`/`was`/`angebotsart`, and `veroeffentlichtseit=1` (today). The REST API does **not** support remote (`arbeitszeit`), free-text role (`beruf`), or company (`arbeitgeber`) filters — those are applied server-side on the normalized source data via a bounded scan instead.
+2. **Opportunities search UX is complete (Phase 3)** — only the explainable matching engine v2 and application prefill remain (Roadmap). The BA API surface that works was live-verified: `v6/jobs` search, `v4/jobdetails`, `wo`/`umkreis`/`was`/`angebotsart`, and `veroeffentlichtseit=1` (today). The REST API does **not** support remote (`arbeitszeit`), free-text role (`beruf`), or company (`arbeitgeber`) filters — those are applied server-side on the normalized source data via a bounded scan (surfaced as `scan_truncated`). The source also only exposes its first ~10,000 listings per query (deeper `page*size` return empty pages), so pagination is capped at 200 pages × 50 items and the bound is surfaced instead of faked.
 3. BA job references expire — saved opportunities keep a server-derived snapshot so they remain useful; the detail page shows a clear "no longer available" state for stale refs.
 4. No CI or deployment configuration yet (unit test suite exists: `npm test`).
 5. Only one vacancy provider (Bundesagentur für Arbeit).
