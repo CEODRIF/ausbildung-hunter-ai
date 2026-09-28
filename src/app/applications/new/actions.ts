@@ -122,15 +122,21 @@ export async function removeAttachment(input: {
     .eq("draft_id", input.draftId)
     .single<{ storage_path: string }>();
   if (!data) throw new Error("Attachment not found.");
-  await admin.storage
-    .from("application-attachments")
-    .remove([data.storage_path]);
+  // Phase 17 — align with the Phase 16 erasure contract: the row deletion
+  // comes first (the erasure commitment), then a best-effort storage sweep.
+  // An object that survives a transient storage failure is reclaimed by the
+  // Phase 17 orphan reconciliation (never the other way around, which could
+  // leave a dangling attachment row).
   const { error } = await admin
     .from("application_draft_attachments")
     .delete()
     .eq("id", input.attachmentId)
     .eq("draft_id", input.draftId);
   if (error) throw new Error("Unable to remove attachment.");
+  await admin.storage
+    .from("application-attachments")
+    .remove([data.storage_path])
+    .catch(() => undefined);
 }
 
 /** Phase 16 — item-level erasure for drafts: delete the draft row
