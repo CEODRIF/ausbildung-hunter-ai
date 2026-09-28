@@ -150,6 +150,27 @@ export async function runScan(scanId: string) {
   }
 }
 
+/** Phase 19 — server-side cap for bulk scan deletion (bounded work per
+ *  request: every scan runs the full Phase 16 verification + erasure).
+ *  Lives here (not in the "use server" action file) because non-function
+ *  exports are not allowed in server-action modules. */
+export const BULK_DELETE_MAX_SCANS = 25;
+
+/** Phase 19 — user-scoped ownership check for a scan (used to validate a
+ *  whole bulk selection BEFORE any destructive operation). Throws the same
+ *  fixed message for missing and foreign scans (no ownership oracle). */
+export async function assertScanOwnership(userId: string, scanId: string) {
+  const admin = createAdminClient();
+  const { data: scan, error } = await admin
+    .from("bewerbung_scans")
+    .select("id")
+    .eq("id", scanId)
+    .eq("user_id", userId)
+    .single();
+  if (error || !scan) throw new Error("Scan not found.");
+  return scan;
+}
+
 export async function getScan(scanId: string) {
   const user = await activeUser();
   const admin = createAdminClient();

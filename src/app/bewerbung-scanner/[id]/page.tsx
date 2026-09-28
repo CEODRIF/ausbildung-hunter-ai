@@ -7,14 +7,30 @@ import { DeleteScanButton } from "@/app/bewerbung-scanner/[id]/delete-scan-butto
 export const dynamic = "force-dynamic";
 export default async function BewerbungScannerResultsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ bulk_deleted?: string; error?: string }>;
 }) {
   const { id } = await params;
+  const query = await searchParams;
   const data = await getScan(id);
   return (
     <main className="min-h-screen bg-[#f6f8fb] p-5 sm:p-8">
       <div className="mx-auto max-w-4xl">
+        {query.bulk_deleted && (
+          <p className="mb-4 rounded-2xl border border-[#cde5d4] bg-[#f2faf4] px-4 py-3 text-sm text-[#20713a]">
+            {query.bulk_deleted} scan
+            {Number(query.bulk_deleted) === 1 ? "" : "s"} deleted, including
+            uploaded files that were not used by another scan.
+          </p>
+        )}
+        {query.error === "bulk_failed" && (
+          <p className="mb-4 rounded-2xl border border-[#f0d9da] bg-[#fff8f8] px-4 py-3 text-sm text-[#a3404b]">
+            We could not delete the selected scans. Check the list below and try
+            again.
+          </p>
+        )}
         {data.profile ? (
           <BewerbungResults
             scanId={id}

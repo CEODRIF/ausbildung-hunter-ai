@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { bulkDeleteScans } from "@/app/bewerbung-scanner/actions";
 import type { CandidateProfile } from "@/lib/bewerbung-schema";
 
 export function BewerbungResults({
@@ -21,6 +22,17 @@ export function BewerbungResults({
   const [profile, setProfile] = useState(initialProfile);
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState(false);
+  // Phase 19 — bulk selection (UX state only; every check is re-run
+  // server-side by the bulkDeleteScans action).
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const selectableHistory = history.filter((item) => item.id !== scanId);
+  const toggleSelected = (id: string) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const update = (next: CandidateProfile) => {
     setProfile({ ...next });
     setSaved(false);
@@ -240,20 +252,88 @@ export function BewerbungResults({
         </Section>
         <Section title="Scan history">
           <div className="flex flex-wrap gap-2">
-            {history.map((item) => (
-              <Link
-                key={item.id}
-                href={`/bewerbung-scanner/${item.id}`}
-                className="rounded-xl border border-[#e7ecf3] bg-white px-3 py-2 text-xs font-semibold text-[#546783]"
-              >
-                {item.goal} · {item.status} ·{" "}
-                {new Date(item.created_at).toLocaleDateString("en")}
-              </Link>
-            ))}
+            {history.map((item) => {
+              const selectable = item.id !== scanId;
+              return (
+                <span
+                  key={item.id}
+                  className="flex items-center gap-2 rounded-xl border border-[#e7ecf3] bg-white px-3 py-2"
+                >
+                  {selectable && (
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-[#2f6fed]"
+                      checked={selected.has(item.id)}
+                      onChange={() => toggleSelected(item.id)}
+                      aria-label={`Select scan from ${new Date(
+                        item.created_at,
+                      ).toLocaleDateString("en")}`}
+                    />
+                  )}
+                  <Link
+                    href={`/bewerbung-scanner/${item.id}`}
+                    className="text-xs font-semibold text-[#546783]"
+                  >
+                    {item.goal} · {item.status} ·{" "}
+                    {new Date(item.created_at).toLocaleDateString("en")}
+                  </Link>
+                </span>
+              );
+            })}
           </div>
+          {selectableHistory.length > 0 && (
+            /* Phase 19 — bulk delete of the selected scans. The browser
+             * only submits ids; ownership, limits and validation happen
+             * server-side. */
+            <form
+              action={bulkDeleteScans}
+              className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-[#f0d9da] bg-[#fffafa] px-4 py-3"
+            >
+              <input type="hidden" name="currentScanId" value={scanId} />
+              {[...selected].map((id) => (
+                <input key={id} type="hidden" name="scanId" value={id} />
+              ))}
+              <span className="text-xs font-semibold text-[#5b6b84]">
+                {selected.size} of {selectableHistory.length} selected
+              </span>
+              <BulkDeleteButton count={selected.size} />
+            </form>
+          )}
         </Section>
       </div>
     </main>
+  );
+}
+/** Phase 19 — two-step confirmation for bulk scan deletion (UX only; the
+ *  server re-validates every id before touching anything). First click
+ *  arms the button for five seconds; the second submits the form. */
+function BulkDeleteButton({ count }: { count: number }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const timer = window.setTimeout(() => setArmed(false), 5000);
+    return () => window.clearTimeout(timer);
+  }, [armed]);
+  return (
+    <button
+      type="submit"
+      disabled={count === 0}
+      className={
+        armed
+          ? "rounded-lg bg-[#b3444e] px-3 py-2 text-xs font-semibold text-white hover:bg-[#9c3841]"
+          : "rounded-lg border border-[#f0d9da] px-3 py-2 text-xs font-semibold text-[#b3444e] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+      }
+      onClick={(event) => {
+        if (!armed) {
+          event.preventDefault();
+          setArmed(true);
+        }
+      }}
+    >
+      {armed
+        ? `Confirm — delete ${count} scan${count === 1 ? "" : "s"} and unused files`
+        : "Delete selected scans"}
+    </button>
   );
 }
 function Section({
