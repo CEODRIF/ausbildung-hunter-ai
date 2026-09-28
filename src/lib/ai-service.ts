@@ -108,16 +108,69 @@ export async function renameConversation(
     .eq("user_id", user.id);
   if (error) throw new Error("Unable to rename conversation.");
 }
+export class AIFileNotFoundError extends Error {
+  constructor() {
+    super("File not found.");
+    this.name = "AIFileNotFoundError";
+  }
+}
+/** Phase 16 — a scan still references this upload (FK RESTRICT). */
+export class AIFileInUseError extends Error {
+  constructor() {
+    super("This file is used by a scan. Delete the scan first.");
+    this.name = "AIFileInUseError";
+  }
+}
 export async function deleteConversation(conversationId: string) {
   const user = await currentUser();
   await assertConversation(user.id, conversationId);
   const admin = createAdminClient();
+  // Phase 16 — collect the storage objects the cascade will orphan, so
+  // they can be swept after the rows are gone (user-scoped reads).
+  // ai_message_files has no conversation_id column — resolve the
+  // conversation's message ids first, then join by message_id.
+  const { data: messages } = await admin
+    .from("ai_messages")
+    .select("id")
+    .eq("conversation_id", conversationId)
+    .eq("user_id", user.id);
+  const messageIds = (messages ?? []).map((m) => m.id as string);
+  const [messageFiles, generatedFiles] = await Promise.all([
+    messageIds.length
+      ? admin
+          .from("ai_message_files")
+          .select("storage_path")
+          .in("message_id", messageIds)
+          .eq("user_id", user.id)
+      : Promise.resolve({
+          data: [] as Array<{ storage_path: string }>,
+          error: null,
+        }),
+    admin
+      .from("ai_generated_files")
+      .select("storage_path")
+      .eq("conversation_id", conversationId)
+      .eq("user_id", user.id),
+  ]);
   const { error } = await admin
     .from("ai_conversations")
     .delete()
     .eq("id", conversationId)
     .eq("user_id", user.id);
   if (error) throw new Error("Unable to delete conversation.");
+  const paths = [
+    ...(messageFiles.data ?? []).map((f) => f.storage_path),
+    ...(generatedFiles.data ?? []).map((f) => f.storage_path),
+  ];
+  if (paths.length) {
+    // Best-effort: the DB cascade is the erasure commitment; an object
+    // that survives a storage failure is still swept by account
+    // deletion (paths are prefixed to this user).
+    await admin.storage
+      .from("ai-files")
+      .remove(paths)
+      .catch(() => undefined);
+  }
 }
 export async function getConversation(conversationId: string) {
   const user = await currentUser();
@@ -162,19 +215,35 @@ export async function uploadAIFile(file: File) {
 export async function deleteAIFile(fileId: string) {
   const user = await currentUser();
   const admin = createAdminClient();
-  const { data: file } = await admin
+  const { data: file, error: fileError } = await admin
     .from("ai_file_uploads")
     .select("storage_path")
     .eq("id", fileId)
     .eq("user_id", user.id)
     .single<{ storage_path: string }>();
-  if (!file) throw new Error("File not found.");
-  await admin.storage.from("ai-files").remove([file.storage_path]);
-  await admin
+  if (fileError || !file) throw new AIFileNotFoundError();
+  // Phase 16 — refuse BEFORE touching anything if a scan references
+  // this upload (bewerbung_scan_files.storage_file_id is RESTRICT).
+  // The old order (storage first, row second) could strand the row and
+  // orphan the storage object.
+  const { count: referencingScans } = await admin
+    .from("bewerbung_scan_files")
+    .select("id", { count: "exact", head: true })
+    .eq("storage_file_id", fileId)
+    .eq("user_id", user.id);
+  if ((referencingScans ?? 0) > 0) throw new AIFileInUseError();
+  const { error: deleteError } = await admin
     .from("ai_file_uploads")
     .delete()
     .eq("id", fileId)
     .eq("user_id", user.id);
+  if (deleteError) throw new Error("Unable to delete file.");
+  // Row gone first; storage sweep is best-effort (account deletion
+  // still sweeps the user's prefix).
+  await admin.storage
+    .from("ai-files")
+    .remove([file.storage_path])
+    .catch(() => undefined);
 }
 
 /** Free-plan AI daily request limit (Phase 10). Subscription plans raise

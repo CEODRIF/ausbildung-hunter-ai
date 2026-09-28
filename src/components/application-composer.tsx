@@ -6,10 +6,12 @@ import { RecipientManager } from "@/components/recipient-manager";
 import { RecipientTable } from "@/components/recipient-table";
 import { RichEmailEditor } from "@/components/rich-email-editor";
 import {
+  discardDraft,
   saveDraft,
   uploadAttachment,
   removeAttachment,
 } from "@/app/applications/new/actions";
+import { DiscardDraftButton } from "@/components/discard-draft-button";
 import { sendApplications } from "@/app/applications/new/send-action";
 import type {
   ApplicationDraft,
@@ -273,6 +275,24 @@ export function ApplicationComposer({
                 No attachments added yet.
               </p>
             )}
+          </Card>
+          {/* Phase 16 — item-level erasure for the draft's personal data */}
+          <Card className="border-[#f0d9da] p-5 sm:p-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="font-bold text-[#c24c55]">
+                  Delete personal data
+                </h2>
+                <p className="mt-1 text-xs text-[#8290a4]">
+                  Discard this draft, including recipients and uploaded
+                  attachments. This cannot be undone.
+                </p>
+              </div>
+              <form action={discardDraft} id="discard-draft-form">
+                <input type="hidden" name="draftId" value={draft.id} />
+                <DiscardDraftButton />
+              </form>
+            </div>
           </Card>
         </div>
         <aside className="space-y-5">

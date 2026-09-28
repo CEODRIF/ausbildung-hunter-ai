@@ -132,3 +132,57 @@ export async function removeAttachment(input: {
     .eq("draft_id", input.draftId);
   if (error) throw new Error("Unable to remove attachment.");
 }
+
+/** Phase 16 — item-level erasure for drafts: delete the draft row
+ *  (recipients + attachments cascade), then best-effort sweep the
+ *  draft's attachment storage objects. The composer page revalidates
+ *  to a fresh empty draft. An unknown or foreign draft id is treated
+ *  as "not found" (no ownership detail leaks to the caller). */
+export async function discardDraft(formData: FormData) {
+  const current = await getCurrentUserAndProfile();
+  if (
+    !current.user ||
+    !current.profile ||
+    current.profile.account_status !== "active"
+  )
+    throw new Error("Not authorized.");
+  const draftId = String(formData.get("draftId") ?? "");
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      draftId,
+    )
+  ) {
+    revalidatePath("/applications/new");
+    return;
+  }
+  let owned = false;
+  try {
+    owned =
+      (await assertDraftOwnership(current.user.id, draftId)).id === draftId;
+  } catch (error) {
+    if (!(error instanceof Error && error.message === "Draft not found."))
+      throw error;
+  }
+  if (owned) {
+    const admin = createAdminClient();
+    const { data: attachments } = await admin
+      .from("application_draft_attachments")
+      .select("storage_path")
+      .eq("draft_id", draftId);
+    const { error: deleteError } = await admin
+      .from("application_drafts")
+      .delete()
+      .eq("id", draftId)
+      .eq("user_id", current.user.id);
+    if (deleteError) throw new Error("Unable to delete draft.");
+    const paths = (attachments ?? [])
+      .map((item) => item.storage_path)
+      .filter(Boolean);
+    if (paths.length)
+      await admin.storage
+        .from("application-attachments")
+        .remove(paths)
+        .catch(() => undefined);
+  }
+  revalidatePath("/applications/new");
+}

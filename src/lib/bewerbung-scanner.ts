@@ -199,3 +199,72 @@ export async function updateCandidateProfile(
   if (error) throw new Error("Unable to update candidate profile.");
   return validated;
 }
+
+/**
+ * Phase 16 — delete a scan (item-level erasure of the most sensitive
+ * data: uploaded CVs + extracted candidate profile).
+ *
+ * Sequence: verify ownership → collect this scan's uploads → delete the
+ * scan row (Postgres cascades `candidate_profiles` +
+ * `bewerbung_scan_files`) → for each referenced upload that NO longer
+ * has any scan reference, delete its row + storage object. Uploads still
+ * referenced by another scan are kept (shared uploads are legal — the
+ * same file can back two scans).
+ *
+ * Returns how many uploaded files were removed with the scan.
+ */
+export async function deleteScan(scanId: string): Promise<{
+  filesRemoved: number;
+}> {
+  const user = await activeUser();
+  const admin = createAdminClient();
+  const { data: scan, error } = await admin
+    .from("bewerbung_scans")
+    .select("id")
+    .eq("id", scanId)
+    .eq("user_id", user.id)
+    .single();
+  if (error || !scan) throw new Error("Scan not found.");
+  const { data: scanFiles } = await admin
+    .from("bewerbung_scan_files")
+    .select("storage_file_id")
+    .eq("scan_id", scanId)
+    .eq("user_id", user.id);
+  const uploadIds = [
+    ...new Set((scanFiles ?? []).map((f) => f.storage_file_id)),
+  ];
+  const { error: deleteError } = await admin
+    .from("bewerbung_scans")
+    .delete()
+    .eq("id", scanId)
+    .eq("user_id", user.id);
+  if (deleteError) throw new Error("Unable to delete scan.");
+  let filesRemoved = 0;
+  for (const uploadId of uploadIds) {
+    const { count: stillReferenced } = await admin
+      .from("bewerbung_scan_files")
+      .select("id", { count: "exact", head: true })
+      .eq("storage_file_id", uploadId)
+      .eq("user_id", user.id);
+    if ((stillReferenced ?? 0) > 0) continue;
+    const { data: upload, error: uploadError } = await admin
+      .from("ai_file_uploads")
+      .select("storage_path")
+      .eq("id", uploadId)
+      .eq("user_id", user.id)
+      .single<{ storage_path: string }>();
+    if (uploadError || !upload) continue;
+    const { error: uploadDeleteError } = await admin
+      .from("ai_file_uploads")
+      .delete()
+      .eq("id", uploadId)
+      .eq("user_id", user.id);
+    if (uploadDeleteError) continue;
+    await admin.storage
+      .from("ai-files")
+      .remove([upload.storage_path])
+      .catch(() => undefined);
+    filesRemoved += 1;
+  }
+  return { filesRemoved };
+}

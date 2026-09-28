@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
-import { uploadAIFile } from "@/lib/ai-service";
+import { AIFileInUseError, deleteAIFile, uploadAIFile } from "@/lib/ai-service";
+
+const deleteFileBody = z.object({ fileId: z.string().uuid() }).strict();
 
 export const runtime = "nodejs";
 export async function POST(request: Request) {
@@ -30,26 +33,25 @@ export async function DELETE(request: Request) {
   } = await supabase.auth.getUser();
   if (!user)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const { fileId } = (await request.json().catch(() => ({}))) as {
-    fileId?: string;
-  };
-  if (!fileId)
-    return NextResponse.json({ error: "File not found." }, { status: 404 });
-  const { createAdminClient } = await import("@/lib/supabase/admin");
-  const admin = createAdminClient();
-  const { data: file } = await admin
-    .from("ai_file_uploads")
-    .select("storage_path")
-    .eq("id", fileId)
-    .eq("user_id", user.id)
-    .single<{ storage_path: string }>();
-  if (!file)
-    return NextResponse.json({ error: "File not found." }, { status: 404 });
-  await admin.storage.from("ai-files").remove([file.storage_path]);
-  await admin
-    .from("ai_file_uploads")
-    .delete()
-    .eq("id", fileId)
-    .eq("user_id", user.id);
-  return NextResponse.json({ success: true });
+  const parsed = deleteFileBody.safeParse(
+    await request.json().catch(() => ({})),
+  );
+  if (!parsed.success)
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  // Phase 16 — the lib performs the safe sequence: reference pre-check
+  // (409 while a scan uses the file), row delete, best-effort storage
+  // sweep. Ownership is enforced inside (session user, user-scoped).
+  try {
+    await deleteAIFile(parsed.data.fileId);
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    if (error instanceof AIFileInUseError)
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof Error && error.message === "File not found.")
+      return NextResponse.json({ error: error.message }, { status: 404 });
+    return NextResponse.json(
+      { error: "Unable to delete file." },
+      { status: 500 },
+    );
+  }
 }
