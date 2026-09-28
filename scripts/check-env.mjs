@@ -64,6 +64,14 @@ function isPlaceholder(value) {
   return PLACEHOLDER_VALUES.has(stripped) || PLACEHOLDER_PATTERN.test(stripped);
 }
 
+/** A variable is "set" when present, non-empty, and not a placeholder. */
+function isSet(env, name) {
+  const raw = env[name];
+  return (
+    typeof raw === "string" && raw.trim().length > 0 && !isPlaceholder(raw)
+  );
+}
+
 /** The checks, in report order. `required` vars gate the exit code; optional
  *  vars are validated only when present (to catch typos/format errors). */
 const CHECKS = [
@@ -83,6 +91,51 @@ const CHECKS = [
   { name: "AI_MODEL", required: false, kind: "id" },
   { name: "AI_VISION_MODEL", required: false, kind: "id" },
   { name: "ARBEITSAGENTUR_API_KEY", required: false, kind: "id" },
+];
+
+/**
+ * Phase 21 — external integration seams.
+ *
+ * These are the resources the deployment MUST obtain from outside the
+ * repository to go fully live. `validateEnv` reports each seam's readiness
+ * derived purely from in-repo environment state. This section is
+ * **informational only**: it never affects the exit code and prints names,
+ * statuses, and static notes — never values. Two seams (payment provider,
+ * additional vacancy providers) have no in-repo switch and are always
+ * `pending` until their provider is configured in code + credentials are set.
+ */
+const SEAMS = [
+  {
+    name: "ai-assistant",
+    status: (env) => (isSet(env, "AI_API_KEY") ? "configured" : "pending"),
+    note: "AI chat, document generation, and the scanner need an AI provider key (AI_API_KEY).",
+  },
+  {
+    name: "email-oauth",
+    status: (env) =>
+      (isSet(env, "GOOGLE_CLIENT_ID") && isSet(env, "GOOGLE_CLIENT_SECRET")) ||
+      (isSet(env, "MICROSOFT_CLIENT_ID") &&
+        isSet(env, "MICROSOFT_CLIENT_SECRET"))
+        ? "configured"
+        : "pending",
+    note: "Connecting Gmail/Microsoft needs real OAuth app credentials (client id + secret + redirect URI).",
+  },
+  {
+    name: "email-worker-poller",
+    status: (env) =>
+      isSet(env, "EMAIL_WORKER_SECRET") ? "configured" : "pending",
+    note: "A durable external poller/scheduler must drive /api/internal/email-worker (and /api/internal/storage-reconcile); the web process never sends.",
+  },
+  {
+    name: "payment-provider",
+    status: () => "pending",
+    note: "No payment provider is wired (seam: src/lib/billing/provider.ts); quota upgrades are invitation-code only and /api/billing/webhook answers 501.",
+  },
+  {
+    name: "vacancy-providers",
+    status: () => "pending",
+    note: "Bundesagentur f\u00fcr Arbeit is the only vacancy provider; additional providers need their own API credentials.",
+  },
 ];
 
 /** Pure validation. `env` is a map of variable name → value (or undefined).
@@ -160,20 +213,35 @@ export function validateEnv(env) {
     if (status === "warn") warnings.push(`${check.name}: ${message}`);
   }
 
-  return { ok: errors.length === 0, errors, warnings, results };
+  // Informational only: readiness of each external integration seam, derived
+  // from in-repo state. Never contributes to errors/warnings or the exit code.
+  const seams = SEAMS.map((seam) => ({
+    name: seam.name,
+    status: seam.status(env),
+    note: seam.note,
+  }));
+
+  return { ok: errors.length === 0, errors, warnings, results, seams };
 }
 
 const isMain =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
-  const { results, errors, warnings, ok } = validateEnv(process.env);
+  const { results, errors, warnings, ok, seams } = validateEnv(process.env);
   console.log("Deployment environment check\n");
   for (const r of results) {
     const tag =
       r.status === "fail" ? "FAIL" : r.status === "warn" ? "WARN" : "PASS";
     const detail = r.message ? ` — ${r.message}` : "";
     console.log(`  [${tag}] ${r.name}${detail}`);
+  }
+  console.log(
+    "\nExternal integration seams (informational — external resources still required to go fully live)\n",
+  );
+  for (const s of seams) {
+    const tag = s.status === "configured" ? "READY" : "PENDING";
+    console.log(`  [${tag}] ${s.name} — ${s.note}`);
   }
   console.log("");
   if (warnings.length > 0) console.log(`${warnings.length} warning(s).`);

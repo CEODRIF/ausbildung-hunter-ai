@@ -130,6 +130,46 @@ describe("validateEnv", () => {
     const ba = result.results.find((r) => r.name === "ARBEITSAGENTUR_API_KEY");
     expect(ba).toEqual(expect.objectContaining({ status: "pass" }));
   });
+
+  it("reports external integration seams by readiness without affecting ok", () => {
+    const result = validateEnv(GOOD_ENV);
+    // GOOD_ENV sets the worker secret but no AI key / no OAuth app.
+    const byName = Object.fromEntries(
+      result.seams.map((s) => [s.name, s.status]),
+    );
+    expect(byName["ai-assistant"]).toBe("pending");
+    expect(byName["email-oauth"]).toBe("pending");
+    expect(byName["email-worker-poller"]).toBe("configured");
+    // The two code-level seams are always pending until configured in code.
+    expect(byName["payment-provider"]).toBe("pending");
+    expect(byName["vacancy-providers"]).toBe("pending");
+    // Seams are informational only — they must never flip readiness.
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("marks AI and OAuth seams configured when their credentials are present", () => {
+    const env = {
+      ...GOOD_ENV,
+      AI_API_KEY: "sk-a-very-long-provider-key-12345",
+      GOOGLE_CLIENT_ID: "google-app-id",
+      GOOGLE_CLIENT_SECRET: "a-google-client-secret-value-123",
+    };
+    const byName = Object.fromEntries(
+      validateEnv(env).seams.map((s) => [s.name, s.status]),
+    );
+    expect(byName["ai-assistant"]).toBe("configured");
+    expect(byName["email-oauth"]).toBe("configured");
+  });
+
+  it("treats a placeholder credential as NOT configured for a seam", () => {
+    const byName = Object.fromEntries(
+      validateEnv({ ...GOOD_ENV, AI_API_KEY: "your-ai-api-key" }).seams.map(
+        (s) => [s.name, s.status],
+      ),
+    );
+    expect(byName["ai-assistant"]).toBe("pending");
+  });
 });
 
 describe("check:env CLI", () => {
@@ -156,5 +196,16 @@ describe("check:env CLI", () => {
     expect(out).not.toContain(JWT_B);
     expect(out).not.toContain(GOOD_ENV.EMAIL_TOKEN_ENCRYPTION_KEY);
     expect(out).not.toContain(GOOD_ENV.EMAIL_WORKER_SECRET);
+  });
+
+  it("prints the external integration seams section (names/notes only, no values)", async () => {
+    const { out } = await runCli(GOOD_ENV);
+    expect(out).toContain("External integration seams");
+    expect(out).toContain("[READY] email-worker-poller");
+    expect(out).toContain("[PENDING] payment-provider");
+    expect(out).toContain("[PENDING] ai-assistant");
+    // The seams section must not leak any credential value.
+    expect(out).not.toContain(GOOD_ENV.EMAIL_WORKER_SECRET);
+    expect(out).not.toContain(GOOD_ENV.SUPABASE_SERVICE_ROLE_KEY);
   });
 });
