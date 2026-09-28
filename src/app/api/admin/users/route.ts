@@ -2,11 +2,14 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/billing/admin";
 import { listAdminUsers } from "@/lib/billing/admin-users";
+import { checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 export async function GET(request: Request): Promise<NextResponse> {
   const adminUser = await requireAdmin();
   if (!adminUser)
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  const limited = await checkRateLimit("admin_actions", adminUser.id);
+  if (!limited.allowed) return tooManyRequests(limited);
 
   const query = new URL(request.url).searchParams;
   const filterSchema = z

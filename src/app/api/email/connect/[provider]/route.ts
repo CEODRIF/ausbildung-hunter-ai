@@ -6,6 +6,7 @@ import {
   getProviderScopes,
   type EmailProvider,
 } from "@/lib/email-oauth";
+import { checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 export async function GET(
   request: Request,
@@ -21,6 +22,8 @@ export async function GET(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.redirect(new URL("/login", request.url));
+  const limited = await checkRateLimit("email_oauth", user.id);
+  if (!limited.allowed) return tooManyRequests(limited);
   const config = getProviderConfig(provider);
   if (!config.clientId || !config.redirectUri)
     return NextResponse.redirect(

@@ -8,11 +8,19 @@ import {
   normalizeSearchParams,
   searchParamsSchema,
 } from "@/lib/opportunities/types";
+import {
+  checkRateLimit,
+  rateLimitHeaders,
+  tooManyRequests,
+} from "@/lib/rate-limit";
 
 export async function GET(request: Request) {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active")
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Protects the shared upstream BA client id from per-user bursts.
+  const limited = await checkRateLimit("opportunity_search", user.id);
+  if (!limited.allowed) return tooManyRequests(limited);
 
   const raw = new URL(request.url).searchParams;
   let params;
@@ -53,7 +61,7 @@ export async function GET(request: Request) {
 
   try {
     const result = await searchOpportunities(params, { userId: user.id });
-    return NextResponse.json(result);
+    return NextResponse.json(result, { headers: rateLimitHeaders(limited) });
   } catch (error) {
     if (error instanceof OpportunityProviderError)
       return NextResponse.json({ error: error.message }, { status: 502 });

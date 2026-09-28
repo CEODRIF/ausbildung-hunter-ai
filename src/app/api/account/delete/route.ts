@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { deleteUserAccount } from "@/lib/account-data";
+import { checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 const deleteSchema = z
   .object({
@@ -17,6 +18,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const limited = await checkRateLimit("account_delete", user.id);
+  if (!limited.allowed) return tooManyRequests(limited);
   let body: unknown;
   try {
     body = await request.json();

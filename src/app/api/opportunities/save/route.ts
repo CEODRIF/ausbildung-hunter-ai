@@ -9,6 +9,7 @@ import {
   saveOpportunityFromKey,
   updateSavedOpportunityNotes,
 } from "@/lib/opportunities/saved";
+import { checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 /**
  * Save contract: the client submits only the opportunity key (and optional
@@ -57,6 +58,9 @@ export async function POST(request: Request) {
   const { user } = await getCurrentUserAndProfile();
   if (!user)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Every save re-resolves the offer from the shared BA upstream.
+  const limited = await checkRateLimit("opportunity_save", user.id);
+  if (!limited.allowed) return tooManyRequests(limited);
   let body;
   try {
     body = saveBodySchema.parse(await request.json());

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { executeAdminAction, isUuid, requireAdmin } from "@/lib/billing/admin";
+import { checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 const actionSchema = z
   .object({
@@ -32,6 +33,8 @@ export async function POST(
   if (!adminUser) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  const limited = await checkRateLimit("admin_actions", adminUser.id);
+  if (!limited.allowed) return tooManyRequests(limited);
   const { id: targetId } = await context.params;
   if (!isUuid(targetId)) {
     return NextResponse.json({ error: "Invalid user id" }, { status: 400 });

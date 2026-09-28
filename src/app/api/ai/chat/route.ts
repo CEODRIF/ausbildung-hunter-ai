@@ -6,6 +6,11 @@ import {
   provider,
   saveAssistantMessage,
 } from "@/lib/ai-service";
+import {
+  checkRateLimit,
+  rateLimitHeaders,
+  tooManyRequests,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export async function POST(request: Request) {
@@ -15,6 +20,9 @@ export async function POST(request: Request) {
   } = await supabase.auth.getUser();
   if (!user)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Paid AI: cap per-user bursts (session-scoped key, fail-open limiter).
+  const limited = await checkRateLimit("ai_chat", user.id);
+  if (!limited.allowed) return tooManyRequests(limited);
   const body = (await request.json().catch(() => ({}))) as {
     conversationId?: string;
     content?: string;
@@ -57,6 +65,7 @@ export async function POST(request: Request) {
         "content-type": "text/plain; charset=utf-8",
         "cache-control": "no-cache",
         "x-content-type-options": "nosniff",
+        ...rateLimitHeaders(limited),
       },
     });
   } catch (error) {
