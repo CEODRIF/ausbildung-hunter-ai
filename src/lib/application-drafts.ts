@@ -171,7 +171,9 @@ export async function createBlankDraft(
     .insert({ user_id: userId, goal, sender_email_account_id: senderAccountId })
     .select("*")
     .single<ApplicationDraft>();
-  if (error) throw new Error(error.message);
+  // Controlled message only: this runs inside the composer server action, so a
+  // raw Supabase insert error (FK/constraint/DB detail) must never reach the client.
+  if (error) throw new Error("Unable to create a new application.");
   return { ...data, recipients: [], attachments: [] };
 }
 
