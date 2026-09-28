@@ -1,0 +1,63 @@
+"use server";
+
+import { redirect } from "next/navigation";
+import { createVerificationCode, verifyCode } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
+
+export type VerificationState = { error?: string; success?: string };
+
+export async function submitVerificationCode(
+  _previousState: VerificationState,
+  formData: FormData,
+): Promise<VerificationState> {
+  const code = String(formData.get("code") ?? "").trim();
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Your session expired. Please sign in again." };
+  if (!/^\d{6}$/.test(code))
+    return { error: "Enter the 6-digit verification code." };
+
+  try {
+    const verified = await verifyCode(user.id, code);
+    if (!verified)
+      return {
+        error:
+          "That code is invalid, expired, or has reached its attempt limit.",
+      };
+  } catch {
+    return {
+      error: "Verification is temporarily unavailable. Please try again.",
+    };
+  }
+  redirect("/onboarding");
+}
+
+export async function requestVerificationCode(
+  _previousState: VerificationState,
+  _formData: FormData,
+): Promise<VerificationState> {
+  void _previousState;
+  void _formData;
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Your session expired. Please sign in again." };
+
+  try {
+    await createVerificationCode(user.id);
+    return {
+      success:
+        "A new code is ready. Check your email when email delivery is connected.",
+    };
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes("verification_rate_limited")
+    )
+      return { error: "Please wait a minute before requesting another code." };
+    return { error: "Unable to create a new code right now." };
+  }
+}

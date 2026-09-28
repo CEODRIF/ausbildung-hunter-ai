@@ -1,0 +1,4 @@
+project_id = "ausbildung-hunter-ai"
+
+[db]
+major_version = 15
