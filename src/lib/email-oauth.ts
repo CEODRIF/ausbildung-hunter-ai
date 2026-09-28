@@ -129,6 +129,43 @@ export async function deleteEmailAccount(userId: string, accountId: string) {
   if (error) throw new Error(error.message);
 }
 
+export type DisconnectBlockers = {
+  /** Campaigns still `queued`/`sending` on this sender. Disconnecting
+   *  would strand live sends — blocked (campaigns are SET NULL only
+   *  after they reach a terminal state, by which point no sends remain). */
+  activeCampaigns: number;
+  /** Drafts that use this account as sender. A draft must keep its
+   *  sender to stay sendable (FK RESTRICT) — blocked until the user
+   *  deletes or reassigns them. */
+  drafts: number;
+};
+
+/** Server-derived usage counts for one of the user's accounts. Both
+ *  queries are user- AND account-scoped (head counts, no rows moved). */
+export async function getDisconnectBlockers(
+  userId: string,
+  accountId: string,
+): Promise<DisconnectBlockers> {
+  const admin = createAdminClient();
+  const [campaigns, drafts] = await Promise.all([
+    admin
+      .from("email_campaigns")
+      .select("id", { count: "exact", head: true })
+      .eq("email_account_id", accountId)
+      .eq("user_id", userId)
+      .in("status", ["queued", "sending"]),
+    admin
+      .from("application_drafts")
+      .select("id", { count: "exact", head: true })
+      .eq("sender_email_account_id", accountId)
+      .eq("user_id", userId),
+  ]);
+  return {
+    activeCampaigns: campaigns.count ?? 0,
+    drafts: drafts.count ?? 0,
+  };
+}
+
 export async function exchangeGoogleCode(code: string) {
   const config = getProviderConfig("gmail");
   if (!config.clientId || !config.clientSecret || !config.redirectUri)

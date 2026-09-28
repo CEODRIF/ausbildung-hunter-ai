@@ -2,7 +2,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui";
 import { getCurrentUserAndProfile } from "@/lib/auth";
-import { listEmailAccounts, type SafeEmailAccount } from "@/lib/email-oauth";
+import {
+  getDisconnectBlockers,
+  listEmailAccounts,
+  type DisconnectBlockers,
+  type SafeEmailAccount,
+} from "@/lib/email-oauth";
 import { disconnectEmailAccount } from "@/app/settings/email/actions";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +28,10 @@ const errors: Record<string, string> = {
   connection_failed: "We could not verify that account. Please try again.",
   account_not_found: "That account could not be found.",
   disconnect_failed: "We could not disconnect this account. Please try again.",
+  active_campaigns:
+    "This account is sending an active campaign. Cancel the campaign before disconnecting.",
+  drafts_in_use:
+    "One or more of your application drafts use this account as sender. Delete or reassign those drafts before disconnecting.",
   provider_authorization_failed:
     "The provider could not authorize the connection. Please try again.",
   gmail_not_configured: "Gmail OAuth is not configured yet.",
@@ -103,8 +112,19 @@ export default async function EmailSettingsPage({
           </p>
           <div className="mt-4 space-y-3">
             {accounts.length ? (
-              accounts.map((account) => (
-                <AccountRow key={account.id} account={account} />
+              (
+                await Promise.all(
+                  accounts.map(async (account) => ({
+                    account,
+                    blockers: await getDisconnectBlockers(user.id, account.id),
+                  })),
+                )
+              ).map(({ account, blockers }) => (
+                <AccountRow
+                  key={account.id}
+                  account={account}
+                  blockers={blockers}
+                />
               ))
             ) : (
               <Card className="p-8 text-center">
@@ -160,7 +180,14 @@ function ProviderCard({
   );
 }
 
-function AccountRow({ account }: { account: SafeEmailAccount }) {
+function AccountRow({
+  account,
+  blockers,
+}: {
+  account: SafeEmailAccount;
+  blockers: DisconnectBlockers;
+}) {
+  const inUse = blockers.activeCampaigns > 0 || blockers.drafts > 0;
   return (
     <Card className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-center gap-3">
@@ -185,10 +212,23 @@ function AccountRow({ account }: { account: SafeEmailAccount }) {
         <span className="text-xs text-[#8b9ab0]">
           Connected {formatDate(account.created_at)}
         </span>
+        {inUse && (
+          <span className="rounded-lg bg-[#fdf3e2] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-[#b57a1f]">
+            {blockers.activeCampaigns > 0
+              ? `In use · ${blockers.activeCampaigns} active campaign${blockers.activeCampaigns === 1 ? "" : "s"}`
+              : `In use · ${blockers.drafts} draft${blockers.drafts === 1 ? "" : "s"}`}
+          </span>
+        )}
         <form action={disconnectEmailAccount}>
           <input type="hidden" name="accountId" value={account.id} />
           <button
-            className="rounded-lg border border-[#f0d9da] px-3 py-2 text-xs font-semibold text-[#c24c55] hover:bg-[#fff7f7]"
+            className="rounded-lg border border-[#f0d9da] px-3 py-2 text-xs font-semibold text-[#c24c55] hover:bg-[#fff7f7] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={inUse}
+            title={
+              inUse
+                ? "Resolve the active campaign or drafts using this account first"
+                : undefined
+            }
             type="submit"
           >
             Disconnect

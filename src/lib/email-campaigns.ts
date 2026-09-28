@@ -202,7 +202,11 @@ async function getCampaignContext(userId: string, campaignId: string) {
       id: string;
       user_id: string;
       draft_id: string;
-      email_account_id: string;
+      // Phase 15: nullable — historical campaigns may outlive their
+      // sender (ON DELETE SET NULL). Active campaigns always keep a
+      // sender (disconnect is blocked while active); the guard in
+      // processCampaignBatch makes that invariant explicit.
+      email_account_id: string | null;
       usage_date: string;
       status: CampaignStatus;
       started_at: string | null;
@@ -319,6 +323,12 @@ export async function processCampaignBatch(
     )
   )
     return { processed: 0, status: campaign.status };
+  // Invariant (Phase 15): an active campaign always has a live sender
+  // (disconnect is blocked while campaigns are active). A null sender
+  // on an active campaign is an inconsistent state — fail loudly and
+  // deterministically instead of deep in provider code.
+  if (!campaign.email_account_id)
+    throw new Error("Campaign has no sender account; nothing to send.");
   const { data: draft, error: draftError } = await admin
     .from("application_drafts")
     .select("body_html, body_text")
