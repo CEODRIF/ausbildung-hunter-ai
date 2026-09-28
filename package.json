@@ -12,7 +12,8 @@
     "test": "vitest run",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "check:env": "node scripts/check-env.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
