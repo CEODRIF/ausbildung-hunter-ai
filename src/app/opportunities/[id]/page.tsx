@@ -263,7 +263,7 @@ export default async function OpportunityDetailsPage({
               {applyLabel}
             </a>
             <Link
-              href="/applications/new"
+              href={`/applications/new?opp=${encodeURIComponent(opportunity.id)}`}
               className="inline-flex rounded-xl bg-[#edf3ff] px-5 py-3 text-sm font-semibold text-[#2f6fed]"
             >
               Prepare application

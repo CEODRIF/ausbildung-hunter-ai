@@ -32,6 +32,13 @@ export type ApplicationDraft = {
   body_text: string;
   created_at: string;
   updated_at: string;
+  /** Opportunity this draft was pre-filled from (server-derived snapshot;
+   *  null for normal drafts). Context/display only — subject, body and
+   *  recipients stay fully user-editable. */
+  opportunity_key: string | null;
+  opportunity_title: string | null;
+  opportunity_company: string | null;
+  opportunity_source_url: string | null;
   recipients: DraftRecipient[];
   attachments: DraftAttachment[];
 };

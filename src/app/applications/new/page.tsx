@@ -2,10 +2,15 @@ import Link from "next/link";
 import { getApplicationComposerData } from "@/lib/application-drafts";
 import { ApplicationComposer } from "@/components/application-composer";
 import { Card } from "@/components/ui";
+import { applyOpportunityPrefill } from "@/lib/opportunity-prefill";
 
 export const dynamic = "force-dynamic";
 
-export default async function NewApplicationPage() {
+export default async function NewApplicationPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const data = await getApplicationComposerData();
   if (!data) return null;
   if (!data.accounts.length)
@@ -38,6 +43,31 @@ export default async function NewApplicationPage() {
         </div>
       </main>
     );
+
+  // Optional server-derived prefill from an opportunity (?opp=<key>).
+  // The key is validated and the opportunity re-resolved from the
+  // authoritative source — nothing is trusted from the URL beyond the key.
+  const params = await searchParams;
+  const rawOpp = typeof params.opp === "string" ? params.opp : "";
+  let activeDraft = data.draft!;
+  let prefillNotice: string | null = null;
+  let prefillError: string | null = null;
+  if (rawOpp) {
+    const outcome = await applyOpportunityPrefill(
+      { userId: data.userId, accounts: data.accounts, draft: data.draft! },
+      rawOpp,
+    );
+    if (outcome.ok) {
+      activeDraft = outcome.draft;
+      prefillNotice = outcome.notice;
+    } else {
+      prefillError =
+        outcome.error === "invalid_key"
+          ? "Der übergebene Stellenangebots-Link ist ungültig. Es wurde kein Entwurf vorbereitet."
+          : "Das Stellenangebot konnte nicht mehr geladen werden. Es wurde kein Entwurf vorbereitet.";
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#f6f8fb] px-5 py-8 sm:px-8 lg:px-10">
       <div className="mx-auto max-w-7xl">
@@ -48,7 +78,12 @@ export default async function NewApplicationPage() {
           ← Back to dashboard
         </Link>
         <div className="mt-7">
-          <ApplicationComposer draft={data.draft!} accounts={data.accounts} />
+          <ApplicationComposer
+            draft={activeDraft}
+            accounts={data.accounts}
+            prefillNotice={prefillNotice}
+            prefillError={prefillError}
+          />
         </div>
       </div>
     </main>

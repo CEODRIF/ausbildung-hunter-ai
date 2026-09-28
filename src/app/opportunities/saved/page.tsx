@@ -121,6 +121,12 @@ function SavedCard({ item }: { item: SavedOpportunityRow }) {
           >
             View details
           </Link>
+          <Link
+            href={`/applications/new?opp=${encodeURIComponent(item.opportunity_key)}`}
+            className="rounded-xl bg-[#edf3ff] px-4 py-2 text-xs font-semibold text-[#2f6fed]"
+          >
+            Prepare application
+          </Link>
           {item.source_url && (
             <a
               href={item.source_url}
