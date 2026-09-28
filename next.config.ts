@@ -1,21 +1,18 @@
 import type { NextConfig } from "next";
+import { buildSecurityHeaders } from "./src/lib/security-headers";
 
 /**
- * Phase 12 — baseline security headers on every response.
- * Deliberately conservative: no CSP yet (a strict policy would break
- * Next.js inline scripts/styles and the Supabase client without a full
- * audit; documented as a known limitation). Everything below is safe for
- * a standalone, non-embedded app.
+ * Phase 12/13 — security headers (rate-limit era baseline) plus a full
+ * Content Security Policy, assembled by the tested pure builder in
+ * src/lib/security-headers.ts.
+ *
+ * Deployment implication: the CSP bakes in the Supabase origin from
+ * NEXT_PUBLIC_SUPABASE_URL at build time. If the Supabase project URL
+ * changes, rebuild (documented in README → Phase 13).
  */
-const securityHeaders: Array<{ key: string; value: string }> = [
-  { key: "x-content-type-options", value: "nosniff" },
-  { key: "x-frame-options", value: "DENY" },
-  { key: "referrer-policy", value: "strict-origin-when-cross-origin" },
-  {
-    key: "permissions-policy",
-    value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
-  },
-];
+const securityHeaders = buildSecurityHeaders(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+);
 
 const nextConfig: NextConfig = {
   async headers() {
