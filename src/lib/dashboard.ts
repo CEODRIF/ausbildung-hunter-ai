@@ -169,6 +169,15 @@ export function buildMatchingSummary(
   };
 }
 
+function scrub(message: string): string {
+  return message
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+/gi, "Bearer [redacted]")
+    .replace(
+      /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+      "[redacted-jwt]",
+    );
+}
+
 export async function getDashboardData(userId: string): Promise<DashboardData> {
   const supabase = await createClient();
   const admin = createAdminClient();
@@ -225,15 +234,52 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     getUsageSnapshot(userId).catch(() => null),
   ]);
 
-  if (profileResult.error) throw new Error("Unable to load your profile.");
-  if (usageResult.error) throw new Error("Unable to load daily usage.");
-  if (applicationsResult.error) throw new Error("Unable to load applications.");
-  if (activityResult.error) throw new Error("Unable to load recent activity.");
-  if (emailAccountResult.error)
+  // Every strict query failure is logged with the exact PostgREST reason
+  // (target + error) before throwing — a broken production access contract
+  // (missing RLS policy/grant, missing RPC, missing table) must be
+  // diagnosable from the Vercel logs, not only from a generic UI error.
+  if (profileResult.error) {
+    console.error(
+      `[dashboard] query failed target="profiles" error="${scrub(profileResult.error.message)}"`,
+    );
+    throw new Error("Unable to load your profile.");
+  }
+  if (usageResult.error) {
+    console.error(
+      `[dashboard] query failed target="get_or_create_daily_usage" error="${scrub(usageResult.error.message)}"`,
+    );
+    throw new Error("Unable to load daily usage.");
+  }
+  if (applicationsResult.error) {
+    console.error(
+      `[dashboard] query failed target="application_drafts" error="${scrub(applicationsResult.error.message)}"`,
+    );
+    throw new Error("Unable to load applications.");
+  }
+  if (activityResult.error) {
+    console.error(
+      `[dashboard] query failed target="activity_logs" error="${scrub(activityResult.error.message)}"`,
+    );
+    throw new Error("Unable to load recent activity.");
+  }
+  if (emailAccountResult.error) {
+    console.error(
+      `[dashboard] query failed target="email_accounts" error="${scrub(emailAccountResult.error.message)}"`,
+    );
     throw new Error("Unable to load email account status.");
-  if (scanResult.error) throw new Error("Unable to load scan status.");
-  if (candidateProfileResult.error)
+  }
+  if (scanResult.error) {
+    console.error(
+      `[dashboard] query failed target="bewerbung_scans" error="${scrub(scanResult.error.message)}"`,
+    );
+    throw new Error("Unable to load scan status.");
+  }
+  if (candidateProfileResult.error) {
+    console.error(
+      `[dashboard] query failed target="candidate_profiles" error="${scrub(candidateProfileResult.error.message)}"`,
+    );
     throw new Error("Unable to load candidate profile status.");
+  }
 
   // Validate the latest profile server-side; an invalid row means "none".
   let candidateProfile: CandidateProfile | null = null;

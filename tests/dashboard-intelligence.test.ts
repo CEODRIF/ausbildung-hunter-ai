@@ -16,6 +16,9 @@ interface MockHandlers {
   single?: (table: string, filters: Filters) => Record<string, unknown> | null;
   count?: (table: string, filters: Filters) => number;
   rpc?: (name: string) => Record<string, unknown> | null;
+  /** PostgREST error simulation: returns the error message for a
+   *  (target, op) pair, or null for a successful call. */
+  error?: (target: string, op: "list" | "single" | "rpc") => string | null;
 }
 
 /** Chainable supabase-builder mock supporting select/eq/in/not/order/limit
@@ -29,20 +32,30 @@ function makeClientMock(handlers: MockHandlers) {
       {
         get(_target, prop) {
           if (typeof prop !== "string") return undefined;
-          if (prop === "then")
+          if (prop === "then") {
+            const listError = handlers.error?.(table, "list") ?? null;
             return (onFulfilled?: unknown, onRejected?: unknown) =>
               Promise.resolve({
-                data: handlers.list?.(table, filters) ?? null,
+                data: listError
+                  ? null
+                  : (handlers.list?.(table, filters) ?? null),
                 count: filters["selectCount"]
-                  ? (handlers.count?.(table, filters) ?? 0)
+                  ? listError
+                    ? null
+                    : (handlers.count?.(table, filters) ?? 0)
                   : null,
-                error: null,
+                error: listError ? { message: listError } : null,
               }).then(onFulfilled as never, onRejected as never);
-          if (prop === "maybeSingle" || prop === "single")
+          }
+          if (prop === "maybeSingle" || prop === "single") {
+            const singleError = handlers.error?.(table, "single") ?? null;
             return async () => ({
-              data: handlers.single?.(table, filters) ?? null,
-              error: null,
+              data: singleError
+                ? null
+                : (handlers.single?.(table, filters) ?? null),
+              error: singleError ? { message: singleError } : null,
             });
+          }
           if (prop === "select")
             return (...args: unknown[]) => {
               filters["select"] = args[0];
@@ -80,10 +93,13 @@ function makeClientMock(handlers: MockHandlers) {
     client: {
       from: (table: string) => chain(table),
       rpc: (name: string) => ({
-        single: async () => ({
-          data: handlers.rpc?.(name) ?? null,
-          error: null,
-        }),
+        single: async () => {
+          const rpcError = handlers.error?.(name, "rpc") ?? null;
+          return {
+            data: rpcError ? null : (handlers.rpc?.(name) ?? null),
+            error: rpcError ? { message: rpcError } : null,
+          };
+        },
       }),
     },
     calls,
@@ -517,50 +533,48 @@ describe("getDashboardData", () => {
     daily_email_limit: 20,
   };
 
+  const baseSessionHandlers: MockHandlers = {
+    single: (table) =>
+      table === "profiles"
+        ? (baseProfileRow as Record<string, unknown>)
+        : table === "email_accounts"
+          ? {
+              id: "mail-1",
+              provider: "gmail",
+              email: "alex@gmail.com",
+              is_active: true,
+              created_at: "2026-09-01T00:00:00.000Z",
+              updated_at: "2026-09-01T00:00:00.000Z",
+              last_used_at: null,
+            }
+          : null,
+    list: (table, filters) => {
+      if (table === "activity_logs" && filters["user_id"] === USER_ID) {
+        return [
+          {
+            id: "act-1",
+            activity_type: "opportunity_saved",
+            title: "Opportunity saved: Testjob",
+            description: "Test AG",
+            metadata: {},
+            created_at: "2026-09-28T10:00:00.000Z",
+          },
+        ];
+      }
+      return null;
+    },
+    count: (table) =>
+      table === "bewerbung_scans" ? 1 : table === "application_drafts" ? 0 : 0,
+    rpc: (name) =>
+      name === "get_or_create_daily_usage"
+        ? { emails_sent: 2, ai_requests: 3, date: "2026-09-28" }
+        : null,
+  };
+
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    sessionMock = makeClientMock({
-      single: (table) =>
-        table === "profiles"
-          ? (baseProfileRow as Record<string, unknown>)
-          : table === "email_accounts"
-            ? {
-                id: "mail-1",
-                provider: "gmail",
-                email: "alex@gmail.com",
-                is_active: true,
-                created_at: "2026-09-01T00:00:00.000Z",
-                updated_at: "2026-09-01T00:00:00.000Z",
-                last_used_at: null,
-              }
-            : null,
-      list: (table, filters) => {
-        if (table === "activity_logs" && filters["user_id"] === USER_ID) {
-          return [
-            {
-              id: "act-1",
-              activity_type: "opportunity_saved",
-              title: "Opportunity saved: Testjob",
-              description: "Test AG",
-              metadata: {},
-              created_at: "2026-09-28T10:00:00.000Z",
-            },
-          ];
-        }
-        return null;
-      },
-      count: (table) =>
-        table === "bewerbung_scans"
-          ? 1
-          : table === "application_drafts"
-            ? 0
-            : 0,
-      rpc: (name) =>
-        name === "get_or_create_daily_usage"
-          ? { emails_sent: 2, ai_requests: 3, date: "2026-09-28" }
-          : null,
-    });
+    sessionMock = makeClientMock(baseSessionHandlers);
     adminMock = makeClientMock({
       single: () => null,
       list: (table, filters) => {
@@ -885,4 +899,75 @@ describe("getDashboardData", () => {
     expect(data.savedPreview[0].stale).toBe(true);
     expect(data.savedPreview[0].staleReasons.join(" ")).toContain("Profil");
   });
+
+  // Production incident: the dashboard error boundary showed a generic
+  // message while the exact PostgREST failure (missing RLS policy/grant or
+  // missing RPC) was swallowed. Each strict query must now log its exact
+  // target + error while keeping the user-facing message safe.
+  const strictErrorCases: Array<{
+    target: string;
+    op: "list" | "single" | "rpc";
+    message: string;
+  }> = [
+    {
+      target: "profiles",
+      op: "single",
+      message: "Unable to load your profile.",
+    },
+    {
+      target: "get_or_create_daily_usage",
+      op: "rpc",
+      message: "Unable to load daily usage.",
+    },
+    {
+      target: "application_drafts",
+      op: "list",
+      message: "Unable to load applications.",
+    },
+    {
+      target: "activity_logs",
+      op: "list",
+      message: "Unable to load recent activity.",
+    },
+    {
+      target: "email_accounts",
+      op: "single",
+      message: "Unable to load email account status.",
+    },
+    {
+      target: "bewerbung_scans",
+      op: "list",
+      message: "Unable to load scan status.",
+    },
+    {
+      target: "candidate_profiles",
+      op: "single",
+      message: "Unable to load candidate profile status.",
+    },
+  ];
+
+  for (const testCase of strictErrorCases) {
+    it(`logs the exact PostgREST failure for ${testCase.target} and throws the safe message`, async () => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const failingMock = makeClientMock({
+        ...baseSessionHandlers,
+        error: (target, op) =>
+          target === testCase.target && op === testCase.op
+            ? `permission denied for table ${testCase.target}`
+            : null,
+      });
+      vi.mocked(createClient).mockResolvedValue(failingMock.client as never);
+
+      await expect(getDashboardData(USER_ID)).rejects.toThrow(testCase.message);
+
+      const logged = spy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logged).toContain(
+        `[dashboard] query failed target="${testCase.target}"`,
+      );
+      expect(logged).toContain(
+        `permission denied for table ${testCase.target}`,
+      );
+      spy.mockRestore();
+    });
+  }
 });

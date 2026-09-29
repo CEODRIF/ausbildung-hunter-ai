@@ -146,6 +146,7 @@ Run the migrations in order (they are self-contained):
    20261006000000_harden_confirmation_trigger.sql    # trigger hardened: profile activation / invitation consumption are best-effort and can never abort the confirmation
    20261007000000_restore_profile_creation_trigger.sql  # restores handle_new_user + on_auth_user_created (AFTER INSERT on auth.users) — additive, exact original contract
    20261008000000_restore_profiles_access.sql    # idempotently restores profiles RLS policies + grants (original definitions) — fixes confirmed+active users being bounced to /verify
+   20261009000000_restore_dashboard_access.sql   # idempotently restores the dashboard tables' RLS policies + grants + get_or_create_daily_usage RPC (original definitions) — fixes "Your dashboard could not load"
 ```
 
 Via the CLI: `npx supabase db push` (or paste into the SQL editor). The migrations create all tables, RLS policies, storage buckets, triggers, and the invitation seeds.
