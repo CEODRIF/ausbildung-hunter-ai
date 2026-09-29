@@ -14,6 +14,22 @@ export type Profile = {
   updated_at: string;
 };
 
+/**
+ * Where the user lands after clicking the Supabase email confirmation link.
+ * Supabase appends `?code=...` to this URL; /auth/callback exchanges the code
+ * for a session and then forwards to the `next` target (default /onboarding).
+ */
+export const AUTH_CALLBACK_PATH = "/auth/callback?next=/onboarding";
+
+/**
+ * Absolute confirmation redirect (emailRedirectTo). Requires APP_URL; when
+ * unset, Supabase falls back to the Site URL configured in the dashboard.
+ */
+export function getAuthCallbackUrl(): string | undefined {
+  const appUrl = process.env.APP_URL?.trim().replace(/\/+$/, "");
+  return appUrl ? `${appUrl}${AUTH_CALLBACK_PATH}` : undefined;
+}
+
 export async function getCurrentUserAndProfile() {
   const supabase = await createClient();
   const {
@@ -35,6 +51,15 @@ export async function requireActiveUser() {
   return { user, profile };
 }
 
+/**
+ * Validate an invitation code (service role — invitation_codes is revoked
+ * from anon/authenticated).
+ *
+ * Consumption is NOT done here: the on_auth_user_email_confirmed database
+ * trigger (migration 20261005000000_email_confirmation_activation.sql) calls
+ * consume_invitation_code() exactly once when the user's email is verified
+ * via the Supabase Auth confirmation link.
+ */
 export async function validateInvitationCode(
   code: string,
   type: "registration" | "quota_upgrade",
@@ -43,38 +68,6 @@ export async function validateInvitationCode(
   const { data, error } = await admin.rpc("validate_invitation_code", {
     invitation_code: code,
     invitation_type: type,
-  });
-  if (error) throw new Error(error.message);
-  return Boolean(data);
-}
-
-export async function consumeInvitationCode(
-  code: string,
-  type: "registration" | "quota_upgrade",
-) {
-  const admin = createAdminClient();
-  const { data, error } = await admin.rpc("consume_invitation_code", {
-    invitation_code: code,
-    invitation_type: type,
-  });
-  if (error) throw new Error(error.message);
-  return Boolean(data);
-}
-
-export async function createVerificationCode(userId: string) {
-  const admin = createAdminClient();
-  const { data, error } = await admin.rpc("create_verification_code", {
-    target_user_id: userId,
-  });
-  if (error) throw new Error(error.message);
-  return data as string;
-}
-
-export async function verifyCode(userId: string, code: string) {
-  const admin = createAdminClient();
-  const { data, error } = await admin.rpc("verify_account_code", {
-    target_user_id: userId,
-    submitted_code: code,
   });
   if (error) throw new Error(error.message);
   return Boolean(data);

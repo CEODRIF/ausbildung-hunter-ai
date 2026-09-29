@@ -1,18 +1,8 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { z } from "zod";
-import {
-  createVerificationCode,
-  consumeInvitationCode,
-  validateInvitationCode,
-} from "@/lib/auth";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { getAuthCallbackUrl, validateInvitationCode } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
-import {
-  VerificationEmailError,
-  sendVerificationCodeEmail,
-} from "@/lib/verification-email";
 
 const schema = z.object({
   fullName: z
@@ -52,7 +42,7 @@ function logRegistrationError(step: string, error: unknown): void {
 }
 
 export async function register(
-  _previousState: { error?: string },
+  _previousState: { error?: string; success?: string },
   formData: FormData,
 ) {
   const parsed = schema.safeParse({
@@ -76,67 +66,40 @@ export async function register(
       ))
     )
       return { error: "That invitation code is invalid or no longer active." };
-    step = "create_user";
-    const admin = createAdminClient();
-    const { data: created, error: authError } =
-      await admin.auth.admin.createUser({
-        email: parsed.data.email,
-        password: parsed.data.password,
-        email_confirm: true,
-        user_metadata: { full_name: parsed.data.fullName },
-      });
-    if (authError || !created.user)
-      return { error: authError?.message ?? "Unable to create your account." };
 
-    step = "upsert_profile";
-    const { error: profileError } = await admin.from("profiles").upsert(
-      {
-        id: created.user.id,
-        full_name: parsed.data.fullName,
-        email: parsed.data.email,
-        account_status: "pending",
-        daily_email_limit: 50,
-      },
-      { onConflict: "id" },
-    );
-    if (profileError)
-      return {
-        error:
-          "Your account was created, but setup could not finish. Please contact support.",
-      };
-    step = "consume_invitation_code";
-    if (
-      !(await consumeInvitationCode(parsed.data.invitationCode, "registration"))
-    )
-      return {
-        error: "That invitation code is no longer active. Please try again.",
-      };
-    step = "sign_in";
-    const { error: signInError } = await (
-      await createClient()
-    ).auth.signInWithPassword({
+    step = "sign_up";
+    const supabase = await createClient();
+    // Standard Supabase Auth sign-up (anon key): creates the user, and Supabase
+    // itself sends the confirmation email — no external email service, no
+    // service-role user creation, no manual verification codes.
+    const { data, error } = await supabase.auth.signUp({
       email: parsed.data.email,
       password: parsed.data.password,
+      options: {
+        // handle_new_user() creates the profile from `full_name`; the
+        // on_auth_user_email_confirmed trigger consumes `invitation_code`
+        // exactly once, when the email is verified.
+        data: {
+          full_name: parsed.data.fullName,
+          invitation_code: parsed.data.invitationCode,
+        },
+        emailRedirectTo: getAuthCallbackUrl(),
+      },
     });
-    if (signInError)
-      return { error: "Your account was created. Please sign in to continue." };
-    step = "create_verification_code";
-    const verificationCode = await createVerificationCode(created.user.id);
-    step = "send_verification_email";
-    await sendVerificationCodeEmail({
-      email: parsed.data.email,
-      code: verificationCode,
-    });
+    if (error) {
+      if (error.message.includes("already registered"))
+        return { error: "An account with this email already exists." };
+      return { error: error.message };
+    }
+    if (!data.user)
+      return { error: "Unable to create your account. Please try again." };
+    if (!getAuthCallbackUrl())
+      console.error(
+        "[register] APP_URL is not set — the confirmation link uses the Supabase Site URL",
+      );
   } catch (error) {
     if (error instanceof Error && error.message.includes("already registered"))
       return { error: "An account with this email already exists." };
-    // The verification email was created but not delivered — never claim
-    // success. The user is already signed in and can retry from /verify
-    // ("Request a new code"), which regenerates and re-sends the code.
-    if (error instanceof VerificationEmailError)
-      return {
-        error: "We couldn't send the verification email. Please try again.",
-      };
     // Record the real, non-sensitive error server-side so a production failure
     // is diagnosable, while keeping the user-facing message safe and generic.
     logRegistrationError(step, error);
@@ -144,5 +107,8 @@ export async function register(
       error: "Registration is temporarily unavailable. Please try again.",
     };
   }
-  redirect("/verify");
+  return {
+    success:
+      "Check your email and click the verification link to activate your account.",
+  };
 }

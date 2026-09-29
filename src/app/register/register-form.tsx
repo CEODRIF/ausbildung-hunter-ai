@@ -6,11 +6,39 @@ import { AuthFeedback } from "@/components/auth-feedback";
 import { Button, Input } from "@/components/ui";
 import { register } from "@/app/register/actions";
 
-const initialState = { error: "" };
-
 export function RegisterForm() {
-  const [state, formAction, pending] = useActionState(register, initialState);
+  const [state, formAction, pending] = useActionState(
+    register,
+    {} as { error?: string; success?: string },
+  );
   const [showPassword, setShowPassword] = useState(false);
+
+  // After a successful sign-up the form is replaced by the "check your
+  // email" confirmation (no 6-digit code is requested).
+  if (state.success)
+    return (
+      <div className="space-y-4">
+        <AuthFeedback state={state} />
+        <p className="text-sm leading-6 text-[#71819a]">
+          The link activates your account and takes you straight to setup. If it
+          doesn&apos;t arrive within a few minutes, check your spam folder or
+          request another link from the{" "}
+          <Link
+            href="/verify"
+            className="font-semibold text-[#2f6fed] hover:text-[#255dcc]"
+          >
+            verification page
+          </Link>
+          .
+        </p>
+        <Link
+          href="/login"
+          className="block text-center text-sm font-semibold text-[#2f6fed] hover:text-[#255dcc]"
+        >
+          Go to sign in
+        </Link>
+      </div>
+    );
 
   return (
     <>

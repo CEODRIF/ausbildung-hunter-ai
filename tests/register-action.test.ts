@@ -1,194 +1,168 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// The register action must never leak a raw Supabase/DB/provider error to the
-// browser, but it also must not swallow it silently. These tests pin that
-// contract: a thrown step returns the safe generic message AND logs the
-// failing step + non-sensitive error server-side, with credentials scrubbed.
-vi.mock("next/navigation", () => ({
-  redirect: vi.fn(() => {
-    throw new Error("NEXT_REDIRECT");
-  }),
-}));
-vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
-vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+/**
+ * Supabase Auth email-confirmation registration contract:
+ *  - the invitation code is validated (service role) before any user is
+ *    created;
+ *  - the user is created with the standard anon-key `auth.signUp()` —
+ *    Supabase itself sends the confirmation email (no Resend, no service
+ *    role user creation, no 6-digit code);
+ *  - full_name + invitation_code travel in the user metadata (the profile
+ *    trigger and the confirmation trigger consume them);
+ *  - emailRedirectTo points at /auth/callback?next=/onboarding;
+ *  - success shows "check your email" — never claims the account is active;
+ *  - raw provider errors are never leaked (they are logged scrubbed); the
+ *    "already registered" message is preserved.
+ */
 vi.mock("@/lib/auth", () => ({
   validateInvitationCode: vi.fn(),
-  consumeInvitationCode: vi.fn(),
-  createVerificationCode: vi.fn(),
+  getAuthCallbackUrl: () => {
+    const appUrl = process.env.APP_URL?.trim().replace(/\/+$/, "");
+    return appUrl ? `${appUrl}/auth/callback?next=/onboarding` : undefined;
+  },
 }));
-vi.mock("@/lib/verification-email", () => ({
-  sendVerificationCodeEmail: vi.fn(),
-  VerificationEmailError: class VerificationEmailError extends Error {},
-}));
+vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 
 const { register } = await import("@/app/register/actions");
-const { redirect } = await import("next/navigation");
-const {
-  validateInvitationCode,
-  consumeInvitationCode,
-  createVerificationCode,
-} = await import("@/lib/auth");
-const { createAdminClient } = await import("@/lib/supabase/admin");
+const { validateInvitationCode } = await import("@/lib/auth");
 const { createClient } = await import("@/lib/supabase/server");
-const { sendVerificationCodeEmail, VerificationEmailError } =
-  await import("@/lib/verification-email");
 
-function makeFormData() {
-  const fd = new FormData();
-  fd.set("fullName", "Jane Doe");
-  fd.set("email", "jane@example.com");
-  fd.set("password", "supersecret123");
-  fd.set("invitationCode", "DRIF928");
-  return fd;
-}
+const signUp = vi.fn();
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
   (console.error as unknown as { mockRestore?: () => void }).mockRestore?.();
 });
 
-describe("register() error diagnostics", () => {
-  it("returns the safe generic message but logs the failing step + upstream error", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const raw =
-      "function public.validate_invitation_code(text, public.invitation_code_type) does not exist";
-    vi.mocked(validateInvitationCode).mockRejectedValue(new Error(raw));
+function mockSignUp(result: unknown) {
+  signUp.mockResolvedValue(result);
+  vi.mocked(createClient).mockResolvedValue({
+    auth: { signUp },
+  } as never);
+}
 
-    const res = await register({} as never, makeFormData());
+function makeFormData(overrides: Record<string, string> = {}): FormData {
+  const body = new FormData();
+  body.set("fullName", "Jane Doe");
+  body.set("email", "jane@example.com");
+  body.set("password", "password123");
+  body.set("invitationCode", "DRIF26");
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === "") body.delete(key);
+    else body.set(key, value);
+  }
+  return body;
+}
 
-    expect(res).toEqual({
-      error: "Registration is temporarily unavailable. Please try again.",
-    });
-    const logged = spy.mock.calls.map((c) => c.join(" ")).join("\n");
-    expect(logged).toContain('step="validate_invitation_code"');
-    expect(logged).toContain(raw);
-    // The user-facing message must not contain the raw DB error.
-    expect((res as { error: string }).error).not.toContain(raw);
+describe("register (Supabase Auth email confirmation)", () => {
+  it("rejects invalid input before touching Supabase", async () => {
+    mockSignUp({});
+    const res = await register({ error: "" }, makeFormData({ fullName: "J" }));
+    expect(res).toEqual({ error: "Enter your full name." });
+    expect(signUp).not.toHaveBeenCalled();
   });
 
-  it("scrubs credential-like values from the diagnostic log", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const jwt =
-      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
-    vi.mocked(createAdminClient).mockReturnValue({
-      auth: {
-        admin: {
-          createUser: vi
-            .fn()
-            .mockResolvedValue({ data: { user: { id: "u1" } }, error: null }),
-        },
-      },
-      from: vi.fn(() => ({
-        upsert: vi.fn().mockResolvedValue({ error: null }),
-      })),
-    } as never);
+  it("rejects an invalid/expired invitation code", async () => {
+    mockSignUp({});
+    vi.mocked(validateInvitationCode).mockResolvedValue(false);
+    const res = await register({ error: "" }, makeFormData());
+    expect(res).toEqual({
+      error: "That invitation code is invalid or no longer active.",
+    });
+    expect(signUp).not.toHaveBeenCalled();
+  });
+
+  it("signs the user up with metadata + emailRedirectTo and shows the check-your-email state", async () => {
+    vi.stubEnv("APP_URL", "https://app.example.com/");
+    mockSignUp({ data: { user: { id: "u1" }, session: null }, error: null });
     vi.mocked(validateInvitationCode).mockResolvedValue(true);
-    // Simulate a later step throwing with a token embedded in the message.
-    vi.mocked(consumeInvitationCode).mockRejectedValue(
-      new Error(`auth failed: Bearer ${jwt}`),
+
+    const res = await register({ error: "" }, makeFormData());
+
+    expect(res).toEqual({
+      success:
+        "Check your email and click the verification link to activate your account.",
+    });
+    expect(signUp).toHaveBeenCalledTimes(1);
+    expect(signUp).toHaveBeenCalledWith({
+      email: "jane@example.com",
+      password: "password123",
+      options: {
+        data: {
+          full_name: "Jane Doe",
+          invitation_code: "DRIF26",
+        },
+        emailRedirectTo:
+          "https://app.example.com/auth/callback?next=/onboarding",
+      },
+    });
+  });
+
+  it("leaves emailRedirectTo undefined when APP_URL is unset (dashboard Site URL fallback)", async () => {
+    vi.stubEnv("APP_URL", "");
+    mockSignUp({ data: { user: { id: "u1" }, session: null }, error: null });
+    vi.mocked(validateInvitationCode).mockResolvedValue(true);
+
+    const res = await register({ error: "" }, makeFormData());
+
+    expect(res).toEqual(
+      expect.objectContaining({
+        success:
+          "Check your email and click the verification link to activate your account.",
+      }),
     );
-
-    const res = await register({} as never, makeFormData());
-
-    expect(res).toEqual({
-      error: "Registration is temporarily unavailable. Please try again.",
-    });
-    const logged = spy.mock.calls.map((c) => c.join(" ")).join("\n");
-    expect(logged).not.toContain(jwt);
-    expect(logged).not.toContain("supersecret123");
-    expect(logged).toContain("[redacted");
+    expect(signUp.mock.calls[0][0].options.emailRedirectTo).toBeUndefined();
   });
 
-  it("still maps 'already registered' to the specific message without a diagnostic", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("keeps the existing 'already registered' message", async () => {
+    mockSignUp({ data: null, error: { message: "User already registered" } });
     vi.mocked(validateInvitationCode).mockResolvedValue(true);
-    vi.mocked(createAdminClient).mockReturnValue({
-      auth: {
-        admin: {
-          createUser: vi
-            .fn()
-            .mockRejectedValue(new Error("User already registered")),
-        },
-      },
-      from: vi.fn(),
-    } as never);
 
-    const res = await register({} as never, makeFormData());
+    const res = await register({ error: "" }, makeFormData());
 
     expect(res).toEqual({
       error: "An account with this email already exists.",
     });
-    expect(spy).not.toHaveBeenCalled();
   });
 
-  it("completes the intended flow, sends the code email, and redirects to /verify", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(validateInvitationCode).mockResolvedValue(true);
-    vi.mocked(consumeInvitationCode).mockResolvedValue(true);
-    vi.mocked(createVerificationCode).mockResolvedValue("123456");
-    vi.mocked(sendVerificationCodeEmail).mockResolvedValue(undefined);
-    vi.mocked(createAdminClient).mockReturnValue({
-      auth: {
-        admin: {
-          createUser: vi
-            .fn()
-            .mockResolvedValue({ data: { user: { id: "u1" } }, error: null }),
-        },
+  it("passes through user-safe sign-up errors (anon-key messages)", async () => {
+    mockSignUp({
+      data: null,
+      error: {
+        message:
+          "For your security, we limit login attempts after many failed attempts.",
       },
-      from: vi.fn(() => ({
-        upsert: vi.fn().mockResolvedValue({ error: null }),
-      })),
-    } as never);
-    vi.mocked(createClient).mockResolvedValue({
-      auth: { signInWithPassword: vi.fn().mockResolvedValue({ error: null }) },
-    } as never);
-
-    let threw = false;
-    try {
-      await register({} as never, makeFormData());
-    } catch {
-      threw = true;
-    }
-    expect(threw).toBe(true);
-    expect(redirect).toHaveBeenCalledWith("/verify");
-    expect(createVerificationCode).toHaveBeenCalledWith("u1");
-    // The email must carry the exact code returned by create_verification_code()
-    // and go to the registered address.
-    expect(sendVerificationCodeEmail).toHaveBeenCalledWith({
-      email: "jane@example.com",
-      code: "123456",
     });
-  });
-
-  it("never claims success when the verification email fails", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(validateInvitationCode).mockResolvedValue(true);
-    vi.mocked(consumeInvitationCode).mockResolvedValue(true);
-    vi.mocked(createVerificationCode).mockResolvedValue("123456");
-    vi.mocked(sendVerificationCodeEmail).mockRejectedValue(
-      new VerificationEmailError("verification_email_send_failed"),
-    );
-    vi.mocked(createAdminClient).mockReturnValue({
-      auth: {
-        admin: {
-          createUser: vi
-            .fn()
-            .mockResolvedValue({ data: { user: { id: "u1" } }, error: null }),
-        },
-      },
-      from: vi.fn(() => ({
-        upsert: vi.fn().mockResolvedValue({ error: null }),
-      })),
-    } as never);
-    vi.mocked(createClient).mockResolvedValue({
-      auth: { signInWithPassword: vi.fn().mockResolvedValue({ error: null }) },
-    } as never);
 
-    const res = await register({} as never, makeFormData());
+    const res = await register({ error: "" }, makeFormData());
 
     expect(res).toEqual({
-      error: "We couldn't send the verification email. Please try again.",
+      error:
+        "For your security, we limit login attempts after many failed attempts.",
     });
-    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("logs scrubbed errors and returns a safe generic message when sign-up throws", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    signUp.mockRejectedValue(
+      new Error(
+        "fetch failed Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.aaaa1111bbbb",
+      ),
+    );
+    vi.mocked(validateInvitationCode).mockResolvedValue(true);
+
+    const res = await register({ error: "" }, makeFormData());
+
+    expect(res).toEqual({
+      error: "Registration is temporarily unavailable. Please try again.",
+    });
+    const logged = spy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(logged).toContain("[register]");
+    expect(logged).toContain("fetch failed");
+    expect(logged).not.toContain(
+      "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.aaaa1111bbbb",
+    );
   });
 });

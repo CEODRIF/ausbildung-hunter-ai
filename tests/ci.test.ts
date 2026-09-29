@@ -77,7 +77,8 @@ describe("environment documentation (deployment contract)", () => {
         value.startsWith("http://localhost") ||
         value.startsWith("https://api.openai.com") ||
         value === "custom" ||
-        value.startsWith("https://your-project");
+        value.startsWith("https://your-project") ||
+        value.startsWith("https://your-app");
       expect(
         isPlaceholder,
         `.env.example value for ${name} looks real: ${value.slice(0, 12)}…`,
