@@ -9,7 +9,7 @@ export default function GlobalError({
   reset: () => void;
 }) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f6f8fb] p-5">
+    <main className="flex min-h-screen items-center justify-center bg-background p-5">
       <div className="w-full max-w-md">
         <ErrorState
           title="This page could not load"

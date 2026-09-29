@@ -32,11 +32,11 @@ export function RichEmailEditor({
     onChange(editorRef.current?.innerHTML ?? "");
   };
   return (
-    <div className="overflow-hidden rounded-xl border border-[#dfe6f0] bg-white focus-within:border-[#2f6fed] focus-within:ring-4 focus-within:ring-[#2f6fed]/10">
-      <div className="flex flex-wrap items-center gap-1 border-b border-[#edf0f4] bg-[#fbfcfe] p-2">
+    <div className="overflow-hidden rounded-xl border border-line-strong bg-surface focus-within:border-accent focus-within:ring-4 focus-within:ring-accent/10">
+      <div className="flex flex-wrap items-center gap-1 border-b border-line bg-surface-2 p-2">
         <select
           aria-label="Font size"
-          className="h-8 rounded-lg border border-[#e1e7f0] bg-white px-2 text-xs text-[#546783]"
+          className="h-8 rounded-lg border border-line-strong bg-surface px-2 text-xs text-muted"
           onChange={(event) => exec("fontSize", event.target.value)}
           defaultValue="3"
         >
@@ -48,14 +48,14 @@ export function RichEmailEditor({
         <input
           aria-label="Text color"
           type="color"
-          className="h-8 w-8 cursor-pointer rounded-lg border border-[#e1e7f0] bg-white p-1"
+          className="h-8 w-8 cursor-pointer rounded-lg border border-line-strong bg-surface p-1"
           title="Text color"
           onChange={(event) => exec("foreColor", event.target.value)}
         />
         <input
           aria-label="Highlight color"
           type="color"
-          className="h-8 w-8 cursor-pointer rounded-lg border border-[#e1e7f0] bg-white p-1"
+          className="h-8 w-8 cursor-pointer rounded-lg border border-line-strong bg-surface p-1"
           title="Highlight"
           defaultValue="#fff3a3"
           onChange={(event) => exec("hiliteColor", event.target.value)}
@@ -68,7 +68,7 @@ export function RichEmailEditor({
             title={tool.label}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => exec(tool.command)}
-            className={`flex h-8 min-w-8 items-center justify-center rounded-lg px-2 text-xs text-[#546783] hover:bg-[#e8f0ff] hover:text-[#2f6fed] ${tool.command === "italic" ? "italic" : ""} ${tool.command === "underline" ? "underline" : ""}`}
+            className={`flex h-8 min-w-8 items-center justify-center rounded-lg px-2 text-xs text-muted hover:bg-accent-soft hover:text-accent ${tool.command === "italic" ? "italic" : ""} ${tool.command === "underline" ? "underline" : ""}`}
           >
             {tool.icon}
           </button>
@@ -77,7 +77,7 @@ export function RichEmailEditor({
           type="button"
           title="Insert link"
           aria-label="Insert link"
-          className="flex h-8 items-center justify-center rounded-lg px-2 text-xs text-[#546783] hover:bg-[#e8f0ff] hover:text-[#2f6fed]"
+          className="flex h-8 items-center justify-center rounded-lg px-2 text-xs text-muted hover:bg-accent-soft hover:text-accent"
           onClick={() => {
             const url = window.prompt("Link URL");
             if (url) exec("createLink", url);
@@ -93,7 +93,7 @@ export function RichEmailEditor({
         role="textbox"
         aria-multiline="true"
         aria-label="Email message"
-        className="min-h-[260px] p-4 text-sm leading-7 text-[#1d3458] outline-none empty:before:text-[#a0adbd] empty:before:content-['Write_your_message_here...']"
+        className="min-h-[260px] p-4 text-sm leading-7 text-ink-soft outline-none empty:before:text-faint empty:before:content-['Write_your_message_here...']"
         onInput={() => onChange(editorRef.current?.innerHTML ?? "")}
       />{" "}
     </div>

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
+import { Icon } from "@/components/icon";
+import { EmptyState } from "@/components/empty-state";
 import {
   SEARCH_SOURCE_LIMIT,
   parseSearchUrlState,
@@ -12,6 +14,8 @@ import {
   type OpportunitySearchResponse,
   type SearchUrlState,
 } from "@/lib/opportunities/types";
+import { useI18n } from "@/lib/i18n";
+import { localeForLang } from "@/lib/i18n/core";
 
 interface OpportunitySearchProps {
   defaultGoal: "ausbildung" | "arbeit";
@@ -21,28 +25,28 @@ interface OpportunitySearchProps {
 
 const PAGE_SIZE = 20;
 
-const SORT_OPTIONS: Array<{ value: SearchUrlState["sort"]; label: string }> = [
-  { value: "relevance", label: "Most relevant" },
-  { value: "newest", label: "Newest first" },
-  { value: "oldest", label: "Oldest first" },
-  { value: "salary", label: "Highest salary first" },
-  { value: "distance", label: "Closest distance first" },
-  { value: "match", label: "Bester Match für mich" },
+const SORT_OPTIONS: Array<{ value: SearchUrlState["sort"]; key: string }> = [
+  { value: "relevance", key: "search.sort.relevance" },
+  { value: "newest", key: "search.sort.newest" },
+  { value: "oldest", key: "search.sort.oldest" },
+  { value: "salary", key: "search.sort.salary" },
+  { value: "distance", key: "search.sort.distance" },
+  { value: "match", key: "search.sort.match" },
 ];
 
 const FRESHNESS_OPTIONS = [
-  { value: "any", label: "Any time" },
-  { value: "today", label: "Published today" },
-  { value: "14d", label: "Last 14 days" },
-  { value: "30d", label: "Last 30 days" },
+  { value: "any", key: "search.freshness.any" },
+  { value: "today", key: "search.freshness.today" },
+  { value: "14d", key: "search.freshness.days14" },
+  { value: "30d", key: "search.freshness.days30" },
 ] as const;
 
-function formatDay(iso: string | null): string | null {
+function formatDay(iso: string | null, locale: string): string | null {
   if (!iso) return null;
   const parsed = new Date(iso);
   return Number.isNaN(parsed.getTime())
     ? null
-    : parsed.toLocaleDateString("en-GB", {
+    : parsed.toLocaleDateString(locale, {
         day: "2-digit",
         month: "short",
         year: "numeric",
@@ -54,6 +58,8 @@ export function OpportunitySearch({
   initialUrlState,
 }: OpportunitySearchProps) {
   const router = useRouter();
+  const { t, lang } = useI18n();
+  const locale = localeForLang(lang);
   const [state, setState] = useState<SearchUrlState>(() =>
     parseSearchUrlState(initialUrlState, defaultGoal),
   );
@@ -98,7 +104,7 @@ export function OpportunitySearch({
         error?: string;
       };
       if (!response.ok)
-        throw new Error(data.error || "The opportunity search failed.");
+        throw new Error(data.error || t("search.error"));
       setResults(data.results);
       setTotal(data.total);
       setScanTruncated(data.scan_truncated);
@@ -111,12 +117,12 @@ export function OpportunitySearch({
       setError(
         searchError instanceof Error
           ? searchError.message
-          : "The opportunity search failed.",
+          : t("search.error"),
       );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   /** Apply a state change: run the search and sync the shareable URL. */
   const apply = useCallback(
@@ -188,7 +194,7 @@ export function OpportunitySearch({
           event.preventDefault();
           apply((current) => current);
         }}
-        className="rounded-2xl border border-[#e7ecf3] bg-white p-5 sm:p-6"
+        className="rounded-2xl border border-line bg-surface p-5 sm:p-6"
       >
         {/* Goal */}
         <div className="flex flex-wrap items-center gap-2">
@@ -199,11 +205,11 @@ export function OpportunitySearch({
               onClick={() => apply((current) => ({ ...current, goal: value }))}
               className={
                 state.goal === value
-                  ? "rounded-lg bg-[#10203b] px-4 py-2 text-xs font-bold text-white"
-                  : "rounded-lg bg-[#f2f4f8] px-4 py-2 text-xs font-semibold text-[#71819a]"
+                  ? "rounded-lg bg-navy px-4 py-2 text-xs font-bold text-white"
+                  : "rounded-lg bg-surface-2 px-4 py-2 text-xs font-semibold text-muted"
               }
             >
-              {value === "ausbildung" ? "Ausbildung" : "Arbeit"}
+              {t(value === "ausbildung" ? "dash.goalAusbildung" : "dash.goalArbeit")}
             </button>
           ))}
         </div>
@@ -211,8 +217,8 @@ export function OpportunitySearch({
         {/* Primary row */}
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <input
-            className="rounded-xl border border-[#e7ecf3] px-4 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed] sm:col-span-2"
-            placeholder="Keyword (e.g. mechatronics, marketing)"
+            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent sm:col-span-2"
+            placeholder={t("search.ph.keyword")}
             value={state.keyword}
             maxLength={120}
             onChange={(event) =>
@@ -221,11 +227,11 @@ export function OpportunitySearch({
                 false,
               )
             }
-            aria-label="Keyword"
+            aria-label={t("search.ph.keyword")}
           />
           <input
-            className="rounded-xl border border-[#e7ecf3] px-4 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
-            placeholder="City, PLZ or Bundesland"
+            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
+            placeholder={t("search.ph.location")}
             value={state.location}
             maxLength={120}
             onChange={(event) =>
@@ -234,11 +240,11 @@ export function OpportunitySearch({
                 false,
               )
             }
-            aria-label="Location"
+            aria-label={t("search.ph.location")}
           />
           <input
-            className="rounded-xl border border-[#e7ecf3] px-4 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
-            placeholder="Radius km (5–100, optional)"
+            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
+            placeholder={t("search.ph.radius")}
             inputMode="numeric"
             value={state.radius === null ? "" : String(state.radius)}
             onChange={(event) => {
@@ -253,14 +259,14 @@ export function OpportunitySearch({
                 false,
               );
             }}
-            aria-label="Radius in km"
+            aria-label={t("search.ph.radius")}
           />
         </div>
 
         {/* Filters row */}
         <div className="mt-3 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <select
-            className="rounded-xl border border-[#e7ecf3] bg-white px-3 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
+            className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
             value={state.freshness}
             onChange={(event) =>
               apply((current) => ({
@@ -268,16 +274,16 @@ export function OpportunitySearch({
                 freshness: event.target.value as SearchUrlState["freshness"],
               }))
             }
-            aria-label="Publication date"
+            aria-label={t("search.freshness.any")}
           >
             {FRESHNESS_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
-                {option.label}
+                {t(option.key)}
               </option>
             ))}
           </select>
           <select
-            className="rounded-xl border border-[#e7ecf3] bg-white px-3 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
+            className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
             value={state.sort}
             onChange={(event) =>
               apply((current) => ({
@@ -285,7 +291,7 @@ export function OpportunitySearch({
                 sort: event.target.value as SearchUrlState["sort"],
               }))
             }
-            aria-label="Sort"
+            aria-label={t("search.sort.relevance")}
           >
             {SORT_OPTIONS.map((option) => (
               <option
@@ -293,12 +299,12 @@ export function OpportunitySearch({
                 value={option.value}
                 disabled={option.value === "match" && !state.match}
               >
-                {option.label}
+                {t(option.key)}
               </option>
             ))}
           </select>
           <select
-            className="rounded-xl border border-[#e7ecf3] bg-white px-3 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
+            className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
             value={state.employment}
             onChange={(event) =>
               apply((current) => ({
@@ -306,15 +312,15 @@ export function OpportunitySearch({
                 employment: event.target.value as SearchUrlState["employment"],
               }))
             }
-            aria-label="Working time"
+            aria-label={t("search.employment.any")}
           >
-            <option value="any">Working time: any</option>
-            <option value="full_time">Full-time</option>
-            <option value="part_time">Part-time</option>
+            <option value="any">{t("search.employment.any")}</option>
+            <option value="full_time">{t("search.employment.fullTime")}</option>
+            <option value="part_time">{t("search.employment.partTime")}</option>
           </select>
           {isAusbildung && (
             <select
-              className="rounded-xl border border-[#e7ecf3] bg-white px-3 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
+              className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
               value={state.training_type}
               onChange={(event) =>
                 apply((current) => ({
@@ -323,16 +329,16 @@ export function OpportunitySearch({
                     .value as SearchUrlState["training_type"],
                 }))
               }
-              aria-label="Training type"
+              aria-label={t("search.trainingType.any")}
             >
-              <option value="any">Training type: any</option>
-              <option value="AUSBILDUNG">Vocational training</option>
-              <option value="DUALES_STUDIUM">Dual study</option>
+              <option value="any">{t("search.trainingType.any")}</option>
+              <option value="AUSBILDUNG">{t("search.trainingType.vocational")}</option>
+              <option value="DUALES_STUDIUM">{t("search.trainingType.dualStudy")}</option>
             </select>
           )}
           {isAusbildung && (
             <select
-              className="rounded-xl border border-[#e7ecf3] bg-white px-3 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
+              className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
               value={state.home_office}
               onChange={(event) =>
                 apply((current) => ({
@@ -341,14 +347,14 @@ export function OpportunitySearch({
                     .value as SearchUrlState["home_office"],
                 }))
               }
-              aria-label="Home office"
+              aria-label={t("search.homeOffice.any")}
             >
-              <option value="any">Home office: any</option>
-              <option value="yes">Home office possible</option>
+              <option value="any">{t("search.homeOffice.any")}</option>
+              <option value="yes">{t("search.homeOffice.yes")}</option>
             </select>
           )}
           <select
-            className="rounded-xl border border-[#e7ecf3] bg-white px-3 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
+            className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
             value={state.salary_documented ? "1" : "0"}
             onChange={(event) =>
               apply((current) => ({
@@ -356,18 +362,18 @@ export function OpportunitySearch({
                 salary_documented: event.target.value === "1",
               }))
             }
-            aria-label="Documented salary"
+            aria-label={t("search.salary.any")}
           >
-            <option value="0">Salary: any</option>
-            <option value="1">Documented salary only</option>
+            <option value="0">{t("search.salary.any")}</option>
+            <option value="1">{t("search.salary.documented")}</option>
           </select>
         </div>
 
         {/* Secondary row */}
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
           <input
-            className="rounded-xl border border-[#e7ecf3] px-4 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
-            placeholder="Role / occupation (e.g. Kaufmann)"
+            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
+            placeholder={t("search.ph.role")}
             value={state.role}
             maxLength={120}
             onChange={(event) =>
@@ -376,11 +382,11 @@ export function OpportunitySearch({
                 false,
               )
             }
-            aria-label="Role"
+            aria-label={t("search.ph.role")}
           />
           <input
-            className="rounded-xl border border-[#e7ecf3] px-4 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
-            placeholder="Company (optional)"
+            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
+            placeholder={t("search.ph.company")}
             value={state.company}
             maxLength={160}
             onChange={(event) =>
@@ -389,12 +395,12 @@ export function OpportunitySearch({
                 false,
               )
             }
-            aria-label="Company"
+            aria-label={t("search.ph.company")}
           />
           {hasLocation && (
             <input
-              className="rounded-xl border border-[#e7ecf3] px-4 py-3 text-sm text-[#10203b] outline-none focus:border-[#2f6fed]"
-              placeholder="Max distance km (optional)"
+              className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
+              placeholder={t("search.ph.distanceMax")}
               inputMode="numeric"
               value={
                 state.distance_max === null ? "" : String(state.distance_max)
@@ -413,13 +419,13 @@ export function OpportunitySearch({
                   false,
                 );
               }}
-              aria-label="Maximum distance in km"
+              aria-label={t("search.ph.distanceMax")}
             />
           )}
         </div>
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-          <label className="flex items-center gap-2 text-sm font-medium text-[#546783]">
+          <label className="flex items-center gap-2 text-sm font-medium text-muted">
             <input
               type="checkbox"
               checked={state.match}
@@ -433,32 +439,32 @@ export function OpportunitySearch({
                       : "relevance",
                 }))
               }
-              className="h-4 w-4 accent-[#2f6fed]"
+              className="h-4 w-4 accent-accent"
             />
-            Meinen Match anzeigen
+            {t("search.matchToggle")}
           </label>
           <div className="flex items-center gap-2">
             {hasActiveFilters && (
               <button
                 type="button"
                 onClick={clearFilters}
-                className="rounded-xl bg-[#f2f4f8] px-4 py-2.5 text-xs font-semibold text-[#546783] transition hover:bg-[#e7ecf3]"
+                className="rounded-xl bg-surface-2 px-4 py-2.5 text-xs font-semibold text-muted transition hover:bg-line"
               >
-                Clear filters
+                {t("search.clear")}
               </button>
             )}
             <button
               type="submit"
               disabled={loading}
-              className="rounded-xl bg-[#2f6fed] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#2456c4] disabled:opacity-60"
+              className="rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-deep disabled:opacity-60"
             >
-              {loading ? "Searching…" : "Search"}
+              {loading ? t("search.searching") : t("search.search")}
             </button>
           </div>
         </div>
 
         {error && (
-          <p className="mt-4 rounded-xl bg-[#fdeee8] p-3 text-sm font-medium text-[#b4543c]">
+          <p className="mt-4 rounded-xl bg-warning-soft p-3 text-sm font-medium text-danger">
             {error}
           </p>
         )}
@@ -468,31 +474,33 @@ export function OpportunitySearch({
         <div>
           {/* Result meta */}
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-[#546783]">
-              {total !== null &&
-                (mode === "scan"
-                  ? scanTruncated
-                    ? `${total} matches in the scanned source window`
-                    : `${total} matches`
-                  : `${total} result${total === 1 ? "" : "s"}`)}
-              {mode === "upstream" &&
-                total !== null &&
-                total >= SEARCH_SOURCE_LIMIT &&
-                ` (source exposes the first ${SEARCH_SOURCE_LIMIT.toLocaleString("en-GB")})`}
-            </p>
+             <p className="text-sm font-semibold text-muted">
+               {total !== null &&
+                 t(
+                   mode === "scan" && scanTruncated
+                     ? "search.resultsScanWindow"
+                     : "search.results",
+                   { count: total.toLocaleString(locale) },
+                 )}
+               {mode === "upstream" &&
+                 total !== null &&
+                 total >= SEARCH_SOURCE_LIMIT &&
+                 t("search.sourceLimit", {
+                   count: SEARCH_SOURCE_LIMIT.toLocaleString(locale),
+                 })}
+             </p>
             <div className="flex flex-wrap items-center gap-2">
               {mode === "scan" && scanTruncated && (
-                <span className="rounded-xl bg-[#fff4e5] px-3 py-2 text-xs font-semibold text-[#a3611c]">
-                  Bounded source scan — refine filters to narrow the results
+                <span className="rounded-xl bg-warning-soft px-3 py-2 text-xs font-semibold text-warning">
+                  {t("search.scanTruncated")}
                 </span>
               )}
               {state.match && !matchAvailable && (
                 <Link
                   href="/bewerbung-scanner"
-                  className="rounded-xl bg-[#fff4e5] px-3 py-2 text-xs font-bold text-[#a3611c]"
+                  className="rounded-xl bg-warning-soft px-3 py-2 text-xs font-bold text-warning"
                 >
-                  Match noch nicht verfügbar — Bewerbung Scanner ausführen, um
-                  Matching zu aktivieren
+{t("search.matchUnavailable")}
                 </Link>
               )}
             </div>
@@ -501,84 +509,93 @@ export function OpportunitySearch({
           {/* Results */}
           <div className="mt-4 space-y-4">
             {loading && (
-              <div className="rounded-2xl border border-[#e7ecf3] bg-white p-10 text-center text-sm text-[#8290a4]">
-                Loading opportunities…
+              <div className="rounded-2xl border border-line bg-surface p-10 text-center text-sm text-muted">
+                {t("search.loading")}
               </div>
             )}
             {!loading && results.length === 0 && (
-              <div className="rounded-2xl border border-dashed border-[#dfe6f0] bg-white p-10 text-center text-sm text-[#8290a4]">
-                No opportunities matched these filters.
-              </div>
+              <EmptyState
+                icon="search"
+                title={t("search.none")}
+              />
             )}
             {!loading &&
               results.map((opportunity) => (
                 <article
                   key={opportunity.id}
-                  className="rounded-2xl border border-[#e7ecf3] bg-white p-5"
+                  className="rounded-2xl border border-line bg-surface p-5"
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-lg bg-[#edf3ff] px-2 py-1 text-[10px] font-bold uppercase text-[#2f6fed]">
-                          {opportunity.goal === "ausbildung"
-                            ? "Ausbildung"
-                            : "Arbeit"}
-                        </span>
+                         <span className="rounded-lg bg-accent-soft px-2 py-1 text-[10px] font-bold uppercase text-accent">
+                           {t(
+                             opportunity.goal === "ausbildung"
+                               ? "dash.goalAusbildung"
+                               : "dash.goalArbeit",
+                           )}
+                         </span>
                         {opportunity.training_type && (
-                          <span className="rounded-lg bg-[#f0e9fb] px-2 py-1 text-[10px] font-bold uppercase text-[#6b46c1]">
+                          <span className="rounded-lg bg-ai-soft px-2 py-1 text-[10px] font-bold uppercase text-ai">
                             {opportunity.training_type
                               .toLowerCase()
                               .replaceAll("_", " ")}
                           </span>
                         )}
                         {opportunity.salary?.label && (
-                          <span className="rounded-lg bg-[#e8f5ee] px-2 py-1 text-[10px] font-bold text-[#177a55]">
+                          <span className="rounded-lg bg-success-soft px-2 py-1 text-[10px] font-bold text-success">
                             {opportunity.salary.label}
                           </span>
                         )}
                         {opportunity.employment_type && (
-                          <span className="rounded-lg bg-[#f2f4f8] px-2 py-1 text-[10px] font-bold text-[#546783]">
+                          <span className="rounded-lg bg-surface-2 px-2 py-1 text-[10px] font-bold text-muted">
                             {opportunity.employment_type}
                           </span>
                         )}
                         {opportunity.home_office === true && (
-                          <span className="rounded-lg bg-[#f2f4f8] px-2 py-1 text-[10px] font-bold text-[#546783]">
-                            Home office
+                          <span className="rounded-lg bg-surface-2 px-2 py-1 text-[10px] font-bold text-muted">
+                            {t("search.homeOfficeBadge")}
                           </span>
                         )}
                         {opportunity.career_change_friendly === true && (
-                          <span className="rounded-lg bg-[#f0fdf4] px-2 py-1 text-[10px] font-bold text-[#16a34a]">
-                            Career changer
+                          <span className="rounded-lg bg-success-soft px-2 py-1 text-[10px] font-bold text-success">
+                            {t("search.careerChanger")}
                           </span>
                         )}
                       </div>
-                      <h2 className="mt-3 text-lg font-bold leading-6 text-[#1d3458]">
+                      <h2 className="mt-3 text-lg font-bold leading-6 text-ink-soft">
                         {opportunity.title}
                       </h2>
-                      <p className="mt-1 text-sm text-[#71819a]">
-                        {opportunity.company_name || "Company not listed"} ·{" "}
-                        {opportunity.location || "Location not listed"}
+                      <p className="mt-1 text-sm text-muted">
+                        {opportunity.company_name || t("search.companyNotListed")} ·{" "}
+                        {opportunity.location || t("search.locationNotListed")}
                         {opportunity.distance_km !== null &&
                           ` · ${opportunity.distance_km} km`}
                       </p>
-                      <p className="mt-1 text-xs text-[#8290a4]">
+                      <p className="mt-1 text-xs text-muted">
                         {[
                           opportunity.profession,
-                          formatDay(opportunity.posted_at)
-                            ? `Posted ${formatDay(opportunity.posted_at)}`
+                          formatDay(opportunity.posted_at, locale)
+                            ? t("search.posted", {
+                                date: formatDay(opportunity.posted_at, locale) ?? "",
+                              })
                             : null,
                         ]
                           .filter(Boolean)
                           .join(" · ")}
                       </p>
                       {opportunity.match && (
-                        <div className="mt-3 rounded-xl bg-[#f7faff] p-3">
+                        <div className="mt-3 rounded-xl bg-surface-2 p-3">
                           {opportunity.match.status === "complete" ? (
                             <>
-                              <p className="text-xs font-bold text-[#2f6fed]">
-                                Match: {opportunity.match.score} %
-                              </p>
-                              <ul className="mt-1 space-y-0.5 text-xs text-[#546783]">
+                              {opportunity.match.score !== null && (
+                                <p className="text-xs font-bold text-accent">
+                                  {t("search.match", {
+                                    score: opportunity.match.score,
+                                  })}
+                                </p>
+                              )}
+                              <ul className="mt-1 space-y-0.5 text-xs text-muted">
                                 {opportunity.match.reasons
                                   .slice(0, 3)
                                   .map((line, index) => (
@@ -588,10 +605,10 @@ export function OpportunitySearch({
                             </>
                           ) : (
                             <>
-                              <p className="text-xs font-bold text-[#a3611c]">
-                                Match unvollständig
-                              </p>
-                              <ul className="mt-1 space-y-0.5 text-xs text-[#546783]">
+                               <p className="text-xs font-bold text-warning">
+                                 {t("search.matchIncomplete")}
+                               </p>
+                              <ul className="mt-1 space-y-0.5 text-xs text-muted">
                                 {opportunity.match.missing_information
                                   .slice(0, 2)
                                   .map((line, index) => (
@@ -611,9 +628,9 @@ export function OpportunitySearch({
                             ? `?from=${encodeURIComponent(fromState)}`
                             : "")
                         }
-                        className="rounded-xl bg-[#10203b] px-4 py-2 text-xs font-semibold text-white"
+                        className="rounded-xl bg-navy px-4 py-2 text-xs font-semibold text-white"
                       >
-                        View details
+                        {t("search.viewDetails")}
                       </Link>
                       <a
                         href={
@@ -621,9 +638,10 @@ export function OpportunitySearch({
                         }
                         target="_blank"
                         rel="noreferrer"
-                        className="text-xs font-bold text-[#2f6fed]"
+                        className="text-xs font-bold text-accent"
                       >
-                        Apply →
+                        {t("search.apply")}
+                        <Icon name="arrowRight" size={12} className="rtl:-scale-x-100" />
                       </a>
                       <SaveOpportunityButton
                         opportunityKey={opportunity.id}
@@ -646,14 +664,17 @@ export function OpportunitySearch({
                   false,
                 )
               }
-              className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-[#2f6fed] shadow-sm transition hover:bg-[#f6f8fb] disabled:opacity-40"
+              className="rounded-xl bg-surface px-4 py-2.5 text-sm font-semibold text-accent shadow-sm transition hover:bg-background disabled:opacity-40"
             >
-              ← Previous
+              <Icon name="chevronLeft" size={15} className="rtl:hidden" />
+              <Icon name="chevronRight" size={15} className="hidden rtl:block" />
+              {t("search.previous")}
             </button>
-            <span className="text-sm font-semibold text-[#546783]">
-              Page {state.page}
-              {maxReachable > 0 &&
-                ` of ${Math.max(1, Math.ceil(maxReachable / PAGE_SIZE))}`}
+            <span className="text-sm font-semibold text-muted">
+              {t("search.page", {
+                page: state.page,
+                total: Math.max(1, Math.ceil(maxReachable / PAGE_SIZE)),
+              })}
             </span>
             <button
               type="button"
@@ -664,9 +685,11 @@ export function OpportunitySearch({
                   false,
                 )
               }
-              className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-[#2f6fed] shadow-sm transition hover:bg-[#f6f8fb] disabled:opacity-40"
+              className="rounded-xl bg-surface px-4 py-2.5 text-sm font-semibold text-accent shadow-sm transition hover:bg-background disabled:opacity-40"
             >
-              Next →
+              {t("search.next")}
+              <Icon name="chevronRight" size={15} className="rtl:hidden" />
+              <Icon name="chevronLeft" size={15} className="hidden rtl:block" />
             </button>
           </div>
         </div>

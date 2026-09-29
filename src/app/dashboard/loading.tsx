@@ -8,13 +8,13 @@ export default function DashboardLoading() {
         {Array.from({ length: 4 }, (_, index) => (
           <div
             key={index}
-            className="shimmer h-36 rounded-2xl border border-[#e7ecf3] bg-white"
+            className="shimmer h-36 rounded-2xl border border-line bg-surface"
           />
         ))}
       </div>
       <div className="mt-8 grid gap-5 xl:grid-cols-[1.3fr_0.7fr]">
-        <div className="shimmer h-72 rounded-2xl border border-[#e7ecf3] bg-white" />
-        <div className="shimmer h-72 rounded-2xl border border-[#e7ecf3] bg-white" />
+        <div className="shimmer h-72 rounded-2xl border border-line bg-surface" />
+        <div className="shimmer h-72 rounded-2xl border border-line bg-surface" />
       </div>
     </div>
   );

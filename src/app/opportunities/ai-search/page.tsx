@@ -1,7 +1,7 @@
-import Link from "next/link";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { summarizeProfile } from "@/lib/opportunities/ai-search";
 import { getCandidateProfile } from "@/lib/opportunities/search";
+import { getServerT } from "@/lib/i18n/server";
 import { AISearchClient } from "@/components/ai-search";
 
 export const dynamic = "force-dynamic";
@@ -20,31 +20,21 @@ export default async function AISearchPage() {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active") return null;
   const candidateProfile = await getCandidateProfile(user.id);
+  const t = await getServerT();
 
   return (
-    <main className="min-h-screen bg-[#f6f8fb] px-5 py-8 sm:px-8 lg:px-10">
+    <div className="px-4 py-6 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-6xl">
         <div>
-          <Link
-            href="/opportunities"
-            className="text-sm font-semibold text-[#2f6fed]"
-          >
-            ← Opportunities
-          </Link>
-          <h1 className="mt-6 text-3xl font-bold tracking-[-0.04em] text-[#10203b]">
-            AI Ausbildung Search
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm text-[#71819a]">
-            Upload your CV, and the AI reads your profile to build focused
-            searches across the public{" "}
-            <span className="font-semibold text-[#1d3458]">
-              Bundesagentur für Arbeit Jobsuche
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
+            {t("account.aiSearchIntro1")}
+            <span className="font-semibold text-ink-soft">
+              {t("account.aiSearchSource")}
             </span>
-            . You get real, currently published postings — nothing invented —
-            with live progress and an Excel export.
+            {t("account.aiSearchIntro2")}
           </p>
         </div>
-        <div className="mt-8">
+        <div className="mt-6">
           <AISearchClient
             hasProfile={candidateProfile !== null}
             profileSummary={
@@ -56,6 +46,6 @@ export default async function AISearchPage() {
           />
         </div>
       </div>
-    </main>
+    </div>
   );
 }

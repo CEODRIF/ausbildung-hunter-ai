@@ -20,19 +20,19 @@ export default function GlobalError({
 
   return (
     <html lang="en">
-      <body className="bg-[#f6f8fb]">
+      <body className="bg-background">
         <main className="flex min-h-screen items-center justify-center p-5">
-          <div className="w-full max-w-md rounded-2xl border border-[#edf0f4] bg-white p-8 text-center">
-            <h1 className="text-xl font-bold text-[#10203b]">
+          <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-8 text-center">
+            <h1 className="text-xl font-bold text-ink">
               Something went wrong
             </h1>
-            <p className="mt-2 text-sm leading-6 text-[#71819a]">
+            <p className="mt-2 text-sm leading-6 text-muted">
               An unexpected error interrupted the app. Your data is safe — try
               loading the page again.
             </p>
             <button
               onClick={reset}
-              className="mt-6 h-10 rounded-xl bg-[#2f6fed] px-5 text-sm font-semibold text-white hover:bg-[#255dcc]"
+              className="mt-6 h-10 rounded-xl bg-accent px-5 text-sm font-semibold text-white hover:bg-accent-deep"
               type="button"
             >
               Try again

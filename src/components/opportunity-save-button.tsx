@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 interface SaveOpportunityButtonProps {
   opportunityKey: string;
@@ -11,6 +12,7 @@ export function SaveOpportunityButton({
   opportunityKey,
   initialSaved,
 }: SaveOpportunityButtonProps) {
+  const { t } = useI18n();
   const [saved, setSaved] = useState(initialSaved);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +30,7 @@ export function SaveOpportunityButton({
       if (!response.ok) throw new Error();
       setSaved((value) => !value);
     } catch {
-      setError("Could not update your saved list right now.");
+      setError(t("account.saveFailed"));
     } finally {
       setBusy(false);
     }
@@ -40,16 +42,21 @@ export function SaveOpportunityButton({
         type="button"
         onClick={toggle}
         disabled={busy}
+        aria-pressed={saved}
         className={
           saved
-            ? "rounded-xl bg-[#e8f5ee] px-4 py-2 text-xs font-bold text-[#177a55] transition hover:bg-[#d8efe3] disabled:opacity-60"
-            : "rounded-xl bg-[#edf3ff] px-4 py-2 text-xs font-bold text-[#2f6fed] transition hover:bg-[#dce9ff] disabled:opacity-60"
+            ? "rounded-xl bg-success-soft px-4 py-2 text-xs font-bold text-success transition hover:bg-success-soft disabled:opacity-60"
+            : "rounded-xl bg-accent-soft px-4 py-2 text-xs font-bold text-accent transition hover:bg-accent-soft disabled:opacity-60"
         }
       >
-        {busy ? "Saving…" : saved ? "✓ Saved — remove" : "Save opportunity"}
+        {busy
+          ? t("account.saving")
+          : saved
+            ? t("account.savedRemove")
+            : t("account.saveOpportunity")}
       </button>
       {error && (
-        <span className="text-[11px] font-semibold text-[#b4543c]">
+        <span className="text-[11px] font-semibold text-danger">
           {error}
         </span>
       )}

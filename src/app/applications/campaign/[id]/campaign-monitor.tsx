@@ -8,7 +8,7 @@ export function CampaignMonitor() {
     return () => window.clearInterval(timer);
   }, []);
   return (
-    <p className="mt-2 text-xs text-[#8290a4]">
+    <p className="mt-2 text-xs text-muted">
       Updates automatically every 10 seconds.
     </p>
   );

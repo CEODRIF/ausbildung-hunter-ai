@@ -31,14 +31,14 @@ export default async function VerifyPage() {
       <div className="space-y-5">
         {confirmed ? (
           <>
-            <p className="text-sm leading-6 text-[#71819a]">
+            <p className="text-sm leading-6 text-muted">
               Your email is confirmed, but your account data looks incomplete.
               Please sign in again — if the problem persists, contact support.
             </p>
-            <p className="text-center text-sm text-[#71819a]">
+            <p className="text-center text-sm text-muted">
               <Link
                 href="/login"
-                className="font-semibold text-[#2f6fed] hover:text-[#255dcc]"
+                className="font-semibold text-accent hover:text-accent-deep"
               >
                 Go to sign in
               </Link>
@@ -46,25 +46,25 @@ export default async function VerifyPage() {
           </>
         ) : (
           <>
-            <p className="text-sm leading-6 text-[#71819a]">
+            <p className="text-sm leading-6 text-muted">
               Click the link in the email to activate your account — it takes
               you straight to setup. If it doesn&apos;t arrive within a few
               minutes, check your spam folder or request another link below.
             </p>
             <ResendForm />
             <div className="space-y-2 text-center">
-              <p className="text-sm text-[#71819a]">
+              <p className="text-sm text-muted">
                 <Link
                   href="/login"
-                  className="font-semibold text-[#2f6fed] hover:text-[#255dcc]"
+                  className="font-semibold text-accent hover:text-accent-deep"
                 >
                   Go to sign in
                 </Link>
               </p>
-              <p className="text-sm text-[#71819a]">
+              <p className="text-sm text-muted">
                 <Link
                   href="/register"
-                  className="font-semibold text-[#2f6fed] hover:text-[#255dcc]"
+                  className="font-semibold text-accent hover:text-accent-deep"
                 >
                   Register with a different email
                 </Link>

@@ -1,149 +1,173 @@
 import Link from "next/link";
 import { Button } from "@/components/ui";
-import { LogoMark } from "@/components/logo-mark";
+import { BrandLogo } from "@/components/brand-logo";
+import { Icon, type IconName } from "@/components/icon";
+import { getServerT } from "@/lib/i18n/server";
+import {
+  ThemeSwitcher,
+} from "@/components/theme-switcher";
+import { LanguageSwitcher } from "@/components/language-switcher";
 
-const benefits = [
-  {
-    number: "01",
-    title: "Find with clarity",
-    text: "Bring the right opportunities into focus with a workspace made for your goals.",
-  },
-  {
-    number: "02",
-    title: "Move with confidence",
-    text: "Keep your search organized so every next step feels simple and intentional.",
-  },
-  {
-    number: "03",
-    title: "Start your next chapter",
-    text: "Build a path toward Ausbildung and jobs that match the future you want.",
-  },
+const FEATURES: Array<{ icon: IconName; titleKey: string; textKey: string }> = [
+  { icon: "search", titleKey: "landing.features.find.title", textKey: "landing.features.find.text" },
+  { icon: "scan", titleKey: "landing.features.analyze.title", textKey: "landing.features.analyze.text" },
+  { icon: "send", titleKey: "landing.features.apply.title", textKey: "landing.features.apply.text" },
+  { icon: "bookmark", titleKey: "landing.features.organize.title", textKey: "landing.features.organize.text" },
 ];
 
-export default function Home() {
+const STEPS = [
+  "landing.steps.step1",
+  "landing.steps.step2",
+  "landing.steps.step3",
+  "landing.steps.step4",
+  "landing.steps.step5",
+] as const;
+
+export default async function Home() {
+  const t = await getServerT();
   return (
-    <main className="min-h-screen overflow-hidden bg-white text-[#10203b]">
-      <header className="relative z-10 mx-auto flex max-w-7xl items-center justify-between px-5 py-5 sm:px-8 lg:px-10">
-        <Link href="/" className="flex items-center gap-2.5">
-          <LogoMark size={38} />
-          <span className="text-sm font-bold tracking-[-0.02em]">
-            Ausbildung Hunter <span className="text-[#2f6fed]">AI</span>
-          </span>
-        </Link>
-        <nav className="hidden items-center gap-8 text-sm font-semibold text-[#6d7d96] md:flex">
-          <a href="#how-it-works" className="hover:text-[#2f6fed]">
-            How it works
-          </a>
-          <a href="#why-us" className="hover:text-[#2f6fed]">
-            Why us
-          </a>
-          <Link href="/login" className="text-[#1d3458] hover:text-[#2f6fed]">
-            Log in
-          </Link>
-          <Link href="/register">
-            <Button size="sm">
-              Get started <span>→</span>
-            </Button>
-          </Link>
-        </nav>
-        <Link
-          href="/login"
-          className="text-sm font-semibold text-[#2f6fed] md:hidden"
-        >
-          Log in
-        </Link>
-      </header>
-      <section className="relative mx-auto max-w-7xl px-5 pb-20 pt-16 sm:px-8 sm:pt-24 lg:px-10 lg:pb-28">
-        <div className="pointer-events-none absolute -right-20 -top-20 h-[550px] w-[550px] rounded-full hero-orb" />
-        <div className="grid-fade pointer-events-none absolute inset-x-0 bottom-0 h-72 opacity-50 [mask-image:linear-gradient(to_bottom,transparent,black)]" />
-        <div className="relative max-w-3xl">
-          <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-[#dce8ff] bg-[#f3f7ff] px-3.5 py-2 text-xs font-bold text-[#2f6fed]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#2f6fed]" />
-            Your next opportunity starts here
+    <main className="min-h-screen bg-background text-ink">
+      <header className="sticky top-0 z-20 border-b border-line bg-surface/90 backdrop-blur-md">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-10">
+          <BrandLogo size={36} />
+          <nav className="hidden items-center gap-7 text-sm font-semibold text-muted md:flex">
+            <a href="#how-it-works" className="transition-colors hover:text-accent">
+              {t("landing.navHow")}
+            </a>
+            <a href="#features" className="transition-colors hover:text-accent">
+              {t("landing.navWhy")}
+            </a>
+            <Link
+              href="/login"
+              className="text-ink-soft transition-colors hover:text-accent"
+            >
+              {t("landing.navLogin")}
+            </Link>
+          </nav>
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <LanguageSwitcher />
+            <ThemeSwitcher />
+            <Link href="/register" className="hidden sm:block">
+              <Button size="sm">{t("landing.ctaStart")}</Button>
+            </Link>
           </div>
-          <h1 className="max-w-3xl text-5xl font-bold leading-[1.04] tracking-[-0.055em] text-[#10203b] sm:text-7xl">
-            Find the path that&apos;s{" "}
-            <span className="text-[#2f6fed]">right for you.</span>
+        </div>
+      </header>
+
+      {/* Hero */}
+      <section className="relative mx-auto max-w-7xl overflow-hidden px-4 pb-16 pt-14 sm:px-6 sm:pt-20 lg:px-10 lg:pb-24">
+        <div className="hero-orb pointer-events-none absolute -end-24 -top-24 h-[520px] w-[520px] rounded-full" />
+        <div className="grid-fade pointer-events-none absolute inset-x-0 bottom-0 h-64 opacity-40 [mask-image:linear-gradient(to_bottom,transparent,black)]" />
+        <div className="relative max-w-3xl">
+          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-accent/20 bg-accent-soft px-3.5 py-1.5 text-xs font-bold text-accent">
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+            {t("landing.heroBadge")}
+          </div>
+          <h1 className="text-4xl font-bold leading-[1.06] tracking-[-0.05em] text-ink sm:text-6xl">
+            {t("landing.heroTitle")}
           </h1>
-          <p className="mt-7 max-w-xl text-base leading-7 text-[#6d7d96] sm:text-lg">
-            A focused workspace to discover Ausbildung and jobs in Germany, stay
-            organized, and move forward with confidence.
+          <p className="mt-6 max-w-xl text-base leading-7 text-muted sm:text-lg">
+            {t("landing.heroSubtitle")}
           </p>
-          <div className="mt-9 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Link href="/register">
               <Button size="lg">
-                Create your workspace <span>→</span>
+                {t("landing.ctaStart")}
+                <Icon name="arrowRight" size={16} className="rtl:-scale-x-100" />
               </Button>
             </Link>
             <Link href="/dashboard">
               <Button size="lg" variant="secondary">
-                Explore the dashboard
+                {t("landing.ctaExplore")}
               </Button>
             </Link>
           </div>
         </div>
-        <div
-          className="relative mt-20 grid gap-4 border-t border-[#e8edf3] pt-8 sm:grid-cols-3 sm:gap-8"
-          id="why-us"
-        >
-          {benefits.map((benefit) => (
-            <div key={benefit.number}>
-              <span className="text-xs font-bold tracking-[0.12em] text-[#2f6fed]">
-                {benefit.number}
-              </span>
-              <h2 className="mt-3 text-lg font-bold text-[#1d3458]">
-                {benefit.title}
-              </h2>
-              <p className="mt-2 max-w-xs text-sm leading-6 text-[#7a899f]">
-                {benefit.text}
-              </p>
-            </div>
-          ))}
-        </div>
       </section>
-      <section
-        className="border-y border-[#edf1f5] bg-[#f8faff]"
-        id="how-it-works"
-      >
-        <div className="mx-auto grid max-w-7xl gap-10 px-5 py-16 sm:px-8 lg:grid-cols-[0.8fr_1.2fr] lg:px-10 lg:py-20">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#2f6fed]">
-              A better starting point
-            </p>
-            <h2 className="mt-4 max-w-md text-3xl font-bold leading-tight tracking-[-0.04em] text-[#10203b] sm:text-4xl">
-              Less noise. More direction.
+
+      {/* Features */}
+      <section id="features" className="border-y border-line bg-surface-2/50">
+        <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-10 lg:py-20">
+          <div className="max-w-2xl">
+            <h2 className="text-3xl font-bold tracking-[-0.04em] text-ink">
+              {t("landing.featureTitle")}
             </h2>
-            <p className="mt-4 max-w-md text-sm leading-6 text-[#6d7d96]">
-              Your search deserves a place that feels clear from the first
-              click. Ausbildung Hunter AI is designed to help you focus on what
-              matters.
+            <p className="mt-3 text-sm leading-6 text-muted">
+              {t("landing.featureSubtitle")}
             </p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl border border-[#e5ebf4] bg-white p-5 card-shadow">
-              <span className="text-2xl font-bold text-[#2f6fed]">↗</span>
-              <h3 className="mt-8 font-bold text-[#1d3458]">
-                One calm workspace
-              </h3>
-              <p className="mt-2 text-sm leading-6 text-[#7a899f]">
-                Keep your opportunities and next steps in one focused place.
-              </p>
-            </div>
-            <div className="rounded-2xl border border-[#e5ebf4] bg-white p-5 card-shadow sm:translate-y-6">
-              <span className="text-2xl font-bold text-[#1b9b70]">✓</span>
-              <h3 className="mt-8 font-bold text-[#1d3458]">
-                Built for momentum
-              </h3>
-              <p className="mt-2 text-sm leading-6 text-[#7a899f]">
-                Move from exploring to taking action without losing your way.
-              </p>
-            </div>
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {FEATURES.map((feature) => (
+              <div
+                key={feature.titleKey}
+                className="rounded-2xl border border-line bg-surface p-5 transition-[transform,border-color] duration-200 hover:-translate-y-0.5 hover:border-line-strong card-shadow"
+              >
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-accent">
+                  <Icon name={feature.icon} size={19} />
+                </span>
+                <h3 className="mt-4 font-bold text-ink">{t(feature.titleKey)}</h3>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  {t(feature.textKey)}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       </section>
-      <footer className="mx-auto flex max-w-7xl flex-col gap-3 px-5 py-8 text-xs text-[#8b9ab0] sm:flex-row sm:items-center sm:justify-between sm:px-8 lg:px-10">
-        <span>© 2025 Ausbildung Hunter AI</span>
-        <span>Built for your next chapter in Germany.</span>
+
+      {/* How it works */}
+      <section id="how-it-works" className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-10 lg:py-20">
+        <div className="max-w-2xl">
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-accent">
+            {t("landing.howTitle")}
+          </p>
+          <h2 className="mt-3 text-3xl font-bold tracking-[-0.04em] text-ink">
+            {t("landing.howSubtitle")}
+          </h2>
+        </div>
+        <ol className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {STEPS.map((stepKey, index) => (
+            <li
+              key={stepKey}
+              className="rounded-2xl border border-line bg-surface p-5"
+            >
+              <span className="text-xs font-bold tracking-[0.12em] text-accent">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <p className="mt-3 text-sm font-bold leading-6 text-ink">
+                {t(stepKey)}
+              </p>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* CTA */}
+      <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-10">
+        <div className="relative overflow-hidden rounded-3xl border border-line bg-surface p-8 sm:p-12">
+          <div className="hero-orb pointer-events-none absolute -end-20 -top-20 h-72 w-72 rounded-full" />
+          <div className="relative max-w-xl">
+            <h2 className="text-2xl font-bold tracking-[-0.03em] text-ink sm:text-3xl">
+              {t("landing.heroTitle")}
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-muted">
+              {t("landing.heroSubtitle")}
+            </p>
+            <Link href="/register" className="mt-6 inline-block">
+              <Button size="lg">
+                {t("landing.ctaStart")}
+                <Icon name="arrowRight" size={16} className="rtl:-scale-x-100" />
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      <footer className="border-t border-line">
+        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-8 text-xs text-muted sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-10">
+          <span>© 2025 Ausbildung Hunter AI</span>
+          <span>{t("landing.footerNote")}</span>
+        </div>
       </footer>
     </main>
   );

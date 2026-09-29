@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui";
 import { getCurrentUserAndProfile } from "@/lib/auth";
@@ -9,6 +8,8 @@ import {
   type DisconnectBlockers,
   type SafeEmailAccount,
 } from "@/lib/email-oauth";
+import { getServerT, getRequestLang } from "@/lib/i18n/server";
+import { localeForLang } from "@/lib/i18n/core";
 import {
   disconnectEmailAccount,
   reassignDraftSender,
@@ -23,28 +24,25 @@ type SearchParams = Promise<{
   reassigned?: string;
 }>;
 
-const errors: Record<string, string> = {
-  authorization_cancelled:
-    "Authorization was cancelled. No account was connected.",
-  invalid_oauth_state: "The authorization expired. Please start again.",
-  session_expired: "Your session expired. Please sign in again.",
-  insufficient_permissions:
-    "The provider did not grant the permissions required for a future connection.",
-  connection_failed: "We could not verify that account. Please try again.",
-  account_not_found: "That account could not be found.",
-  disconnect_failed: "We could not disconnect this account. Please try again.",
-  active_campaigns:
-    "This account is sending an active campaign. Cancel the campaign before disconnecting.",
-  drafts_in_use:
-    "One or more of your application drafts use this account as sender. Delete or reassign those drafts before disconnecting.",
-  reassign_failed:
-    "We could not move that draft to the other account. Please try again.",
-  provider_authorization_failed:
-    "The provider could not authorize the connection. Please try again.",
-  gmail_not_configured: "Gmail OAuth is not configured yet.",
-  outlook_not_configured: "Outlook OAuth is not configured yet.",
-  unsupported_provider: "That provider is not supported.",
+/** Error code → i18n key (all live under `account.*`). */
+const ERROR_KEYS: Record<string, string> = {
+  authorization_cancelled: "account.errAuthorizationCancelled",
+  invalid_oauth_state: "account.errInvalidOAuthState",
+  session_expired: "account.errSessionExpired",
+  insufficient_permissions: "account.errInsufficientPermissions",
+  connection_failed: "account.errConnectionFailed",
+  account_not_found: "account.errAccountNotFound",
+  disconnect_failed: "account.errDisconnectFailed",
+  active_campaigns: "account.errActiveCampaigns",
+  drafts_in_use: "account.errDraftsInUse",
+  reassign_failed: "account.errReassignFailed",
+  provider_authorization_failed: "account.errProviderAuthorization",
+  gmail_not_configured: "account.errGmailNotConfigured",
+  outlook_not_configured: "account.errOutlookNotConfigured",
+  unsupported_provider: "account.errUnsupportedProvider",
 };
+
+type T = (path: string, vars?: Record<string, string | number>) => string;
 
 export default async function EmailSettingsPage({
   searchParams,
@@ -55,74 +53,54 @@ export default async function EmailSettingsPage({
   if (!user) redirect("/login");
   const accounts = await listEmailAccounts(user.id);
   const params = await searchParams;
+  const [t, lang] = await Promise.all([getServerT(), getRequestLang()]);
+  const locale = localeForLang(lang);
   const connectedLabel =
     params.connected === "gmail"
-      ? "Gmail connected"
+      ? t("account.connectedGmail")
       : params.connected === "outlook"
-        ? "Outlook connected"
+        ? t("account.connectedOutlook")
         : null;
   return (
-    <main className="min-h-screen bg-[#f6f8fb] px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
+    <div className="px-4 py-6 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-5xl">
-        <Link
-          href="/dashboard"
-          className="text-sm font-semibold text-[#2f6fed]"
-        >
-          ← Back to dashboard
-        </Link>
-        <div className="mt-8">
-          <p className="text-sm font-semibold text-[#2f6fed]">Settings</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-[-0.04em] text-[#10203b]">
-            Connect an email account
-          </h1>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-[#71819a]">
-            Connect the account you plan to use later for applications. We never
-            ask for your provider password.
-          </p>
-        </div>
         {connectedLabel && (
           <Notice tone="success">
-            {connectedLabel}. Your account is securely connected.
+            {connectedLabel}. {t("account.connectedNotice")}
           </Notice>
         )}
         {params.disconnected && (
-          <Notice tone="success">
-            Email account disconnected and stored tokens deleted.
-          </Notice>
+          <Notice tone="success">{t("account.disconnectedNotice")}</Notice>
         )}
         {params.reassigned === "1" && (
-          <Notice tone="success">
-            Draft reassigned to the new sender. You can now disconnect the old
-            account.
-          </Notice>
+          <Notice tone="success">{t("account.reassignedNotice")}</Notice>
         )}
         {params.error && (
           <Notice tone="error">
-            {errors[params.error] ?? "We could not complete that connection."}
+            {t(ERROR_KEYS[params.error] ?? "account.genericConnectionError")}
           </Notice>
         )}
-        <section className="mt-8 grid gap-4 md:grid-cols-2">
+        <section className="mt-2 grid gap-4 md:grid-cols-2">
           <ProviderCard
+            t={t}
             provider="gmail"
             title="Gmail"
-            description="Connect a Google account for future application sending."
+            description={t("account.gmailDesc")}
             href="/api/email/connect/gmail"
           />
           <ProviderCard
+            t={t}
             provider="outlook"
             title="Outlook"
-            description="Connect Microsoft Outlook or Microsoft 365 securely."
+            description={t("account.outlookDesc")}
             href="/api/email/connect/outlook"
           />
         </section>
         <section className="mt-8">
-          <h2 className="text-lg font-bold text-[#1d3458]">
-            Connected accounts
+          <h2 className="text-lg font-bold text-ink-soft">
+            {t("account.connectedAccounts")}
           </h2>
-          <p className="mt-1 text-sm text-[#8290a4]">
-            Only safe account details are shown here. OAuth tokens stay
-            server-side.
-          </p>
+          <p className="mt-1 text-sm text-muted">{t("account.safeNote")}</p>
           <div className="mt-4 space-y-3">
             {accounts.length ? (
               (
@@ -144,6 +122,8 @@ export default async function EmailSettingsPage({
               ).map(({ account, blockers, drafts }) => (
                 <AccountRow
                   key={account.id}
+                  t={t}
+                  locale={locale}
                   account={account}
                   blockers={blockers}
                   drafts={drafts}
@@ -154,27 +134,29 @@ export default async function EmailSettingsPage({
               ))
             ) : (
               <Card className="p-8 text-center">
-                <p className="text-sm font-semibold text-[#1d3458]">
-                  No email accounts connected
+                <p className="text-sm font-semibold text-ink-soft">
+                  {t("account.noAccountsTitle")}
                 </p>
-                <p className="mt-1 text-xs text-[#8290a4]">
-                  Choose Gmail or Outlook above to get started.
+                <p className="mt-1 text-xs text-muted">
+                  {t("account.noAccountsBody")}
                 </p>
               </Card>
             )}
           </div>
         </section>
       </div>
-    </main>
+    </div>
   );
 }
 
 function ProviderCard({
+  t,
   provider,
   title,
   description,
   href,
 }: {
+  t: T;
   provider: "gmail" | "outlook";
   title: string;
   description: string;
@@ -184,34 +166,38 @@ function ProviderCard({
     <Card className="p-6">
       <div className="flex items-start justify-between">
         <span
-          className={`flex h-12 w-12 items-center justify-center rounded-2xl text-lg font-bold ${provider === "gmail" ? "bg-[#fff0ee] text-[#df5548]" : "bg-[#eaf2ff] text-[#2878d7]"}`}
+          className={`flex h-12 w-12 items-center justify-center rounded-2xl text-lg font-bold ${provider === "gmail" ? "bg-danger-soft text-danger" : "bg-accent-soft text-accent-deep"}`}
         >
           {provider === "gmail" ? "G" : "O"}
         </span>
-        <span className="rounded-lg bg-[#f4f7fc] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-[#8492a7]">
+        <span className="rounded-lg bg-surface-2 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-muted">
           OAuth 2.0
         </span>
       </div>
-      <h3 className="mt-7 text-lg font-bold text-[#1d3458]">{title}</h3>
-      <p className="mt-2 min-h-12 text-sm leading-6 text-[#8290a4]">
+      <h3 className="mt-7 text-lg font-bold text-ink-soft">{title}</h3>
+      <p className="mt-2 min-h-12 text-sm leading-6 text-muted">
         {description}
       </p>
       <a
         href={href}
-        className="mt-5 flex h-11 items-center justify-center rounded-xl bg-[#10203b] px-4 text-sm font-semibold text-white transition hover:bg-[#1d3458]"
+        className="mt-5 flex h-11 items-center justify-center rounded-xl bg-navy px-4 text-sm font-semibold text-white transition hover:bg-navy-soft"
       >
-        Connect {title} <span className="ml-2">→</span>
+        {t("account.connect")} {title} <span className="ms-2">→</span>
       </a>
     </Card>
   );
 }
 
 function AccountRow({
+  t,
+  locale,
   account,
   blockers,
   drafts,
   destinations,
 }: {
+  t: T;
+  locale: string;
   account: SafeEmailAccount;
   blockers: DisconnectBlockers;
   drafts: Array<{ id: string; subject: string; goal: string }>;
@@ -223,64 +209,65 @@ function AccountRow({
       <Card className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <span
-            className={`flex h-10 w-10 items-center justify-center rounded-xl text-sm font-bold ${account.provider === "gmail" ? "bg-[#fff0ee] text-[#df5548]" : "bg-[#eaf2ff] text-[#2878d7]"}`}
+            className={`flex h-10 w-10 items-center justify-center rounded-xl text-sm font-bold ${account.provider === "gmail" ? "bg-danger-soft text-danger" : "bg-accent-soft text-accent-deep"}`}
           >
             {account.provider === "gmail" ? "G" : "O"}
           </span>
           <div>
-            <p className="text-sm font-bold text-[#1d3458]">
+            <p className="text-sm font-bold text-ink-soft">
               {account.provider === "gmail"
-                ? "Gmail connected"
-                : "Outlook connected"}
+                ? t("account.connectedGmail")
+                : t("account.connectedOutlook")}
             </p>
-            <p className="mt-1 text-xs text-[#8290a4]">{account.email}</p>
+            <p className="mt-1 text-xs text-muted">{account.email}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3 sm:justify-end">
-          <span className="rounded-lg bg-[#eaf8f3] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-[#1b9b70]">
-            {account.is_active ? "Active" : "Inactive"}
+          <span className="rounded-lg bg-success-soft px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-success">
+            {account.is_active ? t("account.active") : t("account.inactive")}
           </span>
-          <span className="text-xs text-[#8b9ab0]">
-            Connected {formatDate(account.created_at)}
+          <span className="text-xs text-faint">
+            {t("account.connectedOn", {
+              date: formatDate(account.created_at, locale, t),
+            })}
           </span>
           {inUse && (
-            <span className="rounded-lg bg-[#fdf3e2] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-[#b57a1f]">
+            <span className="rounded-lg bg-warning-soft px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-warning">
               {blockers.activeCampaigns > 0
-                ? `In use · ${blockers.activeCampaigns} active campaign${blockers.activeCampaigns === 1 ? "" : "s"}`
-                : `In use · ${blockers.drafts} draft${blockers.drafts === 1 ? "" : "s"}`}
+                ? t("account.inUseCampaigns", {
+                    count: blockers.activeCampaigns,
+                  })
+                : t("account.inUseDrafts", { count: blockers.drafts })}
             </span>
           )}
           <form action={disconnectEmailAccount}>
             <input type="hidden" name="accountId" value={account.id} />
             <button
-              className="rounded-lg border border-[#f0d9da] px-3 py-2 text-xs font-semibold text-[#c24c55] hover:bg-[#fff7f7] disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-lg border border-danger/25 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger-soft disabled:cursor-not-allowed disabled:opacity-50"
               disabled={inUse}
-              title={
-                inUse
-                  ? "Resolve the active campaign or drafts using this account first"
-                  : undefined
-              }
+              title={inUse ? t("account.resolveFirst") : undefined}
               type="submit"
             >
-              Disconnect
+              {t("account.disconnect")}
             </button>
           </form>
           <a
             href={`/api/email/connect/${account.provider}`}
-            className="rounded-lg border border-[#dbe3ef] px-3 py-2 text-xs font-semibold text-[#2f6fed] hover:bg-[#f5f8ff]"
+            className="rounded-lg border border-line-strong px-3 py-2 text-xs font-semibold text-accent hover:bg-surface-2"
           >
-            Reconnect
+            {t("account.reconnect")}
           </a>
         </div>
       </Card>
       {/* Phase 18 — minimal reassignment UI, shown only while drafts block
        *  this account. Server-rendered form; all checks re-run server-side. */}
       {drafts.length > 0 && (
-        <div className="mt-2 rounded-xl border border-[#f0e2c4] bg-[#fdf9f0] p-4">
-          <p className="text-xs font-semibold text-[#8a6116]">
-            {drafts.length} draft{drafts.length === 1 ? "" : "s"} use{" "}
-            {account.email} as sender. Move a draft to another connected account
-            (or delete it) to unblock the disconnect:
+        <div className="mt-2 rounded-xl border border-warning/25 bg-warning-soft p-4">
+          <p className="text-xs font-semibold text-warning">
+            {t("account.draftsBlockIntro", {
+              count: drafts.length,
+              email: account.email,
+            })}
           </p>
           <div className="mt-3 space-y-2">
             {drafts.map((draft) => (
@@ -290,11 +277,11 @@ function AccountRow({
                 className="flex flex-wrap items-center gap-2"
               >
                 <input type="hidden" name="draftId" value={draft.id} />
-                <span className="max-w-56 truncate text-xs text-[#5b6b84]">
+                <span className="max-w-56 truncate text-xs text-muted">
                   {draft.subject.trim() ||
                     (draft.goal === "arbeit"
-                      ? "Untitled job draft"
-                      : "Untitled training draft")}
+                      ? t("account.untitledArbeit")
+                      : t("account.untitledAusbildung"))}
                 </span>
                 {destinations.length ? (
                   <>
@@ -302,10 +289,10 @@ function AccountRow({
                       name="emailAccountId"
                       defaultValue=""
                       required
-                      className="rounded-lg border border-[#e2d5b8] bg-white px-2 py-1.5 text-xs text-[#1d3458]"
+                      className="rounded-lg border border-warning/25 bg-surface px-2 py-1.5 text-xs text-ink-soft"
                     >
                       <option value="" disabled>
-                        Choose a new sender…
+                        {t("account.chooseSender")}
                       </option>
                       {destinations.map((destination) => (
                         <option key={destination.id} value={destination.id}>
@@ -315,14 +302,14 @@ function AccountRow({
                     </select>
                     <button
                       type="submit"
-                      className="rounded-lg bg-[#10203b] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#1d3458]"
+                      className="rounded-lg bg-navy px-3 py-1.5 text-xs font-semibold text-white hover:bg-navy-soft"
                     >
-                      Move draft
+                      {t("account.moveDraft")}
                     </button>
                   </>
                 ) : (
-                  <span className="text-xs text-[#8290a4]">
-                    Connect another account above to move this draft.
+                  <span className="text-xs text-muted">
+                    {t("account.connectOther")}
                   </span>
                 )}
               </form>
@@ -343,18 +330,22 @@ function Notice({
 }) {
   return (
     <div
-      className={`mt-6 rounded-xl border px-4 py-3 text-sm font-medium ${tone === "success" ? "border-[#ccefe1] bg-[#f3fcf8] text-[#187e5b]" : "border-[#f5d7da] bg-[#fff8f8] text-[#a3404b]"}`}
+      className={`mt-6 rounded-xl border px-4 py-3 text-sm font-medium ${tone === "success" ? "border-success/25 bg-success-soft text-success" : "border-danger/25 bg-danger-soft text-danger"}`}
     >
       {children}
     </div>
   );
 }
-function formatDate(value: string | null) {
+function formatDate(
+  value: string | null,
+  locale: string,
+  t: T,
+): string {
   return value
-    ? new Intl.DateTimeFormat("en", {
+    ? new Intl.DateTimeFormat(locale, {
         month: "short",
         day: "numeric",
         year: "numeric",
       }).format(new Date(value))
-    : "Never";
+    : t("account.never");
 }

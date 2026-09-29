@@ -78,15 +78,15 @@ export function RecipientManager({
     <section>
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="font-bold text-[#1d3458]">Recipients</h2>
-          <p className="mt-1 text-xs text-[#8290a4]">
+          <h2 className="font-bold text-ink-soft">Recipients</h2>
+          <p className="mt-1 text-xs text-muted">
             Add one or many email addresses.
           </p>
         </div>
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          className="rounded-lg border border-[#dbe3ef] px-3 py-2 text-xs font-bold text-[#2f6fed] hover:bg-[#f5f8ff]"
+          className="rounded-lg border border-line-strong px-3 py-2 text-xs font-bold text-accent hover:bg-surface-2"
         >
           Import CSV/TXT
         </button>
@@ -102,12 +102,12 @@ export function RecipientManager({
           }}
         />
       </div>
-      <div className="mt-4 rounded-xl border border-[#dfe6f0] bg-white p-3 focus-within:border-[#2f6fed] focus-within:ring-4 focus-within:ring-[#2f6fed]/10">
+      <div className="mt-4 rounded-xl border border-line-strong bg-surface p-3 focus-within:border-accent focus-within:ring-4 focus-within:ring-accent/10">
         <div className="flex flex-wrap gap-2">
           {recipients.map((recipient, index) => (
             <span
               key={`${recipient.email}-${index}`}
-              className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-semibold ${recipient.status === "valid" ? "bg-[#eaf8f3] text-[#187e5b]" : recipient.status === "invalid" ? "bg-[#fff0f0] text-[#b3444e]" : "bg-[#fff5df] text-[#a56a1e]"}`}
+              className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-semibold ${recipient.status === "valid" ? "bg-success-soft text-success" : recipient.status === "invalid" ? "bg-danger-soft text-danger" : "bg-warning-soft text-warning"}`}
             >
               {recipient.email}
               <button
@@ -124,7 +124,7 @@ export function RecipientManager({
             </span>
           ))}
           <input
-            className="min-w-48 flex-1 border-0 bg-transparent px-1 py-1 text-sm text-[#1d3458] outline-none placeholder:text-[#a0adbd]"
+            className="min-w-48 flex-1 border-0 bg-transparent px-1 py-1 text-sm text-ink-soft outline-none placeholder:text-faint"
             value={value}
             onChange={(event) => setValue(event.target.value)}
             onPaste={(event) => {
@@ -145,22 +145,22 @@ export function RecipientManager({
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-semibold">
-        <span className="rounded-md bg-[#f1f4f8] px-2 py-1 text-[#71819a]">
+        <span className="rounded-md bg-surface-2 px-2 py-1 text-muted">
           Total {counts.total}
         </span>
-        <span className="rounded-md bg-[#eaf8f3] px-2 py-1 text-[#187e5b]">
+        <span className="rounded-md bg-success-soft px-2 py-1 text-success">
           Valid {counts.valid}
         </span>
-        <span className="rounded-md bg-[#fff0f0] px-2 py-1 text-[#b3444e]">
+        <span className="rounded-md bg-danger-soft px-2 py-1 text-danger">
           Invalid {counts.invalid}
         </span>
-        <span className="rounded-md bg-[#fff5df] px-2 py-1 text-[#a56a1e]">
+        <span className="rounded-md bg-warning-soft px-2 py-1 text-warning">
           Duplicate {counts.duplicate}
         </span>
         {counts.invalid > 0 && (
           <button
             type="button"
-            className="ml-auto text-[#b3444e] hover:underline"
+            className="ml-auto text-danger hover:underline"
             onClick={() =>
               onChange(recipients.filter((item) => item.status !== "invalid"))
             }
@@ -171,7 +171,7 @@ export function RecipientManager({
         {counts.duplicate > 0 && (
           <button
             type="button"
-            className="text-[#a56a1e] hover:underline"
+            className="text-warning hover:underline"
             onClick={() =>
               onChange(recipients.filter((item) => item.status !== "duplicate"))
             }
@@ -182,7 +182,7 @@ export function RecipientManager({
         {counts.total > 0 && (
           <button
             type="button"
-            className="text-[#71819a] hover:underline"
+            className="text-muted hover:underline"
             onClick={() => onChange([])}
           >
             Clear all

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 export type AdminUserRow = {
   id: string;
@@ -22,6 +23,7 @@ export function AdminUserActions({
   actorId: string;
   row: AdminUserRow;
 }) {
+  const { t } = useI18n();
   const [result, setResult] = useState<Result>(null);
   const [busy, setBusy] = useState(false);
 
@@ -43,26 +45,28 @@ export function AdminUserActions({
       };
       setResult(
         response.ok
-          ? { kind: "ok", message: data.message ?? "Done." }
+          ? { kind: "ok", message: data.message ?? t("admin.done") }
           : {
               kind: "error",
               message:
                 data.error === "self_revoke_blocked"
-                  ? "You cannot revoke your own admin rights."
+                  ? t("admin.selfRevoke")
                   : data.error === "no_subscription"
-                    ? "No subscription exists for this user."
-                    : `Action failed (${data.error ?? response.status}).`,
+                    ? t("admin.noSubscription")
+                    : t("admin.actionFailed", {
+                        error: data.error ?? String(response.status),
+                      }),
             },
       );
     } catch {
-      setResult({ kind: "error", message: "Network error — please retry." });
+      setResult({ kind: "error", message: t("admin.networkError") });
     } finally {
       setBusy(false);
     }
   };
 
   const button =
-    "rounded-lg border border-[#dbe3ef] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#1d3458] hover:bg-[#f5f8ff] disabled:opacity-50";
+    "rounded-lg border border-line-strong bg-surface px-2.5 py-1.5 text-xs font-semibold text-ink-soft hover:bg-surface-2 disabled:opacity-50";
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -72,7 +76,7 @@ export function AdminUserActions({
         disabled={busy}
         onClick={() => call("set_plan", { plan: "plus", periodDays: 30 })}
       >
-        Plus · 30d
+        {t("admin.plus30")}
       </button>
       <button
         type="button"
@@ -80,7 +84,7 @@ export function AdminUserActions({
         disabled={busy}
         onClick={() => call("set_plan", { plan: "pro", periodDays: 30 })}
       >
-        Pro · 30d
+        {t("admin.pro30")}
       </button>
       {row.subscription && row.subscription.status === "active" && (
         <button
@@ -89,7 +93,7 @@ export function AdminUserActions({
           disabled={busy}
           onClick={() => call("cancel_subscription")}
         >
-          Cancel sub
+          {t("admin.cancelSub")}
         </button>
       )}
       {row.subscription && row.subscription.status !== "active" && (
@@ -101,36 +105,38 @@ export function AdminUserActions({
             call("reactivate_subscription", { plan: "plus", periodDays: 30 })
           }
         >
-          Reactivate
+          {t("admin.reactivate")}
         </button>
       )}
       {row.is_admin ? (
         row.id === actorId ? (
-          <span className="text-[10px] font-semibold text-[#a0adbd]">you</span>
+          <span className="text-[10px] font-semibold text-faint">
+            {t("admin.you")}
+          </span>
         ) : (
           <button
             type="button"
-            className={`${button} text-[#c0392b]`}
+            className={`${button} text-danger`}
             disabled={busy}
             onClick={() => call("revoke_admin")}
           >
-            Revoke admin
+            {t("admin.revokeAdmin")}
           </button>
         )
       ) : (
         <button
           type="button"
-          className={`${button} text-[#805ad5]`}
+          className={`${button} text-ai`}
           disabled={busy}
           onClick={() => call("grant_admin")}
         >
-          Grant admin
+          {t("admin.grantAdmin")}
         </button>
       )}
       {result && (
         <span
           className={`text-xs font-semibold ${
-            result.kind === "ok" ? "text-[#1b9b70]" : "text-[#c0392b]"
+            result.kind === "ok" ? "text-success" : "text-danger"
           }`}
           role="status"
         >

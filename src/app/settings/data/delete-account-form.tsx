@@ -42,7 +42,7 @@ export function DeleteAccountForm({ email }: { email: string }) {
 
   if (done)
     return (
-      <div className="mt-5 rounded-xl border border-[#ccefe1] bg-[#f3fcf8] px-4 py-3 text-sm font-medium text-[#187e5b]">
+      <div className="mt-5 rounded-xl border border-success/25 bg-success-soft px-4 py-3 text-sm font-medium text-success">
         Your account and all related data have been permanently deleted. You can
         close this tab now.
       </div>
@@ -64,21 +64,21 @@ export function DeleteAccountForm({ email }: { email: string }) {
           }}
           placeholder={email}
           aria-label="Type your account email to confirm deletion"
-          className="h-11 flex-1 rounded-xl border border-[#dfe6f0] bg-white px-3.5 text-sm outline-none focus:border-[#b3444e]"
+          className="h-11 flex-1 rounded-xl border border-line-strong bg-surface px-3.5 text-sm outline-none focus:border-danger"
         />
         <button
           type="submit"
           disabled={working || !matches}
-          className="h-11 rounded-xl bg-[#b3444e] px-5 text-sm font-semibold text-white hover:bg-[#9c3841] disabled:opacity-50"
+          className="h-11 rounded-xl bg-danger px-5 text-sm font-semibold text-white hover:bg-danger disabled:opacity-50"
         >
           {working ? "Deleting…" : "Permanently delete account"}
         </button>
       </form>
       {error && (
-        <p className="mt-3 text-sm font-medium text-[#a3404b]">{error}</p>
+        <p className="mt-3 text-sm font-medium text-danger">{error}</p>
       )}
-      <p className="mt-3 text-xs text-[#8290a4]">
-        Type <span className="font-semibold text-[#1d3458]">{email}</span> to
+      <p className="mt-3 text-xs text-muted">
+        Type <span className="font-semibold text-ink-soft">{email}</span> to
         enable deletion.
       </p>
     </>

@@ -309,11 +309,14 @@ export function evaluateSnapshotStaleness(
 }
 
 /** Compact "Stand" label for snapshot dates (display only). */
-export function formatSnapshotDate(savedAt: string | null): string | null {
+export function formatSnapshotDate(
+  savedAt: string | null,
+  locale = "de-DE",
+): string | null {
   if (!savedAt) return null;
   const parsed = Date.parse(savedAt);
   if (Number.isNaN(parsed)) return null;
-  return new Date(parsed).toLocaleDateString("de-DE", {
+  return new Date(parsed).toLocaleDateString(locale, {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",

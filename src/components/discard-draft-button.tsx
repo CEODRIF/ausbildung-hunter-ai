@@ -19,8 +19,8 @@ export function DiscardDraftButton() {
     <button
       className={
         armed
-          ? "rounded-xl bg-[#b3444e] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#9c3841]"
-          : "rounded-xl border border-[#f0d9da] px-4 py-2.5 text-sm font-semibold text-[#c24c55] hover:bg-[#fff7f7]"
+          ? "rounded-xl bg-danger px-4 py-2.5 text-sm font-semibold text-white hover:bg-danger"
+          : "rounded-xl border border-danger/25 px-4 py-2.5 text-sm font-semibold text-danger hover:bg-danger-soft"
       }
       type="submit"
       onClick={(event) => {

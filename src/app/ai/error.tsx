@@ -1,20 +1,23 @@
 "use client";
 import { ErrorState } from "@/components/ui";
+import { useI18n } from "@/lib/i18n";
+
 export default function AIError({
   reset,
 }: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const { t } = useI18n();
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f6f8fb] p-5">
+    <div className="flex min-h-[60vh] items-center justify-center p-5">
       <div className="w-full max-w-md">
         <ErrorState
-          title="The AI workspace could not load"
-          description="Please try again. Your conversations remain protected."
+          title={t("pageErrors.aiTitle")}
+          description={t("pageErrors.aiBody")}
           onRetry={reset}
         />
       </div>
-    </main>
+    </div>
   );
 }

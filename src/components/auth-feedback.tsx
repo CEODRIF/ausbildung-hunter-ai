@@ -8,7 +8,7 @@ export function AuthFeedback({
   if (state?.error)
     return (
       <p
-        className="rounded-xl border border-[#f5d7da] bg-[#fff8f8] px-3.5 py-3 text-sm font-medium leading-5 text-[#a3404b]"
+        className="rounded-xl border border-danger/25 bg-danger-soft px-3.5 py-3 text-sm font-medium leading-5 text-danger"
         role="alert"
       >
         {state.error}
@@ -17,7 +17,7 @@ export function AuthFeedback({
   if (state?.success)
     return (
       <p
-        className="rounded-xl border border-[#ccefe1] bg-[#f3fcf8] px-3.5 py-3 text-sm font-medium leading-5 text-[#187e5b]"
+        className="rounded-xl border border-success/25 bg-success-soft px-3.5 py-3 text-sm font-medium leading-5 text-success"
         role="status"
       >
         {state.success}

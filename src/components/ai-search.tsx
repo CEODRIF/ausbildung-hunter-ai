@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Button, Card, ErrorState } from "@/components/ui";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
 import type { Opportunity } from "@/lib/opportunities/types";
+import { useI18n } from "@/lib/i18n";
 
 /**
  * AI Ausbildung Search — client.
@@ -107,15 +108,15 @@ const CATEGORY_LABELS: Record<SourceCategory, string> = {
 function MatchBadge({ opportunity }: { opportunity: Opportunity }) {
   const match = opportunity.match;
   if (!match || match.status === "unavailable")
-    return <span className="text-xs text-[#8b9ab0]">—</span>;
+    return <span className="text-xs text-faint">—</span>;
   if (match.status === "incomplete")
     return (
-      <span className="inline-flex rounded-full bg-[#fbf1e3] px-2.5 py-0.5 text-[11px] font-bold text-[#a06a24]">
+      <span className="inline-flex rounded-full bg-warning-soft px-2.5 py-0.5 text-[11px] font-bold text-warning">
         Partial match
       </span>
     );
   return (
-    <span className="inline-flex rounded-full bg-[#e8f5ee] px-2.5 py-0.5 text-[11px] font-bold text-[#177a55]">
+    <span className="inline-flex rounded-full bg-success-soft px-2.5 py-0.5 text-[11px] font-bold text-success">
       {match.score}% match
     </span>
   );
@@ -123,7 +124,7 @@ function MatchBadge({ opportunity }: { opportunity: Opportunity }) {
 
 function Chip({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex rounded-lg bg-[#f1f5fb] px-2.5 py-1 text-xs font-semibold text-[#41546f]">
+    <span className="inline-flex rounded-lg bg-surface-2 px-2.5 py-1 text-xs font-semibold text-ink-soft">
       {children}
     </span>
   );
@@ -138,6 +139,7 @@ export function AISearchClient({
   profileSummary: ProfileSummary | null;
   defaultGoal: Goal;
 }) {
+  const { t } = useI18n();
   const [goal, setGoal] = useState<Goal>(defaultGoal);
   const [count, setCount] = useState<(typeof COUNTS)[number]>(25);
   const [stage, setStage] = useState<Stage>("setup");
@@ -371,18 +373,18 @@ export function AISearchClient({
     return (
       <div className="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
         <Card className="p-5 sm:p-6">
-          <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#8b9ab0]">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-faint">
             Your CV profile
           </p>
           {hasProfile && shown ? (
             <div className="mt-4 space-y-4">
-              <p className="text-sm leading-6 text-[#41546f]">
+              <p className="text-sm leading-6 text-ink-soft">
                 The AI will use this profile (from the Bewerbung Scanner) to
                 build your search. No extra CV upload is needed.
               </p>
               {shown.target_roles.length > 0 && (
                 <div>
-                  <p className="text-xs font-bold text-[#6d7d96]">
+                  <p className="text-xs font-bold text-muted">
                     Target roles
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -394,7 +396,7 @@ export function AISearchClient({
               )}
               {shown.locations.length > 0 && (
                 <div>
-                  <p className="text-xs font-bold text-[#6d7d96]">
+                  <p className="text-xs font-bold text-muted">
                     Locations
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -406,7 +408,7 @@ export function AISearchClient({
               )}
               {shown.skills.length > 0 && (
                 <div>
-                  <p className="text-xs font-bold text-[#6d7d96]">Skills</p>
+                  <p className="text-xs font-bold text-muted">Skills</p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {shown.skills.map((skill) => (
                       <Chip key={skill}>{skill}</Chip>
@@ -416,21 +418,21 @@ export function AISearchClient({
               )}
               <Link
                 href="/bewerbung-scanner"
-                className="text-sm font-semibold text-[#2f6fed]"
+                className="text-sm font-semibold text-accent"
               >
                 Re-analyze my CV →
               </Link>
             </div>
           ) : (
             <div className="mt-4 space-y-4">
-              <p className="text-sm leading-6 text-[#41546f]">
+              <p className="text-sm leading-6 text-ink-soft">
                 Upload your CV so the AI can build a profile from it. The
                 Bewerbung Scanner extracts your roles, skills, and locations —
                 only what your document actually says.
               </p>
               <Link
                 href="/bewerbung-scanner"
-                className="mt-1 inline-flex h-12 items-center justify-center rounded-xl bg-[#2f6fed] px-5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(47,111,237,0.22)] transition-colors hover:bg-[#255dcc]"
+                className="mt-1 inline-flex h-12 items-center justify-center rounded-xl bg-accent px-5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(47,111,237,0.22)] transition-colors hover:bg-accent-deep"
               >
                 Upload &amp; analyze my CV
               </Link>
@@ -438,33 +440,33 @@ export function AISearchClient({
           )}
         </Card>
         <Card className="p-5 sm:p-6">
-          <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#8b9ab0]">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-faint">
             Search settings
           </p>
-          <p className="mt-4 text-xs font-bold text-[#6d7d96]">
+          <p className="mt-4 text-xs font-bold text-muted">
             What are you looking for?
           </p>
           <div className="mt-2 grid grid-cols-2 gap-3">
             <button
               type="button"
               onClick={() => setGoal("ausbildung")}
-              className={`rounded-2xl border p-4 text-left ${goal === "ausbildung" ? "border-[#2f6fed] bg-[#f3f7ff]" : "border-[#e3e9f1]"}`}
+              className={`rounded-2xl border p-4 text-left ${goal === "ausbildung" ? "border-accent bg-accent-soft" : "border-line"}`}
             >
-              <p className="font-bold text-[#1d3458]">Ausbildung</p>
-              <p className="mt-1 text-xs text-[#8290a4]">
+              <p className="font-bold text-ink-soft">Ausbildung</p>
+              <p className="mt-1 text-xs text-muted">
                 Vocational training
               </p>
             </button>
             <button
               type="button"
               onClick={() => setGoal("arbeit")}
-              className={`rounded-2xl border p-4 text-left ${goal === "arbeit" ? "border-[#2f6fed] bg-[#f3f7ff]" : "border-[#e3e9f1]"}`}
+              className={`rounded-2xl border p-4 text-left ${goal === "arbeit" ? "border-accent bg-accent-soft" : "border-line"}`}
             >
-              <p className="font-bold text-[#1d3458]">Arbeit</p>
-              <p className="mt-1 text-xs text-[#8290a4]">Jobs &amp; work</p>
+              <p className="font-bold text-ink-soft">Arbeit</p>
+              <p className="mt-1 text-xs text-muted">Jobs &amp; work</p>
             </button>
           </div>
-          <p className="mt-5 text-xs font-bold text-[#6d7d96]">
+          <p className="mt-5 text-xs font-bold text-muted">
             How many opportunities?
           </p>
           <div className="mt-2 grid grid-cols-4 gap-3">
@@ -473,13 +475,13 @@ export function AISearchClient({
                 key={value}
                 type="button"
                 onClick={() => setCount(value)}
-                className={`rounded-2xl border py-3.5 text-center font-bold ${count === value ? "border-[#2f6fed] bg-[#f3f7ff] text-[#2f6fed]" : "border-[#e3e9f1] text-[#41546f]"}`}
+                className={`rounded-2xl border py-3.5 text-center font-bold ${count === value ? "border-accent bg-accent-soft text-accent" : "border-line text-ink-soft"}`}
               >
                 {value}
               </button>
             ))}
           </div>
-          <div className="mt-5 rounded-xl bg-[#f7f9fc] p-4 text-xs leading-5 text-[#8290a4]">
+          <div className="mt-5 rounded-xl bg-surface-2 p-4 text-xs leading-5 text-muted">
             The AI reads your profile, creates focused queries, and searches
             the official Bundesagentur für Arbeit Jobsuche plus publicly
             indexed web sources (job portals, company career pages, public
@@ -496,7 +498,7 @@ export function AISearchClient({
             Start AI search
           </Button>
           {!hasProfile && (
-            <p className="mt-2 text-xs text-[#8492a7]">
+            <p className="mt-2 text-xs text-muted">
               Analyze your CV first to enable the search.
             </p>
           )}
@@ -536,7 +538,7 @@ export function AISearchClient({
         chips: plan ? plan.queries.map(queryLabel) : undefined,
       },
       {
-        label: "Searching public sources",
+        label: t("aiSearch.searching"),
         state: searchingActive ? "active" : "pending",
         subRows: [
           {
@@ -596,10 +598,10 @@ export function AISearchClient({
     ];
     return (
       <Card className="p-5 sm:p-8">
-        <h2 className="text-lg font-bold text-[#10203b]">
+        <h2 className="text-lg font-bold text-ink">
           Searching for {goal === "ausbildung" ? "Ausbildung" : "job"} opportunities…
         </h2>
-        <p className="mt-1 text-sm text-[#71819a]">
+        <p className="mt-1 text-sm text-muted">
           Target: {count} real postings across public sources.
         </p>
         <ol className="mt-6 space-y-4">
@@ -608,10 +610,10 @@ export function AISearchClient({
               <span
                 className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                   step.state === "done"
-                    ? "bg-[#e8f5ee] text-[#177a55]"
+                    ? "bg-success-soft text-success"
                     : step.state === "active"
-                      ? "bg-[#edf3ff] text-[#2f6fed]"
-                      : "bg-[#f1f5fb] text-[#8b9ab0]"
+                      ? "bg-accent-soft text-accent"
+                      : "bg-surface-2 text-faint"
                 }`}
               >
                 {step.state === "done" ? "✓" : index + 1}
@@ -620,17 +622,17 @@ export function AISearchClient({
                 <div className="flex items-center gap-3">
                   <p
                     className={`text-sm font-semibold ${
-                      step.state === "pending" ? "text-[#8b9ab0]" : "text-[#1d3458]"
+                      step.state === "pending" ? "text-faint" : "text-ink-soft"
                     }`}
                   >
                     {step.label}
                   </p>
                   {step.state === "active" && (
-                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#dbe5f4] border-t-[#2f6fed]" />
+                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line-strong border-t-accent" />
                   )}
                 </div>
                 {step.detail && (
-                  <p className="mt-0.5 text-xs text-[#71819a]">
+                  <p className="mt-0.5 text-xs text-muted">
                     {step.detail}
                   </p>
                 )}
@@ -641,8 +643,8 @@ export function AISearchClient({
                         key={row.label}
                         className="flex items-center justify-between gap-3 text-xs"
                       >
-                        <span className="text-[#71819a]">{row.label}</span>
-                        <span className="font-bold text-[#41546f]">
+                        <span className="text-muted">{row.label}</span>
+                        <span className="font-bold text-ink-soft">
                           {row.value}
                         </span>
                       </li>
@@ -664,7 +666,7 @@ export function AISearchClient({
           <Button variant="secondary" onClick={cancel}>
             Cancel
           </Button>
-          <p className="text-xs text-[#8492a7]">
+          <p className="text-xs text-muted">
             You can keep this page open — progress updates live.
           </p>
         </div>
@@ -688,12 +690,12 @@ export function AISearchClient({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-[#10203b]">
+          <h2 className="text-lg font-bold text-ink">
             {found > 0
               ? `${found} of ${count} opportunities found`
-              : "No opportunities found"}
+              : t("aiSearch.empty")}
           </h2>
-          <p className="mt-0.5 text-sm text-[#71819a]">
+          <p className="mt-0.5 text-sm text-muted">
             {found > 0
               ? found < count
                 ? "This is everything the public sources currently document for your search — no results are invented to fill the list."
@@ -715,7 +717,7 @@ export function AISearchClient({
         </div>
       </div>
       {exportError && (
-        <p className="rounded-xl border border-[#f0d9da] bg-[#fff8f8] px-4 py-3 text-sm text-[#a3404b]">
+        <p className="rounded-xl border border-danger/25 bg-danger-soft px-4 py-3 text-sm text-danger">
           {exportError}
         </p>
       )}
@@ -742,11 +744,11 @@ export function AISearchClient({
       )}
       {plan && (
         <Card className="p-4">
-          <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#8b9ab0]">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-faint">
             AI search plan
           </p>
           {plan.rationale && (
-            <p className="mt-1.5 text-sm text-[#41546f]">{plan.rationale}</p>
+            <p className="mt-1.5 text-sm text-ink-soft">{plan.rationale}</p>
           )}
           <div className="mt-2 flex flex-wrap gap-1.5">
             {plan.queries.map((query, index) => (
@@ -767,7 +769,7 @@ export function AISearchClient({
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] border-collapse text-left">
               <thead>
-                <tr className="border-b border-[#e7ecf3] bg-[#f8faff] text-xs font-bold uppercase tracking-[0.06em] text-[#6d7d96]">
+                <tr className="border-b border-line bg-surface-2 text-xs font-bold uppercase tracking-[0.06em] text-muted">
                   <th className="px-4 py-3">#</th>
                   <th className="px-4 py-3">Company</th>
                   <th className="px-4 py-3">Ausbildung title</th>
@@ -828,11 +830,11 @@ function FragmentRow({
   return (
     <>
       <tr
-        className={`border-b border-[#eef2f7] transition-colors hover:bg-[#f8faff] ${expanded ? "bg-[#f8faff]" : ""}`}
+        className={`border-b border-line transition-colors hover:bg-surface-2 ${expanded ? "bg-surface-2" : ""}`}
       >
-        <td className="px-4 py-3 text-xs font-bold text-[#8b9ab0]">{index}</td>
-        <td className="px-4 py-3 text-sm font-semibold text-[#1d3458]">
-          {opportunity.company_name ?? <span className="text-[#8b9ab0]">—</span>}
+        <td className="px-4 py-3 text-xs font-bold text-faint">{index}</td>
+        <td className="px-4 py-3 text-sm font-semibold text-ink-soft">
+          {opportunity.company_name ?? <span className="text-faint">—</span>}
         </td>
         <td className="max-w-[260px] px-4 py-3">
           {isWeb ? (
@@ -840,34 +842,34 @@ function FragmentRow({
               href={opportunity.source_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-sm font-semibold text-[#2f6fed] hover:underline"
+              className="text-sm font-semibold text-accent hover:underline"
             >
               {opportunity.title}
             </a>
           ) : (
             <Link
               href={`/opportunities/${encodeURIComponent(opportunity.id)}`}
-              className="text-sm font-semibold text-[#2f6fed] hover:underline"
+              className="text-sm font-semibold text-accent hover:underline"
             >
               {opportunity.title}
             </Link>
           )}
         </td>
-        <td className="px-4 py-3 text-sm text-[#41546f]">
-          {opportunity.location ?? <span className="text-[#8b9ab0]">—</span>}
+        <td className="px-4 py-3 text-sm text-ink-soft">
+          {opportunity.location ?? <span className="text-faint">—</span>}
         </td>
-        <td className="px-4 py-3 text-sm text-[#41546f]">
+        <td className="px-4 py-3 text-sm text-ink-soft">
           {opportunity.location_detail?.region ?? (
-            <span className="text-[#8b9ab0]">—</span>
+            <span className="text-faint">—</span>
           )}
         </td>
-        <td className="whitespace-nowrap px-4 py-3 text-sm text-[#41546f]">
+        <td className="whitespace-nowrap px-4 py-3 text-sm text-ink-soft">
           {formatDay(opportunity.valid_from)}
         </td>
-        <td className="whitespace-nowrap px-4 py-3 text-sm text-[#41546f]">
+        <td className="whitespace-nowrap px-4 py-3 text-sm text-ink-soft">
           {formatDay(opportunity.application_deadline)}
         </td>
-        <td className="max-w-[190px] px-4 py-3 text-xs leading-5 text-[#41546f]">
+        <td className="max-w-[190px] px-4 py-3 text-xs leading-5 text-ink-soft">
           {opportunity.contact?.email ? (
             <div className="truncate">{opportunity.contact.email}</div>
           ) : null}
@@ -875,7 +877,7 @@ function FragmentRow({
             <div className="truncate">{opportunity.contact.phone}</div>
           ) : null}
           {!opportunity.contact?.email && !opportunity.contact?.phone ? (
-            <span className="text-[#8b9ab0]">—</span>
+            <span className="text-faint">—</span>
           ) : null}
         </td>
         <td className="whitespace-nowrap px-4 py-3">
@@ -886,7 +888,7 @@ function FragmentRow({
             <button
               type="button"
               onClick={onToggle}
-              className="rounded-lg px-2 py-1 text-xs font-bold text-[#6d7d96] hover:bg-[#f1f5fb] hover:text-[#1d3458]"
+              className="rounded-lg px-2 py-1 text-xs font-bold text-muted hover:bg-surface-2 hover:text-ink-soft"
               aria-expanded={expanded}
             >
               {expanded ? "Hide" : "Details"}
@@ -896,7 +898,7 @@ function FragmentRow({
                 href={opportunity.application_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-lg px-2 py-1 text-xs font-bold text-[#2f6fed] hover:bg-[#edf3ff]"
+                className="rounded-lg px-2 py-1 text-xs font-bold text-accent hover:bg-accent-soft"
               >
                 Apply ↗
               </a>
@@ -905,7 +907,7 @@ function FragmentRow({
         </td>
       </tr>
       {expanded && (
-        <tr className="border-b border-[#eef2f7] bg-[#f8faff]">
+        <tr className="border-b border-line bg-surface-2">
           <td colSpan={10} className="px-6 py-4">
             <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
               <div>
@@ -913,26 +915,26 @@ function FragmentRow({
                   <Chip>{opportunity.source_type}</Chip>
                   <Chip>{opportunity.source_name}</Chip>
                 </div>
-                <p className="mt-4 text-xs font-bold uppercase tracking-[0.1em] text-[#8b9ab0]">
+                <p className="mt-4 text-xs font-bold uppercase tracking-[0.1em] text-faint">
                   Requirements
                 </p>
                 {opportunity.requirements.length > 0 ? (
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#41546f]">
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-ink-soft">
                     {opportunity.requirements.map((requirement) => (
                       <li key={requirement}>{requirement}</li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="mt-2 text-sm text-[#8b9ab0]">
+                  <p className="mt-2 text-sm text-faint">
                     No requirements documented by the source.
                   </p>
                 )}
                 {other.length > 0 && (
                   <>
-                    <p className="mt-4 text-xs font-bold uppercase tracking-[0.1em] text-[#8b9ab0]">
+                    <p className="mt-4 text-xs font-bold uppercase tracking-[0.1em] text-faint">
                       Other useful information
                     </p>
-                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#41546f]">
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-ink-soft">
                       {other.map((line) => (
                         <li key={line}>{line}</li>
                       ))}
@@ -941,7 +943,7 @@ function FragmentRow({
                 )}
                 {opportunity.additional_sources.length > 0 && (
                   <>
-                    <p className="mt-4 text-xs font-bold uppercase tracking-[0.1em] text-[#8b9ab0]">
+                    <p className="mt-4 text-xs font-bold uppercase tracking-[0.1em] text-faint">
                       Also found at
                     </p>
                     <ul className="mt-2 space-y-1">
@@ -951,11 +953,11 @@ function FragmentRow({
                             href={source.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="break-all text-sm font-semibold text-[#2f6fed] hover:underline"
+                            className="break-all text-sm font-semibold text-accent hover:underline"
                           >
                             {source.source_name} ↗
                           </a>
-                          <span className="ml-2 text-xs text-[#8b9ab0]">
+                          <span className="ml-2 text-xs text-faint">
                             {source.source_type}
                           </span>
                         </li>
@@ -970,7 +972,7 @@ function FragmentRow({
                     href={opportunity.source_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="rounded-xl bg-[#edf3ff] px-3.5 py-2 text-xs font-bold text-[#2f6fed] transition hover:bg-[#dce9ff]"
+                    className="rounded-xl bg-accent-soft px-3.5 py-2 text-xs font-bold text-accent transition hover:bg-accent-soft"
                   >
                     Source posting ↗
                   </a>
@@ -979,7 +981,7 @@ function FragmentRow({
                       href={opportunity.company_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="rounded-xl bg-[#edf3ff] px-3.5 py-2 text-xs font-bold text-[#2f6fed] transition hover:bg-[#dce9ff]"
+                      className="rounded-xl bg-accent-soft px-3.5 py-2 text-xs font-bold text-accent transition hover:bg-accent-soft"
                     >
                       Company website ↗
                     </a>

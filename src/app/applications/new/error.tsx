@@ -1,6 +1,7 @@
 "use client";
 
 import { ErrorState } from "@/components/ui";
+import { useI18n } from "@/lib/i18n";
 
 export default function NewApplicationError({
   reset,
@@ -8,15 +9,16 @@ export default function NewApplicationError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const { t } = useI18n();
   return (
-    <main className="min-h-screen bg-[#f6f8fb] px-5 py-12 sm:px-8">
+    <div className="px-4 py-12 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-xl">
         <ErrorState
-          title="The application workspace could not load"
-          description="Please try again. Your saved drafts remain protected."
+          title={t("pageErrors.appTitle")}
+          description={t("pageErrors.appBody")}
           onRetry={reset}
         />
       </div>
-    </main>
+    </div>
   );
 }

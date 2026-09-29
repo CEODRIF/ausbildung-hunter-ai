@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 /** Phase 16 — two-step confirmation for scan deletion (the scan's
  *  uploaded CVs and extracted profile are high-sensitivity data, so a
@@ -9,6 +10,7 @@ import { useEffect, useState } from "react";
  *  server action re-validates ownership and cascades. This component
  *  is UX only — no security decision is made in the browser. */
 export function DeleteScanButton() {
+  const { t } = useI18n();
   const [armed, setArmed] = useState(false);
   useEffect(() => {
     if (!armed) return;
@@ -19,8 +21,8 @@ export function DeleteScanButton() {
     <button
       className={
         armed
-          ? "rounded-xl bg-[#b3444e] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#9c3841]"
-          : "rounded-xl border border-[#f0d9da] px-4 py-2.5 text-sm font-semibold text-[#c24c55] hover:bg-[#fff7f7]"
+          ? "rounded-xl bg-danger px-4 py-2.5 text-sm font-semibold text-white hover:bg-danger"
+          : "rounded-xl border border-danger/25 px-4 py-2.5 text-sm font-semibold text-danger hover:bg-danger-soft"
       }
       type="submit"
       onClick={(event) => {
@@ -30,9 +32,7 @@ export function DeleteScanButton() {
         }
       }}
     >
-      {armed
-        ? "Confirm — delete scan, profile & uploaded files"
-        : "Delete this scan"}
+      {armed ? t("profile.confirmDeleteScan") : t("profile.deleteScan")}
     </button>
   );
 }

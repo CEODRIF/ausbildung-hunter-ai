@@ -382,9 +382,10 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
 
 /** Last 5 application drafts (newest first) joined with their recipients,
  *  campaigns, and sent-message timestamps. All reads are user-scoped. */
-async function loadRecentApplications(
+export async function loadRecentApplications(
   admin: ReturnType<typeof createAdminClient>,
   userId: string,
+  limit = 5,
 ): Promise<RecentApplication[]> {
   const { data: drafts, error } = await admin
     .from("application_drafts")
@@ -393,7 +394,7 @@ async function loadRecentApplications(
     )
     .eq("user_id", userId)
     .order("updated_at", { ascending: false })
-    .limit(5);
+    .limit(limit);
   if (error || !drafts || drafts.length === 0) return [];
 
   const draftIds = drafts.map((draft) => draft.id as string);
