@@ -21,6 +21,14 @@ export type ChatMessage = {
   content: string;
   created_at: string;
 };
+/** Attachment metadata shown on a sent message (server-owned values only —
+ *  no storage paths, no URLs). */
+export type MessageFile = {
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+};
+export type ChatMessageWithFiles = ChatMessage & { files: MessageFile[] };
 export type AIFile = {
   id: string;
   filename: string;
@@ -29,24 +37,119 @@ export type AIFile = {
   storage_path: string;
 };
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
-const ALLOWED_TYPES = new Set([
-  "application/pdf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "text/plain",
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-]);
+
+export type DetectedFileType =
+  | "pdf"
+  | "doc"
+  | "docx"
+  | "txt"
+  | "png"
+  | "jpeg"
+  | "webp";
+
+export const DETECTED_MIME: Record<DetectedFileType, string> = {
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  txt: "text/plain",
+  png: "image/png",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+};
 
 export function storagePath(userId: string, filename: string) {
   return `${userId}/${randomUUID()}-${filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120)}`;
 }
-export function validateAIFile(file: File) {
-  if (file.size <= 0 || file.size > MAX_FILE_SIZE)
+
+/** Content-based type detection (magic bytes). The browser's `File.type`
+ *  is only a hint — it is frequently empty or generic (`.txt`/`.doc`/
+ *  renamed files on many systems), which made valid uploads fail with
+ *  "This file type is not supported". The uploaded bytes are the source
+ *  of truth; the hint is only used to catch contradicting content. */
+export function detectFileType(buffer: Buffer): DetectedFileType | null {
+  if (buffer.length < 4) return null;
+  // %PDF-
+  if (
+    buffer[0] === 0x25 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x44 &&
+    buffer[3] === 0x46
+  )
+    return "pdf";
+  // OLE2 compound document (legacy Word .doc)
+  if (
+    buffer[0] === 0xd0 &&
+    buffer[1] === 0xcf &&
+    buffer[2] === 0x11 &&
+    buffer[3] === 0xe0
+  )
+    return "doc";
+  // ZIP container: .docx when it carries Word parts
+  if (buffer[0] === 0x50 && buffer[1] === 0x4b) {
+    const head = buffer
+      .subarray(0, Math.min(buffer.length, 1024 * 1024))
+      .toString("latin1");
+    return head.includes("word/") || head.includes("[Content_Types].xml")
+      ? "docx"
+      : null;
+  }
+  if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  )
+    return "png";
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff)
+    return "jpeg";
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  )
+    return "webp"; // RIFF....WEBP
+  return looksLikeText(buffer) ? "txt" : null;
+}
+
+function looksLikeText(buffer: Buffer): boolean {
+  const sample = buffer
+    .subarray(0, Math.min(buffer.length, 8192))
+    .toString("utf8");
+  if (!sample.trim()) return false;
+  let suspicious = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const code = sample.charCodeAt(i);
+    if (code === 9 || code === 10 || code === 13 || code === 12) continue;
+    if (code < 32 || code === 0x7f || code === 0xfffd) suspicious++;
+  }
+  return suspicious / sample.length <= 0.01;
+}
+
+/** Validate an upload: size + content-based type. A non-empty browser hint
+ *  that contradicts the content (and is not the generic octet-stream)
+ *  rejects the file. Returns the detected type on success. */
+export function validateAIFile(
+  file: File,
+  buffer: Buffer,
+): DetectedFileType {
+  if (buffer.length <= 0 || buffer.length > MAX_FILE_SIZE)
     throw new Error("Files must be 10 MB or smaller.");
-  if (!ALLOWED_TYPES.has(file.type))
-    throw new Error("This file type is not supported.");
+  const detected = detectFileType(buffer);
+  if (!detected) throw new Error("This file type is not supported.");
+  const hint = (file.type || "").toLowerCase();
+  if (
+    hint &&
+    hint !== "application/octet-stream" &&
+    hint !== DETECTED_MIME[detected]
+  )
+    throw new Error("The file content does not match its file type.");
+  return detected;
 }
 
 async function currentUser() {
@@ -183,17 +286,53 @@ export async function getConversation(conversationId: string) {
     .eq("user_id", user.id)
     .order("created_at");
   if (error) throw new Error("Unable to load messages.");
-  return { conversation, messages: (data ?? []) as ChatMessage[] };
+  const messages = (data ?? []) as ChatMessage[];
+  // Attachments belong to the messages (ai_message_files has no
+  // conversation_id — resolve via the message ids, user-scoped).
+  const ids = messages.map((message) => message.id);
+  const { data: fileRows } = ids.length
+    ? await admin
+        .from("ai_message_files")
+        .select("message_id, filename, mime_type, size_bytes")
+        .in("message_id", ids)
+        .eq("user_id", user.id)
+    : {
+        data: [] as Array<{
+          message_id: string;
+          filename: string;
+          mime_type: string;
+          size_bytes: number;
+        }>,
+      };
+  const byMessage = new Map<string, MessageFile[]>();
+  for (const row of fileRows ?? []) {
+    const list = byMessage.get(row.message_id) ?? [];
+    list.push({
+      filename: row.filename,
+      mime_type: row.mime_type,
+      size_bytes: row.size_bytes,
+    });
+    byMessage.set(row.message_id, list);
+  }
+  const withFiles: ChatMessageWithFiles[] = messages.map((message) => ({
+    ...message,
+    files: byMessage.get(message.id) ?? [],
+  }));
+  return { conversation, messages: withFiles };
 }
 
 export async function uploadAIFile(file: File) {
   const user = await currentUser();
-  validateAIFile(file);
+  // Read the bytes once: they are validated (content sniffing) and the same
+  // buffer is what gets stored — never the client-provided metadata.
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const detected = validateAIFile(file, buffer);
+  const mime = DETECTED_MIME[detected];
   const admin = createAdminClient();
   const path = storagePath(user.id, file.name);
   const { error } = await admin.storage
     .from("ai-files")
-    .upload(path, file, { contentType: file.type, upsert: false });
+    .upload(path, buffer, { contentType: mime, upsert: false });
   if (error) throw new Error("Unable to upload file.");
   const { data, error: metadataError } = await admin
     .from("ai_file_uploads")
@@ -201,8 +340,8 @@ export async function uploadAIFile(file: File) {
       user_id: user.id,
       storage_path: path,
       filename: file.name.slice(0, 255),
-      mime_type: file.type,
-      size_bytes: file.size,
+      mime_type: mime,
+      size_bytes: buffer.length,
     })
     .select("id, filename, mime_type, size_bytes")
     .single<AIFile>();
@@ -277,40 +416,96 @@ export async function prepareChat(
   fileIds: string[],
 ) {
   await assertConversation(userId, conversationId);
-  if (!content.trim() && !fileIds.length)
+  const clean = content.trim();
+  if (!clean && !fileIds.length)
     throw new Error("Enter a message or attach a file.");
   await reserveAIUsage(userId);
   const admin = createAdminClient();
-  const { data: uploadedFiles } = fileIds.length
+  // The client may echo duplicate ids — dedupe before the count check so a
+  // legitimate single attachment is never rejected as "not available".
+  const uniqueIds = [...new Set(fileIds)];
+  const { data: uploadedFiles } = uniqueIds.length
     ? await admin
         .from("ai_file_uploads")
         .select("id, storage_path, filename, mime_type, size_bytes")
-        .in("id", fileIds)
+        .in("id", uniqueIds)
         .eq("user_id", userId)
     : { data: [] as AIFile[] };
-  if ((uploadedFiles ?? []).length !== fileIds.length)
+  if ((uploadedFiles ?? []).length !== uniqueIds.length)
     throw new Error("One or more uploaded files are not available.");
-  const { data: userMessage, error } = await admin
+  const stored = uploadedFiles ?? [];
+
+  // Idempotent retry: a failed generation already persisted the user
+  // message. Re-sending the identical content + attachments must reuse that
+  // row instead of duplicating it (the client's retry button does exactly
+  // this).
+  const { data: lastMessages } = await admin
     .from("ai_messages")
-    .insert({
-      conversation_id: conversationId,
-      user_id: userId,
-      role: "user",
-      content: content.trim() || "Please analyze the attached files.",
-    })
-    .select("id, conversation_id, user_id, role, content, created_at")
-    .single<ChatMessage>();
-  if (error) throw new Error("Unable to save your message.");
-  if (uploadedFiles?.length) {
-    const files = uploadedFiles.map((file) => ({
-      message_id: userMessage.id,
+    .select("id, role, content, created_at")
+    .eq("conversation_id", conversationId)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  const last = lastMessages?.[0];
+  const intendedContent = clean || "Please analyze the attached files.";
+  let userMessage: ChatMessage | null = null;
+  if (
+    last &&
+    last.role === "user" &&
+    last.content === intendedContent
+  ) {
+    const { data: lastFiles } = stored.length
+      ? await admin
+          .from("ai_message_files")
+          .select("storage_path")
+          .eq("message_id", last.id)
+          .eq("user_id", userId)
+      : { data: [] as Array<{ storage_path: string }> };
+    const lastPaths = (lastFiles ?? []).map((f) => f.storage_path).sort();
+    const newPaths = stored.map((f) => f.storage_path).sort();
+    if (
+      lastPaths.length === newPaths.length &&
+      newPaths.every((path) => lastPaths.includes(path))
+    )
+      userMessage = {
+        id: last.id as string,
+        conversation_id: conversationId,
+        user_id: userId,
+        role: "user",
+        content: last.content as string,
+        created_at: (last.created_at as string) ?? new Date().toISOString(),
+      };
+  }
+  if (!userMessage) {
+    const { data, error } = await admin
+      .from("ai_messages")
+      .insert({
+        conversation_id: conversationId,
+        user_id: userId,
+        role: "user",
+        content: intendedContent,
+      })
+      .select("id, conversation_id, user_id, role, content, created_at")
+      .single<ChatMessage>();
+    if (error) throw new Error("Unable to save your message.");
+    userMessage = data;
+  }
+  // Associate only when we created the row (a reused retry row already
+  // carries its associations).
+  if (stored.length && !wasReused(userMessage, last, intendedContent)) {
+    const files = stored.map((file) => ({
+      message_id: userMessage!.id,
       user_id: userId,
       storage_path: file.storage_path,
       filename: file.filename,
       mime_type: file.mime_type,
       size_bytes: file.size_bytes,
     }));
-    await admin.from("ai_message_files").insert(files);
+    const { error: filesError } = await admin.from("ai_message_files").insert(files);
+    // Never silently drop the association — that is what made attachments
+    // "sent but invisible to the AI" (the old code ignored this error).
+    if (filesError)
+      throw new Error("Unable to attach the selected files.");
   }
   await admin
     .from("ai_conversations")
@@ -318,6 +513,19 @@ export async function prepareChat(
     .eq("id", conversationId)
     .eq("user_id", userId);
   return userMessage;
+}
+
+function wasReused(
+  userMessage: ChatMessage,
+  last: { id: string; role: string; content: string } | undefined,
+  intendedContent: string,
+) {
+  return (
+    !!last &&
+    last.role === "user" &&
+    last.content === intendedContent &&
+    last.id === userMessage.id
+  );
 }
 
 export async function getAIContext(userId: string, conversationId: string) {
@@ -331,17 +539,25 @@ export async function getAIContext(userId: string, conversationId: string) {
     .order("created_at")
     .limit(30);
   const messages = (data ?? []) as Array<ChatMessage & { id: string }>;
-  const latestUser = messages
+  // File context: the most recent user message that carries attachments —
+  // walking back so a follow-up question ("Was fehlt in meinem CV?") still
+  // sees the file that was sent a few messages earlier. Bounded to the 5
+  // newest user messages to keep request cost predictable.
+  const userMessages = [...messages]
     .filter((message) => message.role === "user")
-    .at(-1);
+    .reverse()
+    .slice(0, 5);
   let context = "";
-  if (latestUser) {
+  for (const candidate of userMessages) {
     const { data: files } = await admin
       .from("ai_message_files")
       .select("filename, mime_type, storage_path")
-      .eq("message_id", latestUser.id)
+      .eq("message_id", candidate.id)
       .eq("user_id", userId);
-    if (files?.length) context = await buildFileContext(files);
+    if (files?.length) {
+      context = await buildFileContext(files);
+      break;
+    }
   }
   const contextMessage: AIMessage | null = context
     ? {

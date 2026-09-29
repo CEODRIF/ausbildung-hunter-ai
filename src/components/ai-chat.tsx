@@ -5,7 +5,271 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Conversation, ChatMessage } from "@/lib/ai-service";
+import type {
+  ChatMessageWithFiles,
+  Conversation,
+  MessageFile,
+} from "@/lib/ai-service";
+import {
+  AI_CHAT_ACCEPT_ATTR,
+  canSendWith,
+  checkClientFile,
+  composerFileKey,
+  fileBadge,
+  formatFileSize,
+  isImageMime,
+} from "@/lib/ai-chat-files";
+
+/**
+ * AI Assistant — chat workspace.
+ *
+ * Behavior contract (kept from the original implementation, now fixed):
+ * - Server-rendered conversation + messages are synced into client state
+ *   ONLY when the selected conversation changes (fixes stale messages when
+ *   switching/creating conversations).
+ * - Uploads go to /api/ai/files BEFORE sending; the send request carries the
+ *   resulting file ids, and the server validates ownership + content.
+ * - A failed generation leaves a compact inline error with retry; the
+ *   conversation state is never destroyed.
+ * - Streaming renders progressively into a separate state slot so the
+ *   committed history does not re-render on every chunk.
+ */
+
+type DisplayMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: string;
+  files: MessageFile[];
+};
+
+type ComposerFile = {
+  key: string;
+  status: "uploading" | "ready" | "error";
+  filename: string;
+  sizeBytes: number;
+  mimeType: string;
+  previewUrl?: string;
+  id?: string;
+  error?: string;
+};
+
+const QUICK_ACTIONS = [
+  "Analysiere meinen Lebenslauf",
+  "Verbessere meine Bewerbung",
+  "Schreibe ein Anschreiben",
+  "Bereite mich auf ein Vorstellungsgespräch vor",
+  "Finde passende Ausbildung",
+  "Analysiere eine Stellenanzeige",
+];
+
+function Icon({
+  name,
+  size = 18,
+  className = "",
+}: {
+  name:
+    | "menu"
+    | "plus"
+    | "paperclip"
+    | "arrowUp"
+    | "stop"
+    | "x"
+    | "spark"
+    | "file"
+    | "image"
+    | "alert"
+    | "arrowLeft"
+    | "activity";
+  size?: number;
+  className?: string;
+}) {
+  const common = {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+    className,
+  };
+  const paths = {
+    menu: <path d="M4 7h16M4 12h16M4 17h16" />,
+    plus: <path d="M12 5v14M5 12h14" />,
+    paperclip: (
+      <path d="M21 12.5l-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.4-8.4a3.7 3.7 0 0 1 5.2 5.2l-8.2 8.2a1.8 1.8 0 0 1-2.6-2.6l7.5-7.5" />
+    ),
+    arrowUp: <path d="M12 19V5M5 12l7-7 7 7" />,
+    stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
+    x: <path d="M6 6l12 12M18 6L6 18" />,
+    spark: (
+      <path d="m12 3 1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6L12 3ZM19 16l.7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z" />
+    ),
+    file: (
+      <>
+        <path d="M6 3.5h8l4 4V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z" />
+        <path d="M14 3.5V8h4M8.5 12h7M8.5 16h5" />
+      </>
+    ),
+    image: (
+      <>
+        <rect x="4" y="5" width="16" height="14" rx="2" />
+        <circle cx="9" cy="10" r="1.4" />
+        <path d="M20 15.5l-4.2-4.2L7 20" />
+      </>
+    ),
+    alert: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7.5V13M12 16.5h.01" />
+      </>
+    ),
+    arrowLeft: <path d="M19 12H5M11 6l-6 6 6 6" />,
+    activity: <path d="M3 12h4l2-7 4 14 2-7h6" />,
+  };
+  return <svg {...common}>{paths[name]}</svg>;
+}
+
+function formatTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString("de-DE", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function formatDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === now.toDateString()) return "Heute";
+  if (date.toDateString() === yesterday.toDateString()) return "Gestern";
+  return date.toLocaleDateString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  });
+}
+
+function ThinkingDots() {
+  return (
+    <span
+      className="inline-flex items-center gap-1 py-2"
+      role="status"
+      aria-label="Die KI denkt nach"
+    >
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2f6fed]/55 [animation-delay:0ms]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2f6fed]/55 [animation-delay:150ms]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2f6fed]/55 [animation-delay:300ms]" />
+    </span>
+  );
+}
+
+/** Markdown rendering for assistant messages — clean, compact, consistent
+ *  with the app's design tokens. */
+function Markdown({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => (
+          <p className="mb-3 leading-7 last:mb-0">{children}</p>
+        ),
+        h1: ({ children }) => (
+          <h1 className="mb-2.5 mt-4 text-lg font-bold tracking-[-0.02em] first:mt-0">
+            {children}
+          </h1>
+        ),
+        h2: ({ children }) => (
+          <h2 className="mb-2.5 mt-4 text-base font-bold first:mt-0">
+            {children}
+          </h2>
+        ),
+        h3: ({ children }) => (
+          <h3 className="mb-2 mt-3 text-sm font-bold first:mt-0">
+            {children}
+          </h3>
+        ),
+        ul: ({ children }) => (
+          <ul className="mb-3 list-disc space-y-1 pl-5 last:mb-0">
+            {children}
+          </ul>
+        ),
+        ol: ({ children }) => (
+          <ol className="mb-3 list-decimal space-y-1 pl-5 last:mb-0">
+            {children}
+          </ol>
+        ),
+        li: ({ children }) => <li className="leading-7">{children}</li>,
+        a: ({ children, href }) => (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="break-words text-[#2f6fed] underline underline-offset-2"
+          >
+            {children}
+          </a>
+        ),
+        blockquote: ({ children }) => (
+          <blockquote className="mb-3 border-l-2 border-[#c9d6ea] pl-3 text-[#5c6f8a] last:mb-0">
+            {children}
+          </blockquote>
+        ),
+        pre: ({ children }) => (
+          <pre className="mb-3 overflow-x-auto rounded-xl bg-[#10203b] p-3.5 text-xs leading-6 text-[#dbe6f5] last:mb-0">
+            {children}
+          </pre>
+        ),
+        code: ({ className, children }) =>
+          className ? (
+            <code className={className}>{children}</code>
+          ) : (
+            <code className="rounded-md bg-[#eef2f8] px-1.5 py-0.5 text-[13px] font-semibold text-[#b3452f]">
+              {children}
+            </code>
+          ),
+        table: ({ children }) => (
+          <div className="mb-3 overflow-x-auto last:mb-0">
+            <table className="w-full text-left text-[13px]">{children}</table>
+          </div>
+        ),
+        th: ({ children }) => (
+          <th className="border-b border-[#dfe6f0] px-2.5 py-1.5 font-bold text-[#1d3458]">
+            {children}
+          </th>
+        ),
+        td: ({ children }) => (
+          <td className="border-b border-[#eef1f6] px-2.5 py-1.5 align-top">
+            {children}
+          </td>
+        ),
+        hr: () => <hr className="my-4 border-[#e5ebf3]" />,
+        img: ({ src, alt }) => (
+          // Markdown may reference arbitrary (external) URLs — next/image
+          // would require a remote-domain allowlist, so a plain img is
+          // the correct control here (content is AI-generated text).
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={alt ?? ""}
+            className="my-2 max-w-full rounded-xl"
+          />
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
 
 export function AIChat({
   conversations: initialConversations,
@@ -14,49 +278,300 @@ export function AIChat({
 }: {
   conversations: Conversation[];
   selectedConversation: Conversation;
-  initialMessages: ChatMessage[];
+  initialMessages: ChatMessageWithFiles[];
 }) {
-  const [conversations, setConversations] = useState(initialConversations);
-  const [messages, setMessages] = useState(initialMessages);
-  const [input, setInput] = useState("");
-  const [files, setFiles] = useState<
-    Array<{
-      id: string;
-      filename: string;
-      mimeType: string;
-      sizeBytes: number;
-    }>
-  >([]);
-  const [streaming, setStreaming] = useState(false);
   const router = useRouter();
-  const [error, setError] = useState("");
+  const [conversations, setConversations] = useState(initialConversations);
+  const [messages, setMessages] = useState<DisplayMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [composerFiles, setComposerFiles] = useState<ComposerFile[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const [streamContent, setStreamContent] = useState("");
+  const [pendingAssistant, setPendingAssistant] = useState(false);
+  const [failedSend, setFailedSend] = useState<{
+    message: string;
+    content: string;
+    fileIds: string[];
+  } | null>(null);
+  const [notice, setNotice] = useState("");
   const [drawer, setDrawer] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
+
+  // Conversation switch (or first mount): reset the conversation-bound
+  // client state when the selected conversation changes — React's
+  // "adjusting state when props change" pattern (synchronous, during
+  // render; no effect cascade). Composer text and attachments are
+  // intentionally NOT reset: they follow the user, not the conversation.
+  const [syncedConversationId, setSyncedConversationId] = useState<string | null>(
+    null,
+  );
+  if (syncedConversationId !== selectedConversation.id) {
+    setSyncedConversationId(selectedConversation.id);
+    setConversations(initialConversations);
+    setMessages(
+      initialMessages.map((message) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        created_at: message.created_at,
+        files: message.files ?? [],
+      })),
+    );
+    setStreamContent("");
+    setPendingAssistant(false);
+    setFailedSend(null);
+    setNotice("");
+    setStreaming(false);
+  }
+  // Abort the previous conversation's in-flight stream (network side
+  // effect — cannot happen during render). Its partial answer is
+  // persisted server-side via the stream's flush.
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+  }, [selectedConversation.id]);
+
+  // Auto-scroll while the user is at the bottom; never fight scrollback.
+  const onScrollArea = (event: React.UIEvent<HTMLDivElement>) => {
+    const el = event.currentTarget;
+    stickRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
+  useEffect(() => {
+    if (stickRef.current && scrollRef.current)
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, streamContent]);
+
+  // Textarea auto-grow (1 → 6 lines).
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 192)}px`;
+  }, [input]);
+
+  const revokePreviews = (items: ComposerFile[]) => {
+    for (const item of items)
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+  };
+  const clearComposerFiles = (items: ComposerFile[]) => {
+    revokePreviews(items);
+    setComposerFiles([]);
+  };
+
+  const uploadOne = async (file: File, key: string) => {
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      const response = await fetch("/api/ai/files", {
+        method: "POST",
+        body: form,
+      });
+      const result = (await response.json().catch(() => ({}))) as {
+        id?: string;
+        filename?: string;
+        mime_type?: string;
+        size_bytes?: number;
+        error?: string;
+      };
+      if (!response.ok) {
+        const message =
+          response.status === 401
+            ? "Sitzung abgelaufen – bitte erneut anmelden."
+            : response.status === 429
+              ? "Zu viele Anfragen – bitte kurz warten und erneut versuchen."
+              : result.error || "Upload fehlgeschlagen.";
+        setComposerFiles((items) =>
+          items.map((it) =>
+            it.key === key ? { ...it, status: "error", error: message } : it,
+          ),
+        );
+        return;
+      }
+      setComposerFiles((items) =>
+        items.map((it) =>
+          it.key === key
+            ? {
+                ...it,
+                status: "ready",
+                id: result.id,
+                filename: result.filename ?? it.filename,
+                mimeType: result.mime_type ?? it.mimeType,
+                sizeBytes: result.size_bytes ?? it.sizeBytes,
+              }
+            : it,
+        ),
+      );
+    } catch {
+      setComposerFiles((items) =>
+        items.map((it) =>
+          it.key === key
+            ? { ...it, status: "error", error: "Netzwerkfehler – bitte erneut versuchen." }
+            : it,
+        ),
+      );
+    }
+  };
+
+  const addFiles = (incoming: File[]) => {
+    const seen = new Set(
+      composerFiles.map((it) => composerFileKey(it.filename, it.sizeBytes)),
+    );
+    const rejected: string[] = [];
+    const fresh: ComposerFile[] = [];
+    const freshFiles: File[] = [];
+    for (const file of incoming) {
+      const check = checkClientFile(file);
+      if (!check.ok) {
+        rejected.push(check.reason);
+        continue;
+      }
+      const dedupeKey = composerFileKey(file.name, file.size);
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      fresh.push({
+        key: crypto.randomUUID(),
+        status: "uploading",
+        filename: file.name,
+        sizeBytes: file.size,
+        mimeType: file.type,
+        previewUrl: isImageMime(file.type) ? URL.createObjectURL(file) : undefined,
+      });
+      freshFiles.push(file);
+    }
+    if (rejected.length) setNotice(rejected[0]);
+    if (!fresh.length) return;
+    setComposerFiles((items) => [...items, ...fresh]);
+    fresh.forEach((entry, index) => void uploadOne(freshFiles[index], entry.key));
+  };
+
+  const removeComposerFile = (key: string) => {
+    setComposerFiles((items) => {
+      const target = items.find((it) => it.key === key);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return items.filter((it) => it.key !== key);
     });
-  }, [messages]);
-  const quickActions = [
-    "Analyze my CV",
-    "Improve my Bewerbung",
-    "Write an Anschreiben",
-    "Translate my application into German",
-    "Prepare me for an interview",
-    "Analyze a job advertisement",
-  ];
-  const selectConversation = (id: string) =>
-    router.push(`/ai?conversation=${id}`);
+  };
+
+  const runChat = async (content: string, fileIds: string[]) => {
+    setStreaming(true);
+    setFailedSend(null);
+    setStreamContent("");
+    setPendingAssistant(true);
+    abortRef.current = new AbortController();
+    try {
+      const response = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          conversationId: selectedConversation.id,
+          content,
+          fileIds,
+        }),
+        signal: abortRef.current.signal,
+      });
+      if (!response.ok || !response.body) {
+        const result = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(result.error || "Die KI-Anfrage ist fehlgeschlagen.");
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let complete = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        complete += decoder.decode(value, { stream: true });
+        setStreamContent(complete);
+      }
+      setMessages((items) => [
+        ...items,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: complete,
+          created_at: new Date().toISOString(),
+          files: [],
+        },
+      ]);
+      setPendingAssistant(false);
+      setStreamContent("");
+    } catch (error) {
+      setPendingAssistant(false);
+      setStreamContent("");
+      if ((error as Error).name === "AbortError") return; // stopped: partial answer is persisted server-side
+      setFailedSend({
+        message:
+          error instanceof Error
+            ? error.message
+            : "Die KI-Anfrage ist fehlgeschlagen.",
+        content,
+        fileIds,
+      });
+    } finally {
+      setStreaming(false);
+      abortRef.current = null;
+    }
+  };
+
+  const send = () => {
+    const content = input.trim();
+    const readyFiles = composerFiles.filter(
+      (file) => file.status === "ready" && file.id,
+    );
+    const uploading = composerFiles.some((file) => file.status === "uploading");
+    if (!canSendWith(!!content, readyFiles.length, uploading, streaming)) return;
+    const files: MessageFile[] = readyFiles.map((file) => ({
+      filename: file.filename,
+      mime_type: file.mimeType,
+      size_bytes: file.sizeBytes,
+    }));
+    const sentContent =
+      content || "Bitte analysiere die angehängte(n) Datei(en).";
+    setMessages((items) => [
+      ...items,
+      {
+        id: `local-${Date.now()}`,
+        role: "user",
+        content: sentContent,
+        created_at: new Date().toISOString(),
+        files,
+      },
+    ]);
+    setInput("");
+    setNotice("");
+    clearComposerFiles(composerFiles);
+    void runChat(sentContent, readyFiles.map((file) => file.id as string));
+  };
+
+  const retry = () => {
+    if (!failedSend || streaming) return;
+    const { content, fileIds } = failedSend;
+    setFailedSend(null);
+    void runChat(content, fileIds);
+  };
+
+  const selectConversation = (id: string) => {
+    setDrawer(false);
+    if (id !== selectedConversation.id)
+      router.push(`/ai?conversation=${id}`);
+  };
   const createNew = async () => {
+    setDrawer(false);
     const response = await fetch("/api/ai/conversations", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
     });
-    const conversation = await response.json();
+    const conversation = (await response.json()) as Conversation;
     if (response.ok) {
       setConversations((items) => [conversation, ...items]);
       router.push(`/ai?conversation=${conversation.id}`);
@@ -73,186 +588,170 @@ export function AIChat({
       if (id === selectedConversation.id) router.push("/ai");
     }
   };
-  const upload = async (file: File) => {
-    const form = new FormData();
-    form.set("file", file);
-    const response = await fetch("/api/ai/files", {
-      method: "POST",
-      body: form,
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Upload failed.");
-    setFiles((items) => [...items, result]);
-  };
-  const send = async () => {
-    if ((!input.trim() && !files.length) || streaming) return;
-    setError("");
-    setStreaming(true);
-    const userContent = input.trim() || "Please analyze the attached file(s).";
-    setMessages((items) => [
-      ...items,
-      {
-        id: `local-${Date.now()}`,
-        conversation_id: selectedConversation.id,
-        user_id: "",
-        role: "user",
-        content: userContent,
-        created_at: new Date().toISOString(),
-      },
-    ]);
-    setInput("");
-    const assistantId = `assistant-${Date.now()}`;
-    setMessages((items) => [
-      ...items,
-      {
-        id: assistantId,
-        conversation_id: selectedConversation.id,
-        user_id: "",
-        role: "assistant",
-        content: "",
-        created_at: new Date().toISOString(),
-      },
-    ]);
-    abortRef.current = new AbortController();
-    try {
-      const response = await fetch("/api/ai/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          conversationId: selectedConversation.id,
-          content: userContent,
-          fileIds: files.map((file) => file.id),
-        }),
-        signal: abortRef.current.signal,
-      });
-      if (!response.ok || !response.body) {
-        const result = await response.json().catch(() => ({}));
-        throw new Error(result.error || "AI request failed.");
-      }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let complete = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        complete += decoder.decode(value, { stream: true });
-        setMessages((items) =>
-          items.map((message) =>
-            message.id === assistantId
-              ? { ...message, content: complete }
-              : message,
-          ),
-        );
-      }
-      setFiles([]);
-    } catch (sendError) {
-      if ((sendError as Error).name !== "AbortError")
-        setError(
-          sendError instanceof Error ? sendError.message : "AI request failed.",
-        );
-    } finally {
-      setStreaming(false);
-      abortRef.current = null;
-    }
-  };
-  return (
-    <div className="flex min-h-[calc(100vh-72px)] bg-[#f6f8fb]">
-      <aside
-        className={`${drawer ? "translate-x-0" : "-translate-x-full"} fixed inset-y-0 left-0 z-40 w-72 border-r border-[#e5ebf3] bg-white p-5 transition-transform lg:static lg:translate-x-0`}
-      >
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold text-[#1d3458]">Conversations</h2>
-          <button
-            className="text-xl text-[#8290a4] lg:hidden"
-            onClick={() => setDrawer(false)}
-          >
-            ×
-          </button>
-        </div>
-        <button
-          onClick={() => void createNew()}
-          className="mt-5 flex h-10 w-full items-center justify-center rounded-xl bg-[#2f6fed] text-xs font-bold text-white"
+
+  const readyCount = composerFiles.filter(
+    (file) => file.status === "ready",
+  ).length;
+  const uploading = composerFiles.some((file) => file.status === "uploading");
+
+  const sidebar = (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between">
+        <Link
+          href="/"
+          className="flex items-center gap-2.5"
+          aria-label="Ausbildung Hunter AI – Startseite"
         >
-          ＋ New conversation
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#2f6fed] text-white shadow-[0_6px_14px_rgba(47,111,237,0.25)]">
+            <span className="text-lg font-bold">A</span>
+          </span>
+          <span className="text-sm font-bold tracking-[-0.02em] text-[#10203b]">
+            Ausbildung Hunter <span className="text-[#2f6fed]">AI</span>
+          </span>
+        </Link>
+        <button
+          className="rounded-lg p-1.5 text-[#7d8da5] hover:bg-[#f2f5f9] lg:hidden"
+          onClick={() => setDrawer(false)}
+          aria-label="Schließen"
+        >
+          <Icon name="x" size={16} />
         </button>
-        <div className="mt-5 space-y-1">
-          {conversations.map((conversation) => (
-            <button
+      </div>
+      <button
+        onClick={() => void createNew()}
+        className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#2f6fed] text-xs font-bold text-white shadow-[0_6px_14px_rgba(47,111,237,0.25)] transition hover:bg-[#255dcc]"
+      >
+        <Icon name="plus" size={15} />
+        Neue Unterhaltung
+      </button>
+      <nav
+        className="mt-5 flex-1 space-y-0.5 overflow-y-auto pb-2"
+        aria-label="Unterhaltungen"
+      >
+        {conversations.length === 0 && (
+          <p className="px-3 py-2 text-xs text-[#a0adbd]">
+            Noch keine Unterhaltungen.
+          </p>
+        )}
+        {conversations.map((conversation) => {
+          const active = conversation.id === selectedConversation.id;
+          return (
+            <div
               key={conversation.id}
-              onClick={() => selectConversation(conversation.id)}
-              className={`flex w-full items-center rounded-xl px-3 py-3 text-left text-xs font-semibold ${conversation.id === selectedConversation.id ? "bg-[#edf3ff] text-[#2f6fed]" : "text-[#6d7d96] hover:bg-[#f6f8fb]"}`}
+              className={`group relative flex items-center rounded-xl ${active ? "bg-[#edf3ff]" : "hover:bg-[#f5f7fa]"}`}
             >
-              <span className="min-w-0 flex-1 truncate">
-                {conversation.title}
-              </span>
-              <span
-                role="button"
-                tabIndex={0}
-                aria-label={`Delete ${conversation.title}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void removeConversation(conversation.id);
-                }}
-                className="ml-2 text-[#a0adbd] hover:text-[#d9535d]"
+              <button
+                onClick={() => selectConversation(conversation.id)}
+                className="min-w-0 flex-1 px-3 py-2.5 pr-8 text-left"
               >
-                ×
-              </span>
-            </button>
-          ))}
-        </div>
+                <span
+                  className={`block truncate text-xs font-semibold ${active ? "text-[#2f6fed]" : "text-[#4a5c77] group-hover:text-[#1d3458]"}`}
+                >
+                  {conversation.title || "Neue Unterhaltung"}
+                </span>
+                <span className="block text-[10px] text-[#a0adbd]">
+                  {formatDate(conversation.updated_at)}
+                </span>
+              </button>
+              <button
+                aria-label={`Unterhaltung „${conversation.title}“ löschen`}
+                onClick={() => void removeConversation(conversation.id)}
+                className="absolute right-2 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[#a0adbd] transition hover:bg-white hover:text-[#c4454f] group-hover:flex"
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          );
+        })}
+      </nav>
+      <div className="mt-auto space-y-0.5 border-t border-[#edf0f4] pt-4">
         <Link
           href="/dashboard"
-          className="absolute bottom-5 left-5 text-xs font-semibold text-[#8290a4]"
+          className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-xs font-semibold text-[#6d7d96] transition hover:bg-[#f5f7fa] hover:text-[#1d3458]"
         >
-          ← Dashboard
+          <Icon name="arrowLeft" size={14} />
+          Dashboard
         </Link>
+        <Link
+          href="/settings/usage"
+          className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-xs font-semibold text-[#6d7d96] transition hover:bg-[#f5f7fa] hover:text-[#1d3458]"
+        >
+          <Icon name="activity" size={14} />
+          KI-Nutzung
+        </Link>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-dvh overflow-hidden bg-[#f6f8fb]">
+      {drawer && (
+        <button
+          className="fixed inset-0 z-30 bg-[#10203b]/35 lg:hidden"
+          aria-label="Unterhaltungen schließen"
+          onClick={() => setDrawer(false)}
+        />
+      )}
+      <aside
+        className={`${drawer ? "translate-x-0" : "-translate-x-full"} fixed inset-y-0 left-0 z-40 w-[280px] border-r border-[#e5ebf3] bg-white p-4 transition-transform duration-200 lg:static lg:z-auto lg:w-72 lg:shrink-0 lg:translate-x-0 lg:p-5`}
+      >
+        {sidebar}
       </aside>
+
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center justify-between border-b border-[#e5ebf3] bg-white px-5 sm:px-8">
-          <div className="flex items-center gap-3">
+        <header className="flex h-14 shrink-0 items-center justify-between border-b border-[#e5ebf3] bg-white/85 px-4 backdrop-blur-md sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
             <button
-              className="rounded-lg border border-[#dfe6f0] px-2 py-1 text-[#546783] lg:hidden"
+              className="rounded-lg border border-[#dfe6f0] p-2 text-[#546783] hover:bg-[#f5f7fa] lg:hidden"
               onClick={() => setDrawer(true)}
+              aria-label="Unterhaltungen öffnen"
             >
-              ☰
+              <Icon name="menu" size={16} />
             </button>
-            <div>
-              <h1 className="text-sm font-bold text-[#1d3458]">AI Assistant</h1>
-              <p className="text-[11px] text-[#8b9ab0]">
-                Your career-document workspace
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-bold text-[#10203b]">
+                AI Assistant
+              </h1>
+              <p className="hidden truncate text-[11px] text-[#8b9ab0] sm:block">
+                Dein Karriere-Assistent für Ausbildung &amp; Bewerbung
               </p>
             </div>
           </div>
           <Link
             href="/settings/usage"
-            className="text-xs font-semibold text-[#2f6fed]"
+            className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-[#2f6fed] hover:bg-[#edf3ff]"
           >
-            Usage
+            Nutzung
           </Link>
         </header>
+
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto px-5 py-8 sm:px-8"
+          onScroll={onScrollArea}
+          className="flex-1 overflow-y-auto overscroll-contain"
         >
-          <div className="mx-auto max-w-3xl">
-            {messages.length === 0 ? (
-              <div className="py-12 text-center">
-                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#edf3ff] text-xl font-bold text-[#2f6fed]">
-                  AI
+          <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6">
+            {messages.length === 0 && !pendingAssistant ? (
+              <div className="flex min-h-[calc(100dvh-240px)] flex-col items-center justify-center pb-10 text-center">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#edf3ff] shadow-[0_10px_30px_rgba(47,111,237,0.16)]">
+                  <Icon name="spark" size={30} className="text-[#2f6fed]" />
                 </div>
-                <h2 className="mt-6 text-2xl font-bold tracking-[-0.04em] text-[#10203b]">
-                  How can I help with your next chapter?
+                <h2 className="mt-6 text-2xl font-bold tracking-[-0.03em] text-[#10203b]">
+                  Dein persönlicher KI-Assistent
                 </h2>
-                <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[#71819a]">
-                  Ask about your Bewerbungen, CV, Anschreiben, interviews, or
-                  uploaded career documents.
+                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#71819a]">
+                  Für Ausbildung, Bewerbungen und Karriere – inklusive deines
+                  Lebenslaufs und deiner Bewerbungs-Dokumente.
                 </p>
-                <div className="mt-8 grid gap-2 sm:grid-cols-2">
-                  {quickActions.map((action) => (
+                <div className="mt-8 flex max-w-xl flex-wrap justify-center gap-2">
+                  {QUICK_ACTIONS.map((action) => (
                     <button
                       key={action}
-                      onClick={() => setInput(action)}
-                      className="rounded-xl border border-[#e2e8f1] bg-white px-4 py-3 text-left text-xs font-semibold text-[#546783] hover:border-[#b9c9e2] hover:bg-[#f8faff]"
+                      onClick={() => {
+                        setInput(action);
+                        taRef.current?.focus();
+                      }}
+                      className="rounded-full border border-[#e2e8f1] bg-white px-4 py-2 text-xs font-semibold text-[#546783] shadow-sm transition hover:border-[#b9c9e2] hover:bg-[#f8faff] hover:text-[#2f6fed]"
                     >
                       {action}
                     </button>
@@ -260,119 +759,262 @@ export function AIChat({
                 </div>
               </div>
             ) : (
-              <div className="space-y-6">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-                  >
-                    <div
-                      className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "user" ? "bg-[#2f6fed] text-white" : "border border-[#e7ecf3] bg-white text-[#1d3458]"}`}
-                    >
-                      {message.role === "assistant" && !message.content ? (
-                        <span className="text-[#8290a4]">
-                          AI is thinking...
-                        </span>
-                      ) : message.role === "assistant" ? (
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {message.content}
-                        </ReactMarkdown>
+              <div className="space-y-6 pb-2">
+                {messages.map((message) =>
+                  message.role === "user" ? (
+                    <div key={message.id} className="flex flex-col items-end">
+                      {message.files.length > 0 && (
+                        <div className="mb-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
+                          {message.files.map((file, index) => (
+                            <span
+                              key={`${file.filename}-${index}`}
+                              className="flex items-center gap-1.5 rounded-lg border border-[#d7e0ee] bg-white py-1 pl-1.5 pr-2 shadow-sm"
+                            >
+                              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#edf3ff] text-[#2f6fed]">
+                                <Icon
+                                  name={isImageMime(file.mime_type) ? "image" : "file"}
+                                  size={12}
+                                />
+                              </span>
+                              <span className="max-w-[160px] truncate text-[11px] font-semibold text-[#1d3458]">
+                                {file.filename}
+                              </span>
+                              <span className="text-[10px] text-[#8b9ab0]">
+                                {formatFileSize(file.size_bytes)}
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[#2f6fed] px-4 py-2.5 text-sm leading-6 text-white shadow-[0_4px_12px_rgba(47,111,237,0.18)]">
+                        {message.content}
+                      </div>
+                      <span className="mt-1 pr-1 text-[10px] text-[#a0adbd]">
+                        {formatTime(message.created_at)}
+                      </span>
+                    </div>
+                  ) : (
+                    <div key={message.id} className="flex gap-2.5">
+                      <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#edf3ff] text-[#2f6fed]">
+                        <Icon name="spark" size={14} />
+                      </span>
+                      <div className="min-w-0 max-w-[88%] flex-1">
+                        <div className="mb-1 flex items-baseline gap-2">
+                          <span className="text-[11px] font-bold text-[#1d3458]">
+                            Ausbildung Hunter AI
+                          </span>
+                          <span className="text-[10px] text-[#a0adbd]">
+                            {formatTime(message.created_at)}
+                          </span>
+                        </div>
+                        {message.content ? (
+                          <div className="text-sm text-[#22375a]">
+                            <Markdown content={message.content} />
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ),
+                )}
+                {pendingAssistant && (
+                  <div className="flex gap-2.5">
+                    <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#edf3ff] text-[#2f6fed]">
+                      <Icon name="spark" size={14} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-1 text-[11px] font-bold text-[#1d3458]">
+                        Ausbildung Hunter AI
+                      </div>
+                      {streamContent ? (
+                        <div className="text-sm text-[#22375a]">
+                          <Markdown content={streamContent} />
+                        </div>
                       ) : (
-                        message.content
+                        <ThinkingDots />
                       )}
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
-            {error && (
-              <div className="mt-5 rounded-xl border border-[#f5d7da] bg-[#fff8f8] px-4 py-3 text-sm text-[#a3404b]">
-                {error}
+                )}
+                {failedSend && (
+                  <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#f3c8cd] bg-[#fdf3f4] px-4 py-3">
+                    <Icon name="alert" size={17} className="shrink-0 text-[#c4454f]" />
+                    <span className="min-w-[180px] flex-1 text-sm leading-5 text-[#9d3a44]">
+                      {failedSend.message}
+                    </span>
+                    <button
+                      onClick={retry}
+                      className="rounded-lg border border-[#e5b8bd] bg-white px-3 py-1.5 text-xs font-bold text-[#9d3a44] transition hover:bg-[#fff7f8]"
+                    >
+                      Nochmal versuchen
+                    </button>
+                    <button
+                      onClick={() => setFailedSend(null)}
+                      aria-label="Fehler schließen"
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-[#c4454f] hover:bg-white/70"
+                    >
+                      <Icon name="x" size={12} />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
         </div>
-        <div className="border-t border-[#e5ebf3] bg-white px-5 py-4 sm:px-8">
-          <div className="mx-auto max-w-3xl">
-            <div className="mb-3 flex flex-wrap gap-2">
-              {files.map((file) => (
-                <span
-                  key={file.id}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#edf3ff] px-2.5 py-1.5 text-xs font-semibold text-[#2f6fed]"
+
+        <div className="shrink-0 border-t border-[#e5ebf3] bg-white px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-6">
+          <div className="mx-auto w-full max-w-3xl">
+            {notice && (
+              <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-[#f3c8cd] bg-[#fdf3f4] px-3 py-2 text-xs text-[#9d3a44]">
+                <span className="min-w-0 truncate">{notice}</span>
+                <button
+                  onClick={() => setNotice("")}
+                  aria-label="Hinweis schließen"
+                  className="shrink-0 rounded p-0.5 hover:bg-white/70"
                 >
-                  {file.filename}
-                  <button
-                    onClick={async () => {
-                      await fetch("/api/ai/files", {
-                        method: "DELETE",
-                        headers: { "content-type": "application/json" },
-                        body: JSON.stringify({ fileId: file.id }),
-                      });
-                      setFiles((items) =>
-                        items.filter((item) => item.id !== file.id),
-                      );
-                    }}
+                  <Icon name="x" size={11} />
+                </button>
+              </div>
+            )}
+            {composerFiles.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {composerFiles.map((file) => (
+                  <span
+                    key={file.key}
+                    className={`flex items-center gap-2 rounded-xl border py-1.5 pl-1.5 pr-2 shadow-sm ${file.status === "error" ? "border-[#f3c8cd] bg-[#fdf3f4]" : "border-[#e2e8f1] bg-white"}`}
                   >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-            <div className="flex items-end gap-2 rounded-2xl border border-[#dfe6f0] bg-[#fbfcfe] p-2 focus-within:border-[#2f6fed] focus-within:ring-4 focus-within:ring-[#2f6fed]/10">
+                    {file.previewUrl && file.status !== "uploading" ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={file.previewUrl}
+                        alt=""
+                        className="h-9 w-9 rounded-lg object-cover"
+                      />
+                    ) : file.status === "uploading" ? (
+                      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#edf3ff]">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#b9c9e2] border-t-[#2f6fed]" />
+                      </span>
+                    ) : (
+                      <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${file.status === "error" ? "bg-[#fde8ea] text-[#c4454f]" : "bg-[#edf3ff] text-[#2f6fed]"}`}>
+                        <Icon
+                          name={isImageMime(file.mimeType) ? "image" : "file"}
+                          size={15}
+                        />
+                      </span>
+                    )}
+                    <span className="min-w-0">
+                      <span className={`block max-w-[150px] truncate text-xs font-semibold ${file.status === "error" ? "text-[#9d3a44]" : "text-[#1d3458]"}`}>
+                        {file.filename}
+                      </span>
+                      <span className="block text-[10px] text-[#8b9ab0]">
+                        {file.status === "uploading"
+                          ? "Wird hochgeladen…"
+                          : file.status === "error"
+                            ? (file.error ?? "Upload fehlgeschlagen")
+                            : `${fileBadge(file.filename)} · ${formatFileSize(file.sizeBytes)}`}
+                      </span>
+                    </span>
+                    <button
+                      aria-label={`Anhang „${file.filename}“ entfernen`}
+                      onClick={() => removeComposerFile(file.key)}
+                      className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#8b9ab0] transition hover:bg-[#f1f5fb] hover:text-[#c4454f]"
+                    >
+                      <Icon name="x" size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node))
+                  setDragOver(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragOver(false);
+                addFiles(Array.from(event.dataTransfer.files ?? []));
+              }}
+              className={`flex items-end gap-1.5 rounded-2xl border bg-white p-2 shadow-sm transition ${dragOver ? "border-[#2f6fed] ring-4 ring-[#2f6fed]/10" : "border-[#dfe6f0] focus-within:border-[#2f6fed] focus-within:ring-4 focus-within:ring-[#2f6fed]/10"}`}
+            >
+              <input
+                ref={fileRef}
+                className="hidden"
+                type="file"
+                multiple
+                accept={AI_CHAT_ACCEPT_ATTR}
+                onChange={(event) => {
+                  addFiles(Array.from(event.target.files ?? []));
+                  event.target.value = "";
+                }}
+              />
               <button
                 type="button"
-                aria-label="Attach files"
+                aria-label="Datei anhängen"
+                title="Datei anhängen"
                 onClick={() => fileRef.current?.click()}
-                className="rounded-xl p-3 text-lg text-[#71819a] hover:bg-[#edf3ff] hover:text-[#2f6fed]"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-[#71819a] transition hover:bg-[#f1f5fb] hover:text-[#2f6fed]"
               >
-                ＋
-                <input
-                  ref={fileRef}
-                  className="hidden"
-                  type="file"
-                  multiple
-                  accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg,.webp"
-                  onChange={async (event) => {
-                    for (const file of Array.from(event.target.files ?? [])) {
-                      try {
-                        await upload(file);
-                      } catch (uploadError) {
-                        setError(
-                          uploadError instanceof Error
-                            ? uploadError.message
-                            : "Upload failed.",
-                        );
-                      }
-                    }
-                    event.target.value = "";
-                  }}
-                />
+                <Icon name="paperclip" size={19} />
               </button>
               <textarea
+                ref={taRef}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
-                    void send();
+                    send();
                   }
                 }}
-                placeholder="Ask about your career documents..."
+                onPaste={(event) => {
+                  const pasted = Array.from(event.clipboardData?.files ?? []);
+                  if (pasted.length) {
+                    event.preventDefault();
+                    addFiles(pasted);
+                  }
+                }}
+                placeholder="Nachricht senden …"
                 rows={1}
-                className="max-h-32 min-h-11 flex-1 resize-none bg-transparent px-2 py-3 text-sm text-[#1d3458] outline-none placeholder:text-[#a0adbd]"
+                aria-label="Nachricht"
+                className="max-h-48 min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-sm leading-6 text-[#1d3458] outline-none placeholder:text-[#a9b6c6]"
               />
-              <button
-                type="button"
-                onClick={() =>
-                  streaming ? abortRef.current?.abort() : void send()
-                }
-                className="rounded-xl bg-[#2f6fed] px-4 py-3 text-xs font-bold text-white hover:bg-[#255dcc] disabled:opacity-50"
-              >
-                {streaming ? "Stop" : "Send"}
-              </button>
+              {streaming ? (
+                <button
+                  type="button"
+                  aria-label="Generierung stoppen"
+                  title="Stoppen"
+                  onClick={() => abortRef.current?.abort()}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#1d3458] text-white transition hover:bg-[#2a436e]"
+                >
+                  <Icon name="stop" size={16} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  aria-label="Senden"
+                  title="Senden (Enter)"
+                  onClick={send}
+                  disabled={
+                    !canSendWith(
+                      !!input.trim(),
+                      readyCount,
+                      uploading,
+                      streaming,
+                    )
+                  }
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2f6fed] text-white shadow-[0_4px_12px_rgba(47,111,237,0.3)] transition hover:bg-[#255dcc] disabled:cursor-not-allowed disabled:bg-[#c5d8f8] disabled:shadow-none"
+                >
+                  <Icon name="arrowUp" size={17} />
+                </button>
+              )}
             </div>
-            <p className="mt-2 text-center text-[10px] text-[#a0adbd]">
-              AI suggestions should be reviewed before use.
+            <p className="mt-2 text-center text-[10px] leading-4 text-[#a9b6c6]">
+              PDF, DOC, DOCX, TXT, JPG, PNG · max. 10 MB pro Datei ·
+              KI-Antworten bitte vor Verwendung prüfen
             </p>
           </div>
         </div>
