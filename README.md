@@ -144,6 +144,7 @@ Run the migrations in order (they are self-contained):
    20261004000000_email_account_lifecycle.sql    # campaigns.email_account_id → nullable + ON DELETE SET NULL (historical campaigns stop locking the sender; Phase 15)
    20261005000000_email_confirmation_activation.sql  # on_auth_user_email_confirmed trigger: activates profile + consumes invitation when the email is confirmed
    20261006000000_harden_confirmation_trigger.sql    # trigger hardened: profile activation / invitation consumption are best-effort and can never abort the confirmation
+   20261007000000_restore_profile_creation_trigger.sql  # restores handle_new_user + on_auth_user_created (AFTER INSERT on auth.users) — additive, exact original contract
 ```
 
 Via the CLI: `npx supabase db push` (or paste into the SQL editor). The migrations create all tables, RLS policies, storage buckets, triggers, and the invitation seeds.
