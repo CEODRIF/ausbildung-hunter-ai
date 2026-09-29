@@ -21,6 +21,8 @@ const PLACEHOLDER_VALUES = new Set([
   "your-project.supabase.co",
   "your-anon-key",
   "your-service-role-key",
+  "your-resend-api-key",
+  "your-verification-sender@example.com",
   "your-google-client-id",
   "your-google-client-secret",
   "your-microsoft-client-id",
@@ -78,6 +80,8 @@ const CHECKS = [
   { name: "NEXT_PUBLIC_SUPABASE_URL", required: true, kind: "httpsUrl" },
   { name: "NEXT_PUBLIC_SUPABASE_ANON_KEY", required: true, kind: "jwt" },
   { name: "SUPABASE_SERVICE_ROLE_KEY", required: true, kind: "jwt" },
+  { name: "RESEND_API_KEY", required: true, kind: "secret" },
+  { name: "RESEND_FROM_EMAIL", required: true, kind: "email" },
   { name: "EMAIL_TOKEN_ENCRYPTION_KEY", required: true, kind: "secret" },
   { name: "EMAIL_WORKER_SECRET", required: true, kind: "secret" },
   { name: "GOOGLE_CLIENT_ID", required: false, kind: "id" },
@@ -119,6 +123,14 @@ const SEAMS = [
         ? "configured"
         : "pending",
     note: "Connecting Gmail/Microsoft needs real OAuth app credentials (client id + secret + redirect URI).",
+  },
+  {
+    name: "verification-email",
+    status: (env) =>
+      isSet(env, "RESEND_API_KEY") && isSet(env, "RESEND_FROM_EMAIL")
+        ? "configured"
+        : "pending",
+    note: "Registration verification codes are delivered via Resend (RESEND_API_KEY + RESEND_FROM_EMAIL).",
   },
   {
     name: "email-worker-poller",
@@ -198,6 +210,12 @@ export function validateEnv(env) {
             if (value.length < 16) {
               status = "warn";
               message = "secret looks short (use a long random value)";
+            }
+            break;
+          case "email":
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+              status = "fail";
+              message = "not a valid email address";
             }
             break;
           case "id":

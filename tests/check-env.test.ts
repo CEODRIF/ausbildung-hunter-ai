@@ -14,6 +14,8 @@ const GOOD_ENV: Record<string, string> = {
   NEXT_PUBLIC_SUPABASE_URL: "https://my-project.supabase.co",
   NEXT_PUBLIC_SUPABASE_ANON_KEY: JWT_A,
   SUPABASE_SERVICE_ROLE_KEY: JWT_B,
+  RESEND_API_KEY: "re_a-very-long-random-resend-api-key-123",
+  RESEND_FROM_EMAIL: "verification@my-domain.com",
   EMAIL_TOKEN_ENCRYPTION_KEY: "a-very-long-random-encryption-secret-123",
   EMAIL_WORKER_SECRET: "a-very-long-random-worker-secret-123",
   ARBEITSAGENTUR_API_KEY: "jobboerse-jobsuche", // documented public default
@@ -52,6 +54,25 @@ describe("validateEnv", () => {
     const result = validateEnv(env);
     expect(result.ok).toBe(false);
     expect(result.errors.join(" ")).toContain("SUPABASE_SERVICE_ROLE_KEY");
+  });
+
+  it("fails when the Resend verification-email credentials are missing", () => {
+    const env = { ...GOOD_ENV };
+    delete env.RESEND_API_KEY;
+    delete env.RESEND_FROM_EMAIL;
+    const result = validateEnv(env);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("RESEND_API_KEY");
+    expect(result.errors.join(" ")).toContain("RESEND_FROM_EMAIL");
+  });
+
+  it("fails on a malformed RESEND_FROM_EMAIL", () => {
+    const result = validateEnv({
+      ...GOOD_ENV,
+      RESEND_FROM_EMAIL: "not-an-email",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("RESEND_FROM_EMAIL");
   });
 
   it("fails when a required key still holds its .env.example placeholder", () => {
@@ -139,6 +160,7 @@ describe("validateEnv", () => {
     );
     expect(byName["ai-assistant"]).toBe("pending");
     expect(byName["email-oauth"]).toBe("pending");
+    expect(byName["verification-email"]).toBe("configured");
     expect(byName["email-worker-poller"]).toBe("configured");
     // The two code-level seams are always pending until configured in code.
     expect(byName["payment-provider"]).toBe("pending");

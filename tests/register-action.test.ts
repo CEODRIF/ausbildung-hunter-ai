@@ -16,6 +16,10 @@ vi.mock("@/lib/auth", () => ({
   consumeInvitationCode: vi.fn(),
   createVerificationCode: vi.fn(),
 }));
+vi.mock("@/lib/verification-email", () => ({
+  sendVerificationCodeEmail: vi.fn(),
+  VerificationEmailError: class VerificationEmailError extends Error {},
+}));
 
 const { register } = await import("@/app/register/actions");
 const { redirect } = await import("next/navigation");
@@ -26,6 +30,8 @@ const {
 } = await import("@/lib/auth");
 const { createAdminClient } = await import("@/lib/supabase/admin");
 const { createClient } = await import("@/lib/supabase/server");
+const { sendVerificationCodeEmail, VerificationEmailError } =
+  await import("@/lib/verification-email");
 
 function makeFormData() {
   const fd = new FormData();
@@ -115,11 +121,12 @@ describe("register() error diagnostics", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("completes the intended flow and redirects to /verify on success", async () => {
+  it("completes the intended flow, sends the code email, and redirects to /verify", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(validateInvitationCode).mockResolvedValue(true);
     vi.mocked(consumeInvitationCode).mockResolvedValue(true);
     vi.mocked(createVerificationCode).mockResolvedValue("123456");
+    vi.mocked(sendVerificationCodeEmail).mockResolvedValue(undefined);
     vi.mocked(createAdminClient).mockReturnValue({
       auth: {
         admin: {
@@ -145,5 +152,43 @@ describe("register() error diagnostics", () => {
     expect(threw).toBe(true);
     expect(redirect).toHaveBeenCalledWith("/verify");
     expect(createVerificationCode).toHaveBeenCalledWith("u1");
+    // The email must carry the exact code returned by create_verification_code()
+    // and go to the registered address.
+    expect(sendVerificationCodeEmail).toHaveBeenCalledWith({
+      email: "jane@example.com",
+      code: "123456",
+    });
+  });
+
+  it("never claims success when the verification email fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(validateInvitationCode).mockResolvedValue(true);
+    vi.mocked(consumeInvitationCode).mockResolvedValue(true);
+    vi.mocked(createVerificationCode).mockResolvedValue("123456");
+    vi.mocked(sendVerificationCodeEmail).mockRejectedValue(
+      new VerificationEmailError("verification_email_send_failed"),
+    );
+    vi.mocked(createAdminClient).mockReturnValue({
+      auth: {
+        admin: {
+          createUser: vi
+            .fn()
+            .mockResolvedValue({ data: { user: { id: "u1" } }, error: null }),
+        },
+      },
+      from: vi.fn(() => ({
+        upsert: vi.fn().mockResolvedValue({ error: null }),
+      })),
+    } as never);
+    vi.mocked(createClient).mockResolvedValue({
+      auth: { signInWithPassword: vi.fn().mockResolvedValue({ error: null }) },
+    } as never);
+
+    const res = await register({} as never, makeFormData());
+
+    expect(res).toEqual({
+      error: "We couldn't send the verification email. Please try again.",
+    });
+    expect(redirect).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,10 @@ import {
 } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import {
+  VerificationEmailError,
+  sendVerificationCodeEmail,
+} from "@/lib/verification-email";
 
 const schema = z.object({
   fullName: z
@@ -117,10 +121,22 @@ export async function register(
     if (signInError)
       return { error: "Your account was created. Please sign in to continue." };
     step = "create_verification_code";
-    await createVerificationCode(created.user.id);
+    const verificationCode = await createVerificationCode(created.user.id);
+    step = "send_verification_email";
+    await sendVerificationCodeEmail({
+      email: parsed.data.email,
+      code: verificationCode,
+    });
   } catch (error) {
     if (error instanceof Error && error.message.includes("already registered"))
       return { error: "An account with this email already exists." };
+    // The verification email was created but not delivered — never claim
+    // success. The user is already signed in and can retry from /verify
+    // ("Request a new code"), which regenerates and re-sends the code.
+    if (error instanceof VerificationEmailError)
+      return {
+        error: "We couldn't send the verification email. Please try again.",
+      };
     // Record the real, non-sensitive error server-side so a production failure
     // is diagnosable, while keeping the user-facing message safe and generic.
     logRegistrationError(step, error);

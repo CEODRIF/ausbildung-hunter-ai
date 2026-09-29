@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { createVerificationCode, verifyCode } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { sendVerificationCodeEmail } from "@/lib/verification-email";
 
 export type VerificationState = { error?: string; success?: string };
 
@@ -45,19 +46,26 @@ export async function requestVerificationCode(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "Your session expired. Please sign in again." };
+  if (!user.email)
+    return {
+      error: "We couldn't determine your email address. Please sign in again.",
+    };
 
   try {
-    await createVerificationCode(user.id);
-    return {
-      success:
-        "A new code is ready. Check your email when email delivery is connected.",
-    };
+    // The RPC returns the fresh 6-digit code; that exact value is what the
+    // email carries (the stored code_hash is never read or decoded).
+    const code = await createVerificationCode(user.id);
+    await sendVerificationCodeEmail({ email: user.email, code });
+    return { success: "A new verification code has been sent to your email." };
   } catch (error) {
     if (
       error instanceof Error &&
       error.message.includes("verification_rate_limited")
     )
       return { error: "Please wait a minute before requesting another code." };
-    return { error: "Unable to create a new code right now." };
+    // sendVerificationCodeEmail already logged the scrubbed error server-side.
+    return {
+      error: "We couldn't send the verification email. Please try again.",
+    };
   }
 }

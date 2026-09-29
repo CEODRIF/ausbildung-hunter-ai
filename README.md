@@ -155,6 +155,8 @@ Create the two private storage buckets if not created by a migration: `applicati
 | `NEXT_PUBLIC_SUPABASE_URL`                        | browser + server | project URL                                                           |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY`                   | browser          | publishable key; RLS is the security boundary                         |
 | `SUPABASE_SERVICE_ROLE_KEY`                       | server only      | bypasses RLS — never send to browser                                  |
+| `RESEND_API_KEY`                                  | server only      | Resend key for the verification-code email (never public)             |
+| `RESEND_FROM_EMAIL`                               | server only      | Resend-verified sender address for the verification email             |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`       | server           | OAuth client with `gmail.send` scope                                  |
 | `GOOGLE_REDIRECT_URI`                             | server           | e.g. `http://localhost:3000/api/email/callback/gmail`                 |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | server           | Graph app with `Mail.Send`                                            |
