@@ -58,7 +58,26 @@ export async function getCurrentUserAndProfile() {
     console.error(
       `[auth] profile lookup failed user="${user.id}" error="${scrub(error.message)}"`,
     );
-  return { user, profile };
+  if (profile) return { user, profile };
+
+  // RLS fallback: the RLS-gated query saw no row. That is either a
+  // genuinely missing profile (trigger not run yet) or a broken access
+  // contract on the profiles table. Re-check the SAME row with the service
+  // role (RLS bypass), strictly scoped to the session user's own id — no
+  // user can influence whose profile is read — so a confirmed user is
+  // never locked out while the schema is being repaired. Using this path
+  // is itself a production defect signal: log it loudly.
+  const admin = createAdminClient();
+  const { data: adminProfile } = await admin
+    .from("profiles")
+    .select("*")
+    .eq("id", user.id)
+    .maybeSingle<Profile>();
+  if (adminProfile)
+    console.error(
+      `[auth] profile visible only to service_role for user="${user.id}" — the profiles RLS policy/grant contract is incomplete in this database; apply migration 20261008000000_restore_profiles_access`,
+    );
+  return { user, profile: adminProfile ?? null };
 }
 
 export async function requireActiveUser() {
