@@ -30,6 +30,15 @@ export function getAuthCallbackUrl(): string | undefined {
   return appUrl ? `${appUrl}${AUTH_CALLBACK_PATH}` : undefined;
 }
 
+function scrub(message: string): string {
+  return message
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+/gi, "Bearer [redacted]")
+    .replace(
+      /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+      "[redacted-jwt]",
+    );
+}
+
 export async function getCurrentUserAndProfile() {
   const supabase = await createClient();
   const {
@@ -37,11 +46,18 @@ export async function getCurrentUserAndProfile() {
   } = await supabase.auth.getUser();
   if (!user) return { user: null, profile: null };
 
-  const { data: profile } = await supabase
+  const { data: profile, error } = await supabase
     .from("profiles")
     .select("*")
     .eq("id", user.id)
     .maybeSingle<Profile>();
+  if (error)
+    // A valid session plus a failed/empty profile lookup is exactly how a
+    // broken profiles access contract (missing RLS policy/grant) presents
+    // itself in production — keep it diagnosable without leaking secrets.
+    console.error(
+      `[auth] profile lookup failed user="${user.id}" error="${scrub(error.message)}"`,
+    );
   return { user, profile };
 }
 

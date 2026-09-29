@@ -8,9 +8,16 @@ export default async function OnboardingLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user) redirect("/login");
-  if (!profile || profile.account_status === "pending") redirect("/verify");
-  if (profile.account_status === "suspended")
+  // /verify is reserved for users who have NOT confirmed their email (the
+  // Supabase confirmation-link flow). A confirmed user must never bounce
+  // back to /verify.
+  if (!user.email_confirmed_at) redirect("/verify");
+  if (profile?.account_status === "suspended")
     redirect("/login?error=suspended");
+  // Confirmed but the profile row is missing or still pending: safe fallback
+  // (the on_auth_user_email_confirmed trigger activates the profile; a
+  // confirmed user in this state has inconsistent account data).
+  if (!profile || profile.account_status === "pending") redirect("/verify");
   if (profile.selected_goal) redirect("/dashboard");
   return children;
 }
