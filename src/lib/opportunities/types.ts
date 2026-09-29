@@ -14,8 +14,11 @@ import { matchResultSchema } from "./matching/types";
  * blob to the explainable `MatchResult` (status/score/dimensions). Match
  * data is still computed AFTER the cache read and never cached; the bump
  * only discards v3 payloads.
+ * v5 (AI Search): added `application_deadline` (details-only; parsed from
+ * the source's published description text with a strict pattern — never
+ * guessed). The bump discards v4 cache payloads, which lack the field.
  */
-export const OPPORTUNITY_SCHEMA_VERSION = 4;
+export const OPPORTUNITY_SCHEMA_VERSION = 5;
 
 /**
  * The BA source only exposes its first ~10,000 listings per query (verified:
@@ -397,6 +400,16 @@ export const opportunityLocationDetailSchema = z.object({
   postal_code: z.string().max(16).nullable(),
 });
 
+export const opportunitySourceTypeSchema = z.enum([
+  "job_portal",
+  "company_website",
+  "search_engine",
+  "social_media",
+  "official_source",
+  "other",
+]);
+export type OpportunitySourceType = z.infer<typeof opportunitySourceTypeSchema>;
+
 export const opportunitySchema = z.object({
   /** Stable identity: `${provider}:${external_id}`. */
   id: z.string().min(3).max(200),
@@ -405,6 +418,21 @@ export const opportunitySchema = z.object({
   source_name: z.string().min(1).max(160),
   /** Canonical public page of the opportunity at the source. */
   source_url: z.string().url().max(500),
+  /** Kind of the PRIMARY source this opportunity was discovered at.
+   *  Defaults keep pre-existing (v5) payloads valid — no version bump. */
+  source_type: opportunitySourceTypeSchema.default("other"),
+  /** Provenance: the OTHER public sources where the same opportunity was
+   *  found (multi-source dedupe keeps the most authoritative row primary). */
+  additional_sources: z
+    .array(
+      z.object({
+        url: z.string().url().max(500),
+        source_type: opportunitySourceTypeSchema,
+        source_name: z.string().min(1).max(160),
+      }),
+    )
+    .max(10)
+    .default([]),
   /** Where to apply: the source's application URL when published, else null. */
   application_url: z.string().url().max(500).nullable(),
   title: z.string().min(1).max(400),
@@ -442,6 +470,11 @@ export const opportunitySchema = z.object({
   education_requirement: educationRequirementSchema.nullable(),
   /** Planned start (BA: eintrittszeitraum.von). */
   valid_from: z.string().nullable(),
+  /** Application deadline, ISO (YYYY-MM-DD) — ONLY when the source's
+   *  published description documents an explicit date next to an
+   *  application phrase ("Bewerbung bis …", "Bewerbungsfrist …"). Details
+   *  only; null whenever the source does not state one. Never inferred. */
+  application_deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
   /** First published (BA: datumErsteVeroeffentlichung). */
   posted_at: z.string().nullable(),
   /** Last updated (BA: aenderungsdatum). */

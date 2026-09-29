@@ -92,6 +92,8 @@ const CHECKS = [
   { name: "AI_MODEL", required: false, kind: "id" },
   { name: "AI_VISION_MODEL", required: false, kind: "id" },
   { name: "ARBEITSAGENTUR_API_KEY", required: false, kind: "id" },
+  { name: "GEMINI_API_KEY", required: false, kind: "secret" },
+  { name: "GEMINI_GROUNDING_MODEL", required: false, kind: "id" },
 ];
 
 /**
@@ -136,6 +138,16 @@ const SEAMS = [
     name: "vacancy-providers",
     status: () => "pending",
     note: "Bundesagentur f\u00fcr Arbeit is the only vacancy provider; additional providers need their own API credentials.",
+  },
+  {
+    name: "web-discovery",
+    status: (env) =>
+      isSet(env, "GEMINI_API_KEY") ||
+      (isSet(env, "AI_API_KEY") &&
+        /generativelanguage\.googleapis\.com/i.test(env.AI_API_URL ?? ""))
+        ? "configured"
+        : "pending",
+    note: "AI Ausbildung Search broad web discovery uses Google Gemini with Google Search grounding: GEMINI_API_KEY, or the existing AI_API_KEY when AI_API_URL is a Google AI Studio (generativelanguage.googleapis.com) endpoint. Without it the web layer is skipped and the official BA source still works.",
   },
 ];
 

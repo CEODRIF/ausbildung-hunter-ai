@@ -41,12 +41,20 @@ export default async function OpportunitiesPage({
               Real vacancies from the Bundesagentur für Arbeit Jobsuche.
             </p>
           </div>
-          <Link
-            href="/opportunities/saved"
-            className="text-sm font-semibold text-[#2f6fed]"
-          >
-            Saved opportunities
-          </Link>
+          <div className="flex items-center gap-5">
+            <Link
+              href="/opportunities/ai-search"
+              className="rounded-xl bg-[#2f6fed] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(47,111,237,0.22)] transition-colors hover:bg-[#255dcc]"
+            >
+              ✦ AI Ausbildung Search
+            </Link>
+            <Link
+              href="/opportunities/saved"
+              className="text-sm font-semibold text-[#2f6fed]"
+            >
+              Saved opportunities
+            </Link>
+          </div>
         </div>
         <div className="mt-8">
           <OpportunitySearch

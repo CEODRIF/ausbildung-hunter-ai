@@ -185,6 +185,35 @@ describe("validateEnv", () => {
     );
     expect(byName["ai-assistant"]).toBe("pending");
   });
+
+  it("reports the web-discovery seam by Gemini grounding key presence", () => {
+    const seam = (env: Record<string, string>) =>
+      validateEnv(env).seams.find((s) => s.name === "web-discovery")?.status;
+    expect(seam(GOOD_ENV)).toBe("pending");
+    expect(
+      seam({ ...GOOD_ENV, GEMINI_API_KEY: "AIzaSy-test-gemini-key-12345" }),
+    ).toBe("configured");
+    // Reuse of the existing AI key when the AI endpoint is Google AI Studio.
+    expect(
+      seam({
+        ...GOOD_ENV,
+        AI_API_KEY: "AIzaSy-existing-ai-key-12345",
+        AI_API_URL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+      }),
+    ).toBe("configured");
+    // …but not for a non-Google AI endpoint.
+    expect(
+      seam({
+        ...GOOD_ENV,
+        AI_API_KEY: "sk-a-very-long-provider-key-12345",
+        AI_API_URL: "https://api.openai.com/v1",
+      }),
+    ).toBe("pending");
+    // A placeholder key must NOT count as configured.
+    expect(seam({ ...GOOD_ENV, GEMINI_API_KEY: "your-gemini-api-key" })).toBe(
+      "pending",
+    );
+  });
 });
 
 describe("check:env CLI", () => {

@@ -140,8 +140,10 @@ async function fetchWindow(
 }
 
 /** The authenticated user's latest VALIDATED candidate profile, fetched
- *  server-side (never browser-supplied). Invalid/foreign JSON → null. */
-async function getCandidateProfile(
+ *  server-side (never browser-supplied). Invalid/foreign JSON → null.
+ *  Exported for reuse by the AI search pipeline (same source of truth —
+ *  no second profile-lookup implementation). */
+export async function getCandidateProfile(
   userId: string,
 ): Promise<CandidateProfile | null> {
   const admin = createAdminClient();

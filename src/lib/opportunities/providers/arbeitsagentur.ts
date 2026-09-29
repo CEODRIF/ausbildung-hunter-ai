@@ -333,6 +333,48 @@ function extractApplicationUrl(description: string): string | null {
   return null;
 }
 
+/**
+ * Application deadline — details only, strictly source-faithful: a real
+ * calendar date explicitly stated in the published text next to an
+ * application phrase ("Bewerbungsfrist …", "Bewerbung bis …"). Never
+ * inferred from posting dates, start dates, or other fields. Returns ISO
+ * YYYY-MM-DD or null.
+ */
+const DEADLINE_FRIST_RE =
+  /\bbewerbungsfrist\s*[:\-–]?\s*(?:am|bis(?: zum)?|zum)?\s*(\d{1,2}\.\s?\d{1,2}\.\s?\d{4})/i;
+const DEADLINE_BIS_RE =
+  /\bbewerbung\w*\s*(?:bitte\s+)?(?:spätestens|bis(?: zum| am)?|noch bis)\s+(\d{1,2}\.\s?\d{1,2}\.\s?\d{4})/i;
+
+function normalizeGermanDate(raw: string): string | null {
+  const parsed = raw.replace(/\s+/g, "").match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (!parsed) return null;
+  const day = Number(parsed[1]);
+  const month = Number(parsed[2]);
+  const year = Number(parsed[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (year < 2000 || year > 2100) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  )
+    return null;
+  return date.toISOString().slice(0, 10);
+}
+
+export function extractApplicationDeadline(
+  description: string,
+): string | null {
+  for (const pattern of [DEADLINE_FRIST_RE, DEADLINE_BIS_RE]) {
+    const match = description.match(pattern);
+    if (!match) continue;
+    const iso = normalizeGermanDate(match[1]);
+    if (iso) return iso;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Normalization
 // ---------------------------------------------------------------------------
@@ -355,6 +397,7 @@ function normalizeSearchItem(
     external_id: ref,
     source_name: SOURCE_NAME,
     source_url: `${PUBLIC_JOB_URL}${encodeURIComponent(ref)}`,
+    source_type: "official_source",
     application_url: null,
     title,
     goal,
@@ -382,6 +425,7 @@ function normalizeSearchItem(
     valid_from:
       safeDate(subObject(value.eintrittszeitraum)?.von) ||
       safeDate(value.eintrittsdatum),
+    application_deadline: null, // only parseable from the details description
     posted_at:
       safeDate(value.datumErsteVeroeffentlichung) ||
       safeDate(subObject(value.veroeffentlichungszeitraum)?.von),
@@ -427,6 +471,7 @@ function normalizeJobDetails(value: RawRecord): Opportunity {
     external_id: ref,
     source_name: SOURCE_NAME,
     source_url: `${PUBLIC_JOB_URL}${encodeURIComponent(ref)}`,
+    source_type: "official_source",
     application_url: applicationUrl,
     title: title || "Untitled vacancy",
     goal,
@@ -456,6 +501,9 @@ function normalizeJobDetails(value: RawRecord): Opportunity {
     valid_from:
       safeDate(subObject(value.eintrittszeitraum)?.von) ||
       safeDate(value.eintrittsdatum),
+    application_deadline: description
+      ? extractApplicationDeadline(description)
+      : null,
     posted_at:
       safeDate(value.datumErsteVeroeffentlichung) ||
       safeDate(subObject(value.veroeffentlichungszeitraum)?.von),

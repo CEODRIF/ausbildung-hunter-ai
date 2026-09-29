@@ -67,8 +67,9 @@ describe("environment documentation (deployment contract)", () => {
       const name = line.slice(0, line.indexOf("="));
       const value = line.slice(line.indexOf("=") + 1).trim();
       // Placeholder conventions: "your-…", "replace-…", localhost redirects,
-      // a documented public API base URL, the provider label, or the
-      // documented public BA client id.
+      // a documented public API base URL, the provider label, the
+      // documented public grounding model name, or the documented public
+      // BA client id.
       const isPlaceholder =
         value === "" ||
         value.startsWith("your-") ||
@@ -77,6 +78,7 @@ describe("environment documentation (deployment contract)", () => {
         value.startsWith("http://localhost") ||
         value.startsWith("https://api.openai.com") ||
         value === "custom" ||
+        value === "gemini-2.5-flash-lite" ||
         value.startsWith("https://your-project") ||
         value.startsWith("https://your-app");
       expect(

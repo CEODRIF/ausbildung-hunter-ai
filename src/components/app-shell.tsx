@@ -160,6 +160,12 @@ const navItems = [
     enabled: true,
   },
   {
+    label: "AI Search",
+    href: "/opportunities/ai-search",
+    icon: "spark" as const,
+    enabled: true,
+  },
+  {
     label: "Settings",
     href: "/settings/email",
     icon: "settings" as const,

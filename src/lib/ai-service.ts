@@ -252,7 +252,9 @@ export async function deleteAIFile(fileId: string) {
  *  point. The dashboard must never trust browser-provided usage values. */
 export const AI_DAILY_REQUEST_LIMIT = 100;
 
-async function reserveAIUsage(userId: string) {
+/** Atomic, plan-aware AI quota reservation. Exported so the AI search
+ *  pipeline reuses the SAME single enforcement point as chat/scanner. */
+export async function reserveAIUsage(userId: string) {
   const admin = createAdminClient();
   // Server-side entitlement (plan-aware; falls back to the free limit).
   const entitlements = await getEntitlements(userId);

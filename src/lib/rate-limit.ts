@@ -28,6 +28,7 @@ export interface RateLimitResult {
 
 export type RateLimitScope =
   | "ai_chat"
+  | "ai_search"
   | "opportunity_search"
   | "opportunity_save"
   | "email_oauth"
@@ -43,6 +44,10 @@ export type RateLimitScope =
  *   10/min per user keeps aggregate upstream usage far below provider
  *   abuse thresholds.
  * - opportunity_save: each save re-resolves the offer from the source.
+ * - ai_search: one run = an AI planning call + a bounded batch of upstream
+ *   search + per-result detail fetches (export re-runs the batch without AI).
+ *   4/min caps the heavy batch work per user; it shares no budget with the
+ *   per-page opportunity_search limiter.
  * - email_oauth: OAuth initiations are cheap but a proxying vector; 5/min.
  * - account_export / account_delete: sensitive GDPR operations, 1 h window.
  * - admin_actions: plan/admin mutations; 30/min is generous for humans.
@@ -52,6 +57,7 @@ export const RATE_LIMITS: Record<
   { max: number; windowSeconds: number }
 > = {
   ai_chat: { max: 20, windowSeconds: 60 },
+  ai_search: { max: 4, windowSeconds: 60 },
   opportunity_search: { max: 10, windowSeconds: 60 },
   opportunity_save: { max: 10, windowSeconds: 60 },
   email_oauth: { max: 5, windowSeconds: 60 },
