@@ -142,9 +142,17 @@ Run the migrations in order (they are self-contained):
    20261002000000_rate_limits.sql                # rate_limits table + check_rate_limit RPC: Postgres-backed fixed-window rate limiter (Phase 12)
    20261003000000_durable_worker.sql             # claim_next_pending_campaign RPC: in-Postgres worker work discovery (Phase 14)
    20261004000000_email_account_lifecycle.sql    # campaigns.email_account_id → nullable + ON DELETE SET NULL (historical campaigns stop locking the sender; Phase 15)
+   20261005000000_email_confirmation_activation.sql  # on_auth_user_email_confirmed trigger: activates profile + consumes invitation when the email is confirmed
+   20261006000000_harden_confirmation_trigger.sql    # trigger hardened: profile activation / invitation consumption are best-effort and can never abort the confirmation
 ```
 
 Via the CLI: `npx supabase db push` (or paste into the SQL editor). The migrations create all tables, RLS policies, storage buckets, triggers, and the invitation seeds.
+
+**Auth configuration (required for the email-confirmation flow):**
+
+1. **Auth → URL Configuration**: set **Site URL** to your app URL and add **`https://<your-domain>/auth/callback?next=/onboarding`** to **Redirect URLs**.
+2. **Auth → URL Configuration → Flow type**: must be **PKCE** (default for new projects). The app clients are configured for PKCE (`flowType: "pkce"`) — an implicit-flow project cannot complete the code exchange in `/auth/callback`.
+3. **Authentication → Providers → Email**: enabled, with **Confirm email** on.
 
 Create the two private storage buckets if not created by a migration: `application-attachments` and `ai-files` (both **private**, `user_id`-scoped policies).
 

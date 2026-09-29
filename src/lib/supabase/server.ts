@@ -7,6 +7,15 @@ export async function createClient() {
   const { supabaseUrl, supabaseAnonKey } = getSupabaseEnv();
 
   return createServerClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: true,
+      // The Supabase project runs in PKCE flow type: signUp() must send the
+      // code challenge (and persist the verifier to the sb-*-code-verifier
+      // cookies), and /auth/callback exchanges the one-time code with that
+      // verifier. Without this, the confirmation link can never be
+      // exchanged, the email is never confirmed, and no session is created.
+      flowType: "pkce",
+    },
     cookies: {
       getAll() {
         return cookieStore.getAll();

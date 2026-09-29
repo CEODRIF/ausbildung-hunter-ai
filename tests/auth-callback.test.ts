@@ -51,8 +51,25 @@ describe("/auth/callback", () => {
 
     await render({ code: "abc123", next: "/onboarding" });
 
-    expect(exchangeCodeForSession).toHaveBeenCalledWith("abc123");
+    expect(exchangeCodeForSession).toHaveBeenCalledWith("abc123", undefined);
     expect(getUser).toHaveBeenCalled();
+    expect(redirect).toHaveBeenCalledWith("/onboarding");
+  });
+
+  it("passes the PKCE sb_flow_id from the URL to the exchange", async () => {
+    mockSupabase();
+    exchangeCodeForSession.mockResolvedValue({ error: null });
+    getUser.mockResolvedValue({ data: { user: { id: "u1" } } });
+
+    await render({
+      code: "abc123",
+      sb_flow_id: "sb-1234567890abcdef",
+      next: "/onboarding",
+    });
+
+    expect(exchangeCodeForSession).toHaveBeenCalledWith("abc123", {
+      flowId: "sb-1234567890abcdef",
+    });
     expect(redirect).toHaveBeenCalledWith("/onboarding");
   });
 
@@ -91,16 +108,23 @@ describe("/auth/callback", () => {
     expect(redirect).toHaveBeenCalledWith("/onboarding");
   });
 
-  it("routes to /login when the code exchange fails", async () => {
+  it("routes to /login when the code exchange fails (and logs it scrubbed)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockSupabase();
     exchangeCodeForSession.mockResolvedValue({
-      error: { message: "Invalid verification type" },
+      error: {
+        message:
+          "PKCE validation failed: code_verifier does not match eyJhbGciOiJIUzI1NiJ9.eyJhIjoiYiJ9.ccc111111",
+      },
     });
 
     await render({ code: "stale-code" });
 
     expect(redirect).toHaveBeenCalledWith("/login");
     expect(getUser).not.toHaveBeenCalled();
+    const logged = spy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(logged).toContain("[callback] code exchange failed");
+    expect(logged).not.toContain("eyJhbGciOiJIUzI1NiJ9.eyJhIjoiYiJ9.ccc111111");
   });
 
   it("routes to /login when there is no code at all", async () => {
@@ -111,7 +135,7 @@ describe("/auth/callback", () => {
 
     await render({});
 
-    expect(exchangeCodeForSession).toHaveBeenCalledWith("");
+    expect(exchangeCodeForSession).toHaveBeenCalledWith("", undefined);
     expect(redirect).toHaveBeenCalledWith("/login");
   });
 
