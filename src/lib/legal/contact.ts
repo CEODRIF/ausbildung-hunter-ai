@@ -2,11 +2,11 @@ import type { LegalDoc } from "./types";
 
 /**
  * Contact page content.
- * The contact email is the one actually present in the project
- * (PLATFORM_OWNER_EMAIL in src/lib/notifications/admin.ts). If the platform
- * owner wants a dedicated support address, replace CONTACT_EMAIL below.
+ * CONTACT_EMAIL is the dedicated support address shown on /contact.
+ * (Note: it differs intentionally from PLATFORM_OWNER_EMAIL in
+ * src/lib/notifications/admin.ts, which identifies the platform owner.)
  */
-export const CONTACT_EMAIL = "adsium.business@gmail.com";
+export const CONTACT_EMAIL = "drif@berlin.com";
 
 export const contactDoc: LegalDoc = {
   slug: "contact",
