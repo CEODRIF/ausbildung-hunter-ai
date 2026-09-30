@@ -58,6 +58,8 @@ type InputProps = InputHTMLAttributes<HTMLInputElement> & {
   hint?: string;
   error?: string;
   leading?: ReactNode;
+  /** Small de-emphasized suffix inside the label (e.g. "optional"). */
+  labelSuffix?: string;
 };
 
 export function Input({
@@ -65,6 +67,7 @@ export function Input({
   hint,
   error,
   leading,
+  labelSuffix,
   id,
   className = "",
   ...props
@@ -74,6 +77,11 @@ export function Input({
       {label && (
         <span className="mb-2 block text-sm font-semibold text-ink-soft">
           {label}
+          {labelSuffix && (
+            <span className="ms-1.5 text-xs font-normal text-faint">
+              {labelSuffix}
+            </span>
+          )}
         </span>
       )}
       <span className="relative block">

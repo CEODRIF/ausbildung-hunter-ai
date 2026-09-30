@@ -277,3 +277,44 @@ textarea:focus-visible,
     break-inside: avoid;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Cover letter print export (Anschreiben builder)                     */
+/* ------------------------------------------------------------------ */
+/* Same philosophy as the CV builder: the printable letter lives in a
+   portal on <body> (.cl-print-root), hidden on screen. Printing with the
+   builder active (body.cl-builder-active) suppresses the app shell so the
+   A4 letter — and nothing else — is printed. */
+.cl-print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+  body.cl-builder-active {
+    background: #ffffff !important;
+  }
+  body.cl-builder-active .app-shell-root {
+    display: none !important;
+  }
+  body.cl-builder-active .cl-print-root {
+    display: block !important;
+  }
+  .cl-print-root .cl-sheet {
+    width: 210mm !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    /* Professional German business-letter margins (DIN 5008 ≈ 25mm left). */
+    padding: 20mm 25mm !important;
+  }
+  /* Long letters: keep paragraphs coherent across page breaks. */
+  .cl-print-root .cl-sheet p {
+    orphans: 2;
+    widows: 2;
+  }
+}
