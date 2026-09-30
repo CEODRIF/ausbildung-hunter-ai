@@ -743,6 +743,16 @@ const de = {
   aiSearch: {
     searching: "Öffentliche Quellen werden durchsucht",
     empty: "Keine Stellenangebote gefunden",
+    exportTitle: "Excel-Export für Ihre Bewerbung",
+    exportSummary:
+      "{email} von {total} Angeboten enthalten eine E-Mail-Adresse.",
+    exportNone: "Keine Angebote mit E-Mail-Adresse gefunden.",
+    exportNote:
+      "Es werden nur Angebote mit gültiger E-Mail-Adresse exportiert; doppelte E-Mail-Adressen werden entfernt.",
+    exportButton: "Excel herunterladen",
+    exportPreparing: "Excel wird vorbereitet…",
+    exportError:
+      "Der Excel-Export ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
   },
   chat: {
     fileHint:
@@ -1446,6 +1456,16 @@ const en: Dict = {
   aiSearch: {
     searching: "Searching public sources",
     empty: "No opportunities found",
+    exportTitle: "Excel export for your applications",
+    exportSummary:
+      "{email} of {total} opportunities include an email address.",
+    exportNone: "No opportunities with an email address found.",
+    exportNote:
+      "Only opportunities with a valid email address are exported; duplicate email addresses are removed.",
+    exportButton: "Download Excel",
+    exportPreparing: "Preparing Excel…",
+    exportError:
+      "The Excel export failed. Please try again.",
   },
   chat: {
     fileHint:
@@ -2145,6 +2165,16 @@ const fr: Dict = {
   aiSearch: {
     searching: "Recherche dans les sources publiques",
     empty: "Aucune offre trouvée",
+    exportTitle: "Export Excel pour vos candidatures",
+    exportSummary:
+      "{email} offres sur {total} incluent une adresse e-mail.",
+    exportNone: "Aucune offre avec adresse e-mail trouvée.",
+    exportNote:
+      "Seules les offres avec une adresse e-mail valide sont exportées ; les adresses en double sont supprimées.",
+    exportButton: "Télécharger l'Excel",
+    exportPreparing: "Préparation de l'Excel…",
+    exportError:
+      "L'export Excel a échoué. Veuillez réessayer.",
   },
   chat: {
     fileHint:
@@ -2833,6 +2863,15 @@ const ar: Dict = {
   aiSearch: {
     searching: "جارٍ البحث في المصادر العامة",
     empty: "لم تُعثر على وظائف",
+    exportTitle: "تصدير Excel للتقديم",
+    exportSummary:
+      "{email} من أصل {total} فرصة تحتوي على عنوان بريد إلكتروني.",
+    exportNone: "لم يتم العثور على فرص بعنوان بريد إلكتروني.",
+    exportNote:
+      "يتم تصدير الفرص التي تحتوي على عنوان بريد إلكتروني صالح فقط، مع إزالة عناوين البريد المكررة.",
+    exportButton: "تنزيل Excel",
+    exportPreparing: "جاري تجهيز ملف Excel…",
+    exportError: "فشل تصدير Excel. يرجى المحاولة مرة أخرى.",
   },
   chat: {
     fileHint:

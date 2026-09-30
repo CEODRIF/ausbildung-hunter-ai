@@ -16,6 +16,10 @@ import {
   getCandidateProfile,
   OpportunityProviderError,
 } from "@/lib/opportunities/search";
+import {
+  exportableOpportunities,
+  resultsWithEmailCount,
+} from "@/lib/opportunities/email-export";
 import { checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
 import type { Opportunity } from "@/lib/opportunities/types";
 
@@ -41,30 +45,45 @@ const bodySchema = z
   })
   .strict();
 
-const EXPORT_HEADERS = [
-  "#",
-  "Company",
-  "Ausbildung Title",
-  "Location",
-  "Bundesland",
-  "Start Date",
-  "Application Deadline",
-  "Email",
-  "Phone",
-  "Company Website",
-  "Application URL",
-  "Source URL",
-  "Requirements",
-  "Other Useful Information",
-  "Source Type",
-  "Additional Sources",
+/**
+ * Column order is stable and outreach-oriented: the contact data the
+ * user needs to reach out (Email, Phone) sit right after the identifying
+ * columns, not buried at the end of the sheet.
+ */
+const EXPORT_COLUMNS = [
+  { header: "#", key: "index", width: 5 },
+  { header: "Company", key: "company", width: 28 },
+  { header: "Ausbildung Title", key: "title", width: 36 },
+  { header: "Email", key: "email", width: 32 },
+  { header: "Phone", key: "phone", width: 18 },
+  { header: "Location", key: "location", width: 20 },
+  { header: "Bundesland", key: "bundesland", width: 16 },
+  { header: "Start Date", key: "start_date", width: 13 },
+  { header: "Application Deadline", key: "application_deadline", width: 15 },
+  { header: "Company Website", key: "company_website", width: 30 },
+  { header: "Application URL", key: "application_url", width: 38 },
+  { header: "Source URL", key: "source_url", width: 38 },
+  { header: "Requirements", key: "requirements", width: 60 },
+  { header: "Other Useful Information", key: "other", width: 52 },
+  { header: "Source Type", key: "source_type", width: 18 },
+  { header: "Additional Sources", key: "additional_sources", width: 55 },
 ] as const;
+
+export interface EmailExportStats {
+  /** All ranked results of the (re-run) search, before email filtering. */
+  totalFound: number;
+  /** Results that actually document a valid email (before dedupe). */
+  withEmail: number;
+  /** Duplicate-email rows removed by the export filter. */
+  duplicatesRemoved: number;
+}
 
 async function buildWorkbook(
   results: Opportunity[],
   plan: AiSearchPlan,
   goal: "ausbildung" | "arbeit",
   targetCount: number,
+  stats: EmailExportStats,
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Ausbildung Hunter AI";
@@ -73,24 +92,11 @@ async function buildWorkbook(
   const sheet = workbook.addWorksheet("Opportunities", {
     views: [{ state: "frozen", ySplit: 1 }],
   });
-  sheet.columns = [
-    { header: EXPORT_HEADERS[0], key: "index", width: 5 },
-    { header: EXPORT_HEADERS[1], key: "company", width: 28 },
-    { header: EXPORT_HEADERS[2], key: "title", width: 36 },
-    { header: EXPORT_HEADERS[3], key: "location", width: 20 },
-    { header: EXPORT_HEADERS[4], key: "bundesland", width: 16 },
-    { header: EXPORT_HEADERS[5], key: "start_date", width: 13 },
-    { header: EXPORT_HEADERS[6], key: "application_deadline", width: 14 },
-    { header: EXPORT_HEADERS[7], key: "email", width: 30 },
-    { header: EXPORT_HEADERS[8], key: "phone", width: 16 },
-    { header: EXPORT_HEADERS[9], key: "company_website", width: 30 },
-    { header: EXPORT_HEADERS[10], key: "application_url", width: 38 },
-    { header: EXPORT_HEADERS[11], key: "source_url", width: 38 },
-    { header: EXPORT_HEADERS[12], key: "requirements", width: 60 },
-    { header: EXPORT_HEADERS[13], key: "other", width: 52 },
-    { header: EXPORT_HEADERS[14], key: "source_type", width: 18 },
-    { header: EXPORT_HEADERS[15], key: "additional_sources", width: 55 },
-  ];
+  sheet.columns = EXPORT_COLUMNS as unknown as Array<{
+    header: string;
+    key: string;
+    width: number;
+  }>;
   const headerRow = sheet.getRow(1);
   headerRow.font = { bold: true };
   headerRow.fill = {
@@ -98,10 +104,16 @@ async function buildWorkbook(
     pattern: "solid",
     fgColor: { argb: "FFE8EEF9" },
   };
+  // The Email header gets an extra accent so the outreach column is
+  // unmistakable in the sheet.
+  const emailColumn = sheet.getColumn("email");
+  emailColumn.font = { bold: true, color: { argb: "FF1D4ED8" } };
   results.forEach((opportunity, index) => {
     const row = buildExportRow(opportunity);
     const data = sheet.addRow({ index: index + 1, ...row });
     data.alignment = { wrapText: true, vertical: "top" };
+    // Emphasize the email cell (the whole point of this export).
+    data.getCell("email").font = { bold: true, color: { argb: "FF1D4ED8" } };
   });
 
   const details = workbook.addWorksheet("Search details");
@@ -117,7 +129,23 @@ async function buildWorkbook(
   addDetail("Generated", new Date().toISOString());
   addDetail("Goal", goal);
   addDetail("Requested opportunities", String(targetCount));
-  addDetail("Found opportunities", String(results.length));
+  addDetail("Found opportunities", String(stats.totalFound));
+  addDetail(
+    "With a valid contact email",
+    String(stats.withEmail),
+  );
+  addDetail(
+    "Duplicate emails removed",
+    String(stats.duplicatesRemoved),
+  );
+  addDetail(
+    "Exported opportunities (this sheet)",
+    String(results.length),
+  );
+  addDetail(
+    "Export filter",
+    "Only opportunities whose source published a valid email address are included; duplicate emails are deduplicated (highest-ranked kept).",
+  );
   addDetail(
     "Source",
     "Bundesagentur für Arbeit — Jobsuche (public API, live postings)",
@@ -163,7 +191,31 @@ export async function POST(request: Request) {
     const currentProfile = await getCandidateProfile(user.id);
     const results = rankOpportunities(enriched, currentProfile, targetCount);
 
-    const bufferOut = await buildWorkbook(results, plan, goal, targetCount);
+    // Outreach contract: the workbook contains ONLY opportunities whose
+    // source actually published a valid (non-placeholder) email, with
+    // duplicate emails removed (highest-ranked occurrence kept). The UI
+    // disables the button at zero; this guard covers the edge where the
+    // source changed between the search run and the export click.
+    const exportable = exportableOpportunities(results);
+    if (exportable.length === 0) {
+      return NextResponse.json(
+        { error: "No opportunities with an email address are available to export." },
+        { status: 409 },
+      );
+    }
+    const withEmail = resultsWithEmailCount(results);
+
+    const bufferOut = await buildWorkbook(
+      exportable,
+      plan,
+      goal,
+      targetCount,
+      {
+        totalFound: results.length,
+        withEmail,
+        duplicatesRemoved: withEmail - exportable.length,
+      },
+    );
     // Copy into a plain Uint8Array: Response's BodyInit rejects TS's
     // generic Buffer<ArrayBufferLike> in this toolchain.
     const body = new Uint8Array(bufferOut.byteLength);

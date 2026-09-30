@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { Button, Card, ErrorState } from "@/components/ui";
+import { Icon } from "@/components/icon";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
 import type { Opportunity } from "@/lib/opportunities/types";
+import { resultsWithEmailCount } from "@/lib/opportunities/email-export";
 import { useI18n } from "@/lib/i18n";
 
 /**
@@ -338,11 +340,11 @@ export function AISearchClient({
           body: JSON.stringify({ goal, targetCount: count, plan }),
         },
       );
-      if (!response.ok) {
+       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as {
           error?: string;
         } | null;
-        throw new Error(payload?.error ?? "The Excel export failed.");
+        throw new Error(payload?.error ?? t("aiSearch.exportError"));
       }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
@@ -356,16 +358,16 @@ export function AISearchClient({
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
-    } catch (exportFailed) {
-      setExportError(
-        exportFailed instanceof Error
-          ? exportFailed.message
-          : "The Excel export failed.",
-      );
-    } finally {
-      setExporting(false);
-    }
-  }
+     } catch (exportFailed) {
+       setExportError(
+         exportFailed instanceof Error
+           ? exportFailed.message
+           : t("aiSearch.exportError"),
+       );
+     } finally {
+       setExporting(false);
+     }
+   }
 
   // ------------------------------------------------------------------ setup
   if (stage === "setup") {
@@ -686,6 +688,7 @@ export function AISearchClient({
   }
 
   // ------------------------------------------------------------------ done
+  const withEmail = results ? resultsWithEmailCount(results) : 0;
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -703,24 +706,14 @@ export function AISearchClient({
               : "The public sources currently have no matching postings. Adjust the goal, count, or re-analyze your CV."}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2.5">
-          <Button
-            variant="secondary"
-            onClick={() => setStage("setup")}
-            disabled={exporting}
-          >
-            New search
-          </Button>
-          <Button onClick={exportExcel} disabled={exporting || found === 0}>
-            {exporting ? "Preparing Excel…" : "Export to Excel"}
-          </Button>
-        </div>
+        <Button
+          variant="secondary"
+          onClick={() => setStage("setup")}
+          disabled={exporting}
+        >
+          New search
+        </Button>
       </div>
-      {exportError && (
-        <p className="rounded-xl border border-danger/25 bg-danger-soft px-4 py-3 text-sm text-danger">
-          {exportError}
-        </p>
-      )}
       {discovery && (
         <div className="flex flex-wrap items-center gap-1.5">
           <Chip>
@@ -798,6 +791,49 @@ export function AISearchClient({
               </tbody>
             </table>
           </div>
+        </Card>
+      )}
+
+      {/* Excel export (outreach): only rows with a valid email are exported */}
+      {results && results.length > 0 && (
+        <Card className="p-5 sm:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-ink">
+                {t("aiSearch.exportTitle")}
+              </p>
+              <p className="mt-1 text-sm font-medium text-muted">
+                {withEmail > 0
+                  ? t("aiSearch.exportSummary", {
+                      email: withEmail,
+                      total: found,
+                    })
+                  : t("aiSearch.exportNone")}
+              </p>
+              <p className="mt-1 text-xs text-faint">
+                {t("aiSearch.exportNote")}
+              </p>
+            </div>
+            <Button
+              onClick={exportExcel}
+              disabled={exporting || withEmail === 0}
+              title={
+                withEmail === 0
+                  ? t("aiSearch.exportNone")
+                  : t("aiSearch.exportButton")
+              }
+            >
+              <Icon name="download" size={16} />
+              {exporting
+                ? t("aiSearch.exportPreparing")
+                : t("aiSearch.exportButton")}
+            </Button>
+          </div>
+          {exportError && (
+            <p className="mt-4 rounded-xl border border-danger/25 bg-danger-soft px-4 py-3 text-sm text-danger">
+              {exportError}
+            </p>
+          )}
         </Card>
       )}
     </div>
