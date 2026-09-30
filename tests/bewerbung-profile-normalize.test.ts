@@ -355,3 +355,230 @@ describe("completeness gate (sparse-output backstop)", () => {
     expect(pickMoreComplete(rich, rich)).toBe(rich);
   });
 });
+
+/**
+ * German key compatibility — the demonstrated production loss point:
+ * a model that answers with German section/entry keys ("Berufserfahrung",
+ * "Zielpositionen", "Tätigkeit", "Zeitraum", …) produced a schema-VALID
+ * but EMPTY profile, because only the English canonical keys were read.
+ * The aliases must move those values into the canonical keys WITHOUT
+ * altering any value and WITHOUT overriding present canonical keys.
+ */
+describe("German key compatibility (Berufserfahrung/Zielfunktionen loss point)", () => {
+  const GERMAN_KEYED_PROFILE = {
+    "Kandidat": {
+      "Name": "Lara Müller",
+      "Ort": "Köln",
+      "E-Mail": "lara.mueller@example.com",
+      "Telefon": "+49 151 23456789",
+    },
+    "Ziel": "ausbildung",
+    "Ausbildung": [
+      { "Name": "Zertifikat Online-Marketing", "Anbieter": "IHK Köln", "Jahr": "2024" },
+      { "Name": "Kurs Digital Commerce", "Anbieter": "Handelsakademie NRW", "Jahr": "2025" },
+    ],
+    "Berufserfahrung": [
+      {
+        "Tätigkeit": "Werkstudentin Online-Marketing",
+        "Unternehmen": "Muster E-Commerce GmbH, Köln",
+        "Zeitraum": "2025–2026",
+        "Aufgaben": ["SEO- und SEA-Kampagnen", "Pflege des Online-Shops"],
+        "Beschäftigungsart": "Werkstudentin",
+      },
+      {
+        "Tätigkeit": "Praktikum E-Commerce & Affiliate Marketing",
+        "Unternehmen": "Shopland GmbH, Bonn",
+        "Zeitraum": "07/2024–09/2024",
+        "Aufgaben": ["Affiliate-Kampagnen"],
+        "Beschäftigungsart": "Praktikum",
+      },
+    ],
+    "Bildung": [
+      { "Hochschule": "Universität zu Köln", "Abschluss": "Bachelor of Arts (B.A.)", "Fachrichtung": "English Studies", "Jahr": 2026 },
+      { "Schule": "Berthold-Schmidt-Gymnasium Köln", "Abschluss": "Abitur", "Jahr": 2022 },
+    ],
+    "Sprachkenntnisse": [
+      { "Sprache": "Arabisch", "Niveau": "Muttersprache" },
+      { "Sprache": "Englisch", "Niveau": "B2" },
+      { "Sprache": "Deutsch", "Niveau": "B1" },
+    ],
+    "Kenntnisse": {
+      "Fachkenntnisse": ["E-Commerce", "SEO", "SEA"],
+      "Software": ["MS Excel", "MS PowerPoint"],
+      "Marketing": ["Online-Marketing", "Onlinehandel"],
+    },
+    "Zielpositionen": [
+      { "Position": "Kaufleute für E-Commerce (Ausbildung)", "Begründung": "Praktikum im E-Commerce plus SEO/SEA-Kenntnisse." },
+      { "Position": "Online-Marketing-Fachkraft" },
+    ],
+    "Stärken": ["Praktische E-Commerce-Erfahrung aus Praktikum und Werkstudententätigkeit."],
+    "Fehlende Informationen": ["Kein LinkedIn-Profil angegeben."],
+    "Mögliche Bedenken": [],
+    "Schlüsselwörter": ["E-Commerce", "Online-Marketing", "SEO", "SEA", "Köln"],
+  };
+
+  function parse(raw: string) {
+    const normalized = normalizeAiProfileResponse(raw, "ausbildung");
+    const parsed = candidateProfileSchema.safeParse(normalized);
+    expect(
+      parsed.success,
+      parsed.success ? "" : JSON.stringify(parsed.error.issues),
+    ).toBe(true);
+    if (!parsed.success) throw new Error("unreachable: schema failed");
+    return parsed.data;
+  }
+
+  it("full German-keyed answer maps to a COMPLETE profile", () => {
+    const p = parse(JSON.stringify(GERMAN_KEYED_PROFILE));
+
+    // candidate (Kandidat/Name/Ort/E-Mail/Telefon)
+    expect(p.candidate.full_name).toBe("Lara Müller");
+    expect(p.candidate.location).toBe("Köln");
+    expect(p.candidate.contact.email).toBe("lara.mueller@example.com");
+    expect(p.candidate.contact.phone).toBe("+49 151 23456789");
+    // Berufserfahrung → experience: NO entry lost
+    expect(p.experience).toHaveLength(2);
+    expect(p.experience[0].job_title).toBe("Werkstudentin Online-Marketing");
+    expect(p.experience[0].company).toBe("Muster E-Commerce GmbH, Köln");
+    expect(p.experience[0].responsibilities).toEqual([
+      "SEO- und SEA-Kampagnen",
+      "Pflege des Online-Shops",
+    ]);
+    // Zeitraum "2025–2026" decomposed into start/end
+    expect(p.experience[0].start_date).toBe("2025");
+    expect(p.experience[0].end_date).toBe("2026");
+    expect(p.experience[1].start_date).toBe("07/2024");
+    expect(p.experience[1].end_date).toBe("09/2024");
+    // Beschäftigungsart → enum
+    expect(p.experience[0].type).toBe("internship");
+    expect(p.experience[1].type).toBe("internship");
+    // Ausbildung → training (not education!)
+    expect(p.training).toHaveLength(2);
+    expect(p.training[0].name).toBe("Zertifikat Online-Marketing");
+    expect(p.training[0].provider).toBe("IHK Köln");
+    // Bildung → education
+    expect(p.education).toHaveLength(2);
+    expect(p.education[0].university).toBe("Universität zu Köln");
+    expect(p.education[0].degree).toBe("Bachelor of Arts (B.A.)");
+    expect(p.education[0].field_of_study).toBe("English Studies");
+    expect(p.education[0].graduation_year).toBe(2026);
+    expect(p.education[1].school).toBe("Berthold-Schmidt-Gymnasium Köln");
+    // Sprachkenntnisse → languages
+    expect(p.languages).toHaveLength(3);
+    expect(
+      p.languages.find((l) => l.language === "Arabisch")?.level,
+    ).toBe("Muttersprache");
+    // Kenntnisse → skills groups
+    expect(p.skills.technical).toEqual(["E-Commerce", "SEO", "SEA"]);
+    expect(p.skills.software_tools).toEqual(["MS Excel", "MS PowerPoint"]);
+    expect(p.skills.marketing).toEqual(["Online-Marketing", "Onlinehandel"]);
+    // Zielpositionen → target_roles (Begründung → reason; missing reason backfilled)
+    expect(p.target_roles).toHaveLength(2);
+    expect(p.target_roles[0].role).toBe("Kaufleute für E-Commerce (Ausbildung)");
+    expect(p.target_roles[0].reason).toBe("Praktikum im E-Commerce plus SEO/SEA-Kenntnisse.");
+    expect(p.target_roles[1].reason).toBe("Online-Marketing-Fachkraft");
+    // prose sections
+    expect(p.strengths).toHaveLength(1);
+    expect(p.missing_information).toHaveLength(1);
+    expect(p.potential_concerns).toEqual([]);
+    expect(p.keywords).toHaveLength(5);
+    expect(p.goal).toBe("ausbildung");
+  });
+
+  it("canonical keys always win over aliases (no override)", () => {
+    const p = parse(
+      JSON.stringify({
+        ...GERMAN_KEYED_PROFILE,
+        experience: [
+          {
+            job_title: "Canonical Titel",
+            company: "Canonical GmbH",
+            start_date: "2020",
+            end_date: "2021",
+            type: "employment",
+          },
+        ],
+      }),
+    );
+    expect(p.experience).toHaveLength(1);
+    expect(p.experience[0].job_title).toBe("Canonical Titel");
+    expect(p.experience[0].start_date).toBe("2020");
+  });
+
+  it("flattened candidate (name/email at top level) is synthesized", () => {
+    const p = parse(
+      JSON.stringify({
+        name: "Jonas Weber",
+        email: "jonas.weber@example.com",
+        telefon: "+49 160 1112223",
+        ort: "Hamburg",
+        experience: [
+          { "Tätigkeit": "Praktikant Marketing", "Unternehmen": "Beispiel AG" },
+        ],
+      }),
+    );
+    expect(p.candidate.full_name).toBe("Jonas Weber");
+    expect(p.candidate.location).toBe("Hamburg");
+    expect(p.candidate.contact.email).toBe("jonas.weber@example.com");
+    expect(p.candidate.contact.phone).toBe("+49 160 1112223");
+    expect(p.experience).toHaveLength(1);
+    // single value Zeitraum-less entry: dates stay null, job kept
+    expect(p.experience[0].start_date).toBeNull();
+    expect(p.experience[0].end_date).toBeNull();
+  });
+
+  it("Zeitraum variants decompose without inventing dates", () => {
+    const mk = (zeitraum: unknown) =>
+      JSON.stringify({
+        "Berufserfahrung": [
+          { "Tätigkeit": "Bürokauffrau", "Unternehmen": "Test GmbH", Zeitraum: zeitraum },
+        ],
+      });
+    expect(parse(mk("seit 2024")).experience[0].start_date).toBe("2024");
+    expect(parse(mk("seit 2024")).experience[0].end_date).toBeNull();
+    expect(parse(mk("2024")).experience[0].start_date).toBe("2024");
+    expect(parse(mk("2024")).experience[0].end_date).toBeNull();
+    expect(parse(mk("2018–2021")).experience[0].start_date).toBe("2018");
+    expect(parse(mk("2018–2021")).experience[0].end_date).toBe("2021");
+  });
+
+  it("German Beschäftigungsart values map to the enum", () => {
+    const mk = (art: string) =>
+      parse(
+        JSON.stringify({
+          "Berufserfahrung": [
+            { "Tätigkeit": "Test", "Unternehmen": "X", Beschäftigungsart: art },
+          ],
+        }),
+      ).experience[0].type;
+    expect(mk("Werkstudentin")).toBe("internship");
+    expect(mk("Praktikum")).toBe("internship");
+    expect(mk("Selbstständig")).toBe("freelance");
+    expect(mk("Freelancer")).toBe("freelance");
+    expect(mk("Vollzeit")).toBe("employment");
+    expect(mk("nichts-davon")).toBe("employment");
+  });
+
+  it("German wrapper objects (Lebenslauf/Profil) are unwrapped", () => {
+    const inner = {
+      "Berufserfahrung": [
+        { "Tätigkeit": "Marketing Assistent", "Unternehmen": "Y GmbH" },
+      ],
+      "Sprachkenntnisse": [{ "Sprache": "Deutsch", "Niveau": "B1" }],
+    };
+    for (const wrapper of ["Lebenslauf", "Profil", "candidateProfile"]) {
+      const p = parse(JSON.stringify({ [wrapper]: inner }));
+      expect(p.experience, wrapper).toHaveLength(1);
+      expect(p.languages, wrapper).toHaveLength(1);
+    }
+  });
+
+  it("values are NEVER translated or altered by the alias layer", () => {
+    const p = parse(JSON.stringify(GERMAN_KEYED_PROFILE));
+    expect(p.experience[0].job_title).toBe("Werkstudentin Online-Marketing");
+    expect(p.experience[0].company).toBe("Muster E-Commerce GmbH, Köln");
+    expect(p.training[1].name).toBe("Kurs Digital Commerce");
+    expect(p.education[0].field_of_study).toBe("English Studies");
+    expect(p.keywords).toContain("Köln");
+  });
+});

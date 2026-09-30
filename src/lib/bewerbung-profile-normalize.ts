@@ -11,8 +11,11 @@
  * these. This module coerces structure only:
  *
  *   - extracts the JSON object from fenced/surrounded text
- *   - unwraps common wrapper objects
+ *   - unwraps common wrapper objects (incl. German "Profil"/"Lebenslauf")
  *   - maps camelCase keys to the schema's snake_case keys
+ *   - maps GERMAN key names a model may use ("Berufserfahrung",
+ *     "Zielpositionen", "Tätigkeit", "Zeitraum", …) to the canonical
+ *     schema keys — VALUES are never translated or altered
  *   - converts malformed optional arrays to arrays/empty arrays
  *   - drops invalid array entries instead of failing the profile
  *   - normalizes invalid experience types to "employment"
@@ -66,13 +69,6 @@ const boolOrFalse = (value: unknown): boolean =>
 
 const validSource = (value: unknown): "ai_extracted" | "user_provided" =>
   value === "user_provided" ? "user_provided" : "ai_extracted";
-
-const EXPERIENCE_TYPES = new Set([
-  "employment",
-  "internship",
-  "freelance",
-  "other",
-]);
 
 const gradYear = (value: unknown): number | string | null => {
   if (typeof value === "number" && Number.isInteger(value))
@@ -137,10 +133,14 @@ const WRAPPER_KEYS = new Set([
   "candidateprofile",
   "candidate_profile",
   "profile",
+  "profil",
   "data",
   "result",
   "response",
   "output",
+  "lebenslauf",
+  "cv",
+  "bewerbungsprofil",
 ]);
 
 /** 2) Unwrap common single-key wrapper objects (max 3 levels). */
@@ -176,6 +176,237 @@ export function snakeKeys(value: unknown): unknown {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// German key compatibility (safety layer).
+//
+// The prompt demands the exact English snake_case keys, but a model that
+// "thinks in German" can still answer with German section/entry keys
+// ("Berufserfahrung", "Zielpositionen", "Tätigkeit", "Zeitraum", …) even
+// when every VALUE is correct. Without a mapping, normalizeProfile reads
+// only the canonical keys and the whole section silently becomes [] —
+// exactly the production symptom (Berufserfahrung/Zielfunktionen empty).
+//
+// These aliases MOVE an alias value into the canonical key only when the
+// canonical key is absent. They never override present data, never touch
+// VALUES, and never invent content. Keys are matched in snake_case
+// lowercase (umlauts intact — snakeKeys only lowercases, it never
+// transliterates).
+// ---------------------------------------------------------------------------
+
+const TOP_KEY_ALIASES: Record<string, string> = {
+  // experience
+  berufserfahrung: "experience",
+  "beruflicher werdegang": "experience",
+  "berufliche erfahrung": "experience",
+  "praktische erfahrung": "experience",
+  "arbeitserfahrung": "experience",
+  "work experience": "experience",
+  jobs: "experience",
+  // training (Ausbildung/Weiterbildung as CV section)
+  ausbildung: "training",
+  "weiterbildungen": "training",
+  // education
+  bildung: "education",
+  schulbildung: "education",
+  "abschlüsse": "education",
+  abschluesse: "education",
+  studium: "education",
+  // languages
+  sprachkenntnisse: "languages",
+  sprachen: "languages",
+  // skills
+  kenntnisse: "skills",
+  fähigkeiten: "skills",
+  fahigkeiten: "skills",
+  // target roles
+  zielfunktionen: "target_roles",
+  zielposition: "target_roles",
+  zielpositionen: "target_roles",
+  "gewünschte position": "target_roles",
+  "gewuenschte position": "target_roles",
+  "gewünschte positionen": "target_roles",
+  zielberuf: "target_roles",
+  zielberufe: "target_roles",
+  // prose sections
+  stärken: "strengths",
+  staerken: "strengths",
+  "fehlende informationen": "missing_information",
+  "fehlende angaben": "missing_information",
+  lücken: "missing_information",
+  luecken: "missing_information",
+  "mögliche bedenken": "potential_concerns",
+  "moegliche bedenken": "potential_concerns",
+  bedenken: "potential_concerns",
+  "schlüsselwörter": "keywords",
+  "schluesselwoerter": "keywords",
+  "schlüsselworte": "keywords",
+  "schlagwörter": "keywords",
+  schlagworte: "keywords",
+  // candidate
+  kandidat: "candidate",
+  "persönliche daten": "candidate",
+  personendaten: "candidate",
+  "personal data": "candidate",
+};
+
+const CANDIDATE_KEY_ALIASES: Record<string, string> = {
+  name: "full_name",
+  "vollständiger name": "full_name",
+  "vollstaendiger name": "full_name",
+  "full name": "full_name",
+  ort: "location",
+  wohnort: "location",
+  standort: "location",
+  land: "country",
+  linkedin: "linkedin",
+};
+
+const CONTACT_KEY_ALIASES: Record<string, string> = {
+  "e-mail": "email",
+  email: "email",
+  mail: "email",
+  telefon: "phone",
+  telefonnummer: "phone",
+  "telefon nr": "phone",
+};
+
+const EXPERIENCE_KEY_ALIASES: Record<string, string> = {
+  tätigkeit: "job_title",
+  taetigkeit: "job_title",
+  stellenbezeichnung: "job_title",
+  position: "job_title",
+  rolle: "job_title",
+  stelle: "job_title",
+  job: "job_title",
+  beruf: "job_title",
+  titel: "job_title",
+  unternehmen: "company",
+  arbeitgeber: "company",
+  firma: "company",
+  betrieb: "company",
+  aufgaben: "responsibilities",
+  verantwortlichkeiten: "responsibilities",
+  aufgabenbeschreibung: "responsibilities",
+  tasks: "responsibilities",
+  beginn: "start_date",
+  start: "start_date",
+  von: "start_date",
+  ende: "end_date",
+  "end date": "end_date",
+  bis: "end_date",
+  beschäftigungsart: "type",
+  beschaftigungsart: "type",
+  typ: "type",
+};
+
+const EDUCATION_KEY_ALIASES: Record<string, string> = {
+  hochschule: "university",
+  universität: "university",
+  universitaet: "university",
+  schule: "school",
+  abschluss: "degree",
+  diplom: "degree",
+  titel: "degree",
+  fachrichtung: "field_of_study",
+  studiengang: "field_of_study",
+  richtung: "field_of_study",
+  fach: "field_of_study",
+  major: "field_of_study",
+  jahr: "graduation_year",
+  abschlussjahr: "graduation_year",
+  stufe: "education_level",
+  niveau: "education_level",
+};
+
+const TRAINING_KEY_ALIASES: Record<string, string> = {
+  titel: "name",
+  bezeichnung: "name",
+  kurs: "name",
+  zertifikat: "name",
+  anbieter: "provider",
+  träger: "provider",
+  traeger: "provider",
+  institut: "provider",
+};
+
+const LANGUAGE_KEY_ALIASES: Record<string, string> = {
+  sprache: "language",
+  niveau: "level",
+  stufe: "level",
+  sprachniveau: "level",
+};
+
+const TARGET_ROLE_KEY_ALIASES: Record<string, string> = {
+  position: "role",
+  rolle: "role",
+  stelle: "role",
+  zielposition: "role",
+  begründung: "reason",
+  begruendung: "reason",
+  begrundung: "reason",
+};
+
+const SKILLS_KEY_ALIASES: Record<string, string> = {
+  fachkenntnisse: "technical",
+  "technische kenntnisse": "technical",
+  software: "software_tools",
+  edv: "software_tools",
+  "edv-kenntnisse": "software_tools",
+  softwarekenntnisse: "software_tools",
+  marketingkenntnisse: "marketing",
+  "it-kenntnisse": "it",
+  "softwarekenntnisse / it": "it",
+  "soziale kompetenzen": "soft",
+  "soft skills": "soft",
+  kompetenzen: "soft",
+  faehigkeiten: "soft",
+};
+
+/** Move alias keys into canonical keys (only when the canonical is absent). */
+function applyAliases(
+  node: PlainObject,
+  aliases: Record<string, string>,
+): PlainObject {
+  for (const [alias, canonical] of Object.entries(aliases)) {
+    if (node[canonical] === undefined && node[alias] !== undefined) {
+      node[canonical] = node[alias];
+      delete node[alias];
+    }
+  }
+  return node;
+}
+
+/** Split a German "Zeitraum" value ("2025–2026", "seit 2024", "2024")
+ *  into [start, end]. Pure decomposition of an existing value. */
+function splitZeitraum(value: unknown): [string | null, string | null] {
+  if (!isNonEmptyString(value)) return [null, null];
+  const v = value.trim();
+  const seit = v.match(/^seit\s+(\d{4})/i);
+  if (seit) return [seit[1], null];
+  const range = v.match(/^(\S+)\s*[–—-]\s*(\S+)$/);
+  if (range) return [range[1], range[2]];
+  return [v, null];
+}
+
+/** German/English experience-type words → schema enum. */
+function experienceType(
+  value: unknown,
+): "employment" | "internship" | "freelance" | "other" {
+  switch (value) {
+    case "employment":
+    case "internship":
+    case "freelance":
+    case "other":
+      return value;
+  }
+  const v = String(value ?? "").toLowerCase().trim();
+  if (/^(werkstudent(in)?|praktikum|intern(ship)?|trainee|student)/.test(v))
+    return "internship";
+  if (/^(selbstständig|selbststaendig|freiberuflich|freelanc\w*|solo)/.test(v))
+    return "freelance";
+  return "employment";
+}
+
 /** 4) Structural coercion toward the schema shape (see module header). */
 export function normalizeProfile(
   raw: unknown,
@@ -186,14 +417,66 @@ export function normalizeProfile(
   if (!isPlainObject(raw)) {
     throw new Error("AI profile is not a JSON object");
   }
-  const data = raw;
+  // German/mixed key compatibility FIRST (moves alias values into the
+  // canonical keys; never overrides, never touches values).
+  const data = applyAliases(raw, TOP_KEY_ALIASES);
   const p: PlainObject = {};
 
-  const candidate = isPlainObject(data.candidate) ? data.candidate : null;
+  let candidate = isPlainObject(data.candidate)
+    ? data.candidate
+    : null;
   if (candidate) {
-    const contact = isPlainObject(candidate.contact)
-      ? candidate.contact
+    candidate = applyAliases(candidate, CANDIDATE_KEY_ALIASES);
+    // Models often put E-Mail/Telefon directly on the candidate object
+    // instead of inside "contact" — normalize those keys here too.
+    candidate = applyAliases(candidate, CONTACT_KEY_ALIASES);
+  }
+
+  // Compatibility: some models FLATTEN the candidate at the top level
+  // ("name", "email", "telefon", …) instead of a "candidate" object.
+  // Synthesize one from the fields that are actually present.
+  if (!candidate) {
+    const flat: PlainObject = {};
+    for (const key of [
+      "full_name",
+      "name",
+      "location",
+      "ort",
+      "wohnort",
+      "country",
+      "land",
+      "email",
+      "e-mail",
+      "phone",
+      "telefon",
+      "linkedin",
+    ]) {
+      if (data[key] !== undefined) {
+        flat[CONTACT_KEY_ALIASES[key] ?? CANDIDATE_KEY_ALIASES[key] ?? key] = data[key];
+      }
+    }
+    if (Object.keys(flat).length > 0) candidate = flat;
+  }
+
+  if (candidate) {
+    let contact = isPlainObject(candidate.contact)
+      ? applyAliases(candidate.contact, CONTACT_KEY_ALIASES)
       : null;
+    // email/phone may sit directly on the candidate object — move them
+    // into contact (compatibility, no invention).
+    if (candidate.email !== undefined || candidate.phone !== undefined || candidate.linkedin !== undefined) {
+      contact = {
+        ...(contact ?? {}),
+        ...(candidate.email !== undefined ? { email: candidate.email } : {}),
+        ...(candidate.phone !== undefined ? { phone: candidate.phone } : {}),
+        ...(candidate.linkedin !== undefined
+          ? { linkedin: candidate.linkedin }
+          : {}),
+      };
+      delete candidate.email;
+      delete candidate.phone;
+      delete candidate.linkedin;
+    }
     const candidateOut: PlainObject = {
       full_name: strOrNull(candidate.full_name),
       location: strOrNull(candidate.location),
@@ -214,26 +497,36 @@ export function normalizeProfile(
   p.goal = goal;
 
   if (Array.isArray(data.education)) {
-    p.education = data.education.filter(isPlainObject).map((e) => ({
-      school: strOrNull(e.school),
-      university: strOrNull(e.university),
-      degree: strOrNull(e.degree),
-      field_of_study: strOrNull(e.field_of_study),
-      graduation_year: gradYear(e.graduation_year),
-      education_level: strOrNull(e.education_level),
-      source: validSource(e.source),
-    }));
+    p.education = data.education
+      .filter(isPlainObject)
+      .map((e) => {
+        const entry = applyAliases(e, EDUCATION_KEY_ALIASES);
+        return {
+          school: strOrNull(entry.school),
+          university: strOrNull(entry.university),
+          degree: strOrNull(entry.degree),
+          field_of_study: strOrNull(entry.field_of_study),
+          graduation_year: gradYear(entry.graduation_year),
+          education_level: strOrNull(entry.education_level),
+          source: validSource(entry.source),
+        };
+      });
   }
 
   if (Array.isArray(data.training)) {
     p.training = data.training
       .filter(isPlainObject)
-      .map((t) => ({
-        name: isNonEmptyString(t.name) ? t.name.trim().slice(0, 300) : null,
-        provider: strOrNull(t.provider),
-        year: strOrNull(t.year),
-        source: validSource(t.source),
-      }))
+      .map((t) => {
+        const entry = applyAliases(t, TRAINING_KEY_ALIASES);
+        return {
+          name: isNonEmptyString(entry.name)
+            ? entry.name.trim().slice(0, 300)
+            : null,
+          provider: strOrNull(entry.provider),
+          year: strOrNull(entry.year),
+          source: validSource(entry.source),
+        };
+      })
       // `name` is required by the schema — entries without it are dropped.
       .filter((t) => t.name !== null);
   }
@@ -241,23 +534,38 @@ export function normalizeProfile(
   if (Array.isArray(data.experience)) {
     p.experience = data.experience
       .filter(isPlainObject)
-      .map((x) => ({
-        job_title: isNonEmptyString(x.job_title)
-          ? x.job_title.trim().slice(0, 300)
-          : null,
-        company: strOrNull(x.company),
-        responsibilities: strArray(x.responsibilities),
-        start_date: strOrNull(x.start_date),
-        end_date: strOrNull(x.end_date),
-        // Invalid/missing types normalize to "employment" (spec).
-        type: EXPERIENCE_TYPES.has(x.type as string) ? x.type : "employment",
-        source: validSource(x.source),
-      }))
+      .map((x) => {
+        const entry = applyAliases(x, EXPERIENCE_KEY_ALIASES);
+        let start = strOrNull(entry.start_date);
+        let end = strOrNull(entry.end_date);
+        // A single "Zeitraum" value ("2025–2026", "seit 2024", "2024")
+        // decomposes into start/end — pure split of an existing value.
+        if (start === null || end === null) {
+          const [zs, ze] = splitZeitraum(
+            entry.zeitraum ?? entry.zeit ?? entry.period ?? entry.dauer,
+          );
+          if (start === null) start = zs;
+          if (end === null) end = ze;
+        }
+        return {
+          job_title: isNonEmptyString(entry.job_title)
+            ? entry.job_title.trim().slice(0, 300)
+            : null,
+          company: strOrNull(entry.company),
+          responsibilities: strArray(entry.responsibilities),
+          start_date: start,
+          end_date: end,
+          type: experienceType(entry.type),
+          source: validSource(entry.source),
+        };
+      })
       // `job_title` is required by the schema — entries without it drop.
       .filter((x) => x.job_title !== null);
   }
 
-  const skills = isPlainObject(data.skills) ? data.skills : {};
+  const skills = isPlainObject(data.skills)
+    ? applyAliases(data.skills, SKILLS_KEY_ALIASES)
+    : {};
   p.skills = {
     technical: strArray(skills.technical),
     software_tools: strArray(skills.software_tools),
@@ -269,14 +577,19 @@ export function normalizeProfile(
   if (Array.isArray(data.languages)) {
     p.languages = data.languages
       .filter(isPlainObject)
-      .map((l) => ({
-        language: isNonEmptyString(l.language)
-          ? l.language.trim().slice(0, 100)
-          : null,
-        level: isNonEmptyString(l.level) ? l.level.trim().slice(0, 50) : null,
-        level_is_inferred: boolOrFalse(l.level_is_inferred),
-        source: validSource(l.source),
-      }))
+      .map((l) => {
+        const entry = applyAliases(l, LANGUAGE_KEY_ALIASES);
+        return {
+          language: isNonEmptyString(entry.language)
+            ? entry.language.trim().slice(0, 100)
+            : null,
+          level: isNonEmptyString(entry.level)
+            ? entry.level.trim().slice(0, 50)
+            : null,
+          level_is_inferred: boolOrFalse(entry.level_is_inferred),
+          source: validSource(entry.source),
+        };
+      })
       // `language` is required by the schema.
       .filter((l) => l.language !== null);
   }
@@ -300,12 +613,15 @@ export function normalizeProfile(
     p.target_roles = data.target_roles
       .filter(isPlainObject)
       .map((r) => {
-        const role = isNonEmptyString(r.role) ? r.role.trim().slice(0, 200) : null;
+        const entry = applyAliases(r, TARGET_ROLE_KEY_ALIASES);
+        const role = isNonEmptyString(entry.role)
+          ? entry.role.trim().slice(0, 200)
+          : null;
         // Backfill from a value that already exists in the same entry.
-        const reason = isNonEmptyString(r.reason)
-          ? r.reason.trim().slice(0, 500)
+        const reason = isNonEmptyString(entry.reason)
+          ? entry.reason.trim().slice(0, 500)
           : role;
-        return { role, reason, source: validSource(r.source) };
+        return { role, reason, source: validSource(entry.source) };
       })
       .filter((r) => r.role !== null && r.reason !== null);
   }

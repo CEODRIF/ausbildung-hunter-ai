@@ -49,10 +49,12 @@ Reconstruct a COMPLETE structured candidate profile from ALL factual information
 
 const GERMAN_TERMINOLOGY = `GERMAN CV TERMINOLOGY → schema field mapping (recognize ALL of these):
 EDUCATION → "education": Schulbildung, Schule, Gymnasium, Realschule, Hauptschule, Berufsfachschule, Studium, Hochschule, Universität, Fachhochschule, Bachelor, Master, Diplom, Abitur, Abschluss, Fachrichtung, Studiengang, Baccalauréat, Licence, Master.
-AUSBILDUNG / VOCATIONAL TRAINING → "training": Ausbildung, Berufsausbildung, duale Ausbildung, Lehrgang, Weiterbildung, Fortbildung, Zertifikat, Zertifizierung, Kurs, Certificate.
-EXPERIENCE → "experience": Berufserfahrung, Beruflicher Werdegang, Berufliche Erfahrung, Beschäftigung, Tätigkeit, Position, Stelle, Praktikum, Praktika, Werkstudent, Werkstudentin, Nebenjob, Minijob, Aushilfe, Freelancer, Selbstständig.
+AUSBILDUNG / VOCATIONAL TRAINING → "training": Ausbildung, Berufsausbildung, duale Ausbildung, Lehrgang, Weiterbildung, Weiterbildungen, Fortbildung, Zertifikat, Zertifikate, Zertifizierung, Kurs, Certificate.
+EXPERIENCE → "experience": Berufserfahrung, Beruflicher Werdegang, Berufliche Erfahrung, Praktische Erfahrung, Arbeitserfahrung, Beschäftigung, Tätigkeit, Tätigkeiten, Position, Stelle, Praktikum, Praktika, Werkstudent, Werkstudentin, Nebenjob, Minijob, Aushilfe, Freelancer, Selbstständig.
+EXPERIENCE ENTRY FIELDS → job_title: Tätigkeit, Stellenbezeichnung, Position, Rolle; company: Arbeitgeber, Unternehmen, Firma, Betrieb; responsibilities: Aufgaben, Verantwortlichkeiten, Tätigkeiten, Aufgabenbeschreibung; dates: Zeitraum, Zeiträume, von/bis, Beginn, Ende; type: Beschäftigungsart.
 SKILLS → "skills": Kenntnisse, Fachkenntnisse, IT-Kenntnisse, EDV-Kenntnisse, Softwarekenntnisse, Software, Technische Kenntnisse, Marketingkenntnisse, Fähigkeiten, Kompetenzen, MS Office, Excel, Word, PowerPoint, SAP.
-LANGUAGES → "languages": Sprachkenntnisse, Sprachen, Muttersprache, Grundkenntnisse, Gute Kenntnisse, Sehr gute Kenntnisse, Fließend, Verhandlungssicher, B1, B2, C1, C2.`;
+LANGUAGES → "languages": Sprachkenntnisse, Sprachen, Muttersprache, Grundkenntnisse, Gute Kenntnisse, Sehr gute Kenntnisse, Fließend, Verhandlungssicher, B1, B2, C1, C2.
+TARGET ROLES → "target_roles": Zielfunktion, Zielfunktionen, Zielposition, Zielpositionen, Zielberuf, Zielberufe, gewünschte Position, gewünschte Stelle, Wunschberuf.`;
 
 const FIELD_RULES = `EXTRACTION RULES — be comprehensive, field by field:
 1. candidate: full_name, current city + country, email, phone, linkedin (if present).
@@ -68,6 +70,13 @@ const FIELD_RULES = `EXTRACTION RULES — be comprehensive, field by field:
 11. potential_concerns: ONLY concerns the document gives EVIDENCE for, in German (e.g. "Deutsch nur B1 — für manche Ausbildungsberufe mögliches Risiko", "Zeitraum der Aushilfstätigkeit ungenau", "Lücke im Lebenslauf zwischen … und …"). If there is no such evidence, return []. NEVER manufacture negative concerns.
 12. keywords: 8–20 keywords taken from the document itself — job titles, qualifications, tools, technologies, industries, languages, and relevant skills. No generic AI filler words.`;
 
+const OUTPUT_CONTRACT = `OUTPUT CONTRACT (follow exactly):
+- Return ONLY one valid JSON object — no markdown fences, no commentary.
+- The JSON KEYS must be EXACTLY the English keys of the template. NEVER translate or rename keys into German or any other language: do NOT use "Berufserfahrung", "Zielfunktionen", "Zielpositionen", "Tätigkeit", "Unternehmen", "Zeitraum", "Kenntnisse", "Sprachkenntnisse" or similar as JSON keys. Only the VALUES are written in the document's language — a German job title stays a German job title (umlauts intact, never translated).
+- If the document lists any Tätigkeiten / Berufserfahrung / Praktika, "experience" MUST contain them as entries. "experience": [] is only correct for a document with no work history at all.
+- If the profile (education + experience + skills + interests) supports realistic target roles, "target_roles" MUST NOT be empty.
+- "goal" must be exactly the Goal value given below.`;
+
 /**
  * Build the full user prompt for one scan pass.
  * @param goal the scan goal from the server row (authoritative for "goal").
@@ -82,8 +91,9 @@ export function buildScannerPrompt(goal: ScanGoal, context: string): string {
     ANALYSIS_INSTRUCTIONS,
     GERMAN_TERMINOLOGY,
     FIELD_RULES,
+    OUTPUT_CONTRACT,
     `Goal: ${goal}`,
-    `Return ONLY one valid JSON object — no markdown fences, no commentary — matching EXACTLY this top-level shape (use "goal": "${goal}"):`,
+    `Return JSON with this exact top-level shape:`,
     shape,
     `Reference documents:`,
     context,

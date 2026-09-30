@@ -90,7 +90,10 @@ describe("German CV pipeline: extraction → prompt → (mocked AI) → normaliz
     // The context block appears verbatim and ends the prompt.
     expect(prompt.endsWith(context)).toBe(true);
     expect(prompt).toContain("Goal: ausbildung");
-    expect(prompt).toContain('"goal": "ausbildung"');
+    // goal is substituted into the JSON template
+    expect(prompt).toContain('"goal":"ausbildung"');
+    // ...and the OUTPUT CONTRACT tells the model to keep exactly this goal
+    expect(prompt).toContain('"goal" must be exactly the Goal value given below');
 
     // §16 measurement: a realistic CV stays far below any modern context.
     // (logged for the record, asserted as a hard ceiling)
@@ -284,6 +287,91 @@ describe("German CV pipeline: extraction → prompt → (mocked AI) → normaliz
     expect(profile.experience[0].company).toBe(
       "Kältebau Beispiel AG, Düsseldorf",
     );
+  });
+
+  it("model answer with GERMAN KEYS (the demonstrated loss point) → complete profile", () => {
+    // A German-native model can answer with German section/entry keys while
+    // every value is correct. The pipeline must not lose Berufserfahrung /
+    // Zielfunktionen to the key names.
+    const raw =
+      "```json\n" +
+      JSON.stringify({
+        "Kandidat": {
+          "Name": "Lara Müller",
+          "Ort": "Köln",
+          "E-Mail": "lara.mueller@example.com",
+          "Telefon": "+49 151 23456789",
+        },
+        "Ziel": "arbeit",
+        "Berufserfahrung": [
+          {
+            "Tätigkeit": "Werkstudentin Online-Marketing",
+            "Unternehmen": "Muster E-Commerce GmbH, Köln",
+            "Zeitraum": "2025–2026",
+            "Aufgaben": ["SEO- und SEA-Kampagnen"],
+            "Beschäftigungsart": "Werkstudentin",
+          },
+          {
+            "Tätigkeit": "Praktikum E-Commerce & Affiliate Marketing",
+            "Unternehmen": "Shopland GmbH, Bonn",
+            "Zeitraum": "07/2024–09/2024",
+            "Aufgaben": ["Affiliate-Kampagnen"],
+          },
+        ],
+        "Bildung": [
+          {
+            "Hochschule": "Universität zu Köln",
+            "Abschluss": "Bachelor of Arts (B.A.)",
+            "Fachrichtung": "English Studies",
+            "Jahr": 2026,
+          },
+        ],
+        "Ausbildung": [
+          { "Name": "Zertifikat Online-Marketing", "Anbieter": "IHK Köln", "Jahr": "2024" },
+        ],
+        "Sprachkenntnisse": [
+          { "Sprache": "Arabisch", "Niveau": "Muttersprache" },
+          { "Sprache": "Englisch", "Niveau": "B2" },
+          { "Sprache": "Deutsch", "Niveau": "B1" },
+        ],
+        "Kenntnisse": {
+          "Fachkenntnisse": ["E-Commerce", "SEO", "SEA", "Affiliate Marketing"],
+          "Software": ["MS Excel", "MS Word", "MS PowerPoint"],
+        },
+        "Zielpositionen": [
+          {
+            "Position": "Kaufleute für E-Commerce (Ausbildung)",
+            "Begründung": "Praktikum im E-Commerce und Affiliate Marketing plus SEO/SEA-Kenntnisse.",
+          },
+          {
+            "Position": "Online-Marketing-Fachkraft",
+            "Begründung": "Werkstudententätigkeit im Online-Marketing sowie IHK-Zertifikat.",
+          },
+        ],
+        "Stärken": [
+          "Praktische E-Commerce-Erfahrung: Praktikum bei Shopland GmbH und Werkstudentenstelle.",
+        ],
+        "Fehlende Informationen": ["Kein LinkedIn-Profil angegeben."],
+        "Mögliche Bedenken": [],
+        "Schlüsselwörter": ["E-Commerce", "Online-Marketing", "SEO", "SEA", "Köln"],
+      }) +
+      "\n```";
+    const profile = runPipeline(raw, "ausbildung");
+
+    // the sections that disappeared in production must now survive
+    expect(profile.experience).toHaveLength(2);
+    expect(profile.experience[0].job_title).toBe("Werkstudentin Online-Marketing");
+    expect(profile.experience[0].start_date).toBe("2025");
+    expect(profile.experience[0].end_date).toBe("2026");
+    expect(profile.experience[0].type).toBe("internship");
+    expect(profile.target_roles).toHaveLength(2);
+    expect(profile.target_roles[0].reason.length).toBeGreaterThan(10);
+    // and every other section stays complete too
+    expect(profile.education).toHaveLength(1);
+    expect(profile.training).toHaveLength(1);
+    expect(profile.languages).toHaveLength(3);
+    expect(profile.candidate.full_name).toBe("Lara Müller");
+    expect(profile.goal).toBe("ausbildung"); // server goal wins over "Ziel": "arbeit"
   });
 
   it("mixed German/English terminology passes through untranslated", () => {
