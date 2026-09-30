@@ -15,6 +15,13 @@ const securityHeaders = buildSecurityHeaders(
 );
 
 const nextConfig: NextConfig = {
+  // PDF stack (pdf-parse v2 → pdf.js 5 + @napi-rs/canvas) must load from
+  // node_modules at runtime, NOT be inlined by the bundler: the parser's
+  // worker bootstraps the canvas-backed DOMMatrix/ImageData/Path2D globals
+  // pdf.js needs in Node. Inlined, that bootstrap is lost and pdf.js falls
+  // back to a path referencing the bare browser global →
+  // `DOMMatrix is not defined` (see src/lib/pdf-extract.ts).
+  serverExternalPackages: ["pdf-parse", "pdfjs-dist", "@napi-rs/canvas"],
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

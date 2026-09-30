@@ -31,6 +31,14 @@ export function BewerbungScannerUpload({ profile }: { profile: Profile }) {
   >("idle");
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  // Stable server error codes → localized, user-friendly messages. Anything
+  // else (already user-safe messages from the API) passes through as-is.
+  const friendlyScanError = (raw: string) =>
+    raw === "PDF_PARSE_FAILED"
+      ? t("account.scanPdfFailed")
+      : raw === "SCAN_UNEXPECTED_FAILED"
+        ? t("account.scanUnexpectedFailed")
+        : raw || t("account.scannerScanFailed");
   const addFiles = async (incoming: File[]) => {
     setError("");
     if (files.length + incoming.length > 10) {
@@ -80,12 +88,16 @@ export function BewerbungScannerUpload({ profile }: { profile: Profile }) {
       });
       const result = await response.json();
       if (!response.ok)
-        throw new Error(result.error || t("account.scannerScanFailed"));
+        throw new Error(
+          friendlyScanError(
+            typeof result.error === "string" ? result.error : "",
+          ),
+        );
       router.push(`/bewerbung-scanner/${result.scanId}`);
     } catch (scanError) {
       setError(
-        scanError instanceof Error
-          ? scanError.message
+        scanError instanceof Error && scanError.message
+          ? friendlyScanError(scanError.message)
           : t("account.scannerScanFailed"),
       );
       setStatus("error");

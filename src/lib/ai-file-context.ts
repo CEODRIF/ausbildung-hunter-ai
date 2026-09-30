@@ -3,6 +3,7 @@ import "server-only";
 import mammoth from "mammoth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAIProvider } from "@/lib/ai-provider";
+import { extractPdfText } from "@/lib/pdf-extract";
 
 export type ContextFile = {
   filename: string;
@@ -19,17 +20,11 @@ export async function buildFileContext(files: ContextFile[]) {
     if (error || !data) continue;
     const buffer = Buffer.from(await data.arrayBuffer());
     if (file.mime_type === "application/pdf") {
-      // Lazy-load pdf-parse only when a PDF is actually parsed. Its ESM build
-      // runs `new DOMMatrix()` at module scope (a browser-only API); a static
-      // top-level import would crash any server-rendered page that transitively
-      // loads this module (e.g. /dashboard → ai-service → here) during SSR.
-      // The dynamic import confines evaluation to this real parse call, which
-      // only runs in the server action/route context.
-      const { PDFParse } = await import("pdf-parse");
-      const parser = new PDFParse({ data: buffer });
-      const parsed = await parser.getText();
-      await parser.destroy();
-      parts.push(`FILE ${file.filename}\n${parsed.text.slice(0, 50000)}`);
+      // Server-safe extraction (see src/lib/pdf-extract.ts): the parser is
+      // lazy-loaded for this real parse call only, real errors are logged
+      // server-side, and callers receive the stable PDF_PARSE_FAILED code.
+      const text = await extractPdfText(buffer);
+      parts.push(`FILE ${file.filename}\n${text.slice(0, 50000)}`);
     } else if (
       file.mime_type ===
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

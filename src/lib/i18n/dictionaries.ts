@@ -592,6 +592,10 @@ const de = {
     bulkFailed:
       "Die ausgewählten Scans konnten nicht gelöscht werden. Prüfen Sie die Liste unten und versuchen Sie es erneut.",
     scanNotReady: "Dieser Scan ist noch nicht bereit.",
+    scanPdfFailed:
+      "Die PDF-Datei konnte nicht gelesen werden. Bitte prüfen Sie die Datei und versuchen Sie es erneut.",
+    scanUnexpectedFailed:
+      "Der Scan ist unerwartet fehlgeschlagen. Bitte versuchen Sie es erneut.",
     nextStep: "Nächster Schritt",
     nextStepBody:
       "Ihr Profil ist bereit. Lassen Sie die KI damit echte {goal}-Angebote in der öffentlichen Jobsuche finden — mit Live-Verlauf und Excel-Export.",
@@ -1288,6 +1292,10 @@ const en: Dict = {
     bulkFailed:
       "We could not delete the selected scans. Check the list below and try again.",
     scanNotReady: "This scan is not ready yet.",
+    scanPdfFailed:
+      "We could not read that PDF file. Please check the file and try again.",
+    scanUnexpectedFailed:
+      "The scan failed unexpectedly. Please try again.",
     nextStep: "Next step",
     nextStepBody:
       "Your profile is ready. Let the AI use it to find real {goal} opportunities across the public Jobsuche — with live progress and an Excel export.",
@@ -1980,6 +1988,10 @@ const fr: Dict = {
     bulkFailed:
       "Les scans sélectionnés n'ont pas pu être supprimés. Vérifiez la liste ci-dessous et réessayez.",
     scanNotReady: "Ce scan n'est pas encore prêt.",
+    scanPdfFailed:
+      "Nous n'avons pas pu lire ce fichier PDF. Veuillez vérifier le fichier et réessayer.",
+    scanUnexpectedFailed:
+      "Le scan a échoué de manière inattendue. Veuillez réessayer.",
     nextStep: "Étape suivante",
     nextStepBody:
       "Votre profil est prêt. Laissez l'IA trouver de vraies offres de {goal} dans la Jobsuche publique — avec suivi en direct et export Excel.",
@@ -2664,6 +2676,9 @@ const ar: Dict = {
       "حُذف {count} مسح، بما في ذلك الملفات المرفوعة التي لم يستخدمها مسح آخر.",
     bulkFailed: "تعذر حذف المسح المحدد. تحقق من القائمة أدناه وحاول مرة أخرى.",
     scanNotReady: "هذا المسح غير جاهز بعد.",
+    scanPdfFailed:
+      "تعذر قراءة ملف PDF. يرجى التحقق من الملف ثم المحاولة مرة أخرى.",
+    scanUnexpectedFailed: "فشل المسح بشكل غير متوقع. يرجى المحاولة مرة أخرى.",
     nextStep: "الخطوة التالية",
     nextStepBody:
       "ملفك جاهز. دع الذكاء الاصطناعي يجد عروض {goal} حقيقية في بحث الوظائف العام — مع تقدم مباشر وتصدير Excel.",

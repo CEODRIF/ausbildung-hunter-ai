@@ -38,7 +38,11 @@ export default async function BewerbungScannerResultsPage({
           />
         ) : (
           <div className="rounded-2xl border border-danger/25 bg-surface p-8 text-center text-sm text-danger">
-            {data.scan.error_message || t("account.scanNotReady")}
+            {data.scan.error_message === "PDF_PARSE_FAILED"
+              ? t("account.scanPdfFailed")
+              : data.scan.error_message === "SCAN_UNEXPECTED_FAILED"
+                ? t("account.scanUnexpectedFailed")
+                : data.scan.error_message || t("account.scanNotReady")}
           </div>
         )}
         {data.profile && (

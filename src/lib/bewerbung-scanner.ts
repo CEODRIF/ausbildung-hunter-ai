@@ -9,6 +9,25 @@ import {
   candidateProfileSchema,
   type CandidateProfile,
 } from "@/lib/bewerbung-schema";
+import { PDF_PARSE_FAILED } from "@/lib/pdf-extract";
+
+/** Stable, user-safe code for unexpected scan failures (UI localizes it). */
+export const SCAN_UNEXPECTED_FAILED = "SCAN_UNEXPECTED_FAILED";
+/** Messages that are already user-safe (stored verbatim, no code mapping). */
+const SAFE_SCAN_MESSAGES = new Set([
+  "Not authorized.",
+  "Scan not found.",
+  "Upload between 1 and 10 supported files.",
+  "Unable to create scan.",
+  "Unable to save scan files.",
+  "No scan files found.",
+  "Scan file ownership could not be verified.",
+  "AI daily request limit reached. Please try again tomorrow.",
+  "AI usage is unavailable.",
+  "The AI response did not match the required profile schema.",
+  "Unable to save candidate profile.",
+  PDF_PARSE_FAILED,
+]);
 
 export type ScanGoal = "ausbildung" | "arbeit";
 export type ScanFile = {
@@ -140,13 +159,22 @@ export async function runScan(scanId: string) {
     });
     return finalProfile;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Scan failed.";
+    const raw = error instanceof Error ? error.message : "Scan failed.";
+    // Only user-safe messages and stable codes reach the DB (surfaced in the
+    // UI) and the client response. Unexpected technical failures (library
+    // internals like "DOMMatrix is not defined", provider stack messages)
+    // are logged server-side and replaced with SCAN_UNEXPECTED_FAILED.
+    const message = SAFE_SCAN_MESSAGES.has(raw)
+      ? raw
+      : SCAN_UNEXPECTED_FAILED;
+    if (message !== raw)
+      console.error("[bewerbung-scanner] scan failed:", error);
     await admin
       .from("bewerbung_scans")
       .update({ status: "failed", error_message: message.slice(0, 500) })
       .eq("id", scanId)
       .eq("user_id", user.id);
-    throw error;
+    throw new Error(message);
   }
 }
 
