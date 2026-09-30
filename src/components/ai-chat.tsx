@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -272,6 +272,76 @@ function Markdown({ content }: { content: string }) {
   );
 }
 
+/**
+ * A committed message bubble. Memoized: while a new answer streams, the
+ * stream updates re-render ONLY the streaming bubble — the committed
+ * history (and its Markdown parsing) is skipped entirely, which is what
+ * keeps typing and the rest of the UI responsive.
+ */
+const MessageBubble = memo(function MessageBubble({
+  message,
+}: {
+  message: DisplayMessage;
+}) {
+  if (message.role === "user") {
+    return (
+      <div className="flex flex-col items-end">
+        {message.files.length > 0 && (
+          <div className="mb-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
+            {message.files.map((file, index) => (
+              <span
+                key={`${file.filename}-${index}`}
+                className="flex items-center gap-1.5 rounded-lg border border-line-strong bg-surface py-1 pl-1.5 pr-2 shadow-sm"
+              >
+                <span className="flex h-6 w-6 items-center justify-center rounded-md bg-accent-soft text-accent">
+                  <Icon
+                    name={isImageMime(file.mime_type) ? "image" : "file"}
+                    size={12}
+                  />
+                </span>
+                <span className="max-w-[160px] truncate text-[11px] font-semibold text-ink-soft">
+                  {file.filename}
+                </span>
+                <span className="text-[10px] text-faint">
+                  {formatFileSize(file.size_bytes)}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-sm leading-6 text-white shadow-[0_4px_12px_rgba(47,111,237,0.18)]">
+          {message.content}
+        </div>
+        <span className="mt-1 pr-1 text-[10px] text-faint">
+          {formatTime(message.created_at)}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex gap-2.5">
+      <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+        <Icon name="spark" size={14} />
+      </span>
+      <div className="min-w-0 max-w-[88%] flex-1">
+        <div className="mb-1 flex items-baseline gap-2">
+          <span className="text-[11px] font-bold text-ink-soft">
+            Ausbildung Hunter AI
+          </span>
+          <span className="text-[10px] text-faint">
+            {formatTime(message.created_at)}
+          </span>
+        </div>
+        {message.content ? (
+          <div className="text-sm text-ink-soft">
+            <Markdown content={message.content} />
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+});
+
 export function AIChat({
   conversations: initialConversations,
   selectedConversation,
@@ -312,6 +382,32 @@ export function AIChat({
   // a stale response must never be committed into a newer conversation.
   const convIdRef = useRef(selectedConversation.id);
   convIdRef.current = selectedConversation.id;
+  // Stream-text coalescing: the first chunk commits to state IMMEDIATELY
+  // (no frame wait — the bubble must appear as soon as the first token
+  // arrives), subsequent chunks flush at most once per animation frame so
+  // the UI never renders more often than it can paint.
+  const pendingStreamRef = useRef<string | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const flushStreamRef = (text: string) => {
+    pendingStreamRef.current = text;
+    if (rafRef.current === null) {
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        if (pendingStreamRef.current !== null) {
+          setStreamContent(pendingStreamRef.current);
+        }
+      });
+    }
+  };
+  const cancelStreamFlush = () => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    pendingStreamRef.current = null;
+  };
+  // Never leak a pending frame after unmount.
+  useEffect(() => () => cancelStreamFlush(), []);
 
   // Conversation switch (or first mount): reset the conversation-bound
   // client state when the selected conversation changes — React's
@@ -347,6 +443,9 @@ export function AIChat({
       abortRef.current.abort();
       abortRef.current = null;
     }
+    // A pending frame flush from the previous conversation must not paint
+    // into the new one.
+    cancelStreamFlush();
   }, [selectedConversation.id]);
 
   // Auto-scroll while the user is at the bottom; never fight scrollback.
@@ -500,6 +599,7 @@ export function AIChat({
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let complete = "";
+      let firstChunk = true;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -507,8 +607,17 @@ export function AIChat({
         // Show only the model text — the server appends a NUL-delimited
         // metadata frame after the last token.
         const cut = complete.lastIndexOf("\u0000");
-        setStreamContent(cut === -1 ? complete : complete.slice(0, cut));
+        const display = cut === -1 ? complete : complete.slice(0, cut);
+        if (firstChunk) {
+          // First token: paint now, do not wait for a frame or the rest
+          // of the answer.
+          firstChunk = false;
+          setStreamContent(display);
+        } else {
+          flushStreamRef(display);
+        }
       }
+      cancelStreamFlush();
       // Extract the persisted assistant message id from the final metadata
       // frame so the committed bubble carries the real database identity
       // (stable across refreshes); fall back to a local id if absent.
@@ -540,6 +649,7 @@ export function AIChat({
       setPendingAssistant(false);
       setStreamContent("");
     } catch (error) {
+      cancelStreamFlush();
       setPendingAssistant(false);
       setStreamContent("");
       if ((error as Error).name === "AbortError") return; // stopped: partial answer is persisted server-side
@@ -797,62 +907,9 @@ export function AIChat({
               </div>
             ) : (
               <div className="space-y-6 pb-2">
-                {messages.map((message) =>
-                  message.role === "user" ? (
-                    <div key={message.id} className="flex flex-col items-end">
-                      {message.files.length > 0 && (
-                        <div className="mb-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
-                          {message.files.map((file, index) => (
-                            <span
-                              key={`${file.filename}-${index}`}
-                              className="flex items-center gap-1.5 rounded-lg border border-line-strong bg-surface py-1 pl-1.5 pr-2 shadow-sm"
-                            >
-                              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-accent-soft text-accent">
-                                <Icon
-                                  name={isImageMime(file.mime_type) ? "image" : "file"}
-                                  size={12}
-                                />
-                              </span>
-                              <span className="max-w-[160px] truncate text-[11px] font-semibold text-ink-soft">
-                                {file.filename}
-                              </span>
-                              <span className="text-[10px] text-faint">
-                                {formatFileSize(file.size_bytes)}
-                              </span>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-sm leading-6 text-white shadow-[0_4px_12px_rgba(47,111,237,0.18)]">
-                        {message.content}
-                      </div>
-                      <span className="mt-1 pr-1 text-[10px] text-faint">
-                        {formatTime(message.created_at)}
-                      </span>
-                    </div>
-                  ) : (
-                    <div key={message.id} className="flex gap-2.5">
-                      <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-                        <Icon name="spark" size={14} />
-                      </span>
-                      <div className="min-w-0 max-w-[88%] flex-1">
-                        <div className="mb-1 flex items-baseline gap-2">
-                          <span className="text-[11px] font-bold text-ink-soft">
-                            Ausbildung Hunter AI
-                          </span>
-                          <span className="text-[10px] text-faint">
-                            {formatTime(message.created_at)}
-                          </span>
-                        </div>
-                        {message.content ? (
-                          <div className="text-sm text-ink-soft">
-                            <Markdown content={message.content} />
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  ),
-                )}
+                {messages.map((message) => (
+                  <MessageBubble key={message.id} message={message} />
+                ))}
                 {pendingAssistant && (
                   <div className="flex gap-2.5">
                     <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
@@ -863,8 +920,12 @@ export function AIChat({
                         Ausbildung Hunter AI
                       </div>
                       {streamContent ? (
-                        <div className="text-sm text-ink-soft">
-                          <Markdown content={streamContent} />
+                        // Plain (unformatted) text while streaming: parsing
+                        // full Markdown on every frame would stall the UI on
+                        // long answers. The committed message (above) renders
+                        // the final Markdown exactly once.
+                        <div className="whitespace-pre-wrap break-words text-sm text-ink-soft">
+                          {streamContent}
                         </div>
                       ) : (
                         <ThinkingDots />

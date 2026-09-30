@@ -285,6 +285,31 @@ const NOTIF_TYPE_KEYS = {
   improvement: "admin.notifTypeImprovement",
 } as const;
 
+// Short module-level TTL cache: AppShell remounts on every section
+// navigation, so a fresh /api/notifications fetch per remount would be pure
+// duplicate traffic. 30 s is comfortably fresh for an unread badge; the
+// cache is invalidated when the user marks a notification read. All mutation
+// happens in these plain module-level accessors (not in component code).
+const notificationCache: {
+  at: number;
+  items: ShellNotification[] | null;
+} = { at: 0, items: null };
+const NOTIFICATION_TTL_MS = 30_000;
+
+function readNotificationCache(): ShellNotification[] | null {
+  if (notificationCache.items && Date.now() - notificationCache.at < NOTIFICATION_TTL_MS)
+    return notificationCache.items;
+  return null;
+}
+function writeNotificationCache(items: ShellNotification[]) {
+  notificationCache.at = Date.now();
+  notificationCache.items = items;
+}
+function invalidateNotificationCache() {
+  notificationCache.at = 0;
+  notificationCache.items = null;
+}
+
 function NotificationsBell() {
   const { t, lang } = useI18n();
   const locale =
@@ -294,10 +319,16 @@ function NotificationsBell() {
   const rootRef = useDismiss<HTMLDivElement>(open, useCallback(() => setOpen(false), []));
 
   const refresh = useCallback(async () => {
+    const cached = readNotificationCache();
+    if (cached) {
+      setItems(cached);
+      return;
+    }
     try {
       const response = await fetch("/api/notifications", { cache: "no-store" });
       if (!response.ok) return;
       const data = (await response.json()) as { items: ShellNotification[] };
+      writeNotificationCache(data.items);
       setItems(data.items);
     } catch {
       // Keep whatever we already show; the bell is non-critical chrome.
@@ -316,7 +347,12 @@ function NotificationsBell() {
       if (!document.hidden) void refresh();
     };
     document.addEventListener("visibilitychange", onVisible);
-    const interval = setInterval(() => void refresh(), 60_000);
+    // Poll only while the tab is visible — a background tab needs no polls
+    // (visibilitychange already refreshes on return).
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      void refresh();
+    }, 60_000);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(interval);
@@ -328,6 +364,9 @@ function NotificationsBell() {
   const markRead = async (item: ShellNotification) => {
     if (item.read) return;
     // Optimistic: the read state is per-user and idempotent server-side.
+    // Invalidate the shared cache so a remount re-reads the fresh state
+    // instead of resurrecting the stale unread flag.
+    invalidateNotificationCache();
     setItems((current) =>
       (current ?? []).map((row) =>
         row.id === item.id

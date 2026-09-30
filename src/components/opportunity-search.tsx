@@ -75,8 +75,26 @@ export function OpportunitySearch({
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const startedRef = useRef(false);
+  // Latest state mirror so handlers can compute the next state without side
+  // effects inside a setState updater. commitSearch/scheduleSearch update it
+  // synchronously (event handlers), and the effect re-syncs after every
+  // committed render.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  const searchSeqRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const search = useCallback(async (next: SearchUrlState) => {
+    // Every search supersedes the previous one: abort the in-flight request
+    // and ignore stale responses — an out-of-order answer from an older
+    // query must never overwrite the newest results.
+    const seq = ++searchSeqRef.current;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setError(null);
     setSourceStatus(null);
@@ -104,6 +122,7 @@ export function OpportunitySearch({
         query.set("distance_max", String(next.distance_max));
       const response = await fetch(
         `/api/opportunities/search?${query.toString()}`,
+        { signal: controller.signal },
       );
       const data = (await response.json().catch(() => null)) as
         | (OpportunitySearchResponse & {
@@ -111,6 +130,7 @@ export function OpportunitySearch({
             source_status?: SourceStatus;
           })
         | null;
+      if (seq !== searchSeqRef.current) return; // superseded
       if (!response.ok) {
         const sourceStatus = data?.source_status ?? null;
         if (sourceStatus) {
@@ -132,33 +152,53 @@ export function OpportunitySearch({
       // Non-blocking notice only when a source actually degraded.
       const failed = data.sources?.find((s) => s.status !== "ok");
       if (failed) setSourceStatus(failed);
-    } catch (searchError) {
-      setResults(null);
-      setTotal(null);
-      setScanTruncated(false);
-      setSourceStatus(null);
-      setError(
-        searchError instanceof Error
-          ? searchError.message
-          : t("search.error"),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
+     } catch (searchError) {
+       if (controller.signal.aborted || seq !== searchSeqRef.current) return;
+       setResults(null);
+       setTotal(null);
+       setScanTruncated(false);
+       setSourceStatus(null);
+       setError(
+         searchError instanceof Error
+           ? searchError.message
+           : t("search.error"),
+       );
+     } finally {
+       if (seq === searchSeqRef.current) setLoading(false);
+     }
+   }, [t]);
 
-  /** Apply a state change: run the search and sync the shareable URL. */
-  const apply = useCallback(
+  const syncUrl = (next: SearchUrlState) => {
+    const qs = serializeSearchState(next);
+    router.replace(qs ? `/opportunities?${qs}` : "/opportunities");
+  };
+
+  /** Filters / submit / pagination: search immediately. */
+  const commitSearch = useCallback(
     (mutate: (current: SearchUrlState) => SearchUrlState, resetPage = true) => {
-      setState((current) => {
-        const next = mutate(current);
-        const final = resetPage ? { ...next, page: 1 } : next;
-        void search(final);
-        const qs = serializeSearchState(final);
-        router.replace(qs ? `/opportunities?${qs}` : "/opportunities");
-        return final;
-      });
+      const next = mutate(stateRef.current);
+      const final = resetPage ? { ...next, page: 1 } : next;
+      stateRef.current = final;
+      setState(final);
+      syncUrl(final);
+      void search(final);
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [router, search],
+  );
+
+  /** Text inputs: instant local update + ONE debounced search after the
+   *  user pauses (400 ms) — never one API request per keystroke. */
+  const scheduleSearch = useCallback(
+    (mutate: (current: SearchUrlState) => SearchUrlState) => {
+      const final = mutate(stateRef.current);
+      stateRef.current = final;
+      setState(final);
+      syncUrl(final);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => void search(final), 400);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [router, search],
   );
 
@@ -166,9 +206,17 @@ export function OpportunitySearch({
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    void search(state);
+    void search(stateRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Cancel in-flight work (pending debounce + open request) on unmount.
+  useEffect(
+    () => () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      abortRef.current?.abort();
+    },
+    [],
+  );
 
   const hasLocation = state.location.trim().length > 0;
   const isAusbildung = state.goal === "ausbildung";
@@ -187,7 +235,7 @@ export function OpportunitySearch({
     state.distance_max !== null;
 
   const clearFilters = () =>
-    apply((current) => ({
+    commitSearch((current) => ({
       ...current,
       keyword: "",
       role: "",
@@ -215,7 +263,7 @@ export function OpportunitySearch({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          apply((current) => current);
+          commitSearch((current) => current);
         }}
         className="rounded-2xl border border-line bg-surface p-5 sm:p-6"
       >
@@ -225,7 +273,7 @@ export function OpportunitySearch({
             <button
               key={value}
               type="button"
-              onClick={() => apply((current) => ({ ...current, goal: value }))}
+              onClick={() => commitSearch((current) => ({ ...current, goal: value }))}
               className={
                 state.goal === value
                   ? "rounded-lg bg-navy px-4 py-2 text-xs font-bold text-white"
@@ -245,10 +293,10 @@ export function OpportunitySearch({
             value={state.keyword}
             maxLength={120}
             onChange={(event) =>
-              apply(
-                (current) => ({ ...current, keyword: event.target.value }),
-                false,
-              )
+              scheduleSearch((current) => ({
+                ...current,
+                keyword: event.target.value,
+              }))
             }
             aria-label={t("search.ph.keyword")}
           />
@@ -258,10 +306,10 @@ export function OpportunitySearch({
             value={state.location}
             maxLength={120}
             onChange={(event) =>
-              apply(
-                (current) => ({ ...current, location: event.target.value }),
-                false,
-              )
+              scheduleSearch((current) => ({
+                ...current,
+                location: event.target.value,
+              }))
             }
             aria-label={t("search.ph.location")}
           />
@@ -273,14 +321,11 @@ export function OpportunitySearch({
             onChange={(event) => {
               const raw = event.target.value.replace(/[^0-9]/g, "");
               const value = raw === "" ? null : Number(raw);
-              apply(
-                (current) => ({
-                  ...current,
-                  radius:
-                    value !== null && value >= 5 && value <= 100 ? value : null,
-                }),
-                false,
-              );
+              scheduleSearch((current) => ({
+                ...current,
+                radius:
+                  value !== null && value >= 5 && value <= 100 ? value : null,
+              }));
             }}
             aria-label={t("search.ph.radius")}
           />
@@ -292,7 +337,7 @@ export function OpportunitySearch({
             className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
             value={state.freshness}
             onChange={(event) =>
-              apply((current) => ({
+              commitSearch((current) => ({
                 ...current,
                 freshness: event.target.value as SearchUrlState["freshness"],
               }))
@@ -309,7 +354,7 @@ export function OpportunitySearch({
             className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
             value={state.sort}
             onChange={(event) =>
-              apply((current) => ({
+              commitSearch((current) => ({
                 ...current,
                 sort: event.target.value as SearchUrlState["sort"],
               }))
@@ -330,7 +375,7 @@ export function OpportunitySearch({
             className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
             value={state.employment}
             onChange={(event) =>
-              apply((current) => ({
+              commitSearch((current) => ({
                 ...current,
                 employment: event.target.value as SearchUrlState["employment"],
               }))
@@ -346,7 +391,7 @@ export function OpportunitySearch({
               className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
               value={state.training_type}
               onChange={(event) =>
-                apply((current) => ({
+                commitSearch((current) => ({
                   ...current,
                   training_type: event.target
                     .value as SearchUrlState["training_type"],
@@ -364,7 +409,7 @@ export function OpportunitySearch({
               className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
               value={state.home_office}
               onChange={(event) =>
-                apply((current) => ({
+                commitSearch((current) => ({
                   ...current,
                   home_office: event.target
                     .value as SearchUrlState["home_office"],
@@ -380,7 +425,7 @@ export function OpportunitySearch({
             className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
             value={state.salary_documented ? "1" : "0"}
             onChange={(event) =>
-              apply((current) => ({
+              commitSearch((current) => ({
                 ...current,
                 salary_documented: event.target.value === "1",
               }))
@@ -400,7 +445,7 @@ export function OpportunitySearch({
             value={state.role}
             maxLength={120}
             onChange={(event) =>
-              apply(
+              commitSearch(
                 (current) => ({ ...current, role: event.target.value }),
                 false,
               )
@@ -413,7 +458,7 @@ export function OpportunitySearch({
             value={state.company}
             maxLength={160}
             onChange={(event) =>
-              apply(
+              commitSearch(
                 (current) => ({ ...current, company: event.target.value }),
                 false,
               )
@@ -431,7 +476,7 @@ export function OpportunitySearch({
               onChange={(event) => {
                 const raw = event.target.value.replace(/[^0-9]/g, "");
                 const value = raw === "" ? null : Number(raw);
-                apply(
+                commitSearch(
                   (current) => ({
                     ...current,
                     distance_max:
@@ -453,7 +498,7 @@ export function OpportunitySearch({
               type="checkbox"
               checked={state.match}
               onChange={(event) =>
-                apply((current) => ({
+                commitSearch((current) => ({
                   ...current,
                   match: event.target.checked,
                   sort:
@@ -698,7 +743,7 @@ export function OpportunitySearch({
               type="button"
               disabled={!hasPrev || loading}
               onClick={() =>
-                apply(
+                commitSearch(
                   (current) => ({ ...current, page: current.page - 1 }),
                   false,
                 )
@@ -719,7 +764,7 @@ export function OpportunitySearch({
               type="button"
               disabled={!hasNext || loading}
               onClick={() =>
-                apply(
+                commitSearch(
                   (current) => ({ ...current, page: current.page + 1 }),
                   false,
                 )

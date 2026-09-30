@@ -132,6 +132,9 @@ export async function POST(request: Request) {
       headers: {
         "content-type": "text/plain; charset=utf-8",
         "cache-control": "no-cache",
+        // Never buffer this stream in intermediate proxies (nginx-style
+        // gateways) — the first chunk must reach the client immediately.
+        "x-accel-buffering": "no",
         "x-content-type-options": "nosniff",
         ...rateLimitHeaders(limited),
       },
