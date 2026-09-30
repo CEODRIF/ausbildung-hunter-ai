@@ -4,6 +4,7 @@ import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
+  TextareaHTMLAttributes,
 } from "react";
 import { useEffect } from "react";
 import { useI18n } from "@/lib/i18n";
@@ -87,6 +88,44 @@ export function Input({
           {...props}
         />
       </span>
+      {error ? (
+        <span className="mt-1.5 block text-xs font-medium text-danger">
+          {error}
+        </span>
+      ) : hint ? (
+        <span className="mt-1.5 block text-xs text-muted">{hint}</span>
+      ) : null}
+    </label>
+  );
+}
+
+type TextareaProps = TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  label?: string;
+  hint?: string;
+  error?: string;
+};
+
+/** Multi-line input with the same visual contract as <Input>. */
+export function Textarea({
+  label,
+  hint,
+  error,
+  id,
+  className = "",
+  ...props
+}: TextareaProps) {
+  return (
+    <label className="block" htmlFor={id}>
+      {label && (
+        <span className="mb-2 block text-sm font-semibold text-ink-soft">
+          {label}
+        </span>
+      )}
+      <textarea
+        id={id}
+        className={`min-h-28 w-full resize-y rounded-xl border bg-surface px-3.5 py-3 text-sm leading-6 text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 ${error ? "border-danger" : "border-line-strong"} ${className}`}
+        {...props}
+      />
       {error ? (
         <span className="mt-1.5 block text-xs font-medium text-danger">
           {error}

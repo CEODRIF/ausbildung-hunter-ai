@@ -234,3 +234,46 @@ textarea:focus-visible,
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* CV builder print export (Templates page)                            */
+/* ------------------------------------------------------------------ */
+/* The printable CV is rendered into a portal on <body> (.cv-print-root)
+   and stays hidden on screen. When printing with the builder active
+   (body.cv-builder-active), the app shell is suppressed so the A4 sheet
+   is the entire printed document — no editor UI, buttons or chrome. */
+.cv-print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+  body.cv-builder-active {
+    background: #ffffff !important;
+  }
+  body.cv-builder-active .app-shell-root {
+    display: none !important;
+  }
+  body.cv-builder-active .cv-print-root {
+    display: block !important;
+  }
+  .cv-print-root .cv-sheet {
+    width: 210mm !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 14mm 15mm !important;
+  }
+  /* Multi-page documents: never strand a section title at the bottom of a
+     page, and never split an individual entry across pages. */
+  .cv-print-root .cv-sheet h2 {
+    break-after: avoid;
+  }
+  .cv-print-root .cv-sheet section > div > div {
+    break-inside: avoid;
+  }
+}

@@ -70,7 +70,7 @@ const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.tools",
     items: [
       { labelKey: "nav.emailAssistant", href: "/settings/email", icon: "mail" },
-      { labelKey: "nav.templates", href: "#", icon: "file", soon: true },
+      { labelKey: "nav.templates", href: "/dashboard/templates", icon: "file" },
     ],
   },
   {
@@ -89,6 +89,10 @@ interface PageHeading {
 }
 
 const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: PageHeading }> = [
+  {
+    match: (p) => p === "/dashboard/templates",
+    heading: { titleKey: "pages.templates.title", subtitleKey: "pages.templates.subtitle" },
+  },
   {
     match: (p) => p === "/dashboard" || p.startsWith("/dashboard/"),
     heading: { titleKey: "pages.dashboard.title", subtitleKey: "pages.dashboard.subtitle" },
@@ -358,7 +362,7 @@ export function AppShell({
     .toUpperCase();
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="app-shell-root min-h-screen bg-background">
       <aside
         className={`fixed inset-y-0 start-0 z-40 flex w-[280px] flex-col border-e border-line bg-surface transition-[width,transform] duration-200 lg:w-[264px] ${
           collapsed ? "lg:w-[76px]" : ""
