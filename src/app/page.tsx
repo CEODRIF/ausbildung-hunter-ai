@@ -63,7 +63,7 @@ export default async function Home() {
             <span className="h-1.5 w-1.5 rounded-full bg-accent" />
             {t("landing.heroBadge")}
           </div>
-          <h1 className="text-4xl font-bold leading-[1.06] tracking-[-0.05em] text-ink sm:text-6xl">
+          <h1 className="text-neon-gradient text-4xl font-bold leading-[1.06] tracking-[-0.05em] sm:text-6xl">
             {t("landing.heroTitle")}
           </h1>
           <p className="mt-6 max-w-xl text-base leading-7 text-muted sm:text-lg">

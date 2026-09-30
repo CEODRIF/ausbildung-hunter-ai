@@ -309,7 +309,7 @@ const MessageBubble = memo(function MessageBubble({
             ))}
           </div>
         )}
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-sm leading-6 text-white shadow-[0_4px_12px_rgba(47,111,237,0.18)]">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-sm leading-6 text-white shadow-[0_4px_12px_rgba(200,60,255,0.18)]">
           {message.content}
         </div>
         <span className="mt-1 pr-1 text-[10px] text-faint">
@@ -749,7 +749,7 @@ export function AIChat({
           className="flex items-center gap-2.5"
           aria-label="Ausbildung Hunter AI – Startseite"
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-white shadow-[0_6px_14px_rgba(47,111,237,0.25)]">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-white shadow-[0_6px_14px_rgba(200,60,255,0.25)]">
             <span className="text-lg font-bold">A</span>
           </span>
           <span className="text-sm font-bold tracking-[-0.02em] text-ink">
@@ -766,7 +766,7 @@ export function AIChat({
       </div>
       <button
         onClick={() => void createNew()}
-        className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-accent text-xs font-bold text-white shadow-[0_6px_14px_rgba(47,111,237,0.25)] transition hover:bg-accent-deep"
+        className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-accent text-xs font-bold text-white shadow-[0_6px_14px_rgba(200,60,255,0.25)] transition hover:bg-accent-deep"
       >
         <Icon name="plus" size={15} />
         Neue Unterhaltung
@@ -880,7 +880,7 @@ export function AIChat({
           <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6">
             {messages.length === 0 && !pendingAssistant ? (
               <div className="flex min-h-[calc(100dvh-240px)] flex-col items-center justify-center pb-10 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-soft shadow-[0_10px_30px_rgba(47,111,237,0.16)]">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-soft shadow-[0_10px_30px_rgba(200,60,255,0.16)]">
                   <Icon name="spark" size={30} className="text-accent" />
                 </div>
                 <h2 className="mt-6 text-2xl font-bold tracking-[-0.03em] text-ink">
@@ -1104,7 +1104,7 @@ export function AIChat({
                       streaming,
                     )
                   }
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow-[0_4px_12px_rgba(47,111,237,0.3)] transition hover:bg-accent-deep disabled:cursor-not-allowed disabled:bg-accent-soft disabled:shadow-none"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow-[0_4px_12px_rgba(200,60,255,0.3)] transition hover:bg-accent-deep disabled:cursor-not-allowed disabled:bg-accent-soft disabled:shadow-none"
                 >
                   <Icon name="arrowUp" size={17} />
                 </button>

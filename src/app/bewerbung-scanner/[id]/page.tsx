@@ -62,7 +62,7 @@ export default async function BewerbungScannerResultsPage({
             </p>
             <Link
               href="/opportunities/ai-search"
-              className="mt-4 inline-flex h-11 items-center justify-center rounded-xl bg-accent px-5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(47,111,237,0.22)] transition-colors hover:bg-accent-deep"
+              className="mt-4 inline-flex h-11 items-center justify-center rounded-xl bg-accent px-5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(200,60,255,0.22)] transition-colors hover:bg-accent-deep"
             >
               ✦ {t("account.startAiSearch")}
             </Link>

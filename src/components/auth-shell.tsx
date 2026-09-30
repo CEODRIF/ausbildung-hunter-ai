@@ -27,7 +27,7 @@ export function AuthShell({
           <BrandLogo tone="light" size={36} />
         </div>
         <div className="relative max-w-md pb-10">
-          <div className="mb-7 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 text-[#a9c7ff]">
+          <div className="mb-7 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
             <Icon name="chart" size={24} strokeWidth={1.7} />
           </div>
           <h2 className="text-4xl font-bold leading-[1.08] tracking-[-0.04em]">

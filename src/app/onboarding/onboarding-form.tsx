@@ -60,7 +60,7 @@ export function OnboardingForm() {
       </label>
       <AuthFeedback state={state} />
       <button
-        className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-accent px-5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(47,111,237,0.22)] transition hover:bg-accent-deep disabled:cursor-not-allowed disabled:opacity-50"
+        className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-accent px-5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(200,60,255,0.22)] transition hover:bg-accent-deep disabled:cursor-not-allowed disabled:opacity-50"
         type="submit"
         disabled={pending || !selected}
       >

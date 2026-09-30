@@ -156,7 +156,7 @@ export function BewerbungScannerUpload({ profile }: { profile: Profile }) {
                 setDragging(false);
                 void addFiles(Array.from(event.dataTransfer.files));
               }}
-              className={`rounded-2xl border-2 border-dashed p-8 text-center transition ${dragging ? "border-accent bg-accent-soft" : "border-line-strong bg-surface-2"}`}
+              className={`rounded-2xl border-2 border-dashed p-8 text-center transition ${dragging ? "border-accent bg-accent-soft shadow-[0_0_28px_rgba(200,60,255,0.18)]" : "border-line-strong bg-surface-2 hover:border-accent/60"}`}
             >
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-xl text-accent">
                 ↑

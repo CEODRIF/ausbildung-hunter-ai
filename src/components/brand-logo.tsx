@@ -52,7 +52,7 @@ function Mark({ size }: { size: number }) {
     <span
       aria-hidden="true"
       style={{ width: size, height: size, fontSize: Math.round(size * 0.44) }}
-      className="flex shrink-0 items-center justify-center rounded-xl bg-accent font-bold text-white shadow-[0_6px_14px_rgba(47,111,237,0.25)] ring-1 ring-black/5 dark:ring-white/10"
+      className="flex shrink-0 items-center justify-center rounded-xl bg-accent font-bold text-white shadow-[0_6px_14px_rgba(200,60,255,0.3)] ring-1 ring-black/5 dark:ring-white/10"
     >
       A
     </span>
@@ -71,7 +71,7 @@ export function BrandLogo({
     tone === "light"
       ? "text-white"
       : "text-ink";
-  const accentClass = tone === "light" ? "text-[#7eaeff]" : "text-accent";
+  const accentClass = tone === "light" ? "text-cyan" : "text-accent";
   let content =
     variant === "mark" ? (
       <Mark size={size} />
