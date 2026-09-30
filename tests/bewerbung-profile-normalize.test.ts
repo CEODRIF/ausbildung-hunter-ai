@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { candidateProfileSchema } from "@/lib/bewerbung-schema";
 import {
+  SPARSE_MAX_ENTRIES,
+  SPARSE_MIN_DOC_CHARS,
+  emptyPrimarySections,
   extractJsonObject,
+  isSuspiciouslySparse,
   normalizeAiProfileResponse,
   normalizeProfile,
+  pickMoreComplete,
+  primaryEntryCount,
 } from "@/lib/bewerbung-profile-normalize";
 
 /**
@@ -270,5 +276,82 @@ describe("AI → CandidateProfile normalization (Bewerbung Scanner)", () => {
     expect(data?.keywords).toEqual([]);
     // zod's .default([]) fills omitted optional arrays — never undefined
     expect(data?.experience).toEqual([]);
+  });
+});
+
+/**
+ * Completeness gate (§17) — deterministic backstop so a substantial CV can
+ * never silently produce an almost-empty profile. The gate only TRIAGES;
+ * it never fabricates data.
+ */
+describe("completeness gate (sparse-output backstop)", () => {
+  type EmptyProfile = {
+    education: unknown[];
+    training: unknown[];
+    experience: unknown[];
+    languages: unknown[];
+    target_roles: unknown[];
+    skills: Record<string, unknown[]>;
+  };
+  const emptyProfile = (): EmptyProfile => ({
+    education: [],
+    training: [],
+    experience: [],
+    languages: [],
+    target_roles: [],
+    skills: {
+      technical: [],
+      software_tools: [],
+      marketing: [],
+      it: [],
+      soft: [],
+    },
+  });
+
+  it("flags a nearly-empty profile for a substantial document", () => {
+    const p = emptyProfile();
+    // 1 language + 1 skill = 2 entries → still at the sparse boundary
+    p.languages = [{ language: "Deutsch", level: "B1" }];
+    p.skills.soft = ["Kommunikation"];
+    expect(primaryEntryCount(p)).toBe(2);
+    expect(primaryEntryCount(p)).toBeLessThanOrEqual(SPARSE_MAX_ENTRIES);
+    expect(isSuspiciouslySparse(p, 5000)).toBe(true);
+    expect(emptyPrimarySections(p)).toEqual(
+      expect.arrayContaining([
+        "education (Bildung)",
+        "experience (Berufserfahrung)",
+        "target_roles (Zielfunktionen)",
+      ]),
+    );
+  });
+
+  it("does NOT flag a small document (legitimately sparse)", () => {
+    expect(
+      isSuspiciouslySparse(emptyProfile(), SPARSE_MIN_DOC_CHARS - 1),
+    ).toBe(false);
+  });
+
+  it("does NOT flag a genuinely complete profile", () => {
+    const p = emptyProfile();
+    p.education = [{ degree: "Abitur" }, { degree: "Bachelor" }];
+    p.experience = [
+      { job_title: "Werkstudentin" },
+      { job_title: "Praktikum" },
+    ];
+    p.languages = [{ language: "Deutsch" }, { language: "Englisch" }];
+    p.skills.technical = ["SEO"];
+    expect(isSuspiciouslySparse(p, 5000)).toBe(false);
+  });
+
+  it("pickMoreComplete keeps the richer genuine output (never invents)", () => {
+    const sparse = emptyProfile();
+    const rich = emptyProfile();
+    rich.education = [{ degree: "Abitur" }];
+    rich.experience = [{ job_title: "Werkstudentin" }];
+    rich.languages = [{ language: "Deutsch" }];
+    expect(pickMoreComplete(sparse, rich)).toBe(rich);
+    expect(pickMoreComplete(rich, sparse)).toBe(rich);
+    // equal → the first argument wins (stable)
+    expect(pickMoreComplete(rich, rich)).toBe(rich);
   });
 });

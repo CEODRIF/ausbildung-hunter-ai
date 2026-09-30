@@ -10,10 +10,17 @@ export type ContextFile = {
   mime_type: string;
   storage_path: string;
 };
-export async function buildFileContext(files: ContextFile[]) {
+/**
+ * Build the combined text context for AI analysis.
+ * @param files the uploaded files to include (ownership-checked upstream).
+ * @param maxFiles safety cap on how many files are read. Default 5 (chat).
+ *        The Bewerbung Scanner passes 10 — its own upload limit — so a
+ *        multi-page application set is never silently dropped.
+ */
+export async function buildFileContext(files: ContextFile[], maxFiles = 5) {
   const admin = createAdminClient();
   const parts: string[] = [];
-  for (const file of files.slice(0, 5)) {
+  for (const file of files.slice(0, maxFiles)) {
     const { data, error } = await admin.storage
       .from("ai-files")
       .download(file.storage_path);

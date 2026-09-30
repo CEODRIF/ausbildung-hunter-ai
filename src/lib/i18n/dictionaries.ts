@@ -95,6 +95,7 @@ const de = {
     contact: "Kontakt",
     notFound: "Nicht gefunden",
     education: "Bildung",
+    training: "Ausbildung & Weiterbildung",
     experience: "Berufserfahrung",
     targetRoles: "Zielfunktionen",
     skills: "Kenntnisse",
@@ -596,6 +597,8 @@ const de = {
       "Die PDF-Datei konnte nicht gelesen werden. Bitte prüfen Sie die Datei und versuchen Sie es erneut.",
     scanUnexpectedFailed:
       "Der Scan ist unerwartet fehlgeschlagen. Bitte versuchen Sie es erneut.",
+    scanProfileIncomplete:
+      "Die KI konnte aus Ihren Dokumenten kein vollständiges Profil erstellen. Bitte versuchen Sie es erneut.",
     nextStep: "Nächster Schritt",
     nextStepBody:
       "Ihr Profil ist bereit. Lassen Sie die KI damit echte {goal}-Angebote in der öffentlichen Jobsuche finden — mit Live-Verlauf und Excel-Export.",
@@ -823,6 +826,7 @@ const en: Dict = {
     contact: "Contact",
     notFound: "Not found",
     education: "Education",
+    training: "Vocational training & courses",
     experience: "Experience",
     targetRoles: "Target roles",
     skills: "Skills",
@@ -1296,6 +1300,8 @@ const en: Dict = {
       "We could not read that PDF file. Please check the file and try again.",
     scanUnexpectedFailed:
       "The scan failed unexpectedly. Please try again.",
+    scanProfileIncomplete:
+      "The AI could not create a complete profile from your documents. Please try again.",
     nextStep: "Next step",
     nextStepBody:
       "Your profile is ready. Let the AI use it to find real {goal} opportunities across the public Jobsuche — with live progress and an Excel export.",
@@ -1518,6 +1524,7 @@ const fr: Dict = {
     contact: "Contact",
     notFound: "Non trouvé",
     education: "Formation",
+    training: "Formation professionnelle & cours",
     experience: "Expérience",
     targetRoles: "Fonctions cibles",
     skills: "Compétences",
@@ -1992,6 +1999,8 @@ const fr: Dict = {
       "Nous n'avons pas pu lire ce fichier PDF. Veuillez vérifier le fichier et réessayer.",
     scanUnexpectedFailed:
       "Le scan a échoué de manière inattendue. Veuillez réessayer.",
+    scanProfileIncomplete:
+      "L'IA n'a pas pu créer un profil complet à partir de vos documents. Veuillez réessayer.",
     nextStep: "Étape suivante",
     nextStepBody:
       "Votre profil est prêt. Laissez l'IA trouver de vraies offres de {goal} dans la Jobsuche publique — avec suivi en direct et export Excel.",
@@ -2214,6 +2223,7 @@ const ar: Dict = {
     contact: "التواصل",
     notFound: "لم يُعثر عليه",
     education: "التعليم",
+    training: "التدريب المهني والدورات",
     experience: "الخبرة",
     targetRoles: "الوظائف المستهدفة",
     skills: "المهارات",
@@ -2679,6 +2689,8 @@ const ar: Dict = {
     scanPdfFailed:
       "تعذر قراءة ملف PDF. يرجى التحقق من الملف ثم المحاولة مرة أخرى.",
     scanUnexpectedFailed: "فشل المسح بشكل غير متوقع. يرجى المحاولة مرة أخرى.",
+    scanProfileIncomplete:
+      "لم يتمكن الذكاء الاصطناعي من إنشاء ملف كامل من مستنداتك. يرجى المحاولة مرة أخرى.",
     nextStep: "الخطوة التالية",
     nextStepBody:
       "ملفك جاهز. دع الذكاء الاصطناعي يجد عروض {goal} حقيقية في بحث الوظائف العام — مع تقدم مباشر وتصدير Excel.",

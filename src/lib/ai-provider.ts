@@ -11,7 +11,13 @@ export type AIMessage = {
       }>;
 };
 export type AIProvider = {
-  generateText(messages: AIMessage[]): Promise<string>;
+  /**
+   * Generate a text response.
+   * @param timeoutMs per-request AbortSignal timeout. Default 60s; long
+   *        structured extractions (e.g. the full CV scanner profile) may
+   *        pass a larger budget.
+   */
+  generateText(messages: AIMessage[], timeoutMs?: number): Promise<string>;
   streamText(messages: AIMessage[]): Promise<ReadableStream<Uint8Array>>;
   analyzeFile(input: {
     filename: string;
@@ -58,7 +64,11 @@ function cleanError(status: number) {
   return new Error("The AI request could not be completed.");
 }
 
-async function requestChat(messages: AIMessage[], stream: boolean) {
+async function requestChat(
+  messages: AIMessage[],
+  stream: boolean,
+  timeoutMs = 60000,
+) {
   const { apiKey, baseUrl, model } = config();
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
@@ -69,7 +79,7 @@ async function requestChat(messages: AIMessage[], stream: boolean) {
       stream,
     }),
     cache: "no-store",
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw cleanError(response.status);
   return response;
@@ -116,8 +126,8 @@ async function streamResponse(response: Response) {
 
 export function createAIProvider(): AIProvider {
   return {
-    generateText: async (messages) =>
-      textResponse(await requestChat(messages, false)),
+    generateText: async (messages, timeoutMs) =>
+      textResponse(await requestChat(messages, false, timeoutMs)),
     streamText: async (messages) =>
       streamResponse(await requestChat(messages, true)),
     analyzeFile: async ({ filename, mimeType, content }) => {

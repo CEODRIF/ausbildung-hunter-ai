@@ -326,3 +326,85 @@ export function normalizeAiProfileResponse(
   const data = snakeKeys(unwrapProfile(extractJsonObject(raw)));
   return normalizeProfile(data, goal);
 }
+
+// ---------------------------------------------------------------------------
+// Completeness gate (deterministic) — backstop against a "successful" scan
+// that silently returns an almost-empty profile for a substantial CV.
+//
+// The gate never fabricates data. It only (a) decides whether a profile is
+// suspiciously sparse relative to the document, (b) names the empty sections
+// for a controlled retry pass, and (c) picks the more complete of two
+// genuine model outputs. All inputs are the already-schema-validated shape.
+// ---------------------------------------------------------------------------
+
+export type ProfileLike = {
+  education?: unknown[];
+  training?: unknown[];
+  experience?: unknown[];
+  languages?: unknown[];
+  target_roles?: unknown[];
+  skills?: Record<string, unknown>;
+};
+
+/** Document length (chars) below which sparsity is not judged. A real
+ *  Lebenslauf extracts to well above this; tiny notes legitimately can't. */
+export const SPARSE_MIN_DOC_CHARS = 800;
+/** At or below this many primary entries, a substantial doc is "sparse". */
+export const SPARSE_MAX_ENTRIES = 2;
+
+const len = (v: unknown): number => (Array.isArray(v) ? v.length : 0);
+
+function skillsCount(skills: Record<string, unknown> | undefined): number {
+  if (!skills) return 0;
+  return Object.values(skills).reduce<number>(
+    (n, arr) => n + (Array.isArray(arr) ? arr.length : 0),
+    0,
+  );
+}
+
+/** Total number of primary factual entries in a profile. */
+export function primaryEntryCount(profile: ProfileLike): number {
+  return (
+    len(profile.education) +
+    len(profile.training) +
+    len(profile.experience) +
+    len(profile.languages) +
+    len(profile.target_roles) +
+    skillsCount(profile.skills as Record<string, unknown> | undefined)
+  );
+}
+
+/**
+ * True when the document is substantial yet the profile is nearly empty.
+ * This is the "suspiciously sparse" signal that triggers a controlled retry.
+ */
+export function isSuspiciouslySparse(
+  profile: ProfileLike,
+  docChars: number,
+): boolean {
+  if (docChars < SPARSE_MIN_DOC_CHARS) return false;
+  return primaryEntryCount(profile) <= SPARSE_MAX_ENTRIES;
+}
+
+/** Names of the primary sections that came back empty (for the retry prompt). */
+export function emptyPrimarySections(
+  profile: ProfileLike,
+): string[] {
+  const out: string[] = [];
+  if (len(profile.education) === 0) out.push("education (Bildung)");
+  if (len(profile.training) === 0) out.push("training (Ausbildung)");
+  if (len(profile.experience) === 0) out.push("experience (Berufserfahrung)");
+  if (skillsCount(profile.skills as Record<string, unknown> | undefined) === 0)
+    out.push("skills (Kenntnisse)");
+  if (len(profile.languages) === 0) out.push("languages (Sprachen)");
+  if (len(profile.target_roles) === 0) out.push("target_roles (Zielfunktionen)");
+  return out;
+}
+
+/** Pick the more complete of two genuine profiles (never fabricate). */
+export function pickMoreComplete(
+  a: ProfileLike,
+  b: ProfileLike,
+): ProfileLike {
+  return primaryEntryCount(a) >= primaryEntryCount(b) ? a : b;
+}

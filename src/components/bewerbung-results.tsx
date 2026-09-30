@@ -124,13 +124,16 @@ export function BewerbungResults({
                 {t("profile.contact")}:{" "}
                 {profile.candidate.contact.email || notFound} ·{" "}
                 {profile.candidate.contact.phone || notFound}
+                {profile.candidate.contact.linkedin
+                  ? ` · ${profile.candidate.contact.linkedin}`
+                  : ""}
               </p>
             </Section>
             <Section title={t("profile.education")}>
               <Timeline
                 t={t}
-                items={profile.education.map((item) =>
-                  [
+                items={profile.education.map((item) => ({
+                  text: [
                     item.education_level || t("profile.education"),
                     [
                       item.school,
@@ -144,16 +147,30 @@ export function BewerbungResults({
                   ]
                     .filter(Boolean)
                     .join(" — "),
-                )}
+                }))}
+              />
+            </Section>
+            <Section title={t("profile.training")}>
+              <Timeline
+                t={t}
+                items={profile.training.map((item) => ({
+                  text: [
+                    item.name,
+                    item.provider ? `· ${item.provider}` : "",
+                    item.year ? `(${item.year})` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" "),
+                }))}
               />
             </Section>
             <Section title={t("profile.experience")}>
               <Timeline
                 t={t}
-                items={profile.experience.map(
-                  (item) =>
-                    `${item.job_title}${item.company ? ` · ${item.company}` : ""}${item.start_date || item.end_date ? ` (${item.start_date || "?"}–${item.end_date || t("profile.present")})` : ""}`,
-                )}
+                items={profile.experience.map((item) => ({
+                  text: `${item.job_title}${item.company ? ` · ${item.company}` : ""}${item.start_date || item.end_date ? ` (${item.start_date || "?"}–${item.end_date || t("profile.present")})` : ""}`,
+                  details: item.responsibilities,
+                }))}
               />
             </Section>
           </section>
@@ -180,6 +197,8 @@ export function BewerbungResults({
               </div>
             </Section>
             <Section title={t("profile.skills")}>
+              {Object.values(profile.skills).flat().length === 0 &&
+                !editing && <Empty text={t("profile.noSupportedInfo")} />}
               <div className="flex flex-wrap gap-2">
                 {Object.values(profile.skills)
                   .flat()
@@ -249,16 +268,20 @@ export function BewerbungResults({
           />
         </div>
         <Section title={t("profile.keywords")}>
-          <div className="flex flex-wrap gap-2">
-            {profile.keywords.map((keyword) => (
-              <span
-                key={keyword}
-                className="rounded-lg bg-surface-2 px-2.5 py-1.5 text-xs font-semibold text-muted"
-              >
-                {keyword}
-              </span>
-            ))}
-          </div>
+          {profile.keywords.length === 0 ? (
+            <Empty text={t("profile.noSupportedInfo")} />
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {profile.keywords.map((keyword, index) => (
+                <span
+                  key={`${keyword}-${index}`}
+                  className="rounded-lg bg-surface-2 px-2.5 py-1.5 text-xs font-semibold text-muted"
+                >
+                  {keyword}
+                </span>
+              ))}
+            </div>
+          )}
         </Section>
         <Section title={t("profile.scanHistory")}>
           <div className="flex flex-wrap gap-2">
@@ -374,19 +397,26 @@ function Timeline({
   items,
 }: {
   t: (path: string, vars?: Record<string, string | number>) => string;
-  items: string[];
+  items: Array<{ text: string; details?: string[] }>;
 }) {
   return items.length ? (
     <div className="space-y-3">
       {items.map((item, index) => (
         <div
-          key={`${item}-${index}`}
+          key={`${item.text}-${index}`}
           className="border-s-2 border-accent/25 ps-4 text-sm leading-6 text-muted"
         >
           <span className="me-2 inline-block rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold uppercase text-accent">
             {t("profile.aiExtracted")}
           </span>
-          {item}
+          {item.text}
+          {item.details && item.details.length > 0 && (
+            <ul className="mt-1.5 list-disc space-y-1 ps-5 text-xs leading-5">
+              {item.details.map((detail, detailIndex) => (
+                <li key={`${detail}-${detailIndex}`}>{detail}</li>
+              ))}
+            </ul>
+          )}
         </div>
       ))}
     </div>
