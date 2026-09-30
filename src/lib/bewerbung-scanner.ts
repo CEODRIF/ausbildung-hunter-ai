@@ -9,6 +9,7 @@ import {
   candidateProfileSchema,
   type CandidateProfile,
 } from "@/lib/bewerbung-schema";
+import { normalizeAiProfileResponse } from "@/lib/bewerbung-profile-normalize";
 import { PDF_PARSE_FAILED } from "@/lib/pdf-extract";
 
 /** Stable, user-safe code for unexpected scan failures (UI localizes it). */
@@ -125,13 +126,36 @@ export async function runScan(scanId: string) {
     const response = await createAIProvider().generateText([
       { role: "user", content: prompt },
     ]);
-    const parsed = candidateProfileSchema.safeParse(
-      JSON.parse(response.replace(/^```json\s*/i, "").replace(/\s*```$/i, "")),
-    );
-    if (!parsed.success)
+    // Pure normalization layer (fences/wrappers/camelCase/malformed entries)
+    // BEFORE the strict schema, which remains the final validation boundary.
+    // Diagnostics (Zod paths, truncated raw response) go to server logs only
+    // — the user always sees the localized, user-safe message below.
+    let normalized: unknown;
+    try {
+      normalized = normalizeAiProfileResponse(response, scan.goal);
+    } catch (jsonError) {
+      console.error(
+        "[bewerbung-scanner] AI returned no parseable JSON object:",
+        jsonError instanceof Error ? jsonError.message : jsonError,
+        "raw (truncated):",
+        String(response).slice(0, 2000),
+      );
       throw new Error(
         "The AI response did not match the required profile schema.",
       );
+    }
+    const parsed = candidateProfileSchema.safeParse(normalized);
+    if (!parsed.success) {
+      console.error(
+        "[bewerbung-scanner] AI profile schema issues:",
+        parsed.error.issues
+          .slice(0, 12)
+          .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.code}`),
+      );
+      throw new Error(
+        "The AI response did not match the required profile schema.",
+      );
+    }
     const finalProfile: CandidateProfile = { ...parsed.data, goal: scan.goal };
     const { error: profileError } = await admin
       .from("candidate_profiles")
