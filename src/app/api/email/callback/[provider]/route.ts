@@ -59,8 +59,23 @@ export async function GET(
       ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       : null;
     const scopes = tokens.scope?.split(" ") ?? getProviderScopes(provider);
+    // Stage logging (temporary, diagnostic): metadata/booleans only — never
+    // tokens, secrets or other credentials.
+    console.info("Email OAuth stage: token_exchange ok", {
+      provider,
+      hasAccessToken: Boolean(tokens.access_token),
+      hasRefreshToken: Boolean(tokens.refresh_token),
+      expiresInSeconds: tokens.expires_in ?? null,
+      grantedScopes: scopes,
+    });
     if (provider === "gmail") {
       const identity = await fetchGoogleIdentity(tokens.access_token);
+      console.info("Email OAuth stage: identity ok", {
+        provider,
+        hasSub: Boolean(identity.sub),
+        hasEmail: Boolean(identity.email),
+        emailVerified: identity.email_verified ?? null,
+      });
       if (!identity.sub || !identity.email || identity.email_verified === false)
         throw new Error("Unable to verify provider account.");
       await saveEmailAccount({
@@ -73,6 +88,7 @@ export async function GET(
         expiresAt,
         scopes,
       });
+      console.info("Email OAuth stage: account_saved ok", { provider });
     } else {
       const identity = await fetchMicrosoftIdentity(tokens.access_token);
       const email = identity.mail ?? identity.userPrincipalName;
