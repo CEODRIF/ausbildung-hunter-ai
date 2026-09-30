@@ -7,8 +7,8 @@ import {
   OpportunityNotFoundError,
   OpportunityProviderError,
   parseOpportunityKey,
-  resolveOpportunity,
 } from "@/lib/opportunities/providers/arbeitsagentur";
+import { resolveOpportunityCached } from "@/lib/opportunities/search";
 
 export { OpportunityNotFoundError, OpportunityProviderError };
 
@@ -67,7 +67,9 @@ export async function saveOpportunityFromKey(
   notes?: string,
 ): Promise<SavedOpportunityRow> {
   assertValidKey(opportunityKey);
-  const opportunity = await resolveOpportunity(opportunityKey);
+  // Cached resolver: saving an opportunity just viewed does not re-hit BA
+  // (the detail page warmed the short-lived details cache).
+  const opportunity = await resolveOpportunityCached(opportunityKey);
   const admin = createAdminClient();
 
   // Optional server-computed match snapshot at save time (never

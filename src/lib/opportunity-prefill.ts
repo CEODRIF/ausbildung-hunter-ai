@@ -9,10 +9,8 @@ import {
   type ApplicationGoal,
 } from "@/lib/application-drafts";
 import { createAdminClient } from "@/lib/supabase/admin";
-import {
-  parseOpportunityKey,
-  resolveOpportunity,
-} from "@/lib/opportunities/providers/arbeitsagentur";
+import { parseOpportunityKey } from "@/lib/opportunities/providers/arbeitsagentur";
+import { resolveOpportunityCached } from "@/lib/opportunities/search";
 import type { Opportunity } from "@/lib/opportunities/types";
 
 /**
@@ -210,10 +208,12 @@ export async function applyOpportunityPrefill(
   } catch {
     return { ok: false, error: "invalid_key" };
   }
-  // Always re-resolve from the authoritative source (never browser data).
+  // Always re-resolve from the authoritative source (never browser data) —
+  // via the short-lived details cache, so prefilling an opportunity the user
+  // just viewed does not re-hit BA.
   let opportunity: Opportunity;
   try {
-    opportunity = await resolveOpportunity(opportunityKey);
+    opportunity = await resolveOpportunityCached(opportunityKey);
   } catch {
     return { ok: false, error: "unavailable" };
   }

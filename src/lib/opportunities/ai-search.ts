@@ -4,14 +4,16 @@ import { z } from "zod";
 import type { CandidateProfile } from "@/lib/bewerbung-schema";
 import { createAIProvider } from "@/lib/ai-provider";
 import { applyMatch } from "@/lib/opportunities/matching";
-import { resolveOpportunity } from "@/lib/opportunities/providers/arbeitsagentur";
+import { BaFetchFailure } from "@/lib/opportunities/providers/arbeitsagentur";
 import {
   mergeOpportunities,
   runWebDiscovery,
   type SourceCategory,
 } from "@/lib/opportunities/web-discovery";
 import {
+  BA_SOURCE_ID,
   getCandidateProfile,
+  resolveOpportunityCached,
   searchOpportunities,
 } from "@/lib/opportunities/search";
 import {
@@ -21,6 +23,7 @@ import {
 import {
   normalizeSearchParams,
   type Opportunity,
+  type SourceStatus,
 } from "@/lib/opportunities/types";
 
 /**
@@ -283,48 +286,97 @@ export type AiSearchProgress =
       plan: AiSearchPlan;
       elapsedMs: number;
       discovery: AiSearchDiscovery;
+      /** Per-source availability ("bundesagentur" entry) so the UI can show
+       *  a small notice when the official source failed or degraded. */
+      sources: SourceStatus[];
     };
+
+/** Availability of the official BA source during collection:
+ *  ok — no failures; degraded — data was collected despite failures;
+ *  unavailable — no BA data at all. `baRetryable` mirrors the internal
+ *  classification (transient network/timeout/5xx/429 → true; a deliberate
+ *  access block/challenge → false). */
+export interface AiSearchCollection {
+  opportunities: Opportunity[];
+  ba: "ok" | "degraded" | "unavailable";
+  baRetryable: boolean;
+}
 
 /** Collect unique opportunities for every planned query (source order per
  *  query; query priority order preserved across queries). Stops early once
- *  the enrichment budget is met. */
+ *  the enrichment budget is met.
+ *
+ *  Resilience contract: a BA failure NEVER fails the collection.
+ *  - A retryable failure (already retried 3× inside the provider) stops the
+ *    BA work for THIS run — hitting the flapping upstream with more queries
+ *    would only extend the wait (bounded, no storm).
+ *  - A non-retryable failure (access block/challenge) stops it as well — BA's
+ *    controls are respected, never pushed through.
+ *  - Whatever was collected before the failure is returned as-is, so the web
+ *    source's results are never discarded along with a BA blip. */
 export async function collectOpportunities(args: {
   plan: AiSearchPlan;
   goal: "ausbildung" | "arbeit";
   targetCount: AiSearchCount;
   onProgress?: (event: Extract<AiSearchProgress, { type: "search" }>) => void;
-}): Promise<Opportunity[]> {
+}): Promise<AiSearchCollection> {
   const { plan, goal, targetCount, onProgress } = args;
   const budget = targetCount + ENRICH_BUFFER;
   const merged = new Map<string, Opportunity>();
+  let baFailures = 0;
+  let baRetryable = false;
+  let baStopped = false;
   for (let queryIndex = 0; queryIndex < plan.queries.length; queryIndex += 1) {
+    if (baStopped) break;
     const query = plan.queries[queryIndex];
     for (let page = 1; page <= MAX_PAGES_PER_QUERY; page += 1) {
       if (merged.size >= budget) break;
-      const response = await searchOpportunities(
-        normalizeSearchParams({
-          goal,
-          keyword: query.keyword,
-          role: query.role,
-          company: "",
-          location: query.location,
-          radius: undefined,
-          freshness: "any",
-          sort: "relevance",
-          employment: "any",
-          training_type: "any",
-          home_office: "any",
-          salary_documented: false,
-          distance_max: undefined,
-          page,
-          pageSize: 50,
-          match: false,
-        }),
-        null,
-      );
+      let response: Awaited<ReturnType<typeof searchOpportunities>>;
+      try {
+        response = await searchOpportunities(
+          normalizeSearchParams({
+            goal,
+            keyword: query.keyword,
+            role: query.role,
+            company: "",
+            location: query.location,
+            radius: undefined,
+            freshness: "any",
+            sort: "relevance",
+            employment: "any",
+            training_type: "any",
+            home_office: "any",
+            salary_documented: false,
+            distance_max: undefined,
+            page,
+            pageSize: 50,
+            match: false,
+          }),
+          null,
+        );
+      } catch (error) {
+        if (error instanceof BaFetchFailure) {
+          baFailures += 1;
+          baRetryable = error.retryable || baRetryable;
+          baStopped = true;
+          onProgress?.({
+            type: "search",
+            queryIndex: queryIndex + 1,
+            queryTotal: plan.queries.length,
+            collected: merged.size,
+            target: targetCount,
+          });
+          break;
+        }
+        // Unexpected (non-provider) error — let the pipeline fail loudly.
+        throw error;
+      }
       for (const item of response.results) {
         if (!merged.has(item.id)) merged.set(item.id, item);
       }
+      // A partial (degraded) window: real results, but the source was already
+      // struggling — count it so the availability status reflects reality.
+      if (response.sources?.some((s) => s.status !== "ok")) baFailures += 1;
       onProgress?.({
         type: "search",
         queryIndex: queryIndex + 1,
@@ -342,13 +394,23 @@ export async function collectOpportunities(args: {
         break;
     }
   }
-  return [...merged.values()];
+  // An empty result set with zero failures is a SUCCESSFUL answer (the
+  // source was reachable and simply matched nothing) — never "unavailable".
+  const ba: AiSearchCollection["ba"] =
+    baFailures === 0
+      ? "ok"
+      : merged.size > 0
+        ? "degraded"
+        : "unavailable";
+  return { opportunities: [...merged.values()], ba, baRetryable };
 }
 
-/** Detail enrichment: re-fetch each candidate from the source's details
+/** Detail enrichment: resolve each candidate from the source's details
  *  endpoint (published description, contact, requirements, application URL,
- *  deadline). Bounded concurrency; failures are skipped, never substituted. */
-const ENRICH_CONCURRENCY = 6;
+ *  deadline) via the short-lived details cache — an export or a repeated view
+ *  reuses the already-fetched record instead of re-hitting BA. Bounded
+ *  concurrency (≤ 5 in flight); failures are skipped, never substituted. */
+const ENRICH_CONCURRENCY = 5;
 
 export async function enrichOpportunities(
   items: Opportunity[],
@@ -359,7 +421,7 @@ export async function enrichOpportunities(
   for (let start = 0; start < items.length; start += ENRICH_CONCURRENCY) {
     const batch = items.slice(start, start + ENRICH_CONCURRENCY);
     const settled = await Promise.allSettled(
-      batch.map((item) => resolveOpportunity(item.id)),
+      batch.map((item) => resolveOpportunityCached(item.id)),
     );
     for (const result of settled) {
       if (result.status === "fulfilled") enriched.push(result.value);
@@ -417,6 +479,8 @@ export interface AiSearchResult {
   enriched: number;
   /** Real discovery statistics for the progress UI / export. */
   discovery: AiSearchDiscovery;
+  /** Per-source availability (the "bundesagentur" entry) for the UI notice. */
+  sources: SourceStatus[];
   elapsedMs: number;
 }
 
@@ -488,10 +552,11 @@ export async function runAISearch(args: {
   else if (client !== null)
     emit({ type: "web_status", configured: true, provider: client.name });
 
-  const [collected, webResult] = await Promise.all([
+  const [collection, webResult] = await Promise.all([
     collectPromise,
     webPromise,
   ]);
+  const collected = collection.opportunities;
 
   const discovery: AiSearchDiscovery = webResult
     ? {
@@ -503,6 +568,20 @@ export async function runAISearch(args: {
         duplicatesRemoved: 0,
       }
     : emptyDiscovery();
+
+  // Official-source availability for the UI notice (only shown when not ok).
+  const sources: SourceStatus[] = [
+    {
+      source: BA_SOURCE_ID,
+      status:
+        collection.ba === "ok"
+          ? "ok"
+          : collection.ba === "degraded"
+            ? "degraded"
+            : "temporarily_unavailable",
+      retryable: collection.baRetryable,
+    },
+  ];
 
   // BA detail enrichment (expensive) — starts only after web discovery.
   const buffer = Math.min(collected.length, args.targetCount + ENRICH_BUFFER);
@@ -532,6 +611,7 @@ export async function runAISearch(args: {
     searched: collected.length,
     enriched: enriched.length,
     discovery,
+    sources,
     elapsedMs,
   };
   emit({
@@ -542,6 +622,7 @@ export async function runAISearch(args: {
     plan,
     elapsedMs,
     discovery,
+    sources,
   });
   return result;
 }

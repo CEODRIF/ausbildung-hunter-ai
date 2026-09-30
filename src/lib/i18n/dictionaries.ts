@@ -468,6 +468,11 @@ const de = {
     next: "Weiter",
     page: "Seite {page} von {total}",
     error: "Die Stellensuche ist fehlgeschlagen.",
+    sourceUnavailable:
+      "Bundesagentur für Arbeit ist momentan nicht erreichbar. Bitte versuchen Sie es in Kürze erneut.",
+    sourcePartial:
+      "Bundesagentur für Arbeit ist momentan eingeschränkt erreichbar — die Ergebnisse können unvollständig sein.",
+    retry: "Erneut versuchen",
   },
 
   // ---- Empty states (shared) ---------------------------------------------
@@ -745,6 +750,8 @@ const de = {
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
   aiSearch: {
     searching: "Öffentliche Quellen werden durchsucht",
+    sourceNotice:
+      "Bundesagentur für Arbeit ist momentan nicht erreichbar. Andere Quellen wurden trotzdem durchsucht.",
     empty: "Keine Stellenangebote gefunden",
     exportTitle: "Excel-Export für Ihre Bewerbung",
     exportSummary:
@@ -1396,6 +1403,11 @@ const en: Dict = {
     next: "Next",
     page: "Page {page} of {total}",
     error: "The opportunity search failed.",
+    sourceUnavailable:
+      "The Federal Employment Agency (Jobbörse) is currently unreachable. Please try again in a moment.",
+    sourcePartial:
+      "The Federal Employment Agency (Jobbörse) is currently reachable only partially — results may be incomplete.",
+    retry: "Retry",
   },
   empty: {
     noCv: { title: "Your candidate profile has not been created yet.", body: "Scan your application to build a profile that vacancies are matched against.", cta: "Analyze your CV" },
@@ -1671,6 +1683,8 @@ const en: Dict = {
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
   aiSearch: {
     searching: "Searching public sources",
+    sourceNotice:
+      "The Federal Employment Agency (Jobbörse) is currently unreachable. The other sources were still searched.",
     empty: "No opportunities found",
     exportTitle: "Excel export for your applications",
     exportSummary:
@@ -2310,6 +2324,11 @@ const fr: Dict = {
     next: "Suivant",
     page: "Page {page} sur {total}",
     error: "La recherche d'offres a échoué.",
+    sourceUnavailable:
+      "L'Agence fédérale pour l'emploi (Jobbörse) est momentanément inaccessible. Veuillez réessayer dans un instant.",
+    sourcePartial:
+      "L'Agence fédérale pour l'emploi (Jobbörse) n'est accessible que partiellement pour le moment — les résultats peuvent être incomplets.",
+    retry: "Réessayer",
   },
   empty: {
     noCv: { title: "Votre profil candidat n'a pas encore été créé.", body: "Scannez votre candidature pour créer un profil avec lequel comparer les offres.", cta: "Analyser votre CV" },
@@ -2585,6 +2604,8 @@ const fr: Dict = {
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
   aiSearch: {
     searching: "Recherche dans les sources publiques",
+    sourceNotice:
+      "L'Agence fédérale pour l'emploi (Jobbörse) est momentanément inaccessible. Les autres sources ont quand même été consultées.",
     empty: "Aucune offre trouvée",
     exportTitle: "Export Excel pour vos candidatures",
     exportSummary:
@@ -3227,6 +3248,11 @@ const ar: Dict = {
     next: "التالي",
     page: "صفحة {page} من {total}",
     error: "فشل البحث عن الوظائف.",
+    sourceUnavailable:
+      "وكالة العمل الفيدرالية غير متاحة حاليًا. يرجى المحاولة مرة أخرى بعد قليل.",
+    sourcePartial:
+      "وكالة العمل الفيدرالية متاحة جزئيًا حاليًا — قد تكون النتائج غير مكتملة.",
+    retry: "إعادة المحاولة",
   },
   empty: {
     noCv: { title: "لم يُنشأ ملف مرشحك بعد.", body: "امسح طلبك لبناء ملف تُقابَل عليه الوظائف.", cta: "حلّل سيرتك الذاتية" },
@@ -3492,6 +3518,8 @@ const ar: Dict = {
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
   aiSearch: {
     searching: "جارٍ البحث في المصادر العامة",
+    sourceNotice:
+      "وكالة العمل الفيدرالية غير متاحة حاليًا. تم البحث في المصادر الأخرى على أي حال.",
     empty: "لم تُعثر على وظائف",
     exportTitle: "تصدير Excel للتقديم",
     exportSummary:

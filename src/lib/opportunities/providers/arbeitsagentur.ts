@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
+
 import {
   opportunitySchema,
   usesScanWindow,
@@ -519,27 +521,326 @@ function normalizeJobDetails(value: RawRecord): Opportunity {
 }
 
 // ---------------------------------------------------------------------------
-// Fetching
+// Fetching (controlled retries, failure classification, structured logging)
 // ---------------------------------------------------------------------------
 
-async function fetchBaJson(url: string): Promise<RawRecord> {
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      headers: { "X-API-Key": config().apiKey, accept: "application/json" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(15000),
-    });
-  } catch {
-    throw new OpportunityProviderError(
-      `${SOURCE_NAME} could not be reached right now.`,
-    );
+/** Internal failure classes. A valid response with zero results is
+ *  deliberately NOT a failure (EMPTY_RESULT) — it is a successful answer. */
+export type BaFailureKind =
+  | "NETWORK_ERROR"
+  | "TIMEOUT"
+  | "RATE_LIMITED"
+  | "SERVER_ERROR"
+  | "BLOCKED_OR_CHALLENGED"
+  | "INVALID_RESPONSE";
+
+export interface BaFetchOptions {
+  /** Per-attempt timeout in ms (production default: 15000 — the existing
+   *  value; kept, now bounded by the overall deadline below). */
+  timeoutMs?: number;
+  /** Total attempts, 1–3 (production default: 3). */
+  maxAttempts?: number;
+  /** Base delay for the exponential backoff in ms. */
+  backoffBaseMs?: number;
+  /** Backoff cap in ms. */
+  backoffMaxMs?: number;
+  /** Overall deadline for the whole operation in ms — guarantees a single
+   *  request can never turn into a 30–60 s wait. */
+  deadlineMs?: number;
+  /** Short label for structured logs ("search" | "scan" | "details"). */
+  label?: string;
+}
+
+interface ResolvedBaFetchOptions extends Required<
+  Omit<BaFetchOptions, "label">
+> {
+  label: string;
+}
+
+/** Production defaults (the per-attempt timeout is the pre-existing 15 s). */
+const baFetchDefaults: ResolvedBaFetchOptions = {
+  timeoutMs: 15000,
+  maxAttempts: 3,
+  backoffBaseMs: 750,
+  backoffMaxMs: 5000,
+  deadlineMs: 25000,
+  label: "search",
+};
+
+/** Test hook: temporarily override the production fetch defaults (e.g. tiny
+ *  timeouts/backoffs) without faking timers. */
+export function configureBaFetchDefaults(
+  overrides: Partial<ResolvedBaFetchOptions>,
+) {
+  Object.assign(baFetchDefaults, overrides);
+}
+
+/** Provider failure carrying the internal classification. Extends
+ *  OpportunityProviderError so every existing `instanceof` handler keeps
+ *  working; `retryable` tells the UI whether "Erneut versuchen" makes sense
+ *  (transient kinds yes; a deliberate access block/challenge no). */
+export class BaFetchFailure extends OpportunityProviderError {
+  readonly kind: BaFailureKind;
+  readonly retryable: boolean;
+  readonly status: number | null;
+  readonly attempts: number;
+
+  constructor(
+    message: string,
+    details: { kind: BaFailureKind; status?: number | null; attempts?: number },
+  ) {
+    super(message);
+    this.name = "BaFetchFailure";
+    this.kind = details.kind;
+    this.status = details.status ?? null;
+    this.attempts = details.attempts ?? 1;
+    this.retryable =
+      details.kind === "NETWORK_ERROR" ||
+      details.kind === "TIMEOUT" ||
+      details.kind === "RATE_LIMITED" ||
+      details.kind === "SERVER_ERROR";
   }
-  if (!response.ok)
-    throw new OpportunityProviderError(
-      `The ${SOURCE_NAME} provider returned HTTP ${response.status}.`,
-    );
-  return (await response.json()) as RawRecord;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Structured, log-safe metadata only: event, attempt, status, duration,
+ *  result count, and a short hash of the request URL. Never headers, API
+ *  keys, query text, or personal data. */
+function baLog(event: string, fields: Record<string, string | number | null>) {
+  const rendered = Object.entries(fields)
+    .filter(([, value]) => value !== null)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(" ");
+  console.log(
+    `[opportunities][bundesagentur] event=${event} ${rendered}`.trimEnd(),
+  );
+}
+
+/** Short hash of the request URL (query included; the API key is a header
+ *  and never part of the URL). Identifies a request in logs without logging
+ *  the search content itself. */
+function requestHash(url: string): string {
+  return createHash("sha256").update(url).digest("hex").slice(0, 8);
+}
+
+function parseRetryAfter(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+/** Exponential backoff (base × 2^(attempt-1), capped) with a small random
+ *  jitter (0–30 %) so parallel runs do not re-hit the upstream in lockstep.
+ *  A 429 Retry-After header (in seconds) is honoured, capped at 5 s. */
+function backoffDelay(
+  attempt: number,
+  opts: ResolvedBaFetchOptions,
+  retryAfterSeconds: number | null,
+): number {
+  let delay = Math.min(opts.backoffMaxMs, opts.backoffBaseMs * 2 ** (attempt - 1));
+  delay = delay * (1 + Math.random() * 0.3);
+  if (retryAfterSeconds !== null)
+    delay = Math.max(delay, Math.min(retryAfterSeconds * 1000, 5000));
+  return Math.round(delay);
+}
+
+/**
+ * Fetch a BA JSON endpoint with controlled retries and classification.
+ *
+ * - Maximum 3 attempts (configurable), each bounded by a per-attempt timeout
+ *   (AbortSignal.timeout, default 15 s — the existing production value) and
+ *   together by an overall deadline (default 25 s) so a search can never
+ *   become a 30–60 s wait.
+ * - Retries ONLY transient kinds: NETWORK_ERROR, TIMEOUT, RATE_LIMITED (429),
+ *   SERVER_ERROR (5xx) — with exponential backoff + jitter (429 honours a
+ *   Retry-After header, capped at 5 s).
+ * - BLOCKED_OR_CHALLENGED (401/403, or an HTML challenge page where JSON is
+ *   expected) is NOT retried: BA's session/access controls are respected,
+ *   never pushed through. INVALID_RESPONSE (unparseable body) is not
+ *   retried either — retrying the same payload cannot fix it.
+ * - A 200 whose body is HTML (challenge/error page) is classified as
+ *   BLOCKED_OR_CHALLENGED instead of surfacing as an obscure JSON.parse
+ *   error.
+ * - Every attempt is logged with safe metadata only (see baLog).
+ */
+export async function fetchBaJson(
+  url: string,
+  options: BaFetchOptions = {},
+): Promise<RawRecord> {
+  const opts: ResolvedBaFetchOptions = { ...baFetchDefaults, ...options };
+  opts.maxAttempts = Math.min(3, Math.max(1, opts.maxAttempts));
+  const deadlineAt = Date.now() + opts.deadlineMs;
+  const hash = requestHash(url);
+
+  for (let attempt = 1; attempt <= opts.maxAttempts; attempt += 1) {
+    const attemptStartedAt = Date.now();
+
+    // --- network layer -----------------------------------------------------
+    let response: Response | null = null;
+    let networkKind: BaFailureKind | null = null;
+    try {
+      response = await fetch(url, {
+        headers: { "X-API-Key": config().apiKey, accept: "application/json" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(opts.timeoutMs),
+      });
+    } catch (error) {
+      networkKind =
+        error instanceof Error && error.name === "TimeoutError"
+          ? "TIMEOUT"
+          : "NETWORK_ERROR";
+    }
+
+    if (response === null || networkKind !== null) {
+      const kind = networkKind ?? "NETWORK_ERROR";
+      const durationMs = Date.now() - attemptStartedAt;
+      baLog(kind === "TIMEOUT" ? "request_timeout" : "request_failed", {
+        label: opts.label,
+        attempt,
+        kind,
+        duration_ms: durationMs,
+        query_hash: hash,
+      });
+      const failure = new BaFetchFailure(
+        `${SOURCE_NAME} could not be reached right now.`,
+        { kind, attempts: attempt },
+      );
+      if (attempt < opts.maxAttempts && Date.now() + opts.timeoutMs <= deadlineAt) {
+        const delay = backoffDelay(attempt, opts, null);
+        baLog("retry", {
+          label: opts.label,
+          attempt,
+          kind,
+          delay_ms: delay,
+          query_hash: hash,
+        });
+        await sleep(delay);
+        continue;
+      }
+      throw failure;
+    }
+
+    // --- HTTP status ---------------------------------------------------------
+    if (!response.ok) {
+      let kind: BaFailureKind;
+      if (response.status === 429) kind = "RATE_LIMITED";
+      else if (response.status >= 500) kind = "SERVER_ERROR";
+      else if (response.status === 401 || response.status === 403)
+        kind = "BLOCKED_OR_CHALLENGED";
+      else kind = "INVALID_RESPONSE";
+      const durationMs = Date.now() - attemptStartedAt;
+      baLog(kind === "RATE_LIMITED" ? "rate_limited" : "request_failed", {
+        label: opts.label,
+        attempt,
+        status: response.status,
+        kind,
+        duration_ms: durationMs,
+        query_hash: hash,
+      });
+      const retryableKind =
+        kind === "RATE_LIMITED" || kind === "SERVER_ERROR";
+      const failure = new BaFetchFailure(
+        kind === "RATE_LIMITED"
+          ? `${SOURCE_NAME} is currently rate-limited. Please try again shortly.`
+          : kind === "BLOCKED_OR_CHALLENGED"
+            ? `${SOURCE_NAME} is temporarily unavailable (access restricted).`
+            : `${SOURCE_NAME} returned HTTP ${response.status}.`,
+        { kind, status: response.status, attempts: attempt },
+      );
+      if (retryableKind && attempt < opts.maxAttempts) {
+        const delay = backoffDelay(
+          attempt,
+          opts,
+          parseRetryAfter(response.headers.get("retry-after")),
+        );
+        if (Date.now() + delay + opts.timeoutMs <= deadlineAt) {
+          baLog("retry", {
+            label: opts.label,
+            attempt,
+            kind,
+            status: response.status,
+            delay_ms: delay,
+            query_hash: hash,
+          });
+          await sleep(delay);
+          continue;
+        }
+      }
+      throw failure;
+    }
+
+    // --- body validation (2xx) -------------------------------------------------
+    const contentType = response.headers.get("content-type") ?? "";
+    const bodyText = await response.text();
+    const durationMs = Date.now() - attemptStartedAt;
+    const looksHtml =
+      contentType.includes("text/html") ||
+      /^\s*(<!doctype html|<html)/i.test(bodyText);
+    if (looksHtml) {
+      // An access challenge / interstitial page where JSON is expected:
+      // classify it, do NOT retry (respect BA's controls).
+      baLog("invalid_response", {
+        label: opts.label,
+        attempt,
+        kind: "BLOCKED_OR_CHALLENGED",
+        status: 200,
+        duration_ms: durationMs,
+        query_hash: hash,
+      });
+      throw new BaFetchFailure(
+        `${SOURCE_NAME} is temporarily unavailable (access restricted).`,
+        { kind: "BLOCKED_OR_CHALLENGED", status: 200, attempts: attempt },
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(bodyText);
+    } catch {
+      baLog("invalid_response", {
+        label: opts.label,
+        attempt,
+        kind: "INVALID_RESPONSE",
+        status: 200,
+        duration_ms: durationMs,
+        query_hash: hash,
+      });
+      throw new BaFetchFailure(
+        `${SOURCE_NAME} returned a response that could not be parsed.`,
+        { kind: "INVALID_RESPONSE", status: 200, attempts: attempt },
+      );
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      baLog("invalid_response", {
+        label: opts.label,
+        attempt,
+        kind: "INVALID_RESPONSE",
+        status: 200,
+        duration_ms: durationMs,
+        query_hash: hash,
+      });
+      throw new BaFetchFailure(
+        `${SOURCE_NAME} returned a response that could not be parsed.`,
+        { kind: "INVALID_RESPONSE", status: 200, attempts: attempt },
+      );
+    }
+    const raw = parsed as RawRecord;
+    baLog("request_succeeded", {
+      label: opts.label,
+      attempt,
+      status: 200,
+      duration_ms: durationMs,
+      results: Array.isArray(raw.ergebnisliste) ? raw.ergebnisliste.length : null,
+      query_hash: hash,
+    });
+    return raw;
+  }
+
+  // Unreachable (every iteration returns or throws); keeps the type narrow.
+  throw new BaFetchFailure(`${SOURCE_NAME} could not be reached right now.`, {
+    kind: "NETWORK_ERROR",
+    attempts: opts.maxAttempts,
+  });
 }
 
 function berlinDay(offsetDays: number): string {
@@ -724,7 +1025,9 @@ export async function fetchOpportunityWindow(
       page: params.page,
       size: params.pageSize,
     });
-    const raw = await fetchBaJson(`${SEARCH_URL}?${query.toString()}`);
+    const raw = await fetchBaJson(`${SEARCH_URL}?${query.toString()}`, {
+      label: "search",
+    });
     const items = Array.isArray(raw.ergebnisliste) ? raw.ergebnisliste : [];
     const window = items
       .map((item) => normalizeSearchItem(item, params.goal))
@@ -735,6 +1038,7 @@ export async function fetchOpportunityWindow(
       total: Number(raw.maxErgebnisse) || window.length,
       scan_truncated: false,
       exhausted: true,
+      degraded: false,
     };
   }
 
@@ -748,6 +1052,7 @@ export async function fetchOpportunityWindow(
   const seen = new Set<string>();
   let sourceTotal = Number.MAX_SAFE_INTEGER;
   let exhausted = false;
+  let degraded = false;
   for (let page = 1; page <= SCAN_MAX_PAGES; page++) {
     const query = buildSearchQuery({
       goal: params.goal,
@@ -760,7 +1065,23 @@ export async function fetchOpportunityWindow(
       page,
       size: SCAN_PAGE_SIZE,
     });
-    const raw = await fetchBaJson(`${SEARCH_URL}?${query.toString()}`);
+    let raw: RawRecord;
+    try {
+      raw = await fetchBaJson(`${SEARCH_URL}?${query.toString()}`, {
+        label: "scan",
+      });
+    } catch (error) {
+      // Controlled partial success: when a LATER page fails after controlled
+      // retries, the already-collected real results are served as a degraded
+      // (partial) window instead of failing the whole search. A first-page
+      // failure (no data) and non-retryable failures (blocked/challenged)
+      // still propagate.
+      if (page > 1 && error instanceof BaFetchFailure && error.retryable) {
+        degraded = true;
+        break;
+      }
+      throw error;
+    }
     const counted = Number(raw.maxErgebnisse);
     if (Number.isFinite(counted) && counted >= 0) sourceTotal = counted;
     const items = Array.isArray(raw.ergebnisliste) ? raw.ergebnisliste : [];
@@ -781,8 +1102,9 @@ export async function fetchOpportunityWindow(
     mode: "scan",
     window: sorted,
     total: sorted.length,
-    scan_truncated: !exhausted,
+    scan_truncated: !exhausted || degraded,
     exhausted,
+    degraded,
   };
 }
 
@@ -791,7 +1113,9 @@ export async function getArbeitsagenturDetails(
 ): Promise<Opportunity> {
   if (!isArbeitsagenturRef(ref))
     throw new OpportunityProviderError("Invalid opportunity reference.");
-  const raw = await fetchBaJson(`${DETAILS_URL}/${base64Ref(ref)}`);
+  const raw = await fetchBaJson(`${DETAILS_URL}/${base64Ref(ref)}`, {
+    label: "details",
+  });
   if (Array.isArray(raw.messages)) {
     const codes = (raw.messages as Array<RawRecord>)
       .map((message) => text(message.code))

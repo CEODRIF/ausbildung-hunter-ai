@@ -13,6 +13,7 @@ import {
   type Opportunity,
   type OpportunitySearchResponse,
   type SearchUrlState,
+  type SourceStatus,
 } from "@/lib/opportunities/types";
 import { useI18n } from "@/lib/i18n";
 import { localeForLang } from "@/lib/i18n/core";
@@ -69,12 +70,16 @@ export function OpportunitySearch({
   const [mode, setMode] = useState<"upstream" | "scan" | null>(null);
   const [matchAvailable, setMatchAvailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Non-blocking source-status notice (degraded window) or retryable
+   *  failure context (source_status from a structured 502). */
+  const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const startedRef = useRef(false);
 
   const search = useCallback(async (next: SearchUrlState) => {
     setLoading(true);
     setError(null);
+    setSourceStatus(null);
     try {
       const query = new URLSearchParams({
         goal: next.goal,
@@ -100,20 +105,38 @@ export function OpportunitySearch({
       const response = await fetch(
         `/api/opportunities/search?${query.toString()}`,
       );
-      const data = (await response.json()) as OpportunitySearchResponse & {
-        error?: string;
-      };
-      if (!response.ok)
-        throw new Error(data.error || t("search.error"));
+      const data = (await response.json().catch(() => null)) as
+        | (OpportunitySearchResponse & {
+            error?: string;
+            source_status?: SourceStatus;
+          })
+        | null;
+      if (!response.ok) {
+        const sourceStatus = data?.source_status ?? null;
+        if (sourceStatus) {
+          // Structured source failure (the server already retried the
+          // official source): keep the previously shown results and offer a
+          // no-reload retry — a BA blip must not wipe the user's page.
+          setSourceStatus(sourceStatus);
+          setError(t("search.sourceUnavailable"));
+          return;
+        }
+        throw new Error(data?.error || t("search.error"));
+      }
+      if (!data) throw new Error(t("search.error"));
       setResults(data.results);
       setTotal(data.total);
       setScanTruncated(data.scan_truncated);
       setMode(data.mode);
       setMatchAvailable(data.match_available);
+      // Non-blocking notice only when a source actually degraded.
+      const failed = data.sources?.find((s) => s.status !== "ok");
+      if (failed) setSourceStatus(failed);
     } catch (searchError) {
       setResults(null);
       setTotal(null);
       setScanTruncated(false);
+      setSourceStatus(null);
       setError(
         searchError instanceof Error
           ? searchError.message
@@ -464,14 +487,30 @@ export function OpportunitySearch({
         </div>
 
         {error && (
-          <p className="mt-4 rounded-xl bg-warning-soft p-3 text-sm font-medium text-danger">
-            {error}
-          </p>
+          <div className="mt-4 rounded-xl bg-warning-soft p-3 text-sm font-medium text-danger">
+            <p>{error}</p>
+            {sourceStatus?.retryable && (
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => void search(state)}
+                className="mt-2 rounded-lg border border-danger/30 px-3 py-1.5 text-xs font-bold text-danger transition hover:bg-danger/10 disabled:opacity-60"
+              >
+                {t("search.retry")}
+              </button>
+            )}
+          </div>
         )}
       </form>
 
       {results !== null && (
         <div>
+          {/* Source notice — only when the official source actually degraded */}
+          {sourceStatus && sourceStatus.status === "degraded" && !error && (
+            <div className="mb-4 rounded-xl bg-warning-soft p-3 text-sm font-medium text-warning">
+              {t("search.sourcePartial")}
+            </div>
+          )}
           {/* Result meta */}
           <div className="flex flex-wrap items-center justify-between gap-3">
              <p className="text-sm font-semibold text-muted">

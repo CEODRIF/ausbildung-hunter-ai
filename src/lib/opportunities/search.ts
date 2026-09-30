@@ -8,6 +8,7 @@ import {
   type CandidateProfile,
 } from "@/lib/bewerbung-schema";
 import {
+  BaFetchFailure,
   OpportunityNotFoundError,
   OpportunityProviderError,
   fetchOpportunityWindow,
@@ -21,11 +22,23 @@ import {
   type Opportunity,
   type OpportunitySearchParams,
   type OpportunitySearchResponse,
+  type SourceStatus,
 } from "@/lib/opportunities/types";
 
-export { OpportunityNotFoundError, OpportunityProviderError };
+export {
+  BaFetchFailure,
+  OpportunityNotFoundError,
+  OpportunityProviderError,
+};
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
+/** Degraded (partially failed) windows are cached much shorter so the cache
+ *  self-heals as soon as the upstream recovers. */
+const DEGRADED_CACHE_TTL_MS = 60 * 1000;
+/** Short-lived details cache: keeps exports, saved-opportunity views and
+ *  prefill from re-hitting BA per opportunity. */
+const DETAILS_CACHE_TTL_MS = 15 * 60 * 1000;
+export const BA_SOURCE_ID = "bundesagentur";
 
 /**
  * Shared cache payload. MUST stay user-independent: no user ids, no
@@ -43,6 +56,9 @@ const cachePayloadSchema = z.object({
   total: z.number().int().min(0),
   scan_truncated: z.boolean(),
   exhausted: z.boolean(),
+  /** Partial window from a mid-scan upstream failure. `default(false)` keeps
+   *  older cached payloads valid (they were never degraded). */
+  degraded: z.boolean().default(false),
   generated_at: z.string(),
 });
 type CachePayload = z.infer<typeof cachePayloadSchema>;
@@ -99,10 +115,14 @@ async function readCachedPayload(key: string): Promise<CachePayload | null> {
   return parsed.data;
 }
 
-async function writeCachedPayload(key: string, payload: CachePayload) {
+async function writeCachedPayload(
+  key: string,
+  payload: CachePayload,
+  ttlMs: number = CACHE_TTL_MS,
+) {
   const admin = createAdminClient();
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + CACHE_TTL_MS).toISOString();
+  const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
   // Opportunistic cleanup: expired rows and rows from older schema versions
   // (their payloads no longer match the current format and are refreshable).
   await admin
@@ -135,7 +155,10 @@ async function fetchWindow(
     ...window,
     generated_at: new Date().toISOString(),
   });
-  await writeCachedPayload(key, payload);
+  // A degraded window is real but partial: cache it briefly so the failure
+  // does not amplify into repeated upstream scans, short enough that the
+  // cache self-heals quickly once the source recovers.
+  await writeCachedPayload(key, payload, window.degraded ? DEGRADED_CACHE_TTL_MS : CACHE_TTL_MS);
   return payload;
 }
 
@@ -208,6 +231,12 @@ export async function searchOpportunities(
   const start =
     payload.mode === "upstream" ? 0 : (params.page - 1) * params.pageSize;
   const results = window.slice(start, start + params.pageSize);
+  // Present only when the official source delivered partial data: the UI
+  // shows a small non-blocking notice, never a full failure, for a degraded
+  // window (the results it carries are real, just incomplete).
+  const sources: SourceStatus[] | undefined = payload.degraded
+    ? [{ source: BA_SOURCE_ID, status: "degraded", retryable: true }]
+    : undefined;
   if (matchAvailable && params.sort !== "match") {
     return {
       results: results.map((opportunity) => applyMatch(candidate, opportunity)),
@@ -215,6 +244,7 @@ export async function searchOpportunities(
       scan_truncated: payload.scan_truncated,
       mode: payload.mode,
       match_available: true,
+      ...(sources ? { sources } : {}),
     };
   }
   return {
@@ -223,7 +253,87 @@ export async function searchOpportunities(
     scan_truncated: payload.scan_truncated,
     mode: payload.mode,
     match_available: matchAvailable,
+    ...(sources ? { sources } : {}),
   };
+}
+
+/** In-flight detail promises (per process): concurrent lookups for the same
+ *  opportunity share ONE provider call instead of re-hitting BA. */
+const inFlightDetails = new Map<string, Promise<Opportunity>>();
+
+function detailsCacheKey(key: string): string {
+  return `v${OPPORTUNITY_SCHEMA_VERSION}:details:${key}`;
+}
+
+async function readCachedDetails(key: string): Promise<Opportunity | null> {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from("opportunity_cache")
+      .select("result")
+      .eq("cache_key", detailsCacheKey(key))
+      .eq("schema_version", OPPORTUNITY_SCHEMA_VERSION)
+      .gte("expires_at", new Date().toISOString())
+      .maybeSingle();
+    if (error || !data || !data.result) return null;
+    const parsed = opportunitySchema.safeParse(data.result);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    // The cache is an optimization — a cache failure must never break the
+    // lookup itself.
+    return null;
+  }
+}
+
+async function writeCachedDetails(key: string, opportunity: Opportunity) {
+  try {
+    const admin = createAdminClient();
+    const now = new Date();
+    const { error } = await admin.from("opportunity_cache").upsert({
+      cache_key: detailsCacheKey(key),
+      provider: "arbeitsagentur",
+      normalized_query: detailsCacheKey(key),
+      result: opportunity,
+      expires_at: new Date(now.getTime() + DETAILS_CACHE_TTL_MS).toISOString(),
+      schema_version: OPPORTUNITY_SCHEMA_VERSION,
+    });
+    if (error)
+      console.error(
+        "[opportunities] details cache write failed:",
+        error.message,
+      );
+  } catch (error) {
+    console.error(
+      "[opportunities] details cache write failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+/**
+ * Resolve the canonical opportunity, served from the short-lived details
+ * cache (15 min) when fresh. The cached record is exactly what the source
+ * published (email, contact, description) — nothing is inferred. Not-found
+ * and provider failures are NOT cached and propagate unchanged.
+ */
+export async function resolveOpportunityCached(
+  key: string,
+): Promise<Opportunity> {
+  const cached = await readCachedDetails(key);
+  if (cached) return cached;
+  const inFlight = inFlightDetails.get(key);
+  if (inFlight) return inFlight;
+  const pending = (async () => {
+    try {
+      const opportunity = await resolveOpportunity(key);
+      await writeCachedDetails(key, opportunity);
+      return opportunity;
+    } finally {
+      inFlightDetails.delete(key);
+    }
+  })();
+  inFlightDetails.set(key, pending);
+  return pending;
 }
 
 export interface OpportunityDetailsResult {
@@ -232,16 +342,17 @@ export interface OpportunityDetailsResult {
 }
 
 /**
- * Fetch the canonical opportunity from the authoritative source and, when the
- * user has a candidate profile, compute the match. Classification (Ausbildung
- * vs Arbeit) always comes from the source record — never from query params.
+ * Fetch the canonical opportunity (via the short-lived details cache) and,
+ * when the user has a candidate profile, compute the match. Classification
+ * (Ausbildung vs Arbeit) always comes from the source record — never from
+ * query params.
  */
 export async function getOpportunityDetails(
   id: string,
   auth: { userId: string } | null,
 ): Promise<OpportunityDetailsResult> {
   if (!auth) throw new Error("Not authorized.");
-  const opportunity = await resolveOpportunity(id);
+  const opportunity = await resolveOpportunityCached(id);
   const candidate = await getCandidateProfile(auth.userId);
   if (!candidate) return { opportunity, match_available: false };
   return {

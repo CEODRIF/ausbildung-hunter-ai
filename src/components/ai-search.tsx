@@ -6,7 +6,10 @@ import Link from "next/link";
 import { Button, Card, ErrorState } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
-import type { Opportunity } from "@/lib/opportunities/types";
+import type {
+  Opportunity,
+  SourceStatus,
+} from "@/lib/opportunities/types";
 import { resultsWithEmailCount } from "@/lib/opportunities/email-export";
 import { useI18n } from "@/lib/i18n";
 
@@ -79,6 +82,8 @@ type AiSearchEvent =
       plan: Plan;
       elapsedMs: number;
       discovery: Discovery;
+      /** Per-source availability; a non-"ok" entry shows a small notice. */
+      sources?: SourceStatus[];
     }
   | { type: "error"; message: string };
 
@@ -180,6 +185,11 @@ export function AISearchClient({
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   const [results, setResults] = useState<Opportunity[] | null>(null);
   const [found, setFound] = useState(0);
+  /** Per-source availability from the complete event (notice only when a
+   *  source failed or degraded — never shown on a clean run). */
+  const [sourceStatuses, setSourceStatuses] = useState<SourceStatus[] | null>(
+    null,
+  );
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
@@ -239,6 +249,7 @@ export function AISearchClient({
         setResults(event.results);
         setFound(event.found);
         setDiscovery(event.discovery);
+        setSourceStatuses(event.sources ?? null);
         setStage("done");
         break;
       case "error":
@@ -262,6 +273,7 @@ export function AISearchClient({
     setEnrichProgress(null);
     setDiscovery(null);
     setResults(null);
+    setSourceStatuses(null);
     setExpanded(new Set());
     setExportError("");
     const controller = new AbortController();
@@ -714,6 +726,11 @@ export function AISearchClient({
           New search
         </Button>
       </div>
+      {(sourceStatuses ?? []).some((s) => s.status !== "ok") && (
+        <div className="rounded-xl bg-warning-soft p-3 text-sm font-medium text-warning">
+          {t("aiSearch.sourceNotice")}
+        </div>
+      )}
       {discovery && (
         <div className="flex flex-wrap items-center gap-1.5">
           <Chip>

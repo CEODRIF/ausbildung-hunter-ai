@@ -316,8 +316,10 @@ describe("collectOpportunities", () => {
       onProgress: (event) => progress.push(event.collected),
     });
     // Same single upstream item for both queries → exactly one unique row.
-    expect(collected).toHaveLength(1);
-    expect(collected[0].id).toBe("arbeitsagentur:REF-A");
+    expect(collected.opportunities).toHaveLength(1);
+    expect(collected.opportunities[0].id).toBe("arbeitsagentur:REF-A");
+    expect(collected.ba).toBe("ok");
+    expect(collected.baRetryable).toBe(false);
     expect(progress).toEqual([1, 1]);
   });
 
@@ -350,10 +352,11 @@ describe("collectOpportunities", () => {
       goal: "ausbildung",
       targetCount: 10,
     });
-    expect(collected.map((item) => item.id)).toEqual([
+    expect(collected.opportunities.map((item) => item.id)).toEqual([
       "arbeitsagentur:REF-A",
       "arbeitsagentur:REF-B",
     ]);
+    expect(collected.ba).toBe("ok");
   });
 });
 

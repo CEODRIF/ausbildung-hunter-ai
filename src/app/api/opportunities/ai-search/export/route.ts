@@ -13,6 +13,7 @@ import {
   type AiSearchPlan,
 } from "@/lib/opportunities/ai-search";
 import {
+  BA_SOURCE_ID,
   getCandidateProfile,
   OpportunityProviderError,
 } from "@/lib/opportunities/search";
@@ -180,12 +181,11 @@ export async function POST(request: Request) {
   const { goal, targetCount, plan } = parsed.data;
 
   try {
-    // Deterministic re-run (cache-warm search windows), server-derived.
-    const collected = await collectOpportunities({
-      plan,
-      goal,
-      targetCount,
-    });
+    // Deterministic re-run (cache-warm search windows + short-lived details
+    // cache), server-derived. Collection never throws for BA failures — a
+    // transient source problem is surfaced via `ba`/`baRetryable` instead.
+    const collection = await collectOpportunities({ plan, goal, targetCount });
+    const collected = collection.opportunities;
     const buffer = Math.min(collected.length, targetCount + 10);
     const enriched = await enrichOpportunities(collected.slice(0, buffer));
     const currentProfile = await getCandidateProfile(user.id);
@@ -198,6 +198,23 @@ export async function POST(request: Request) {
     // source changed between the search run and the export click.
     const exportable = exportableOpportunities(results);
     if (exportable.length === 0) {
+      if (collection.ba !== "ok") {
+        // Nothing exportable BECAUSE the official source was down/degraded:
+        // structured 502 (retryable when the failure class allows it) so the
+        // client can retry without a reload. A source that is reachable and
+        // simply publishes no emails stays a 409 — never confused.
+        return NextResponse.json(
+          {
+            error: "The official source is temporarily unavailable.",
+            source_status: {
+              source: BA_SOURCE_ID,
+              status: "temporarily_unavailable",
+              retryable: collection.baRetryable,
+            },
+          },
+          { status: 502 },
+        );
+      }
       return NextResponse.json(
         { error: "No opportunities with an email address are available to export." },
         { status: 409 },

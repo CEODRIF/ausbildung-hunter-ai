@@ -514,6 +514,23 @@ export interface OpportunityWindow {
   scan_truncated: boolean;
   /** True when the full source result set was seen (or upstream mode). */
   exhausted: boolean;
+  /** True when the window is partial because a later source request failed
+   *  after controlled retries (scan mode) — the results it carries are real,
+   *  just incomplete. Never true for upstream mode (single request). */
+  degraded: boolean;
+}
+
+/** Per-source availability surfaced to the UI so a transient BA failure can
+ *  be shown as a small notice instead of wiping the whole result set. */
+export interface SourceStatus {
+  /** Stable source id — currently always "bundesagentur". */
+  source: string;
+  /** ok: fully available. degraded: partial data served.
+   *  temporarily_unavailable: no data could be retrieved. */
+  status: "ok" | "degraded" | "temporarily_unavailable";
+  /** Whether a retry is expected to help (transient network/timeout/5xx/429),
+   *  as opposed to a deliberate block or challenge. */
+  retryable: boolean;
 }
 
 export interface OpportunitySearchResponse {
@@ -525,6 +542,9 @@ export interface OpportunitySearchResponse {
   /** True when the authenticated user has a candidate profile and match was
    *  requested — otherwise results carry match: null (not an empty match). */
   match_available: boolean;
+  /** Present when a source returned partial or no data for this request, so
+   *  the UI can show a non-blocking notice. Omitted when everything is ok. */
+  sources?: SourceStatus[];
 }
 
 // NOTE (Phase 5): the matching engine consumes the full validated

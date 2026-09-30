@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import {
+  BA_SOURCE_ID,
+  BaFetchFailure,
   OpportunityProviderError,
   searchOpportunities,
 } from "@/lib/opportunities/search";
@@ -63,6 +65,22 @@ export async function GET(request: Request) {
     const result = await searchOpportunities(params, { userId: user.id });
     return NextResponse.json(result, { headers: rateLimitHeaders(limited) });
   } catch (error) {
+    if (error instanceof BaFetchFailure) {
+      // Transient official-source failure AFTER controlled retries: a
+      // structured 502 so the client can keep its previous results and offer
+      // a no-reload "Erneut versuchen" (only when the failure is retryable).
+      return NextResponse.json(
+        {
+          error: error.message,
+          source_status: {
+            source: BA_SOURCE_ID,
+            status: "temporarily_unavailable",
+            retryable: error.retryable,
+          },
+        },
+        { status: 502, headers: rateLimitHeaders(limited) },
+      );
+    }
     if (error instanceof OpportunityProviderError)
       return NextResponse.json({ error: error.message }, { status: 502 });
     return NextResponse.json(
