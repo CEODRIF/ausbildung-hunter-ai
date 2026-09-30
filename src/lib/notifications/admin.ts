@@ -14,19 +14,31 @@ import {
  * Platform owner authorization (server-side, never client-side).
  *
  * The Platform Updates feature (including targeted notifications and the
- * recipient search) is reserved for the single owner account:
+ * recipient search) is reserved for the single owner account. The
+ * AUTHENTICATED USER ID is the reference identity — it comes from
+ * `supabase.auth.getUser()` (server-side JWT verification) and is never
+ * taken from the client:
  *   1. authenticated session (requireAdmin → supabase.auth.getUser),
  *   2. verified admin membership (public.admins — users cannot write it),
- *   3. the account email matches the platform owner email exactly.
- * A regular user — or any non-owner admin — fails step 3.
+ *   3. session user id === PLATFORM_OWNER_USER_ID.
+ * The email is ADVISORY ONLY (a warning log on mismatch) — a drifted or
+ * null `profiles.email` must never lock the real owner out, and an
+ * unrelated account that happens to have the email is never the owner.
  */
+export const PLATFORM_OWNER_USER_ID = "99a30c47-ebb6-47f1-a38f-3e2594c09e79";
 export const PLATFORM_OWNER_EMAIL = "adsium.business@gmail.com";
 
 export async function requirePlatformOwner(): Promise<Profile | null> {
   const admin = await requireAdmin();
   if (!admin) return null;
+  // UID is the canonical owner identity.
+  if (admin.id !== PLATFORM_OWNER_USER_ID) return null;
+  // Email: additional verification only (never a hard gate).
   if ((admin.email ?? "").trim().toLowerCase() !== PLATFORM_OWNER_EMAIL) {
-    return null;
+    console.warn(
+      "[notifications] platform owner email mismatch — UID matched, " +
+        "email is advisory only.",
+    );
   }
   return admin;
 }

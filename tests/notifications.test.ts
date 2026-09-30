@@ -206,9 +206,16 @@ import { POST as readRoute } from "@/app/api/notifications/read/route";
 import { POST as searchRoute } from "@/app/api/admin/notifications/search/route";
 import { POST as sendRoute } from "@/app/api/admin/notifications/send/route";
 import { GET as historyRoute } from "@/app/api/admin/notifications/history/route";
+import {
+  PLATFORM_OWNER_EMAIL,
+  PLATFORM_OWNER_USER_ID,
+} from "@/lib/notifications/admin";
 
 const BASE = Date.UTC(2026, 8, 30, 12, 0, 0);
-const OWNER_ID = "a0000000-0000-4000-8000-000000000001";
+// The REAL production owner identity: the authenticated UID is the
+// canonical owner reference (email is advisory only).
+const OWNER_ID = PLATFORM_OWNER_USER_ID;
+const OTHER_ADMIN_ID = "a1111111-0000-4000-8000-000000000002";
 const JOHN_ID = "b0000000-0000-4000-8000-000000000002";
 const JANE_ID = "c0000000-0000-4000-8000-000000000003";
 
@@ -230,6 +237,10 @@ function setSession(user: { id: string; email: string } | null) {
   session.user = user;
 }
 
+function ownerSession() {
+  return { id: OWNER_ID, email: PLATFORM_OWNER_EMAIL };
+}
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const key = () => {
@@ -245,7 +256,7 @@ beforeEach(() => {
   seedUsers();
   setSession(null);
   // Guard against hand-typed UUID literals that are not canonical 8-4-4-4-12.
-  for (const id of [OWNER_ID, JOHN_ID, JANE_ID]) {
+  for (const id of [OWNER_ID, OTHER_ADMIN_ID, JOHN_ID, JANE_ID]) {
     if (!UUID_RE.test(id)) throw new Error(`malformed test UUID: ${id}`);
   }
 });
@@ -254,7 +265,7 @@ beforeEach(() => {
 
 describe("1-2. owner can send (all users / one user)", () => {
   it("1. owner sends a global notification — row targets all users and the recipient can see it", async () => {
-    setSession({ id: OWNER_ID, email: "adsium.business@gmail.com" });
+    setSession(ownerSession());
     const response = await sendRoute(
       new Request("http://localhost/api/admin/notifications/send", {
         method: "POST",
@@ -288,7 +299,7 @@ describe("1-2. owner can send (all users / one user)", () => {
   });
 
   it("2. owner sends a targeted notification — row carries the target user id and recipient identity", async () => {
-    setSession({ id: OWNER_ID, email: "adsium.business@gmail.com" });
+    setSession(ownerSession());
     const response = await sendRoute(
       new Request("http://localhost/api/admin/notifications/send", {
         method: "POST",
@@ -315,7 +326,7 @@ describe("1-2. owner can send (all users / one user)", () => {
 
 describe("3-4. targeting isolation", () => {
   it("3. the targeted notification reaches ONLY the selected user", async () => {
-    setSession({ id: OWNER_ID, email: "adsium.business@gmail.com" });
+    setSession(ownerSession());
     await sendRoute(
       new Request("http://localhost/api/admin/notifications/send", {
         method: "POST",
@@ -337,7 +348,7 @@ describe("3-4. targeting isolation", () => {
   });
 
   it("4. any other user cannot see the targeted notification", async () => {
-    setSession({ id: OWNER_ID, email: "adsium.business@gmail.com" });
+    setSession(ownerSession());
     await sendRoute(
       new Request("http://localhost/api/admin/notifications/send", {
         method: "POST",
@@ -414,7 +425,7 @@ describe("5-7. non-owner authorization", () => {
 
 describe("8. bounded search", () => {
   it("search returns at most 10 results and matches email or name", async () => {
-    setSession({ id: OWNER_ID, email: "adsium.business@gmail.com" });
+    setSession(ownerSession());
     const response = await searchRoute(
       new Request("http://localhost/api/admin/notifications/search", {
         method: "POST",
@@ -438,7 +449,7 @@ describe("8. bounded search", () => {
 
 describe("9. idempotency", () => {
   it("a duplicate submit (same idempotency key) returns the original — no second row", async () => {
-    setSession({ id: OWNER_ID, email: "adsium.business@gmail.com" });
+    setSession(ownerSession());
     const sharedKey = key();
     // One form open = one key. A double-click / network retry re-sends the
     // EXACT same payload (same key) in a fresh request.
@@ -477,7 +488,7 @@ describe("9. idempotency", () => {
 
 describe("10-12. read state", () => {
   async function seedTargetedForJohn() {
-    setSession({ id: OWNER_ID, email: "adsium.business@gmail.com" });
+    setSession(ownerSession());
     const response = await sendRoute(
       new Request("http://localhost/api/admin/notifications/send", {
         method: "POST",
@@ -627,7 +638,7 @@ describe("13-14. authorization + existing behavior", () => {
 // --- admin history (owner view) — bonus contract ---------------------------
 describe("admin history", () => {
   it("the owner sees their sent notifications with recipient identity", async () => {
-    setSession({ id: OWNER_ID, email: "adsium.business@gmail.com" });
+    setSession(ownerSession());
     await sendRoute(
       new Request("http://localhost/api/admin/notifications/send", {
         method: "POST",
@@ -650,5 +661,61 @@ describe("admin history", () => {
     expect(items).toHaveLength(1);
     expect(items[0].target_type).toBe("user");
     expect(items[0].recipient?.email).toBe("john@example.com");
+  });
+});
+
+// --- owner identity: the authenticated UID is the reference ----------------
+describe("owner identity is UID-based (spec: UID 99a30c47-… is THE owner)", () => {
+  it("the real owner UID is recognized even when the profile email has drifted (email is advisory)", async () => {
+    // Simulate a drifted / stale profile email for the owner row.
+    const ownerRow = db.profiles.find((row) => row.id === OWNER_ID);
+    if (ownerRow) ownerRow.email = "drifted-alias@example.com";
+
+    setSession(ownerSession());
+    const response = await sendRoute(
+      new Request("http://localhost/api/admin/notifications/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          target_type: "all",
+          title: "Owner still works",
+          content: "UID matched; email is only advisory.",
+          type: "info",
+          idempotency_key: key(),
+        }),
+      }),
+    );
+    // The session UID is the owner — a drifted email must NOT lock the
+    // real owner out.
+    expect(response.status).toBe(201);
+    expect(db.notifications).toHaveLength(1);
+  });
+
+  it("a DIFFERENT user (even an admin, even with the owner's email) is never the owner", async () => {
+    // Give another account admin membership AND the owner's email — the
+    // UID check must still deny it.
+    db.profiles.push({
+      id: OTHER_ADMIN_ID,
+      email: PLATFORM_OWNER_EMAIL,
+      full_name: "Lookalike Admin",
+    });
+    db.admins.push({ user_id: OTHER_ADMIN_ID, created_by: null });
+    setSession({ id: OTHER_ADMIN_ID, email: PLATFORM_OWNER_EMAIL });
+
+    const response = await sendRoute(
+      new Request("http://localhost/api/admin/notifications/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          target_type: "all",
+          title: "Should be denied",
+          content: "Same email, different UID.",
+          type: "info",
+          idempotency_key: key(),
+        }),
+      }),
+    );
+    expect(response.status).toBe(403);
+    expect(db.notifications).toHaveLength(0);
   });
 });
