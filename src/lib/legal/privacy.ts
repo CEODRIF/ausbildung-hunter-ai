@@ -32,10 +32,10 @@ export const privacyDoc: LegalDoc = {
       },
       p: [
         {
-          de: "Verantwortlich für die Verarbeitung Ihrer Daten auf dieser Plattform ist " + PLACEHOLDERS.Ausbildung_Hunter_Privacy + " (Anschrift: " + PLACEHOLDERS.BUSINESS_ADDRESS + "). Für Fragen zur Datenverarbeitung erreichen Sie uns über die Kontaktseite mit der dort angegebenen E-Mail-Adresse.",
-          en: "The party responsible for the processing of your data on this platform is " + PLACEHOLDERS.Ausbildung_Hunter_Privacy + " (address: " + PLACEHOLDERS.BUSINESS_ADDRESS + "). For questions about data processing, reach us via the Contact page using the email address listed there.",
-          fr: "Le responsable du traitement de vos données sur cette plateforme est " + PLACEHOLDERS.Ausbildung_Hunter_Privacy + " (adresse : " + PLACEHOLDERS.BUSINESS_ADDRESS + "). Pour toute question sur le traitement des données, contactez-nous via la page Contact à l'adresse e-mail indiquée.",
-          ar: "الجهة المسؤولة عن معالجة بياناتك على هذه المنصّة هي " + PLACEHOLDERS.Ausbildung_Hunter_Privacy + " (العنوان: " + PLACEHOLDERS.Ausbildung_Hunter_Privacy + "). للاستفسار عن معالجة البيانات، راسلنا عبر صفحة الاتصال باستخدام البريد المذكور هناك.",
+          de: "Verantwortlich für die Verarbeitung Ihrer Daten auf dieser Plattform ist " + PLACEHOLDERS.LEGAL_ENTITY + " (Anschrift: " + PLACEHOLDERS.BUSINESS_ADDRESS + "). Für Fragen zur Datenverarbeitung erreichen Sie uns über die Kontaktseite mit der dort angegebenen E-Mail-Adresse.",
+          en: "The party responsible for the processing of your data on this platform is " + PLACEHOLDERS.LEGAL_ENTITY + " (address: " + PLACEHOLDERS.BUSINESS_ADDRESS + "). For questions about data processing, reach us via the Contact page using the email address listed there.",
+          fr: "Le responsable du traitement de vos données sur cette plateforme est " + PLACEHOLDERS.LEGAL_ENTITY + " (adresse : " + PLACEHOLDERS.BUSINESS_ADDRESS + "). Pour toute question sur le traitement des données, contactez-nous via la page Contact à l'adresse e-mail indiquée.",
+          ar: "الجهة المسؤولة عن معالجة بياناتك على هذه المنصّة هي " + PLACEHOLDERS.LEGAL_ENTITY + " (العنوان: " + PLACEHOLDERS.LEGAL_ENTITY + "). للاستفسار عن معالجة البيانات، راسلنا عبر صفحة الاتصال باستخدام البريد المذكور هناك.",
         },
       ],
     },
