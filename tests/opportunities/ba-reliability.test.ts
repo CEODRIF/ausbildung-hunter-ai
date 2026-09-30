@@ -192,6 +192,51 @@ function scriptedFetch(
   return { calls: () => calls, maxInFlight: () => maxInFlight };
 }
 
+function baItem(ref: string): Opportunity {
+  return {
+    id: `arbeitsagentur:${ref}`,
+    provider: "arbeitsagentur",
+    external_id: ref,
+    source_name: "Bundesagentur für Arbeit – Jobbörse",
+    source_url: "https://www.arbeitsagentur.de/jobboerse",
+    source_type: "job_portal",
+    additional_sources: [],
+    application_url: null,
+    title: "Stelle",
+    goal: "ausbildung",
+    stellenangebotsart: null,
+    company_name: "Firma Bergmann",
+    company_url: null,
+    location: "Berlin",
+    location_detail: null,
+    distance_km: null,
+    latitude: null,
+    longitude: null,
+    profession: "Mechatroniker/in",
+    alternative_professions: [],
+    description: null,
+    tasks: [],
+    requirements: [],
+    employment_type: null,
+    home_office: null,
+    career_change_friendly: null,
+    salary: null,
+    training_type: null,
+    education_requirement: null,
+    valid_from: null,
+    application_deadline: null,
+    posted_at: null,
+    updated_at: null,
+    retrieved_at: "2026-09-30T12:00:00.000Z",
+    contact: null,
+    required_skills: [],
+    preferred_skills: [],
+    required_languages: [],
+    extracted_keywords: [],
+    match: null,
+  };
+}
+
 function webOpportunity(): Opportunity {
   return {
     id: "web:career1",
@@ -754,5 +799,154 @@ describe("12. retry issues a fresh attempt (no reload needed)", () => {
     expect(retryBody.results).toHaveLength(1);
     expect(retryBody.results[0].id).toBe("arbeitsagentur:REF-R");
     expect(probe.calls()).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Extended coverage — 403/WAF, all sources fail, partial results,
+// email collection without fake emails (spec §14 items 3, 8, 12, 13, 14)
+// ---------------------------------------------------------------------------
+describe("extended WAF / partial-results coverage", () => {
+  it("classifies 403 (access block / WAF) as BLOCKED_OR_CHALLENGED — never retried, never bypassed", async () => {
+    const probe = scriptedFetch([
+      () =>
+        new Response("{}", {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+    ]);
+    await expect(
+      fetchBaJson("https://ba.example.test/search", {
+        timeoutMs: 50,
+        backoffBaseMs: 1,
+        deadlineMs: 1000,
+        label: "test",
+      }),
+    ).rejects.toMatchObject({
+      name: "BaFetchFailure",
+      kind: "BLOCKED_OR_CHALLENGED",
+      retryable: false,
+      status: 403,
+    });
+    // A deliberate block is respected: exactly one attempt, no hammering.
+    expect(probe.calls()).toBe(1);
+  });
+
+  it("all sources fail → structured 'temporarily_unavailable', the pipeline does not throw", async () => {
+    adminState.profileRow = candidateProfileFixture();
+    vi.mocked(createAIProvider).mockReturnValue({
+      generateText: vi.fn(async () =>
+        JSON.stringify({
+          rationale: "Profile documents Mechatroniker in Berlin.",
+          queries: [{ keyword: "", role: "Mechatroniker", location: "Berlin" }],
+          web_queries: [],
+        }),
+      ),
+      streamText: vi.fn(),
+      analyzeFile: vi.fn(),
+      analyzeImage: vi.fn(),
+      generateFile: vi.fn(),
+    } as never);
+    // No web client configured → the ONLY source is BA, and it is down.
+    vi.mocked(getWebSearchClient).mockReturnValue(null);
+    const probe = scriptedFetch([() => {
+      throw networkError();
+    }]);
+
+    const events: Array<Record<string, unknown>> = [];
+    const result = await runAISearch({
+      userId: "user-test",
+      goal: "ausbildung",
+      targetCount: 10,
+      onProgress: (event) => events.push(event as unknown as Record<string, unknown>),
+    });
+
+    // No exception, no fabricated results — a clean "nothing, here is why".
+    expect(result.found).toBe(0);
+    expect(result.results).toEqual([]);
+    expect(result.sources).toEqual([
+      {
+        source: "bundesagentur",
+        status: "temporarily_unavailable",
+        retryable: true,
+      },
+    ]);
+    const complete = events.find((event) => event.type === "complete");
+    expect(complete).toBeDefined();
+    expect(probe.calls()).toBe(3); // 3 controlled attempts, then stopped
+  });
+
+  it("scan window: page 1 ok + page 2 fails → partial (degraded) results are returned, not an error", async () => {
+    // Page 1: 50 real items, source claims 100 → the scan wants a page 2.
+    // Page 2: network failure on all 3 controlled attempts → the collected
+    // page-1 results must still be served, flagged as degraded/partial.
+    const items = Array.from({ length: 50 }, (_, i) =>
+      mkSearchItem(`D-${i + 1}`, "2026-09-20", { hauptberuf: "Mechatroniker/in" }),
+    );
+    const probe = scriptedFetch([
+      () => jsonResponse({ ergebnisliste: items, maxErgebnisse: 100 }),
+      () => {
+        throw networkError();
+      },
+      () => {
+        throw networkError();
+      },
+      () => {
+        throw networkError();
+      },
+    ]);
+    const window = await fetchOpportunityWindow({
+      goal: "ausbildung",
+      keyword: "",
+      role: "Mechatroniker",
+      company: "",
+      location: "",
+      freshness: "any",
+      sort: "relevance",
+      employment: "any",
+      training_type: "any",
+      home_office: "any",
+      salary_documented: false,
+      page: 1,
+      pageSize: 20,
+      match: false,
+    });
+    expect(window.mode).toBe("scan");
+    expect(window.window).toHaveLength(50); // real results survived
+    expect(window.degraded).toBe(true);
+    expect(window.scan_truncated).toBe(true);
+    expect(window.exhausted).toBe(false);
+    expect(probe.calls()).toBe(4); // 1 ok page + 3 controlled retries of page 2
+  });
+
+  it("email collection keeps successful emails, skips the failed source, and never invents an email", async () => {
+    const publishedEmail = "bewerbung@firma-bergmann.de";
+    const goodDetails = {
+      ...detailsArbeit,
+      stellenangebotsBeschreibung: `Bewerbung bitte direkt an ${publishedEmail} senden.`,
+    };
+    // Only the details call for REF-EMAIL-1 succeeds; REF-EMAIL-2's source
+    // is unreachable (network failure on every attempt).
+    const b64Good = Buffer.from("REF-EMAIL-1", "utf8").toString("base64");
+    scriptedFetch([
+      (_call, url) => {
+        if (url.includes(b64Good)) return jsonResponse(goodDetails);
+        throw networkError();
+      },
+    ]);
+
+    const items = [baItem("REF-EMAIL-1"), baItem("REF-EMAIL-2")];
+    const enriched = await enrichOpportunities(items);
+
+    // The failed source is skipped — its row is simply absent (its email is
+    // null by construction, never guessed).
+    expect(enriched).toHaveLength(1);
+    // The kept email is EXACTLY the one the source published.
+    expect(enriched[0].contact?.email).toBe(publishedEmail);
+    // No fake emails anywhere: every non-null email in the result set is the
+    // published one (no info@/contact@/bewerbung@<company> synthesis).
+    for (const opp of enriched) {
+      if (opp.contact?.email) expect(opp.contact.email).toBe(publishedEmail);
+    }
   });
 });

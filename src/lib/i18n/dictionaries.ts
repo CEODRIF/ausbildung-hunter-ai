@@ -469,9 +469,9 @@ const de = {
     page: "Seite {page} von {total}",
     error: "Die Stellensuche ist fehlgeschlagen.",
     sourceUnavailable:
-      "Bundesagentur für Arbeit ist momentan nicht erreichbar. Bitte versuchen Sie es in Kürze erneut.",
+      "Die Suche ist vorübergehend nicht verfügbar. Bitte versuchen Sie es erneut.",
     sourcePartial:
-      "Bundesagentur für Arbeit ist momentan eingeschränkt erreichbar — die Ergebnisse können unvollständig sein.",
+      "Die Bundesagentur für Arbeit ist derzeit vorübergehend nicht erreichbar. Einige Ergebnisse können fehlen.",
     retry: "Erneut versuchen",
   },
 
@@ -1404,9 +1404,9 @@ const en: Dict = {
     page: "Page {page} of {total}",
     error: "The opportunity search failed.",
     sourceUnavailable:
-      "The Federal Employment Agency (Jobbörse) is currently unreachable. Please try again in a moment.",
+      "Search temporarily unavailable. Please try again.",
     sourcePartial:
-      "The Federal Employment Agency (Jobbörse) is currently reachable only partially — results may be incomplete.",
+      "The Federal Employment Agency (Jobbörse) is temporarily unavailable. Some results may be missing.",
     retry: "Retry",
   },
   empty: {
@@ -2325,9 +2325,9 @@ const fr: Dict = {
     page: "Page {page} sur {total}",
     error: "La recherche d'offres a échoué.",
     sourceUnavailable:
-      "L'Agence fédérale pour l'emploi (Jobbörse) est momentanément inaccessible. Veuillez réessayer dans un instant.",
+      "Recherche temporairement indisponible. Veuillez réessayer.",
     sourcePartial:
-      "L'Agence fédérale pour l'emploi (Jobbörse) n'est accessible que partiellement pour le moment — les résultats peuvent être incomplets.",
+      "L'Agence fédérale pour l'emploi (Jobbörse) est temporairement inaccessible. Certains résultats peuvent manquer.",
     retry: "Réessayer",
   },
   empty: {
@@ -3249,9 +3249,9 @@ const ar: Dict = {
     page: "صفحة {page} من {total}",
     error: "فشل البحث عن الوظائف.",
     sourceUnavailable:
-      "وكالة العمل الفيدرالية غير متاحة حاليًا. يرجى المحاولة مرة أخرى بعد قليل.",
+      "البحث غير متاح مؤقتًا حاليًا. يرجى المحاولة مرة أخرى.",
     sourcePartial:
-      "وكالة العمل الفيدرالية متاحة جزئيًا حاليًا — قد تكون النتائج غير مكتملة.",
+      "وكالة العمل الفيدرالية غير متاحة مؤقتًا حاليًا. قد تكون بعض النتائج مفقودة.",
     retry: "إعادة المحاولة",
   },
   empty: {
