@@ -10,6 +10,8 @@ import {
   AdminUserActions,
   type AdminUserRow,
 } from "@/components/admin-user-actions";
+import { AdminNotifications } from "@/components/admin-notifications";
+import { PLATFORM_OWNER_EMAIL } from "@/lib/notifications/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +36,12 @@ export default async function AdminPage({
     getRequestLang(),
   ]);
   const locale = localeForLang(lang);
+  // Platform Updates (notifications) is reserved for the platform owner:
+  // the section is only RENDERED for the owner account, and every API call
+  // is re-verified server-side (requirePlatformOwner) — non-owner admins
+  // neither see the UI nor can reach the endpoints.
+  const isPlatformOwner =
+    (admin.email ?? "").trim().toLowerCase() === PLATFORM_OWNER_EMAIL;
 
   return (
     <main className="min-h-screen bg-background px-5 py-8 sm:px-8 lg:px-10">
@@ -133,12 +141,14 @@ export default async function AdminPage({
                         />
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+              ))}
+            </tbody>
+          </table>
             </div>
           )}
         </Card>
+
+        {isPlatformOwner && <AdminNotifications />}
       </div>
     </main>
   );

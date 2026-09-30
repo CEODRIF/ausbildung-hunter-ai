@@ -17,6 +17,7 @@ import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import type { Profile } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
+import { relativeTime } from "@/lib/relative-time";
 import { useDismiss } from "@/lib/use-dismiss";
 import { Icon, type IconName } from "@/components/icon";
 import { BrandLogo } from "@/components/brand-logo";
@@ -264,13 +265,86 @@ function Tooltip({ label }: { label: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Notifications (honest empty state — no notification backend exists)
+// Notifications (in-app: global platform updates + targeted owner messages)
 // ---------------------------------------------------------------------------
 
+interface ShellNotification {
+  id: string;
+  title: string;
+  content: string;
+  type: "info" | "important" | "maintenance" | "improvement";
+  created_at: string;
+  read: boolean;
+  read_at: string | null;
+}
+
+const NOTIF_TYPE_KEYS = {
+  info: "admin.notifTypeInfo",
+  important: "admin.notifTypeImportant",
+  maintenance: "admin.notifTypeMaintenance",
+  improvement: "admin.notifTypeImprovement",
+} as const;
+
 function NotificationsBell() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  const locale =
+    lang === "de" ? "de-DE" : lang === "fr" ? "fr-FR" : lang === "ar" ? "ar" : "en-US";
   const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<ShellNotification[] | null>(null);
   const rootRef = useDismiss<HTMLDivElement>(open, useCallback(() => setOpen(false), []));
+
+  const refresh = useCallback(async () => {
+    try {
+      const response = await fetch("/api/notifications", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = (await response.json()) as { items: ShellNotification[] };
+      setItems(data.items);
+    } catch {
+      // Keep whatever we already show; the bell is non-critical chrome.
+    }
+  }, []);
+
+  useEffect(() => {
+    // Initial notification list load: fetch → setState after await (async,
+    // not a synchronous cascading update).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refresh();
+  }, [refresh]);
+  // Refresh when the tab becomes visible again + a slow 60 s poll.
+  useEffect(() => {
+    const onVisible = () => {
+      if (!document.hidden) void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const interval = setInterval(() => void refresh(), 60_000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(interval);
+    };
+  }, [refresh]);
+
+  const unread = (items ?? []).filter((item) => !item.read).length;
+
+  const markRead = async (item: ShellNotification) => {
+    if (item.read) return;
+    // Optimistic: the read state is per-user and idempotent server-side.
+    setItems((current) =>
+      (current ?? []).map((row) =>
+        row.id === item.id
+          ? { ...row, read: true, read_at: new Date().toISOString() }
+          : row,
+      ),
+    );
+    try {
+      await fetch("/api/notifications/read", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ notification_id: item.id }),
+      });
+    } catch {
+      // Next refresh reconciles.
+    }
+  };
 
   return (
     <div ref={rootRef} className="relative">
@@ -280,28 +354,74 @@ function NotificationsBell() {
         aria-label={t("header.notifications")}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex h-9 w-9 items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-2 hover:text-ink"
+        className="relative flex h-9 w-9 items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-2 hover:text-ink"
       >
         <Icon name="bell" size={18} />
+        {unread > 0 && (
+          <span className="absolute -end-0.5 -top-0.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
       </button>
       {open && (
         <div
           role="menu"
           aria-label={t("header.notifications")}
-          className="absolute end-0 top-11 z-50 w-72 overflow-hidden rounded-xl border border-line bg-surface card-shadow"
+          className="absolute end-0 top-11 z-50 w-80 overflow-hidden rounded-xl border border-line bg-surface card-shadow"
         >
           <div className="border-b border-line px-4 py-3 text-sm font-bold text-ink">
             {t("header.notifications")}
           </div>
-          <div className="flex flex-col items-center gap-2.5 px-5 py-7 text-center">
-            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-surface-2 text-faint">
-              <Icon name="bell" size={18} />
-            </span>
-            <p className="text-sm font-bold text-ink">{t("header.noNotifications")}</p>
-            <p className="text-xs leading-5 text-muted">
-              {t("header.noNotificationsHint")}
-            </p>
-          </div>
+          {items === null || items.length === 0 ? (
+            <div className="flex flex-col items-center gap-2.5 px-5 py-7 text-center">
+              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-surface-2 text-faint">
+                <Icon name="bell" size={18} />
+              </span>
+              <p className="text-sm font-bold text-ink">{t("header.noNotifications")}</p>
+              <p className="text-xs leading-5 text-muted">
+                {t("header.noNotificationsHint")}
+              </p>
+            </div>
+          ) : (
+            <ul className="max-h-96 divide-y divide-line overflow-y-auto">
+              {items.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => void markRead(item)}
+                    className={`block w-full px-4 py-3 text-start transition-colors hover:bg-surface-2 ${
+                      item.read ? "" : "bg-surface-2/50"
+                    }`}
+                  >
+                    <span className="flex items-start gap-2">
+                      <span
+                        className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                          item.read ? "bg-transparent" : "bg-accent"
+                        }`}
+                      />
+                      <span className="min-w-0">
+                        <span className="flex items-baseline gap-2">
+                          <span className="truncate text-sm font-semibold text-ink">
+                            {item.title}
+                          </span>
+                          <span className="shrink-0 rounded bg-surface-2 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-faint">
+                            {t(NOTIF_TYPE_KEYS[item.type])}
+                          </span>
+                        </span>
+                        <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-muted">
+                          {item.content}
+                        </span>
+                        <span className="mt-1 block text-[10px] font-semibold uppercase tracking-wide text-faint">
+                          {relativeTime(item.created_at, t, locale)}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </div>
