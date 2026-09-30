@@ -303,6 +303,15 @@ export function AIChat({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
+  // Synchronous in-flight lock. React state (`streaming`) is not updated
+  // until the next render, so Enter auto-repeat / a double click within
+  // one event batch could otherwise fire two concurrent streams for the
+  // same question (duplicate user bubble + two near-identical answers).
+  const sendingRef = useRef(false);
+  // Mirror of the currently rendered conversation for async completions —
+  // a stale response must never be committed into a newer conversation.
+  const convIdRef = useRef(selectedConversation.id);
+  convIdRef.current = selectedConversation.id;
 
   // Conversation switch (or first mount): reset the conversation-bound
   // client state when the selected conversation changes — React's
@@ -463,6 +472,9 @@ export function AIChat({
   };
 
   const runChat = async (content: string, fileIds: string[]) => {
+    if (sendingRef.current) return; // one stream per conversation, ever
+    sendingRef.current = true;
+    const requestConvId = selectedConversation.id;
     setStreaming(true);
     setFailedSend(null);
     setStreamContent("");
@@ -473,7 +485,7 @@ export function AIChat({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          conversationId: selectedConversation.id,
+          conversationId: requestConvId,
           content,
           fileIds,
         }),
@@ -492,14 +504,35 @@ export function AIChat({
         const { done, value } = await reader.read();
         if (done) break;
         complete += decoder.decode(value, { stream: true });
-        setStreamContent(complete);
+        // Show only the model text — the server appends a NUL-delimited
+        // metadata frame after the last token.
+        const cut = complete.lastIndexOf("\u0000");
+        setStreamContent(cut === -1 ? complete : complete.slice(0, cut));
       }
+      // Extract the persisted assistant message id from the final metadata
+      // frame so the committed bubble carries the real database identity
+      // (stable across refreshes); fall back to a local id if absent.
+      let text = complete;
+      let messageId = `assistant-${Date.now()}`;
+      const cut = complete.lastIndexOf("\u0000");
+      if (cut !== -1) {
+        try {
+          const meta = JSON.parse(complete.slice(cut + 1)) as {
+            aiMeta?: { messageId?: string | null; saved?: boolean };
+          };
+          text = complete.slice(0, cut);
+          if (meta.aiMeta?.messageId) messageId = meta.aiMeta.messageId;
+        } catch {
+          // Marker malformed — keep the raw text and the local id.
+        }
+      }
+      if (convIdRef.current !== requestConvId) return; // stale request
       setMessages((items) => [
         ...items,
         {
-          id: `assistant-${Date.now()}`,
+          id: messageId,
           role: "assistant",
-          content: complete,
+          content: text,
           created_at: new Date().toISOString(),
           files: [],
         },
@@ -510,6 +543,7 @@ export function AIChat({
       setPendingAssistant(false);
       setStreamContent("");
       if ((error as Error).name === "AbortError") return; // stopped: partial answer is persisted server-side
+      if (convIdRef.current !== requestConvId) return; // stale request
       setFailedSend({
         message:
           error instanceof Error
@@ -520,6 +554,7 @@ export function AIChat({
       });
     } finally {
       setStreaming(false);
+      sendingRef.current = false;
       abortRef.current = null;
     }
   };

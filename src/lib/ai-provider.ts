@@ -97,26 +97,42 @@ async function streamResponse(response: Response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+  // SSE events can be split across network chunks: the partial tail line is
+  // carried between reads so no delta is ever lost (the previous per-chunk
+  // parse silently dropped every token that straddled a chunk boundary).
+  let pending = "";
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
-      }
-      const text = decoder.decode(value, { stream: true });
-      const output = text
-        .split("\n")
-        .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
-        .map((line) => {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        pending += decoder.decode(value, { stream: true });
+        const lines = pending.split("\n");
+        pending = lines.pop() ?? ""; // may be an incomplete event line
+        let output = "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") continue;
           try {
-            return JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || "";
+            output +=
+              (JSON.parse(payload).choices?.[0]?.delta?.content as
+                | string
+                | undefined) ?? "";
           } catch {
-            return "";
+            // Malformed event — skip it instead of breaking the stream.
           }
-        })
-        .join("");
-      if (output) controller.enqueue(encoder.encode(output));
+        }
+        if (output) {
+          controller.enqueue(encoder.encode(output));
+          return;
+        }
+        // No text in this chunk (role-only deltas / keep-alive lines) —
+        // keep pulling until the next real delta arrives.
+      }
     },
     cancel() {
       void reader.cancel();
@@ -128,8 +144,11 @@ export function createAIProvider(): AIProvider {
   return {
     generateText: async (messages, timeoutMs) =>
       textResponse(await requestChat(messages, false, timeoutMs)),
+    // Streaming: the timeout is a total-generation budget, not per-chunk —
+    // long answers must not be killed mid-stream (a 60s cap truncated
+    // responses, and the truncated history then produced repeated answers).
     streamText: async (messages) =>
-      streamResponse(await requestChat(messages, true)),
+      streamResponse(await requestChat(messages, true, 180_000)),
     analyzeFile: async ({ filename, mimeType, content }) => {
       const text = content.toString("utf8").slice(0, 50000);
       return textResponse(

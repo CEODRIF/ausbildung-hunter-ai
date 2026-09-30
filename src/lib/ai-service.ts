@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getEntitlements } from "@/lib/billing/entitlements";
 import { createAIProvider, type AIMessage } from "@/lib/ai-provider";
-import { buildFileContext } from "@/lib/ai-file-context";
+import { buildFileContext, type ContextFile } from "@/lib/ai-file-context";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 
 export type Conversation = {
@@ -548,15 +548,27 @@ export async function getAIContext(userId: string, conversationId: string) {
     .reverse()
     .slice(0, 5);
   let context = "";
-  for (const candidate of userMessages) {
-    const { data: files } = await admin
+  if (userMessages.length) {
+    // ONE query for all candidates (the previous loop issued up to five
+    // sequential lookups before the first token could be sent), then pick
+    // the most recent user message that actually carries attachments.
+    const { data: fileRows } = await admin
       .from("ai_message_files")
-      .select("filename, mime_type, storage_path")
-      .eq("message_id", candidate.id)
+      .select("message_id, filename, mime_type, storage_path")
+      .in("message_id", userMessages.map((m) => m.id))
       .eq("user_id", userId);
-    if (files?.length) {
-      context = await buildFileContext(files);
-      break;
+    const filesByMessage = new Map<string, ContextFile[]>();
+    for (const row of fileRows ?? []) {
+      const list = filesByMessage.get(row.message_id as string) ?? [];
+      list.push(row as ContextFile);
+      filesByMessage.set(row.message_id as string, list);
+    }
+    for (const candidate of userMessages) {
+      const files = filesByMessage.get(candidate.id);
+      if (files?.length) {
+        context = await buildFileContext(files);
+        break;
+      }
     }
   }
   const contextMessage: AIMessage | null = context
