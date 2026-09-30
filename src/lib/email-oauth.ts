@@ -44,6 +44,33 @@ export function getProviderConfig(provider: EmailProvider) {
   };
 }
 
+/**
+ * Read the provider's JSON error body so the *real* failure reason
+ * (e.g. Google's `invalid_client`, a PostgREST `42P01`) survives into the
+ * callback log instead of a generic message that hides it.
+ */
+async function describeProviderFailure(
+  response: Response,
+  fallback: string,
+): Promise<Error> {
+  let detail = "";
+  try {
+    const body = (await response.json()) as {
+      error?: string;
+      error_description?: string;
+      message?: string;
+    };
+    detail = [body.error, body.error_description ?? body.message]
+      .filter(Boolean)
+      .join(": ");
+  } catch {
+    // Non-JSON error body (gateway HTML, empty body) — fallback suffices.
+  }
+  return new Error(
+    `${fallback} (HTTP ${response.status}${detail ? `: ${detail}` : ""})`,
+  );
+}
+
 export async function saveEmailAccount(input: {
   userId: string;
   provider: EmailProvider;
@@ -78,7 +105,10 @@ export async function saveEmailAccount(input: {
       "id, provider, email, is_active, created_at, updated_at, last_used_at",
     )
     .single<SafeEmailAccount>();
-  if (error) throw new Error(error.message);
+  if (error)
+    throw new Error(
+      `Saving email account failed${error.code ? ` [${error.code}]` : ""}: ${error.message}`,
+    );
   return data;
 }
 
@@ -182,7 +212,8 @@ export async function exchangeGoogleCode(code: string) {
     }),
     cache: "no-store",
   });
-  if (!response.ok) throw new Error("Gmail authorization failed.");
+  if (!response.ok)
+    throw await describeProviderFailure(response, "Gmail authorization failed.");
   return (await response.json()) as {
     access_token?: string;
     refresh_token?: string;
@@ -225,7 +256,8 @@ export async function fetchGoogleIdentity(accessToken: string) {
     "https://openidconnect.googleapis.com/v1/userinfo",
     { headers: { authorization: `Bearer ${accessToken}` }, cache: "no-store" },
   );
-  if (!response.ok) throw new Error("Gmail account verification failed.");
+  if (!response.ok)
+    throw await describeProviderFailure(response, "Gmail account verification failed.");
   return (await response.json()) as {
     sub?: string;
     email?: string;
