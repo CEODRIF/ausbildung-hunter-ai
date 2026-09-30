@@ -1,48 +1,56 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
- * Design tokens — Ausbildung Hunter AI (dark neon palette)
- * Both scopes are dark neon variants of the same system: the light scope is
- * a slightly elevated dark, the .dark scope is the deepest variant. Every
- * component that uses the semantic utilities (bg-surface, text-ink,
- * border-line, bg-accent, …) picks the palette up from here — no per-theme
- * branching in components.
+ * Design tokens — Ausbildung Hunter AI
+ * One visual identity, two scopes: the .dark scope is the dark neon theme,
+ * the light scope is the same pink/magenta/purple identity on a light
+ * background. Every component that uses the semantic utilities
+ * (bg-surface, text-ink, border-line, bg-accent, …) picks the palette up
+ * from here — no per-theme branching in components.
  * --------------------------------------------------------------------------- */
 :root {
-  --background: #f6f8fb;
+  /* Light mode — same identity as dark neon, on a light background:
+   * dark navy text, white surfaces, soft lavender borders and the
+   * pink/magenta/purple accent family. */
+  --background: #fafafc;
   --foreground: #10203b;
   --surface: #ffffff;
-  --surface-2: #f4f7fb;
+  --surface-2: #f7f4fb;
   --ink: #10203b;
   --ink-soft: #1d3458;
   --muted: #6d7d96;
   --faint: #8b9ab0;
-  --line: #e6ebf2;
-  --line-strong: #dfe6f0;
+  --line: #f0e9fa;
+  --line-strong: #e9d5ff;
   --navy: #10203b;
   --navy-soft: #1d3458;
-  --blue: #2f6fed;
-  --blue-deep: #255dcc;
-  --blue-soft: #edf3ff;
-  --ai: #805ad5;
-  --ai-deep: #6d47c9;
-  --ai-soft: #f2edff;
+  --blue: #d946ef;
+  --blue-deep: #c026d3;
+  --blue-soft: #fce7f9;
+  --ai: #a855f7;
+  --ai-deep: #9333ea;
+  --ai-soft: #f3e8ff;
   --success: #1b9b70;
   --success-soft: #eaf8f3;
   --warning: #a3611c;
   --warning-soft: #fff4e5;
   --danger: #d9535d;
   --danger-soft: #fdecec;
-  --focus-ring: rgba(47, 111, 237, 0.28);
-  --selection: #d9e6ff;
+  --focus-ring: rgba(217, 70, 239, 0.25);
+  --selection: #fbcfe8;
   --shadow-color: 16, 32, 59;
-  /* Neon additions — in the light scope they resolve to the original
-   * solid blue/ink values so light mode stays the original light theme. */
-  --cyan: #7eaeff;
-  --cyan-soft: rgba(47, 111, 237, 0.08);
-  --glow-accent-rgb: 47, 111, 237;
+  /* Accent family in the light scope — pink/magenta/purple instead of
+   * the old blues, so the light theme keeps the neon identity. */
+  --cyan: #c084fc;
+  --cyan-soft: rgba(168, 85, 247, 0.08);
+  --glow-accent-rgb: 217, 70, 239;
   --glow-navy-rgb: 16, 32, 59;
-  --gradient-neon: linear-gradient(0deg, #2f6fed, #2f6fed);
+  --gradient-neon: linear-gradient(
+    90deg,
+    #d946ef 0%,
+    #ec4899 55%,
+    #8b5cf6 100%
+  );
   --gradient-headline: linear-gradient(0deg, #10203b, #10203b);
 }
 
@@ -184,8 +192,8 @@ textarea:focus-visible,
 
 .grid-fade {
   background-image:
-    linear-gradient(rgba(47, 111, 237, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(47, 111, 237, 0.045) 1px, transparent 1px);
+    linear-gradient(rgba(217, 70, 239, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(217, 70, 239, 0.05) 1px, transparent 1px);
 }
 
 .dark .grid-fade {
@@ -195,11 +203,13 @@ textarea:focus-visible,
 }
 
 .hero-orb {
-  background: radial-gradient(
-    circle,
-    rgba(47, 111, 237, 0.13) 0%,
-    rgba(47, 111, 237, 0) 70%
-  );
+  background:
+    radial-gradient(circle, rgba(217, 70, 239, 0.12) 0%, rgba(217, 70, 239, 0) 65%),
+    radial-gradient(
+      circle at 70% 70%,
+      rgba(168, 85, 247, 0.1) 0%,
+      rgba(168, 85, 247, 0) 60%
+    );
 }
 
 .dark .hero-orb {
