@@ -4,8 +4,14 @@ import {
   getAIContext,
   prepareChat,
   provider,
+  recentMessages,
   saveAssistantMessage,
 } from "@/lib/ai-service";
+import {
+  decideScope,
+  detectUILanguage,
+  SCOPE_REDIRECTS,
+} from "@/lib/ai-scope";
 import {
   checkRateLimit,
   rateLimitHeaders,
@@ -13,6 +19,19 @@ import {
 } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
+
+/** Wrap a plain string as a small text stream (2 chunks for progressive UI). */
+function textStream(text: string) {
+  const encoder = new TextEncoder();
+  const half = Math.ceil(text.length / 2);
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(text.slice(0, half)));
+      controller.enqueue(encoder.encode(text.slice(half)));
+      controller.close();
+    },
+  });
+}
 export async function POST(request: Request) {
   const supabase = await createClient();
   const {
@@ -34,16 +53,29 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   try {
-    await prepareChat(
-      user.id,
-      body.conversationId,
-      body.content || "",
-      Array.isArray(body.fileIds)
-        ? body.fileIds.filter((id) => typeof id === "string")
-        : [],
-    );
-    const context = await getAIContext(user.id, body.conversationId);
-    const stream = await provider().streamText(context.messages);
+    const fileIds = Array.isArray(body.fileIds)
+      ? body.fileIds.filter((id) => typeof id === "string")
+      : [];
+    // Server-side scope gate (BEFORE any model call): the assistant is a
+    // specialist for Ausbildung Hunter AI. Out-of-scope questions get a
+    // short, language-matched redirect — streamed and persisted like any
+    // assistant reply, with no model call and no fabricated off-topic answer.
+    // The hardened system prompt enforces the same boundary on the model side
+    // for every in-scope request.
+    const history = await recentMessages(user.id, body.conversationId);
+    const scope = decideScope(body.content || "", fileIds.length > 0, history);
+    await prepareChat(user.id, body.conversationId, body.content || "", fileIds);
+    let stream: ReadableStream<Uint8Array>;
+    if (scope.inScope) {
+      const context = await getAIContext(user.id, body.conversationId);
+      stream = await provider().streamText(context.messages);
+    } else {
+      console.info(
+        "[ai-chat] out-of-scope request redirected",
+        JSON.stringify({ conversationId: body.conversationId, reason: scope.reason }),
+      );
+      stream = textStream(SCOPE_REDIRECTS[detectUILanguage(body.content || "")]);
+    }
     let complete = "";
     let persisted = false;
     const encoder = new TextEncoder();

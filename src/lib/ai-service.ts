@@ -275,6 +275,32 @@ export async function deleteConversation(conversationId: string) {
       .catch(() => undefined);
   }
 }
+/**
+ * The most recent messages of a conversation, newest first. Lightweight
+ * variant of getConversation (no file association): used by the chat route
+ * for the server-side scope decision (follow-up detection).
+ */
+export async function recentMessages(
+  userId: string,
+  conversationId: string,
+  limit = 8,
+): Promise<Array<{ role: "user" | "assistant" | "system"; content: string }>> {
+  const admin = createAdminClient();
+  await assertConversation(userId, conversationId);
+  const { data, error } = await admin
+    .from("ai_messages")
+    .select("role, content")
+    .eq("conversation_id", conversationId)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error("The conversation history could not be loaded.");
+  return (data ?? []).map((row) => ({
+    role: row.role as "user" | "assistant" | "system",
+    content: (row.content as string) ?? "",
+  }));
+}
+
 export async function getConversation(conversationId: string) {
   const user = await currentUser();
   const conversation = await assertConversation(user.id, conversationId);

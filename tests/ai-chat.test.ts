@@ -352,19 +352,19 @@ beforeEach(() => {
 describe("persistence contract", () => {
   it("1. a new user message is persisted", async () => {
     providerSteps.push({ chunks: ["ok"] });
-    const response = await chat("سلام");
+    const response = await chat("ما هي Ausbildung؟");
     expect(response.status).toBe(200);
     await consume(response);
     const users = userMessages();
     expect(users).toHaveLength(1);
-    expect(users[0].content).toBe("سلام");
+    expect(users[0].content).toBe("ما هي Ausbildung؟");
     expect(users[0].conversation_id).toBe(CONV_ID);
     expect(users[0].user_id).toBe(USER_ID);
   });
 
   it("2. the assistant response is persisted with the full streamed text", async () => {
     providerSteps.push({ chunks: ["وعليكم ال", "سلام، كيف ", "أخدمك؟"] });
-    const response = await chat("سلام");
+    const response = await chat("ما هي Ausbildung؟");
     const body = splitMeta(await consume(response));
     expect(body.text).toBe("وعليكم السلام، كيف أخدمك؟");
     const assistants = assistantMessages();
@@ -377,8 +377,8 @@ describe("persistence contract", () => {
 
   it("3. every assistant response gets its own message id", async () => {
     providerSteps.push({ chunks: ["A1"] }, { chunks: ["A2"] });
-    const r1 = await chat("سؤال أول");
-    const r2 = await chat("سؤال ثانٍ");
+    const r1 = await chat("السؤال الأول عن التدريب؟");
+    const r2 = await chat("السؤال الثاني عن التقديم؟");
     const b1 = splitMeta(await consume(r1));
     const b2 = splitMeta(await consume(r2));
     expect(b1.meta?.saved).toBe(true);
@@ -394,26 +394,26 @@ describe("persistence contract", () => {
 
   it("4. two different questions produce two different provider requests", async () => {
     providerSteps.push({ chunks: ["A1"] }, { chunks: ["A2"] });
-    await consume(await chat("من أنا؟"));
     await consume(await chat("ما هي Ausbildung؟"));
+    await consume(await chat("كيف أكتب Anschreiben؟"));
     expect(providerCalls).toHaveLength(2);
     const first = providerCalls[0] as Array<{ role: string; content: string }>;
     const second = providerCalls[1] as Array<{ role: string; content: string }>;
     // First request: only the first question.
-    expect(first).toEqual([{ role: "user", content: "من أنا؟" }]);
+    expect(first).toEqual([{ role: "user", content: "ما هي Ausbildung؟" }]);
     // Second request: the full ordered history, ending in the new question.
     expect(second.map((m) => `${m.role}:${m.content}`)).toEqual([
-      "user:من أنا؟",
-      "assistant:A1",
       "user:ما هي Ausbildung؟",
+      "assistant:A1",
+      "user:كيف أكتب Anschreiben؟",
     ]);
     expect(JSON.stringify(first)).not.toBe(JSON.stringify(second));
   });
 
   it("5. the previous assistant response is never reused", async () => {
     providerSteps.push({ chunks: ["الجواب-القديم"] }, { chunks: ["الجواب-الجديد"] });
-    await consume(await chat("سؤال 1"));
-    const body = splitMeta(await consume(await chat("سؤال 2")));
+    await consume(await chat("أول سؤال عن التدريب؟"));
+    const body = splitMeta(await consume(await chat("ثاني سؤال عن التقديم؟")));
     expect(body.text).toBe("الجواب-الجديد");
     expect(body.text).not.toContain("الجواب-القديم");
     expect(assistantMessages().map((m) => m.content)).toEqual([
@@ -428,33 +428,38 @@ describe("persistence contract", () => {
       { chunks: ["A2"] },
       { chunks: ["A3"] },
     );
-    await consume(await chat("Q1"));
-    await consume(await chat("Q2"));
-    await consume(await chat("Q3"));
+    await consume(await chat("Frage zur Ausbildung"));
+    await consume(await chat("Frage zur Bewerbung"));
+    await consume(await chat("Frage zum CV"));
     const last = providerCalls[2] as Array<{ role: string; content: string }>;
     expect(last).toEqual([
-      { role: "user", content: "Q1" },
+      { role: "user", content: "Frage zur Ausbildung" },
       { role: "assistant", content: "A1" },
-      { role: "user", content: "Q2" },
+      { role: "user", content: "Frage zur Bewerbung" },
       { role: "assistant", content: "A2" },
-      { role: "user", content: "Q3" },
+      { role: "user", content: "Frage zum CV" },
     ]);
   });
 
   it("7. a refresh (getConversation) loads every message in order", async () => {
     providerSteps.push({ chunks: ["A1"] }, { chunks: ["A2"] });
-    await consume(await chat("Q1"));
-    await consume(await chat("Q2"));
+    await consume(await chat("Frage zur Ausbildung"));
+    await consume(await chat("Frage zur Bewerbung"));
     const { messages } = await getConversation(CONV_ID);
     expect(
       messages.map((m) => `${m.role}:${m.content}`),
-    ).toEqual(["user:Q1", "assistant:A1", "user:Q2", "assistant:A2"]);
+    ).toEqual([
+      "user:Frage zur Ausbildung",
+      "assistant:A1",
+      "user:Frage zur Bewerbung",
+      "assistant:A2",
+    ]);
     for (const message of messages) expect(message.id).toBeTruthy();
   });
 
   it("8. messages survive logout/login (rows are keyed by user_id, not by client state)", async () => {
     providerSteps.push({ chunks: ["A1"] });
-    await consume(await chat("Q1"));
+    await consume(await chat("Frage zur Ausbildung"));
     // A brand-new "session" (same user) sees everything through the same
     // server-owned read path.
     (
@@ -532,7 +537,7 @@ describe("streaming", () => {
 
   it("10. the streamed final text is exactly what gets persisted", async () => {
     providerSteps.push({ chunks: ["Te", "xt ", "mit", " Markdown"] });
-    const response = await chat("fmt");
+    const response = await chat("Ausbildung format?");
     const body = splitMeta(await consume(response));
     expect(body.text).toBe("Text mit Markdown");
     expect(assistantMessages()[0].content).toBe("Text mit Markdown");
@@ -541,8 +546,8 @@ describe("streaming", () => {
   it("11. a stale request cannot overwrite a newer one (no crossed saves)", async () => {
     providerSteps.push({ chunks: ["ANSWER-OLD"] }, { chunks: ["ANSWER-NEW"] });
     // Q1 is in flight; Q2 starts before Q1's stream is consumed.
-    const r1 = await chat("alter frage");
-    const r2 = await chat("neue frage");
+    const r1 = await chat("Alte Frage zur Ausbildung");
+    const r2 = await chat("Neue Frage zur Bewerbung");
     const b2 = splitMeta(await consume(r2)); // consume the newer one first
     const b1 = splitMeta(await consume(r1));
     expect(b1.text).toBe("ANSWER-OLD");
@@ -561,8 +566,8 @@ describe("streaming", () => {
     // above: the two streams never crossed each other's content.
     const second = providerCalls[1] as Array<{ role: string; content: string }>;
     expect(second.map((m) => m.content)).toEqual([
-      "alter frage",
-      "neue frage",
+      "Alte Frage zur Ausbildung",
+      "Neue Frage zur Bewerbung",
     ]);
   });
 });
@@ -577,27 +582,27 @@ describe("failure & retry", () => {
       { throw: new Error("The AI provider is temporarily unavailable.") },
       { chunks: ["okay"] },
     );
-    const failed = await chat("bitte");
+    const failed = await chat("Hilf mir mit der Bewerbung");
     expect(failed.status).toBe(400);
     expect(userMessages()).toHaveLength(1); // persisted despite the failure
-    const retried = await chat("bitte"); // identical resend = retry
+    const retried = await chat("Hilf mir mit der Bewerbung"); // identical resend = retry
     expect(retried.status).toBe(200);
     await consume(retried);
     const users = userMessages();
     expect(users).toHaveLength(1); // deduplicated, not re-inserted
-    expect(users[0].content).toBe("bitte");
+    expect(users[0].content).toBe("Hilf mir mit der Bewerbung");
     expect(assistantMessages()).toHaveLength(1);
   });
 
   it("13. a retry after an empty failure creates exactly one assistant message", async () => {
     providerSteps.push({ chunks: [] }, { chunks: ["die antwort"] });
-    const empty = await chat("leer?");
+    const empty = await chat("Ausbildung leer?");
     expect(empty.status).toBe(200);
     const firstBody = splitMeta(await consume(empty));
     expect(firstBody.text).toBe("");
     expect(firstBody.meta?.saved).toBe(false); // no fake empty message
     expect(assistantMessages()).toHaveLength(0);
-    const retried = await chat("leer?"); // same content → reuses the user row
+    const retried = await chat("Ausbildung leer?"); // same content → reuses the user row
     expect(retried.status).toBe(200);
     await consume(retried);
     expect(userMessages()).toHaveLength(1);
@@ -609,12 +614,14 @@ describe("failure & retry", () => {
     providerSteps.push({
       throw: new Error("The AI provider is temporarily unavailable."),
     });
-    const response = await chat("wird fehlschlagen");
+    const response = await chat("Meine Bewerbung wird fehlschlagen, warum?");
     expect(response.status).toBe(400);
     const body = await response.text();
     expect(body).toContain("temporarily unavailable");
     expect(userMessages()).toHaveLength(1);
-    expect(userMessages()[0].content).toBe("wird fehlschlagen");
+    expect(userMessages()[0].content).toBe(
+      "Meine Bewerbung wird fehlschlagen, warum?",
+    );
     expect(assistantMessages()).toHaveLength(0);
   });
 });
@@ -672,10 +679,10 @@ describe("attachments & isolation", () => {
 
   it("getAIContext builds history from the database, never from client input", async () => {
     providerSteps.push({ chunks: ["A1"] });
-    await consume(await chat("Q1"));
+    await consume(await chat("Frage zur Ausbildung"));
     const context = await getAIContext(USER_ID, CONV_ID);
     expect(context.messages).toEqual([
-      { role: "user", content: "Q1" },
+      { role: "user", content: "Frage zur Ausbildung" },
       { role: "assistant", content: "A1" },
     ]);
   });
