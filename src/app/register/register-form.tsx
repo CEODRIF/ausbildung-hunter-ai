@@ -105,7 +105,23 @@ export function RegisterForm() {
             className="mt-0.5 h-4 w-4 rounded border-line-strong accent-accent"
             required
           />
-          {t("auth.form.terms")}
+          <span>
+            {t("auth.form.termsPrefix")}{" "}
+            <Link
+              href="/terms"
+              className="font-semibold text-accent underline-offset-2 hover:underline focus:outline-none focus-visible:ring-4 focus-visible:ring-accent/10"
+            >
+              {t("auth.form.termsOfService")}
+            </Link>{" "}
+            {t("auth.form.termsAnd")}{" "}
+            <Link
+              href="/privacy"
+              className="font-semibold text-accent underline-offset-2 hover:underline focus:outline-none focus-visible:ring-4 focus-visible:ring-accent/10"
+            >
+              {t("auth.form.privacyPolicy")}
+            </Link>
+            {t("auth.form.termsSuffix")}
+          </span>
         </label>
         <AuthFeedback state={state} />
         <Button type="submit" className="mt-2 w-full" disabled={pending}>

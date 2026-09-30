@@ -282,7 +282,7 @@ describe("navigation + app shell", () => {
   });
 
   it("renders exactly one global <main> in the shell", () => {
-    const opens = (shell.match(/<main>/g) ?? []).length;
+    const opens = (shell.match(/<main[\s>]/g) ?? []).length;
     const closes = (shell.match(/<\/main>/g) ?? []).length;
     expect(opens).toBe(1);
     expect(closes).toBe(1);

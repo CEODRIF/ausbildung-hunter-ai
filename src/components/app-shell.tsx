@@ -21,6 +21,7 @@ import { relativeTime } from "@/lib/relative-time";
 import { useDismiss } from "@/lib/use-dismiss";
 import { Icon, type IconName } from "@/components/icon";
 import { BrandLogo } from "@/components/brand-logo";
+import { LegalFooter } from "@/components/legal-footer";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { ProfileMenu } from "@/components/profile-menu";
@@ -618,7 +619,7 @@ export function AppShell({
         />
       )}
 
-      <div className={`transition-[padding] duration-200 ${collapsed ? "lg:ps-[76px]" : "lg:ps-[264px]"}`}>
+      <div className={`flex min-h-screen flex-col transition-[padding] duration-200 ${collapsed ? "lg:ps-[76px]" : "lg:ps-[264px]"}`}>
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-line bg-surface/90 px-4 backdrop-blur-md sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <button
@@ -653,7 +654,8 @@ export function AppShell({
             )}
           </div>
         </header>
-        <main>{children}</main>
+        <main className="flex-1">{children}</main>
+        <LegalFooter variant="bar" />
       </div>
     </div>
   );

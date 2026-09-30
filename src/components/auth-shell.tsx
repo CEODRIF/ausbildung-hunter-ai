@@ -3,6 +3,7 @@
 import { useI18n } from "@/lib/i18n";
 import { BrandLogo } from "@/components/brand-logo";
 import { Icon } from "@/components/icon";
+import { LegalFooter } from "@/components/legal-footer";
 
 /**
  * Auth screen layout: dark navy brand panel (constant across themes — it is
@@ -60,6 +61,7 @@ export function AuthShell({
             <p className="mt-2 text-sm leading-6 text-muted">{subtitle}</p>
           </div>
           {children}
+          <LegalFooter variant="bar" />
         </div>
       </section>
     </main>
