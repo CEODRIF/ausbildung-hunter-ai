@@ -29,7 +29,7 @@ function setAdminMock(options: Parameters<typeof createAdminMock>[0] = {}) {
 function lastCachePayload(): {
   cache_key: string;
   schema_version: number;
-  result: Record<string, unknown>;
+  results: Record<string, unknown>;
 } {
   const upsert = adminMock.calls.find(
     (call) => call.table === "opportunity_cache" && call.op === "upsert",
@@ -102,7 +102,7 @@ describe("shared cache content (user-independent, no match data)", () => {
     await searchOpportunities(baseParams({ match: false }), null);
     const payload = lastCachePayload();
     expect(payload.schema_version).toBe(OPPORTUNITY_SCHEMA_VERSION);
-    const result = payload.result as {
+    const result = payload.results as {
       mode: string;
       window: Array<{ match: unknown; user_id?: unknown }>;
       total: number;
@@ -164,7 +164,7 @@ describe("shared cache content (user-independent, no match data)", () => {
     setAdminMock({
       maybeSingleData: (table) =>
         table === "opportunity_cache"
-          ? { result: payload.result }
+          ? { results: payload.results }
           : table === "candidate_profiles"
             ? { profile_json: candidateProfileFixture() }
             : null,
@@ -227,7 +227,7 @@ describe("shared cache content (user-independent, no match data)", () => {
     // Page 2 must be served from the cached window — no new provider call.
     setAdminMock({
       maybeSingleData: (table) =>
-        table === "opportunity_cache" ? { result: payload.result } : null,
+        table === "opportunity_cache" ? { results: payload.results } : null,
     });
     const before = fetchMock.mock.calls.length;
     const second = await searchOpportunities(
@@ -281,6 +281,40 @@ describe("shared cache content (user-independent, no match data)", () => {
     expect(response.results).toHaveLength(2);
     expect(response.mode).toBe("upstream");
     expect(response.match_available).toBe(false);
+  });
+
+  it("skips a malformed source item instead of failing the whole search", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          jsonResponse({
+            ergebnisliste: [
+              {
+                referenznummer: "W-OK-1",
+                stellenangebotsTitel: "Gültige Stelle",
+                stellenangebotsart: "ARBEIT",
+                datumErsteVeroeffentlichung: "2026-09-28",
+              },
+              {
+                referenznummer: "W-BAD-1",
+                stellenangebotsTitel: "Defekte Stelle",
+                // violates the normalized schema (max 40)
+                stellenangebotsart: "X".repeat(80),
+                datumErsteVeroeffentlichung: "2026-09-28",
+              },
+            ],
+            maxErgebnisse: 2,
+          }),
+      ),
+    );
+    const response = await searchOpportunities(
+      baseParams({ match: false }),
+      null,
+    );
+    expect(response.mode).toBe("upstream");
+    expect(response.results).toHaveLength(1);
+    expect(response.results[0].id).toBe("arbeitsagentur:W-OK-1");
   });
 });
 
@@ -339,7 +373,7 @@ describe("sorting + pagination semantics (search layer)", () => {
       maybeSingleData: (table) =>
         table === "opportunity_cache"
           ? {
-              result: {
+              results: {
                 mode: "scan",
                 window: items,
                 total: items.length,

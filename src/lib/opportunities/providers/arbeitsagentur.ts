@@ -393,7 +393,7 @@ function normalizeSearchItem(
   if (!ref || !title) return null;
   const goal = classifyGoal(value.stellenangebotsart, requestedGoal);
   const location = parseLocation(value);
-  return opportunitySchema.parse({
+  const parsed = opportunitySchema.safeParse({
     id: `${ARBEITSAGENTUR_PROVIDER}:${ref}`,
     provider: ARBEITSAGENTUR_PROVIDER,
     external_id: ref,
@@ -436,14 +436,32 @@ function normalizeSearchItem(
     contact: null,
     required_skills: [],
     preferred_skills: [],
-    required_languages: [],
-    extracted_keywords: [],
-    match: null,
-  });
-}
+     required_languages: [],
+     extracted_keywords: [],
+     match: null,
+   });
+  // A malformed source item must never take the whole search page down:
+  // skip it (structured log) instead of throwing an uncaught ZodError.
+  if (!parsed.success) {
+    console.error(
+      "[opportunities] skipping unnormalizable search item:",
+      parsed.error.issues.slice(0, 3),
+    );
+    return null;
+  }
+  return parsed.data;
+ }
 
-function normalizeJobDetails(value: RawRecord): Opportunity {
+ function normalizeJobDetails(value: RawRecord): Opportunity {
   const ref = text(value.referenznummer) || text(value.refnr) || "";
+  if (!ref) {
+    // The source answered without vacancy data (takedown edge case): report
+    // it as not-found so the UI can state "no longer available" instead of
+    // failing with a raw validation error.
+    throw new OpportunityNotFoundError(
+      "The source returned no vacancy data for this reference.",
+    );
+  }
   const title =
     text(value.stellenangebotsTitel) || text(value.titel) || text(value.beruf);
   const goal = classifyGoal(value.stellenangebotsart, "arbeit");
@@ -467,7 +485,7 @@ function normalizeJobDetails(value: RawRecord): Opportunity {
           phone: phone,
         }
       : null;
-  return opportunitySchema.parse({
+  const parsed = opportunitySchema.safeParse({
     id: `${ARBEITSAGENTUR_PROVIDER}:${ref}`,
     provider: ARBEITSAGENTUR_PROVIDER,
     external_id: ref,
@@ -516,12 +534,26 @@ function normalizeJobDetails(value: RawRecord): Opportunity {
     preferred_skills: [],
     required_languages: [],
     extracted_keywords: [],
-    match: null,
-  });
-}
+     match: null,
+   });
+  // Never fabricate data to satisfy the schema: a details body that cannot
+  // be normalized means the listing is no longer in a usable shape at the
+  // source → treat it as not-found (clean 404 + understandable UI message).
+  if (!parsed.success) {
+    console.error(
+      "[opportunities] unnormalizable details for ref",
+      ref,
+      parsed.error.issues.slice(0, 3),
+    );
+    throw new OpportunityNotFoundError(
+      "This vacancy is no longer available at the source.",
+    );
+  }
+  return parsed.data;
+ }
 
-// ---------------------------------------------------------------------------
-// Fetching (controlled retries, failure classification, structured logging)
+ // ---------------------------------------------------------------------------
+ // Fetching (controlled retries, failure classification, structured logging)
 // ---------------------------------------------------------------------------
 
 /** Internal failure classes. A valid response with zero results is

@@ -791,7 +791,6 @@ describe("getDashboardData", () => {
         location: "Berlin",
         source_url: null,
         source_name: null,
-        source_external_id: "TEST-A",
         posted_at: "2026-09-20T00:00:00.000Z",
         salary_label: null,
         training_type: null,
@@ -803,7 +802,6 @@ describe("getDashboardData", () => {
         matcher_version: 2,
         match_profile_updated_at: "2026-09-20T09:00:00.000Z",
         saved_at: "2026-09-22T09:00:00.000Z",
-        updated_at: "2026-09-22T09:00:00.000Z",
       },
     ]);
 
@@ -883,7 +881,6 @@ describe("getDashboardData", () => {
         location: "Berlin",
         source_url: null,
         source_name: null,
-        source_external_id: "TEST-A",
         posted_at: "2026-09-20T00:00:00.000Z",
         salary_label: null,
         training_type: null,
@@ -895,7 +892,6 @@ describe("getDashboardData", () => {
         matcher_version: 2,
         match_profile_updated_at: "2026-09-20T09:00:00.000Z",
         saved_at: "2026-09-22T09:00:00.000Z",
-        updated_at: "2026-09-22T09:00:00.000Z",
       },
     ]);
     const data = await getDashboardData(USER_ID);

@@ -23,6 +23,7 @@ const {
   saveOpportunityFromKey,
   removeSavedOpportunity,
   updateSavedOpportunityNotes,
+  listSavedOpportunities,
   evaluateSnapshotStaleness,
   formatSnapshotDate,
 } = await import("@/lib/opportunities/saved");
@@ -46,7 +47,6 @@ function detailsSingleRow(): Record<string, unknown> {
     location: "Berlin",
     source_url: `https://www.arbeitsagentur.de/jobsuche/jobdetail/${DETAILS_REF}`,
     source_name: "Bundesagentur für Arbeit – Jobbörse",
-    source_external_id: DETAILS_REF,
     posted_at: "2026-09-28T00:00:00.000Z",
     salary_label: "13,90 € / hour",
     training_type: null,
@@ -58,7 +58,6 @@ function detailsSingleRow(): Record<string, unknown> {
     matcher_version: null,
     match_profile_updated_at: null,
     saved_at: "2026-09-28T12:00:00.000Z",
-    updated_at: "2026-09-28T12:00:00.000Z",
   };
 }
 
@@ -127,7 +126,6 @@ describe("saveOpportunityFromKey (server-derived data only)", () => {
           "location",
           "source_url",
           "source_name",
-          "source_external_id",
           "posted_at",
           "salary_label",
           "training_type",
@@ -374,6 +372,146 @@ describe("save route contract", () => {
     );
     expect(response.status).toBe(404);
   });
+
+  it("maps a source body without vacancy data to 404 (nothing fabricated)", async () => {
+    vi.mocked(getCurrentUserAndProfile).mockResolvedValue(authed("user-1"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ someUnexpectedField: true })),
+    );
+    const { POST } = await loadRoute();
+    const response = await POST(
+      new Request("http://localhost/api/opportunities/save", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          opportunityKey: `arbeitsagentur:${DETAILS_REF}`,
+        }),
+      }),
+    );
+    expect(response.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Migrated-schema alignment (regression guard): the save/saved-page flows must
+// only ever touch columns that the Supabase migrations create. An unmigrated
+// column makes PostgREST reject the whole request (42703) — that is exactly
+// the production failure mode this guards against.
+// ---------------------------------------------------------------------------
+
+describe("saved flow ↔ migrated database schema", () => {
+  // Full column set of public.saved_opportunities as created by:
+  // 20260927060000_opportunities.sql (base),
+  // 20260928000000_opportunities_phase2.sql,
+  // 20260929000000_opportunities_matching_v2.sql,
+  // 20260931000000_match_snapshot_metadata.sql.
+  const MIGRATED_COLUMNS = new Set([
+    "id",
+    "user_id",
+    "opportunity_key",
+    "provider",
+    "source_url",
+    "title",
+    "company_name",
+    "location",
+    "goal",
+    "saved_at",
+    "notes",
+    "source_name",
+    "posted_at",
+    "salary_label",
+    "training_type",
+    "education_requirement",
+    "contact_email",
+    "match_score",
+    "match_status",
+    "matcher_version",
+    "match_profile_updated_at",
+  ]);
+
+  it("listSavedOpportunities selects only migrated columns, scoped to the session user", async () => {
+    const rows = await listSavedOpportunities("user-1");
+    expect(rows).toEqual([]); // the mock returns no rows
+    const selectCall = adminMock.calls.find(
+      (call) => call.table === "saved_opportunities" && call.op === "select",
+    );
+    expect(selectCall).toBeDefined();
+    const columns = (selectCall?.args[0] as string)
+      .split(",")
+      .map((column) => column.trim());
+    for (const column of columns) {
+      expect(MIGRATED_COLUMNS.has(column)).toBe(true);
+    }
+    // Read is always keyed by the authenticated user → the same rows come
+    // back after refresh and after logout/login.
+    const userScope = adminMock.calls.find(
+      (call) =>
+        call.table === "saved_opportunities" &&
+        call.op === "eq" &&
+        call.args[0] === "user_id",
+    );
+    expect(userScope?.args[1]).toBe("user-1");
+  });
+
+  it("the save upsert writes only migrated columns (user_id from the session)", async () => {
+    await saveOpportunityFromKey("user-1", `arbeitsagentur:${DETAILS_REF}`);
+    const upsert = adminMock.calls.find(
+      (call) => call.table === "saved_opportunities" && call.op === "upsert",
+    );
+    const payload = upsert?.args[0] as Record<string, unknown>;
+    expect(payload).toBeDefined();
+    for (const column of Object.keys(payload!)) {
+      expect(MIGRATED_COLUMNS.has(column)).toBe(true);
+    }
+    expect(payload.user_id).toBe("user-1");
+  });
+
+  it("an incomplete but valid opportunity can be saved (optionals stay null)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          jsonResponse({
+            referenznummer: DETAILS_REF,
+            stellenangebotsTitel: "Minimale Stelle",
+            stellenangebotsart: "ARBEIT",
+          }),
+      ),
+    );
+    const row = await saveOpportunityFromKey(
+      "user-1",
+      `arbeitsagentur:${DETAILS_REF}`,
+    );
+    expect(row.id).toBe("row-1");
+    const upsert = adminMock.calls.find(
+      (call) => call.table === "saved_opportunities" && call.op === "upsert",
+    );
+    const payload = upsert?.args[0] as Record<string, unknown>;
+    expect(payload.title).toBe("Minimale Stelle");
+    expect(payload.company_name).toBeNull();
+    expect(payload.location).toBeNull();
+    expect(payload.salary_label).toBeNull();
+    expect(payload.contact_email).toBeNull();
+    expect(payload.posted_at).toBeNull();
+    expect(payload.training_type).toBeNull();
+    expect(payload.education_requirement).toBeNull();
+  });
+
+  it("a source body without vacancy data is rejected safely (no write, no fabrication)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ someUnexpectedField: true })),
+    );
+    await expect(
+      saveOpportunityFromKey("user-1", `arbeitsagentur:${DETAILS_REF}`),
+    ).rejects.toBeInstanceOf(OpportunityNotFoundError);
+    expect(
+      adminMock.calls.some(
+        (call) => call.table === "saved_opportunities" && call.op === "upsert",
+      ),
+    ).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -451,5 +589,23 @@ describe("snapshot staleness (v2 metadata)", () => {
     );
     expect(formatSnapshotDate(null)).toBeNull();
     expect(formatSnapshotDate("not-a-date")).toBeNull();
+  });
+
+  it("legacy rows (all optional/snapshot data missing) pass the saved-page pipeline without crashing", () => {
+    const legacyRow = {
+      match_score: null,
+      match_status: null,
+      matcher_version: null,
+      match_profile_updated_at: null,
+      saved_at: "2026-09-27T12:00:00.000Z",
+    };
+    const result = evaluateSnapshotStaleness(legacyRow, {
+      profileUpdatedAt: "2026-10-01T09:00:00.000Z",
+      matcherVersion: MATCHER_VERSION,
+    });
+    expect(result.hasSnapshot).toBe(false);
+    expect(result.stale).toBe(false);
+    expect(result.reasons).toEqual([]);
+    expect(formatSnapshotDate(legacyRow.match_profile_updated_at)).toBeNull();
   });
 });

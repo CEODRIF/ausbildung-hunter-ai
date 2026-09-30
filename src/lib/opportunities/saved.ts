@@ -23,7 +23,6 @@ export interface SavedOpportunityRow {
   location: string | null;
   source_url: string | null;
   source_name: string | null;
-  source_external_id: string | null;
   posted_at: string | null;
   salary_label: string | null;
   training_type: string | null;
@@ -45,11 +44,16 @@ export interface SavedOpportunityRow {
    *  be stale instead of presenting it as current. */
   match_profile_updated_at: string | null;
   saved_at: string;
-  updated_at: string;
 }
 
+// Column list of public.saved_opportunities. Keep in sync with the migrated
+// schema (supabase/migrations/20260927060000_opportunities.sql,
+// 20260928000000_opportunities_phase2.sql, 20260929000000_opportunities_matching_v2.sql,
+// 20260931000000_match_snapshot_metadata.sql): every column here must exist in
+// the database, otherwise PostgREST rejects the whole request (42703) and the
+// save + saved-page flows fail.
 const SAVED_SELECT =
-  "id, user_id, opportunity_key, provider, goal, title, company_name, location, source_url, source_name, source_external_id, posted_at, salary_label, training_type, education_requirement, contact_email, notes, match_score, match_status, matcher_version, match_profile_updated_at, saved_at, updated_at";
+  "id, user_id, opportunity_key, provider, goal, title, company_name, location, source_url, source_name, posted_at, salary_label, training_type, education_requirement, contact_email, notes, match_score, match_status, matcher_version, match_profile_updated_at, saved_at";
 
 function assertValidKey(opportunityKey: string) {
   parseOpportunityKey(opportunityKey); // throws on malformed/foreign keys
@@ -119,7 +123,6 @@ export async function saveOpportunityFromKey(
     location: opportunity.location,
     source_url: opportunity.source_url,
     source_name: opportunity.source_name,
-    source_external_id: opportunity.external_id,
     posted_at: opportunity.posted_at,
     salary_label: opportunity.salary?.label ?? null,
     training_type: opportunity.training_type,

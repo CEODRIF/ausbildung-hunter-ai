@@ -707,6 +707,10 @@ const de = {
     savedRemove: "✓ Gespeichert — entfernen",
     saving: "Wird gespeichert …",
     saveFailed: "Die gespeicherte Liste konnte gerade nicht aktualisiert werden.",
+    saveJobGone:
+      "Diese Stelle ist aktuell nicht mehr über die Jobbörse verfügbar.",
+    saveRateLimited:
+      "Zu viele Anfragen — bitte kurz warten und es erneut versuchen.",
   },
 
   // ---- Admin (standalone page) ---------------------------------------------
@@ -1684,6 +1688,9 @@ const en: Dict = {
     savedRemove: "✓ Saved — remove",
     saving: "Saving…",
     saveFailed: "Could not update your saved list right now.",
+    saveJobGone: "This job is currently no longer available from the source.",
+    saveRateLimited:
+      "Too many requests — please wait a moment and try again.",
   },
 
   // ---- Admin (standalone page) ---------------------------------------------
@@ -2649,6 +2656,10 @@ const fr: Dict = {
     savedRemove: "✓ Enregistrée — retirer",
     saving: "Enregistrement…",
     saveFailed: "Impossible de mettre à jour la liste enregistrée pour le moment.",
+    saveJobGone:
+      "Cette offre n'est actuellement plus disponible à la source.",
+    saveRateLimited:
+      "Trop de requêtes — veuillez patienter un instant et réessayer.",
   },
 
   // ---- Admin (standalone page) ---------------------------------------------
@@ -3607,6 +3618,8 @@ const ar: Dict = {
     savedRemove: "✓ محفوظة — إزالة",
     saving: "جارٍ الحفظ…",
     saveFailed: "تعذر تحديث قائمتك المحفوظة الآن.",
+    saveJobGone: "هذا الإعلان لم يعد متاحًا حاليًا من المصدر.",
+    saveRateLimited: "محاولات كثيرة — الرجاء الانتظار لحظة ثم إعادة المحاولة.",
   },
 
 

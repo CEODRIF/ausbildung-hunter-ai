@@ -8,6 +8,19 @@ interface SaveOpportunityButtonProps {
   initialSaved: boolean;
 }
 
+/**
+ * User-visible failure message by API status — a real, understandable error
+ * instead of one generic message:
+ * - 404: the vacancy is no longer available at the source (takedowns happen);
+ * - 429: the per-user save rate limit tripped;
+ * - everything else: the generic "could not update the list" message.
+ */
+function failureKey(status: number): string {
+  if (status === 404) return "account.saveJobGone";
+  if (status === 429) return "account.saveRateLimited";
+  return "account.saveFailed";
+}
+
 export function SaveOpportunityButton({
   opportunityKey,
   initialSaved,
@@ -18,6 +31,7 @@ export function SaveOpportunityButton({
   const [error, setError] = useState<string | null>(null);
 
   async function toggle() {
+    if (busy) return; // no duplicate requests while one is in flight
     setBusy(true);
     setError(null);
     try {
@@ -27,7 +41,10 @@ export function SaveOpportunityButton({
         // Only the key travels to the server — all data is derived there.
         body: JSON.stringify({ opportunityKey }),
       });
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        setError(t(failureKey(response.status)));
+        return;
+      }
       setSaved((value) => !value);
     } catch {
       setError(t("account.saveFailed"));

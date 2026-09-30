@@ -102,15 +102,16 @@ export function buildCacheKey(params: OpportunitySearchParams): string {
 
 async function readCachedPayload(key: string): Promise<CachePayload | null> {
   const admin = createAdminClient();
+  // Column is `results` (jsonb) per supabase/migrations/20260927060000_opportunities.sql.
   const { data, error } = await admin
     .from("opportunity_cache")
-    .select("result")
+    .select("results")
     .eq("cache_key", key)
     .eq("schema_version", OPPORTUNITY_SCHEMA_VERSION)
     .gte("expires_at", new Date().toISOString())
     .maybeSingle();
-  if (error || !data || !data.result) return null;
-  const parsed = cachePayloadSchema.safeParse(data.result);
+  if (error || !data || !data.results) return null;
+  const parsed = cachePayloadSchema.safeParse(data.results);
   if (!parsed.success) return null;
   return parsed.data;
 }
@@ -135,7 +136,7 @@ async function writeCachedPayload(
     cache_key: key,
     provider: "arbeitsagentur",
     normalized_query: key,
-    result: payload,
+    results: payload,
     expires_at: expiresAt,
     schema_version: OPPORTUNITY_SCHEMA_VERSION,
   });
@@ -268,15 +269,17 @@ function detailsCacheKey(key: string): string {
 async function readCachedDetails(key: string): Promise<Opportunity | null> {
   try {
     const admin = createAdminClient();
+    // Column is `results` (jsonb) per
+    // supabase/migrations/20260927060000_opportunities.sql.
     const { data, error } = await admin
       .from("opportunity_cache")
-      .select("result")
+      .select("results")
       .eq("cache_key", detailsCacheKey(key))
       .eq("schema_version", OPPORTUNITY_SCHEMA_VERSION)
       .gte("expires_at", new Date().toISOString())
       .maybeSingle();
-    if (error || !data || !data.result) return null;
-    const parsed = opportunitySchema.safeParse(data.result);
+    if (error || !data || !data.results) return null;
+    const parsed = opportunitySchema.safeParse(data.results);
     return parsed.success ? parsed.data : null;
   } catch {
     // The cache is an optimization — a cache failure must never break the
@@ -293,7 +296,7 @@ async function writeCachedDetails(key: string, opportunity: Opportunity) {
       cache_key: detailsCacheKey(key),
       provider: "arbeitsagentur",
       normalized_query: detailsCacheKey(key),
-      result: opportunity,
+      results: opportunity,
       expires_at: new Date(now.getTime() + DETAILS_CACHE_TTL_MS).toISOString(),
       schema_version: OPPORTUNITY_SCHEMA_VERSION,
     });

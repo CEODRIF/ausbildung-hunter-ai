@@ -25,7 +25,7 @@ const { adminState, makeAdminClient } = vi.hoisted(() => {
     profileRow: null as Record<string, unknown> | null,
     cache: new Map<
       string,
-      { result: unknown; expires_at: string; schema_version: number }
+      { results: unknown; expires_at: string; schema_version: number }
     >(),
   };
   function makeAdminClient() {
@@ -64,7 +64,7 @@ const { adminState, makeAdminClient } = vi.hoisted(() => {
                       row.schema_version === Number(filters.schema_version) &&
                       new Date(row.expires_at).getTime() >= Date.now();
                     return {
-                      data: valid ? { result: row.result } : null,
+                      data: valid ? { results: row.results } : null,
                       error: null,
                     };
                   }
@@ -73,13 +73,13 @@ const { adminState, makeAdminClient } = vi.hoisted(() => {
               if (prop === "upsert")
                 return async (value: {
                   cache_key: string;
-                  result: unknown;
+                  results: unknown;
                   expires_at: string;
                   schema_version: number;
                 }) => {
                   if (table === "opportunity_cache")
                     adminState.cache.set(value.cache_key, {
-                      result: value.result,
+                      results: value.results,
                       expires_at: value.expires_at,
                       schema_version: value.schema_version,
                     });
