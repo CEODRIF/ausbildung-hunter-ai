@@ -435,13 +435,32 @@ function NotificationsBell() {
 export function AppShell({
   children,
   profile,
+  isPlatformOwner,
 }: {
   children: React.ReactNode;
   profile?: Profile | null;
+  /** Server-computed (layout) by comparing the AUTHENTICATED session UID
+   *  against the platform-owner constant — never client-supplied. Controls
+   *  ONLY the sidebar entry; /admin and every admin API re-verify
+   *  server-side (requireAdmin + requirePlatformOwner). */
+  isPlatformOwner?: boolean;
 }) {
   const pathname = usePathname();
   const { t } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
+  // The Platform section (→ /admin, where Platform Updates lives) is offered
+  // ONLY to the platform owner — regular users never see the admin entry
+  // point at all. Visibility is decided server-side (layout); /admin and
+  // every admin API re-verify the UID server-side regardless.
+  const sections: NavSection[] = isPlatformOwner
+    ? [
+        ...NAV_SECTIONS,
+        {
+          titleKey: "nav.platform",
+          items: [{ labelKey: "nav.platformUpdates", href: "/admin", icon: "bell" }],
+        },
+      ]
+    : NAV_SECTIONS;
   const [collapsed, setCollapsed] = useState(false);
   const closeMobile = useCallback(() => setMobileOpen(false), []);
 
@@ -509,7 +528,7 @@ export function AppShell({
         </div>
 
         <NavSectionList
-          sections={NAV_SECTIONS}
+          sections={sections}
           pathname={pathname}
           collapsed={collapsed}
           onNavigate={closeMobile}

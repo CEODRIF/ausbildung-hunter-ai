@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import { PLATFORM_OWNER_USER_ID } from "@/lib/notifications/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -20,5 +21,12 @@ export default async function DashboardLayout({
   // confirmed user in this state has inconsistent account data).
   if (!profile || profile.account_status === "pending") redirect("/verify");
   if (!profile.selected_goal) redirect("/onboarding");
-  return <AppShell profile={profile}>{children}</AppShell>;
+  // Sidebar "Platform Updates" entry: server-side comparison of the
+  // authenticated session UID (never client-supplied).
+  const isPlatformOwner = user.id === PLATFORM_OWNER_USER_ID;
+  return (
+    <AppShell profile={profile} isPlatformOwner={isPlatformOwner}>
+      {children}
+    </AppShell>
+  );
 }

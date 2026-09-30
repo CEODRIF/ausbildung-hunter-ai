@@ -66,6 +66,9 @@ export default async function AdminPage({
           </p>
         )}
 
+        {/* Platform Updates first: the owner's primary console surface. */}
+        {isPlatformOwner && <AdminNotifications />}
+
         <Card className="mt-6 overflow-hidden">
           {users.length === 0 ? (
             <p className="px-6 py-10 text-center text-sm text-muted">
@@ -146,8 +149,6 @@ export default async function AdminPage({
             </div>
           )}
         </Card>
-
-        {isPlatformOwner && <AdminNotifications />}
       </div>
     </main>
   );

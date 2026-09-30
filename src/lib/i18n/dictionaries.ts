@@ -33,6 +33,8 @@ const de = {
     soon: "Demnächst",
     collapse: "Seitenleiste einklappen",
     expand: "Seitenleiste ausklappen",
+    platform: "Plattform",
+    platformUpdates: "Plattform-Updates",
   },
 
   // ---- Shell: global header ----------------------------------------------
@@ -1047,6 +1049,8 @@ const en: Dict = {
     soon: "Soon",
     collapse: "Collapse sidebar",
     expand: "Expand sidebar",
+    platform: "Platform",
+    platformUpdates: "Platform Updates",
   },
   header: {
     notifications: "Notifications",
@@ -2009,6 +2013,8 @@ const fr: Dict = {
     soon: "Bientôt",
     collapse: "Réduire la barre latérale",
     expand: "Déplier la barre latérale",
+    platform: "Plateforme",
+    platformUpdates: "Mises à jour de la plateforme",
   },
   header: {
     notifications: "Notifications",
@@ -2976,6 +2982,8 @@ const ar: Dict = {
     soon: "قريبًا",
     collapse: "طي الشريط الجانبي",
     expand: "توسيع الشريط الجانبي",
+    platform: "المنصة",
+    platformUpdates: "تحديثات المنصة",
   },
   header: {
     notifications: "الإشعارات",

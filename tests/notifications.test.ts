@@ -421,6 +421,74 @@ describe("5-7. non-owner authorization", () => {
     expect(response.status).toBe(403);
     expect(db.notifications).toHaveLength(0);
   });
+
+  it("a non-owner admin also gets 403 on the admin history endpoint", async () => {
+    setSession({ id: JOHN_ID, email: "john@example.com" });
+    expect((await historyRoute()).status).toBe(403);
+  });
+});
+
+describe("endpoint matrix — owner succeeds on all admin endpoints", () => {
+  it("the real owner UID can search, send global, send targeted, and read history", async () => {
+    setSession(ownerSession());
+
+    const search = await searchRoute(
+      new Request("http://localhost/api/admin/notifications/search", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: "john" }),
+      }),
+    );
+    expect(search.status).toBe(200);
+    const searchBody = (await search.json()) as {
+      results: Array<{ id: string }>;
+    };
+    expect(searchBody.results.some((row) => row.id === JOHN_ID)).toBe(true);
+
+    const globalSend = await sendRoute(
+      new Request("http://localhost/api/admin/notifications/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          target_type: "all",
+          title: "Global from owner",
+          content: "Visible to everyone.",
+          type: "info",
+          idempotency_key: key(),
+        }),
+      }),
+    );
+    expect(globalSend.status).toBe(201);
+
+    const targetedSend = await sendRoute(
+      new Request("http://localhost/api/admin/notifications/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          target_type: "user",
+          target_user_id: JOHN_ID,
+          title: "Targeted from owner",
+          content: "Only for John.",
+          type: "important",
+          idempotency_key: key(),
+        }),
+      }),
+    );
+    expect(targetedSend.status).toBe(201);
+
+    const history = await historyRoute();
+    expect(history.status).toBe(200);
+    const historyBody = (await history.json()) as {
+      items: Array<{ title: string; target_type: string }>;
+    };
+    expect(historyBody.items).toHaveLength(2);
+    expect(historyBody.items.map((item) => item.title)).toEqual([
+      "Targeted from owner",
+      "Global from owner",
+    ]);
+    expect(historyBody.items[0].target_type).toBe("user");
+    expect(historyBody.items[1].target_type).toBe("all");
+  });
 });
 
 describe("8. bounded search", () => {
