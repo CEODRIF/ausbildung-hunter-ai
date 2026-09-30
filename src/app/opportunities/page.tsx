@@ -42,7 +42,7 @@ export default async function OpportunitiesPage({
             </Link>
             <Link
               href="/opportunities/ai-search"
-              className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(200,60,255,0.22)] transition-colors hover:bg-accent-deep"
+              className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(var(--glow-accent-rgb),0.22)] transition-colors hover:bg-accent-deep"
             >
               <Icon name="spark" size={15} />
               {t("nav.ausbildungSearch")}

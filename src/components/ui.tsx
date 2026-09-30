@@ -18,12 +18,12 @@ import { Icon } from "@/components/icon";
 
 const buttonStyles = {
   primary:
-    "btn-neon text-white shadow-[0_8px_22px_rgba(200,60,255,0.3)] hover:shadow-[0_10px_26px_rgba(255,63,209,0.38)]",
+    "btn-neon text-white shadow-[0_8px_22px_rgba(var(--glow-accent-rgb),0.3)] hover:shadow-[0_10px_26px_rgba(var(--glow-accent-rgb),0.38)]",
   secondary:
     "border border-line-strong bg-surface text-ink-soft hover:border-faint hover:bg-surface-2",
   ghost: "text-muted hover:bg-surface-2 hover:text-ink",
   dark:
-    "border border-line bg-navy text-white shadow-[0_8px_18px_rgba(0,0,0,0.35)] hover:bg-navy-soft",
+    "border border-transparent bg-navy text-white shadow-[0_8px_18px_rgba(var(--glow-navy-rgb),0.18)] hover:bg-navy-soft dark:border-line dark:shadow-[0_8px_18px_rgba(0,0,0,0.35)]",
 } as const;
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
