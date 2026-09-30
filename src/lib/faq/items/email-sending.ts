@@ -1,0 +1,226 @@
+import type { FaqItem } from "../types";
+
+/** Category 14 — Email Sending / E-Mail-Versand */
+export const emailSendingItems: FaqItem[] = [
+  {
+    id: "es-how",
+    category: "email-sending",
+    question: {
+      de: "Wie funktioniert der E-Mail-Assistent?",
+      en: "How does the Email Assistant work?",
+      fr: "Comment fonctionne l'assistant e-mail ?",
+      ar: "كيف يعمل مساعد البريد الإلكتروني؟",
+    },
+    answer: {
+      de: "Der E-Mail-Assistent hilft Ihnen, E-Mails zu verfassen und zu versenden: Sie geben Empfänger, Betreff und Text an (mit Formatierung und Anhängen), verknüpfen ein E-Mail-Konto und senden.",
+      en: "The Email Assistant helps you write and send emails: you enter recipients, subject and text (with formatting and attachments), connect an email account and send.",
+      fr: "L'assistant e-mail vous aide à rédiger et envoyer des e-mails : vous saisissez destinataires, objet et texte (avec mise en forme et pièces jointes), reliez un compte e-mail et envoyez.",
+      ar: "يساعدك مساعد البريد في كتابة الرسائل وإرسالها: تدخل المستلمين والموضوع والنص (مع التنسيق والمرفقات)، وتربط حساب بريد، ثم ترسل.",
+    },
+    keywords: ["email assistant", "how", "send"],
+  },
+  {
+    id: "es-multiple",
+    category: "email-sending",
+    question: {
+      de: "Kann ich eine E-Mail an mehrere Empfänger senden?",
+      en: "Can I send an email to multiple recipients?",
+      fr: "Puis-je envoyer un e-mail à plusieurs destinataires ?",
+      ar: "هل يمكنني إرسال بريد إلى عدة مستلمين؟",
+    },
+    answer: {
+      de: "Ja. Sie können mehrere Empfänger hinzufügen oder eine Liste aus einer CSV-/TXT-Datei importieren.",
+      en: "Yes. You can add several recipients or import a list from a CSV/TXT file.",
+      fr: "Oui. Vous pouvez ajouter plusieurs destinataires ou importer une liste depuis un fichier CSV/TXT.",
+      ar: "نعم. يمكنك إضافة عدة مستلمين أو استيراد قائمة من ملف CSV أو TXT.",
+    },
+    keywords: ["multiple", "recipients", "import"],
+  },
+  {
+    id: "es-100",
+    category: "email-sending",
+    question: {
+      de: "Kann ich 100 E-Mails in einem Vorgang senden?",
+      en: "Can I send 100 emails in one operation?",
+      fr: "Puis-je envoyer 100 e-mails dans une opération ?",
+      ar: "هل يمكنني إرسال 100 بريد في عملية واحدة؟",
+    },
+    answer: {
+      de: "Ja, Sie können mehrere Empfänger in einem Vorgang senden. Pro Vorgang gilt eine Höchstzahl von Empfängern; die genaue Obergrenze hängt von Ihrem Plan ab.",
+      en: "Yes, you can send to several recipients in one operation. Per operation a maximum number of recipients applies; the exact cap depends on your plan.",
+      fr: "Oui, vous pouvez envoyer à plusieurs destinataires dans une opération. Par opération, un nombre maximum de destinataires s'applique ; la limite exacte dépend de votre plan.",
+      ar: "نعم، يمكنك الإرسال إلى عدة مستلمين في عملية واحدة. وتطبق حد أقصى للمستلمين في كل عملية؛ والحد الفعلي يعتمد على خطتك.",
+    },
+    keywords: ["100", "recipients", "batch"],
+  },
+  {
+    id: "es-sequential",
+    category: "email-sending",
+    question: {
+      de: "Werden sie einzeln oder gleichzeitig gesendet?",
+      en: "Are they sent one by one or simultaneously?",
+      fr: "Sont-ils envoyés un par un ou simultanément ?",
+      ar: "هل تُرسل واحدة تلو الأخرى أم في وقت واحد؟",
+    },
+    answer: {
+      de: "Der Versand erfolgt sequenziell in kleinen Gruppen mit kurzer Pause dazwischen. Das schützt Ihr E-Mail-Konto und sorgt für einen zuverlässigen Ablauf.",
+      en: "Sending is done sequentially in small groups with a short pause in between. This protects your email account and ensures a reliable flow.",
+      fr: "L'envoi se fait séquentiellement par petits groupes avec une courte pause entre. Cela protège votre compte e-mail et assure un déroulement fiable.",
+      ar: "يتم الإرسال بالتسلسل على دفعات صغيرة مع فاصل قصير بينها. هذا يحمي حساب بريدك ويضمن سيرًا موثوقًا.",
+    },
+    keywords: ["sequential", "batch", "one by one"],
+  },
+  {
+    id: "es-limits",
+    category: "email-sending",
+    question: {
+      de: "Gibt es Limits?",
+      en: "Are there limits?",
+      fr: "Y a-t-il des limites ?",
+      ar: "هل توجد حدود؟",
+    },
+    answer: {
+      de: "Ja. Es gilt ein tägliches Kontingent an E-Mails, das von Ihrem Plan abhängt. Sie sehen Ihren täglichen Limit, die gesendete Anzahl und den Rest unter Verbrauch.",
+      en: "Yes. A daily email quota applies, depending on your plan. You see your daily limit, the sent count and the remainder under Usage.",
+      fr: "Oui. Un quota d'e-mails par jour s'applique, selon votre plan. Vous voyez votre limite quotidienne, le nombre envoyé et le reste sous Utilisation.",
+      ar: "نعم. يطبق حد يومي لرسائل البريد، ويعتمد على خطتك. وترى حدك اليومي وعدد المرسَل والباقي في صفحة الاستخدام.",
+    },
+    keywords: ["limits", "quota", "daily"],
+  },
+  {
+    id: "es-duplicate",
+    category: "email-sending",
+    question: {
+      de: "Wird doppeltes Senden verhindert?",
+      en: "Is duplicate sending prevented?",
+      fr: "Le double envoi est-il évité ?",
+      ar: "هل يُمنع الإرسال المكرر؟",
+    },
+    answer: {
+      de: "Ja. Empfänger werden ohne Unterschied zwischen Groß- und Kleinschreibung entdupliziert; ungültige oder doppelte Adressen werden gekennzeichnet, und nur gültige Empfänger werden in den Versand aufgenommen.",
+      en: "Yes. Recipients are deduplicated case-insensitively; invalid or duplicate addresses are flagged, and only valid recipients are queued for sending.",
+      fr: "Oui. Les destinataires sont dédupliqués sans distinction de majuscules ; les adresses invalides ou en double sont signalées, et seuls les destinataires valides sont mis en file d'envoi.",
+      ar: "نعم. يُزال التكرار من المستلمين بغضّ النظر عن الأحرف الكبيرة والصغيرة؛ وتُعلَّم العناوين غير الصالحة أو المكررة، ولا يُدرج في الإرسال إلا المستلمون الصحيحون.",
+    },
+    keywords: ["duplicate", "dedupe", "prevent"],
+  },
+  {
+    id: "es-attachments",
+    category: "email-sending",
+    question: {
+      de: "Kann ich Anhänge hinzufügen?",
+      en: "Can I add attachments?",
+      fr: "Puis-je ajouter des pièces jointes ?",
+      ar: "هل يمكنني إضافة مرفقات؟",
+    },
+    answer: {
+      de: "Ja. Unterstützt werden PDF, DOC, DOCX, PNG und JPG; pro Anhang gelten 10 MB.",
+      en: "Yes. Supported are PDF, DOC, DOCX, PNG and JPG; 10 MB per attachment apply.",
+      fr: "Oui. Sont pris en charge PDF, DOC, DOCX, PNG et JPG ; 10 Mo par pièce jointe s'appliquent.",
+      ar: "نعم. الأنواع المدعومة: PDF وDOC وDOCX وPNG وJPG؛ والحد 10 ميغابايت لكل مرفق.",
+    },
+    keywords: ["attachments", "files", "10mb"],
+  },
+  {
+    id: "es-gmail",
+    category: "email-sending",
+    question: {
+      de: "Kann ich Gmail verwenden?",
+      en: "Can I use Gmail?",
+      fr: "Puis-je utiliser Gmail ?",
+      ar: "هل يمكنني استخدام Gmail؟",
+    },
+    answer: {
+      de: "Ja. Sie verbinden Ihr Gmail-Konto über eine sichere Anmeldung; danach werden Ihre E-Mails über dieses Konto versendet.",
+      en: "Yes. You connect your Gmail account via a secure sign-in; afterwards your emails are sent through that account.",
+      fr: "Oui. Vous reliez votre compte Gmail via une connexion sécurisée ; ensuite, vos e-mails sont envoyés via ce compte.",
+      ar: "نعم. تربط حساب Gmail عبر تسجيل دخول آمن؛ بعد ذلك تُرسل رسائل البريد عبر ذلك الحساب.",
+    },
+    keywords: ["gmail", "connect", "provider"],
+  },
+  {
+    id: "es-outlook",
+    category: "email-sending",
+    question: {
+      de: "Kann ich Outlook verwenden?",
+      en: "Can I use Outlook?",
+      fr: "Puis-je utiliser Outlook ?",
+      ar: "هل يمكنني استخدام Outlook؟",
+    },
+    answer: {
+      de: "Ja. Wie bei Gmail verbinden Sie Ihr Outlook-Konto über eine sichere Anmeldung und senden darüber.",
+      en: "Yes. Like Gmail, you connect your Outlook account via a secure sign-in and send through it.",
+      fr: "Oui. Comme Gmail, vous reliez votre compte Outlook via une connexion sécurisée et envoyez via celui-ci.",
+      ar: "نعم. كما في Gmail تربط حساب Outlook عبر تسجيل دخول آمن وترسل من خلاله.",
+    },
+    keywords: ["outlook", "connect", "provider"],
+  },
+  {
+    id: "es-partial-fail",
+    category: "email-sending",
+    question: {
+      de: "Was passiert, wenn Teil des Versands fehlschlägt?",
+      en: "What happens if part of the send fails?",
+      fr: "Que se passe-t-il si une partie de l'envoi échoue ?",
+      ar: "ماذا يحدث إذا فشل جزء من الإرسال؟",
+    },
+    answer: {
+      de: "Die gesendeten E-Mails bleiben erhalten; die fehlgeschlagenen werden mit ihrer Ursache in der Übersicht angezeigt. Bei vorübergehenden Anbieterfehlern wird der Versand automatisch wiederholt.",
+      en: "The sent emails remain; the failed ones are shown in the overview with their cause. For temporary provider errors, the send is retried automatically.",
+      fr: "Les e-mails envoyés restent ; les échoués sont affichés dans la vue avec leur cause. En cas d'erreur temporaire du fournisseur, l'envoi est retenté automatiquement.",
+      ar: "تبقى الرسائل المرسلة؛ وتُعرض الرسائل الفاشلة في الصفحة مع سببها. وفي الأخطاء العارضة للمزود يُعاد الإرسال تلقائيًا.",
+    },
+    keywords: ["partial", "fail", "retry"],
+  },
+  {
+    id: "es-status",
+    category: "email-sending",
+    question: {
+      de: "Wie sehe ich den Versandstatus?",
+      en: "How do I see the send status?",
+      fr: "Comment voir l'état d'envoi ?",
+      ar: "كيف أرى حالة الإرسال؟",
+    },
+    answer: {
+      de: "In der Kampagne-Übersicht sehen Sie pro Empfänger den Status (z. B. gesendet, fehlerhaft) sowie einen Hinweis bei Problemen.",
+      en: "In the campaign overview you see the status per recipient (e.g. sent, failed) plus a note on problems.",
+      fr: "Dans la vue de la campagne, vous voyez le statut par destinataire (p. ex. envoyé, en échec) ainsi qu'une note en cas de problème.",
+      ar: "في صفحة الحملة ترى حالة كل مستلم (مثل: مُرسَل، فاشل) بالإضافة إلى ملاحظة عند وجود مشكلة.",
+    },
+    keywords: ["status", "campaign", "overview"],
+  },
+  {
+    id: "es-history",
+    category: "email-sending",
+    question: {
+      de: "Wird ein Versandverlauf gespeichert?",
+      en: "Is a send history saved?",
+      fr: "Un historique d'envoi est-il enregistré ?",
+      ar: "هل يُحفظ سجل الإرسال؟",
+    },
+    answer: {
+      de: "Ja. Der Versand wird in Ihrem Konto protokolliert – Status, Zeitpunkt und ggf. Fehler – und steht Ihnen zur Nachschau bereit.",
+      en: "Yes. The send is logged in your account – status, time and, if any, error – and is available for review.",
+      fr: "Oui. L'envoi est journalisé dans votre compte – statut, heure et, le cas échéant, l'erreur – et disponible pour consultation.",
+      ar: "نعم. يُسجَّل الإرسال في حسابك — الحالة والوقت وأي خطأ — ويكون متاحًا للمراجعة.",
+    },
+    keywords: ["history", "log", "saved"],
+  },
+  {
+    id: "es-retry",
+    category: "email-sending",
+    question: {
+      de: "Kann ich den Versand erneut versuchen?",
+      en: "Can I retry the send?",
+      fr: "Puis-je retenter l'envoi ?",
+      ar: "هل يمكنني إعادة محاولة الإرسال؟",
+    },
+    answer: {
+      de: "Ja. Sie können fehlgeschlagene Empfänger erneut versenden; vorübergehende Fehler werden zudem automatisch wiederholt.",
+      en: "Yes. You can resend failed recipients; temporary errors are also retried automatically.",
+      fr: "Oui. Vous pouvez renvoyer les destinataires en échec ; les erreurs temporaires sont aussi retentées automatiquement.",
+      ar: "نعم. يمكنك إعادة إرسال المستلمين الفاشلين؛ كما تُعاد الأخطاء العارضة تلقائيًا.",
+    },
+    keywords: ["retry", "resend", "failed"],
+  },
+];

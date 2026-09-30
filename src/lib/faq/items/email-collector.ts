@@ -1,0 +1,243 @@
+import type { FaqItem } from "../types";
+
+/** Category 5 — Email Collector / E-Mail-Sammlung */
+export const emailCollectorItems: FaqItem[] = [
+  {
+    id: "ec-what",
+    category: "email-collector",
+    question: {
+      de: "Was ist die E-Mail-Sammlung?",
+      en: "What is the Email Collector?",
+      fr: "Qu'est-ce que le collecteur d'e-mails ?",
+      ar: "ما هو جهاز جمع البريد الإلكتروني؟",
+    },
+    answer: {
+      de: "Die E-Mail-Sammlung findet in den Stellenangeboten gültige Kontakt-E-Mail-Adressen, die im Text des Originalangebots stehen, und bereitet sie für die Bewerbung und den Excel-Export vor.",
+      en: "The Email Collector finds valid contact email addresses in the job listings that appear in the original listing text, and prepares them for applications and the Excel export.",
+      fr: "Le collecteur d'e-mails trouve dans les offres des adresses de contact valides qui figurent dans le texte de l'offre originale, et les prépare pour les candidatures et l'export Excel.",
+      ar: "يجد جهاز جمع البريد عناوين تواصل صحيحة في إعلانات الوظائف الموجودة في نص الإعلان الأصلي، ويجهّزها للتقديم وتصدير Excel.",
+    },
+    keywords: ["email", "collector", "contact"],
+  },
+  {
+    id: "ec-how",
+    category: "email-collector",
+    question: {
+      de: "Wie funktioniert sie?",
+      en: "How does it work?",
+      fr: "Comment fonctionne-t-il ?",
+      ar: "كيف يعمل؟",
+    },
+    answer: {
+      de: "Die Plattform liest den Text jedes Angebots, erkennt darin E-Mail-Adressen und prüft deren Form. Nur formkorrekte Adressen werden übernommen; pro Kontakt wird die erste (beste) Adresse behalten.",
+      en: "The platform reads each listing's text, detects email addresses in it and checks their format. Only well-formed addresses are kept; per contact the first (best) address is retained.",
+      fr: "La plateforme lit le texte de chaque offre, détecte les adresses e-mail qui s'y trouvent et vérifie leur format. Seules les adresses bien formées sont conservées ; par contact, la première (meilleure) adresse est retenue.",
+      ar: "تقرأ المنصّة نص كل إعلان، وتكتشف عناوين البريد فيه وتحقق صيغتها. تُعتمد فقط العناوين الصحيحة الصيغة؛ ويحتفظ بالأولى (الأفضل) لكل جهة تواصل.",
+    },
+    keywords: ["how", "extract", "detect"],
+  },
+  {
+    id: "ec-valid",
+    category: "email-collector",
+    question: {
+      de: "Was gilt als gültige E-Mail?",
+      en: "What counts as a valid email?",
+      fr: "Qu'est-ce qui compte comme e-mail valide ?",
+      ar: "ما الذي يُعدّ بريدًا إلكترونيًا صحيحًا؟",
+    },
+    answer: {
+      de: "Eine Adresse, die im Originaltext vorkommt, die übliche E-Mail-Form erfüllt (maximal 254 Zeichen) und keine Platzhalter- oder Testadresse ist (z. B. noreply, example oder test-Adressen).",
+      en: "An address that appears in the original text, meets the usual email format (at most 254 characters) and is not a placeholder or test address (e.g. noreply, example or test addresses).",
+      fr: "Une adresse qui figure dans le texte original, respecte le format e-mail habituel (au plus 254 caractères) et n'est pas une adresse de remplissage ou de test (p. ex. noreply, example ou test).",
+      ar: "عنوان موجود في النص الأصلي، ويلبّي صيغة البريد المعتادة (254 حرفًا كحد أقصى)، وليس عنوانًا تجريبيًا أو بديلًا (مثل noreply أو example أو test).",
+    },
+    keywords: ["valid", "format", "placeholder"],
+  },
+  {
+    id: "ec-some-have",
+    category: "email-collector",
+    question: {
+      de: "Warum haben manche Ergebnisse eine E-Mail und andere nicht?",
+      en: "Why do some results have an email and others not?",
+      fr: "Pourquoi certains résultats ont un e-mail et d'autres non ?",
+      ar: "لماذا تحتوي بعض النتائج على بريد وأخرى لا؟",
+    },
+    answer: {
+      de: "Weil nur Ergebnisse eine E-Mail erhalten, bei denen im Originaltext tatsächlich eine gültige Adresse steht. Fehlt dort keine, zeigt die Plattform keine an.",
+      en: "Because only results get an email when the original text actually contains a valid address. If none is there, the platform shows none.",
+      fr: "Parce que seuls les résultats reçoivent un e-mail lorsque le texte original contient réellement une adresse valide. S'il n'y en a pas, la plateforme n'en affiche aucun.",
+      ar: "لأن النتائج تحصل على بريد فقط عندما يوجد في النص الأصلي عنوان صحيح فعلًا. إن لم يوجد، لا تعرض المنصّة شيئًا.",
+    },
+    keywords: ["missing", "email", "some"],
+  },
+  {
+    id: "ec-no-invent",
+    category: "email-collector",
+    question: {
+      de: "Wird eine E-Mail erfunden oder geraten?",
+      en: "Is an email invented or guessed?",
+      fr: "Un e-mail est-il inventé ou deviné ?",
+      ar: "هل يُخترع البريد الإلكتروني أو يُخمَّن؟",
+    },
+    answer: {
+      de: "Nein. Die Plattform erfindet und rät keine Adressen. Es werden ausschließlich Adressen übernommen, die tatsächlich im Angebots-Text vorkommen.",
+      en: "No. The platform invents and guesses no addresses. It only takes addresses that actually occur in the listing text.",
+      fr: "Non. La plateforme n'invente et ne devine aucune adresse. Seules les adresses réellement présentes dans le texte de l'offre sont reprises.",
+      ar: "لا. لا تخترع المنصّة ولا تتخمن العناوين. تُعتمد فقط العناوين الموجودة فعلًا في نص الإعلان.",
+    },
+    keywords: ["invent", "guess", "no"],
+  },
+  {
+    id: "ec-from-source",
+    category: "email-collector",
+    question: {
+      de: "Kommt die E-Mail aus der Quelle?",
+      en: "Does the email come from the source?",
+      fr: "L'e-mail vient-il de la source ?",
+      ar: "هل يأتي البريد من المصدر؟",
+    },
+    answer: {
+      de: "Ja. Die Adresse wird direkt aus dem Text des Originalangebots entnommen – nicht berechnet oder ergänzt.",
+      en: "Yes. The address is taken directly from the original listing's text – not calculated or added.",
+      fr: "Oui. L'adresse est prise directement dans le texte de l'offre originale – elle n'est ni calculée ni ajoutée.",
+      ar: "نعم. يُأخذ العنوان مباشرةً من نص الإعلان الأصلي — لا يُحسب ولا يُضاف.",
+    },
+    keywords: ["source", "direct", "text"],
+  },
+  {
+    id: "ec-duplicates",
+    category: "email-collector",
+    question: {
+      de: "Wie werden doppelte E-Mails behandelt?",
+      en: "How are duplicate emails handled?",
+      fr: "Comment les e-mails en double sont-ils gérés ?",
+      ar: "كيف يتم التعامل مع عناوين البريد المكررة؟",
+    },
+    answer: {
+      de: "Duplikate werden ohne Unterschied zwischen Groß- und Kleinschreibung erkannt. Pro Adresse bleibt nur der erste, bestbewertete Eintrag erhalten.",
+      en: "Duplicates are detected case-insensitively. Per address, only the first, highest-ranked entry is kept.",
+      fr: "Les doublons sont détectés sans distinction de majuscules et minuscules. Par adresse, seul le premier élément le mieux classé est conservé.",
+      ar: "تُكتشف العناوين المكررة بغضّ النظر عن الأحرف الكبيرة والصغيرة. ويُحتفظ فقط بالبيان الأول والأعلى تقييمًا لكل عنوان.",
+    },
+    keywords: ["duplicate", "dedupe", "first"],
+  },
+  {
+    id: "ec-export-without-email",
+    category: "email-collector",
+    question: {
+      de: "Werden Stellen ohne E-Mail exportiert?",
+      en: "Are jobs without an email exported?",
+      fr: "Les offres sans e-mail sont-elles exportées ?",
+      ar: "هل تُصدَّر الوظائف بدون بريد؟",
+    },
+    answer: {
+      de: "Nein. Für den Excel-Export werden nur Zeilen mit einer gültigen E-Mail übernommen. Ergebnisse ohne E-Mail bleiben dort bewusst außen vor.",
+      en: "No. For the Excel export only rows with a valid email are included. Results without an email are deliberately left out.",
+      fr: "Non. Pour l'export Excel, seules les lignes avec un e-mail valide sont incluses. Les résultats sans e-mail en sont délibérément exclus.",
+      ar: "لا. في تصدير Excel تُشمل فقط الصفوف التي لها بريد صحيح. تبقى النتائج بدون بريد خارج التصدير عمدًا.",
+    },
+    keywords: ["export", "without email", "exclude"],
+  },
+  {
+    id: "ec-excel-only-email",
+    category: "email-collector",
+    question: {
+      de: "Warum enthält Excel nur Ergebnisse mit E-Mail?",
+      en: "Why does Excel contain only results with an email?",
+      fr: "Pourquoi Excel ne contient-il que des résultats avec e-mail ?",
+      ar: "لماذا يحتوي Excel فقط على النتائج التي لها بريد؟",
+    },
+    answer: {
+      de: "Weil der Export auf den Zweck ausgelegt ist, direkt zu bewerben: Nur Angebote mit einer kontaktierbaren E-Mail sind für den Versand nützlich und werden daher exportiert.",
+      en: "Because the export is built for the purpose of applying directly: only listings with a contactable email are useful for sending and are therefore exported.",
+      fr: "Parce que l'export vise à postuler directement : seules les offres avec un e-mail joignable sont utiles pour l'envoi et sont donc exportées.",
+      ar: "لأن الهدف من التصدير هو التقديم مباشرةً: فقط الإعلانات التي لها بريد قابل للتواصل تكون مفيدة للإرسال، ولذلك تُصدَّر.",
+    },
+    keywords: ["excel", "only email", "purpose"],
+  },
+  {
+    id: "ec-no-emails",
+    category: "email-collector",
+    question: {
+      de: "Was passiert, wenn keine E-Mails gefunden werden?",
+      en: "What happens if no emails are found?",
+      fr: "Que se passe-t-il si aucun e-mail n'est trouvé ?",
+      ar: "ماذا يحدث إذا لم يُعثر على أي بريد؟",
+    },
+    answer: {
+      de: "Dann enthält der Export keine exportierbaren Zeilen und die Plattform zeigt entsprechend an, dass keine gültigen E-Mails vorlagen. Es wird nichts erfunden.",
+      en: "Then the export has no exportable rows and the platform indicates accordingly that no valid emails were present. Nothing is invented.",
+      fr: "Alors l'export ne contient aucune ligne exportable et la plateforme indique qu'aucun e-mail valide n'était présent. Rien n'est inventé.",
+      ar: "في هذه الحالة لا يحتوي التصدير على أي صفوف قابلة للتصدير، وتُظهر المنصّة أن هناك عناوين صحيحة موجودة. لا يُخترع شيء.",
+    },
+    keywords: ["no emails", "empty", "export"],
+  },
+  {
+    id: "ec-export-count",
+    category: "email-collector",
+    question: {
+      de: "Wie viele Ergebnisse können exportiert werden?",
+      en: "How many results can be exported?",
+      fr: "Combien de résultats peuvent être exportés ?",
+      ar: "كم نتيجة يمكن تصديرها؟",
+    },
+    answer: {
+      de: "Der Export ist begrenzt: Pro Export werden maximal 100 Zeilen erzeugt. So bleibt die Datei übersichtlich und schnell.",
+      en: "The export is bounded: at most 100 rows are generated per export. This keeps the file tidy and fast.",
+      fr: "L'export est limité : au maximum 100 lignes par export. Ainsi le fichier reste lisible et rapide.",
+      ar: "التصدير محدود: يُنشأ 100 صف كحد أقصى في كل تصدير. ليبقى الملف منظمًا وسريعًا.",
+    },
+    keywords: ["export", "count", "limit", "100"],
+  },
+  {
+    id: "ec-excel-info",
+    category: "email-collector",
+    question: {
+      de: "Enthält Excel alle Informationen der Stelle?",
+      en: "Does Excel contain all the job's information?",
+      fr: "Excel contient-il toutes les informations de l'offre ?",
+      ar: "هل يحتوي Excel على جميع معلومات الوظيفة؟",
+    },
+    answer: {
+      de: "Ja, es werden die relevanten Felder exportiert: Unternehmen, Ausbildungstitel, E-Mail, Telefon, Ort, Bundesland, Startdatum, Bewerbungsfrist, Firmen-Website, Bewerbungs- und Quell-URL, Anforderungen, weitere nützliche Informationen, Quellentyp und zusätzliche Quellen.",
+      en: "Yes, the relevant fields are exported: company, apprenticeship title, email, phone, location, state, start date, application deadline, company website, application and source URL, requirements, other useful information, source type and additional sources.",
+      fr: "Oui, les champs pertinents sont exportés : entreprise, titre de la formation, e-mail, téléphone, lieu, land, date de début, date limite de candidature, site de l'entreprise, URL de candidature et URL source, exigences, autres informations utiles, type de source et sources supplémentaires.",
+      ar: "نعم، تُصدَّر الحقول ذات الصلة: الشركة، عنوان التدريب، البريد، الهاتف، الموقع، الولاية، تاريخ البدء، آخر موعد للتقديم، موقع الشركة، رابط التقديم ورابط المصدر، المتطلبات، معلومات مفيدة أخرى، نوع المصدر، والمصادر الإضافية.",
+    },
+    keywords: ["excel", "columns", "info"],
+  },
+  {
+    id: "ec-difference-counts",
+    category: "email-collector",
+    question: {
+      de: "Was ist der Unterschied zwischen der Anzahl der Suchergebnisse und der exportierbaren Anzahl?",
+      en: "What is the difference between the number of search results and the exportable number?",
+      fr: "Quelle est la différence entre le nombre de résultats et le nombre exportable ?",
+      ar: "ما الفرق بين عدد نتائج البحث وعدد النتائج القابلة للتصدير؟",
+    },
+    answer: {
+      de: "Die Suche kann mehr Ergebnisse liefern, als exportiert werden: Nur Zeilen mit gültiger E-Mail werden exportiert, Duplikate werden entfernt und die Anzahl ist begrenzt. Deshalb kann die exportierte Zahl kleiner sein als die Anzahl der gefundenen Ergebnisse.",
+      en: "The search can return more results than are exported: only rows with a valid email are exported, duplicates are removed and the count is bounded. That is why the exported number can be smaller than the number of results found.",
+      fr: "La recherche peut renvoyer plus de résultats que ce qui est exporté : seules les lignes avec e-mail valide sont exportées, les doublons sont retirés et le nombre est limité. C'est pourquoi le nombre exporté peut être plus petit que le nombre de résultats trouvés.",
+      ar: "قد يعيد البحث نتائج أكثر مما يُصدَّر: تُصدَّر فقط الصفوف التي لها بريد صحيح، وتُحذف المكررات، والعدد محدود. لهذا قد يكون العدد المُصدَّر أقل من عدد النتائج التي عثر عليها.",
+    },
+    keywords: ["count", "export", "difference"],
+  },
+  {
+    id: "ec-core-rule",
+    category: "email-collector",
+    question: {
+      de: "Erfindet die Plattform E-Mails, die sie nicht findet?",
+      en: "Does the platform invent emails it does not find?",
+      fr: "La plateforme invente-t-elle des e-mails qu'elle ne trouve pas ?",
+      ar: "هل تخترع المنصّة عناوين بريد لا تجدها؟",
+    },
+    answer: {
+      de: "Nein. Die Plattform erfindet keine E-Mail-Adresse. Es werden ausschließlich E-Mails exportiert, die tatsächlich gefunden und formal geprüft wurden.",
+      en: "No. The platform invents no email address. It only exports emails that were actually found and formally checked.",
+      fr: "Non. La plateforme n'invente aucune adresse e-mail. Elle n'exporte que des e-mails réellement trouvés et vérifiés formellement.",
+      ar: "لا. لا تخترع المنصّة عنوان بريد. فقط تُصدَّر العناوين التي تم العثور إليها فعلًا والتحقق من صيغتها.",
+    },
+    keywords: ["no invent", "rule", "trust"],
+  },
+];

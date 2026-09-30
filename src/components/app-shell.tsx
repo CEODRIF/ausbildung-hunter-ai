@@ -79,6 +79,10 @@ const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.account",
     items: [{ labelKey: "nav.settings", href: "/settings/usage", icon: "settings" }],
   },
+  {
+    titleKey: "nav.help",
+    items: [{ labelKey: "nav.faq", href: "/dashboard/faq", icon: "help" }],
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -98,6 +102,10 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
   {
     match: (p) => p === "/dashboard/cover-letter",
     heading: { titleKey: "pages.coverLetter.title", subtitleKey: "pages.coverLetter.subtitle" },
+  },
+  {
+    match: (p) => p === "/dashboard/faq",
+    heading: { titleKey: "pages.faq.title", subtitleKey: "pages.faq.subtitle" },
   },
   {
     match: (p) => p === "/dashboard" || p.startsWith("/dashboard/"),

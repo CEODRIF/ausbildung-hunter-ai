@@ -35,6 +35,8 @@ const de = {
     expand: "Seitenleiste ausklappen",
     platform: "Plattform",
     platformUpdates: "Plattform-Updates",
+    help: "Hilfe",
+    faq: "FAQ",
   },
 
   // ---- Shell: global header ----------------------------------------------
@@ -68,6 +70,7 @@ const de = {
     settingsBilling: { title: "Abrechnung", subtitle: "Abonnement und Zahlungen" },
     templates: { title: "Vorlagen", subtitle: "Lebenslauf erstellen und exportieren" },
     coverLetter: { title: "Anschreiben", subtitle: "Professionellen Bewerbungsbrief erstellen und exportieren" },
+    faq: { title: "FAQ", subtitle: "Hilfe und Antworten" },
   },
 
   // ---- Language switcher --------------------------------------------------
@@ -150,6 +153,23 @@ const de = {
     comingSoon: "Demnächst verfügbar",
     notDocumented: "Nicht dokumentiert",
     none: "Keine",
+  },
+
+  // ---- FAQ page -------------------------------------------------------------
+  faq: {
+    title: "Häufig gestellte Fragen",
+    description:
+      "Schnelle, verlässliche Antworten zur Ausbildungssuche, zu Bewerbungen, den Tools und Ihrer Plattform – auf einen Blick.",
+    searchLabel: "FAQ durchsuchen",
+    searchPlaceholder: "Fragen durchsuchen (z. B. PDF, E-Mail, Ausbildung)",
+    clearSearch: "Suche zurücksetzen",
+    all: "Alle",
+    categories: "Kategorien",
+    resultOne: "1 Frage",
+    results: "{count} Fragen",
+    noResults: "Keine Fragen gefunden",
+    noResultsHint:
+      "Versuchen Sie einen anderen Suchbegriff oder wechseln Sie die Kategorie.",
   },
 
   // ---- Auth screen (brand panel pitch) ------------------------------------
@@ -1055,6 +1075,8 @@ const en: Dict = {
     expand: "Expand sidebar",
     platform: "Platform",
     platformUpdates: "Platform Updates",
+    help: "Help",
+    faq: "FAQ",
   },
   header: {
     notifications: "Notifications",
@@ -1083,6 +1105,7 @@ const en: Dict = {
     settingsBilling: { title: "Billing", subtitle: "Subscription and payments" },
     templates: { title: "Templates", subtitle: "Build and export your CV" },
     coverLetter: { title: "Cover Letter", subtitle: "Build and export your professional application letter" },
+    faq: { title: "FAQ", subtitle: "Help and answers" },
   },
   lang: {
     label: "Language",
@@ -1155,6 +1178,21 @@ const en: Dict = {
     comingSoon: "Coming soon",
     notDocumented: "Not documented",
     none: "None",
+  },
+  // ---- FAQ page -------------------------------------------------------------
+  faq: {
+    title: "Frequently Asked Questions",
+    description:
+      "Quick, reliable answers about the apprenticeship search, applications, the tools and your platform – all in one place.",
+    searchLabel: "Search the FAQ",
+    searchPlaceholder: "Search questions (e.g. PDF, email, apprenticeship)",
+    clearSearch: "Clear search",
+    all: "All",
+    categories: "Categories",
+    resultOne: "1 question",
+    results: "{count} questions",
+    noResults: "No questions found",
+    noResultsHint: "Try a different keyword or switch category.",
   },
   auth: {
     pitchTitle: "Build a career you can be proud of.",
@@ -2022,6 +2060,8 @@ const fr: Dict = {
     expand: "Déplier la barre latérale",
     platform: "Plateforme",
     platformUpdates: "Mises à jour de la plateforme",
+    help: "Aide",
+    faq: "FAQ",
   },
   header: {
     notifications: "Notifications",
@@ -2050,6 +2090,7 @@ const fr: Dict = {
     settingsBilling: { title: "Facturation", subtitle: "Abonnement et paiements" },
     templates: { title: "Modèles", subtitle: "Créer et exporter votre CV" },
     coverLetter: { title: "Lettre de motivation", subtitle: "Créer et exporter votre lettre de motivation professionnelle" },
+    faq: { title: "FAQ", subtitle: "Aide et réponses" },
   },
   lang: {
     label: "Langue",
@@ -2122,6 +2163,21 @@ const fr: Dict = {
     comingSoon: "Bientôt disponible",
     notDocumented: "Non documenté",
     none: "Aucun",
+  },
+  // ---- FAQ page -------------------------------------------------------------
+  faq: {
+    title: "Questions fréquentes",
+    description:
+      "Des réponses rapides et fiables sur la recherche d'alternance, les candidatures, les outils et votre plateforme, au même endroit.",
+    searchLabel: "Rechercher dans la FAQ",
+    searchPlaceholder: "Rechercher (ex. : PDF, e-mail, alternance)",
+    clearSearch: "Effacer la recherche",
+    all: "Toutes",
+    categories: "Catégories",
+    resultOne: "1 question",
+    results: "{count} questions",
+    noResults: "Aucune question trouvée",
+    noResultsHint: "Essayez un autre mot-clé ou changez de catégorie.",
   },
   auth: {
     pitchTitle: "Bâtissez une carrière dont vous pouvez être fier.",
@@ -2995,6 +3051,8 @@ const ar: Dict = {
     expand: "توسيع الشريط الجانبي",
     platform: "المنصة",
     platformUpdates: "تحديثات المنصة",
+    help: "مساعدة",
+    faq: "الأسئلة الشائعة",
   },
   header: {
     notifications: "الإشعارات",
@@ -3023,6 +3081,7 @@ const ar: Dict = {
     settingsBilling: { title: "الفوترة", subtitle: "الاشتراك والمدفوعات" },
     templates: { title: "القوالب", subtitle: "إنشاء سيرتك الذاتية وتصديرها" },
     coverLetter: { title: "خطاب تقديم الطلب", subtitle: "إنشاء خطاب تقديم احترافي وتصديره" },
+    faq: { title: "الأسئلة الشائعة", subtitle: "مساعدة وإجابات" },
   },
   lang: {
     label: "اللغة",
@@ -3095,6 +3154,21 @@ const ar: Dict = {
     comingSoon: "قريبًا",
     notDocumented: "غير موثّق",
     none: "لا شيء",
+  },
+  // ---- FAQ page -------------------------------------------------------------
+  faq: {
+    title: "الأسئلة الشائعة",
+    description:
+      "إجابات سريعة وموثوقة عن البحث عن التدريب المهني، وطلبات التقديم، والأدوات، ومنصّتك — في مكان واحد.",
+    searchLabel: "البحث في الأسئلة الشائعة",
+    searchPlaceholder: "ابحث عن سؤال (مثل: PDF، بريد إلكتروني، تدريب)",
+    clearSearch: "مسح البحث",
+    all: "الكل",
+    categories: "الفئات",
+    resultOne: "سؤال واحد",
+    results: "{count} أسئلة",
+    noResults: "لا توجد أسئلة",
+    noResultsHint: "جرّب كلمة مفتاحية أخرى أو بدّل الفئة.",
   },
   auth: {
     pitchTitle: "ابنِ مسيرة تفخر بها.",
