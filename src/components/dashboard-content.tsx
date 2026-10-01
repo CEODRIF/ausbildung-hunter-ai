@@ -8,7 +8,6 @@ import type {
   DashboardRecommendations,
   MatchingSummary,
   RecommendationItem,
-  RecentApplication,
   SavedPreviewItem,
 } from "@/lib/dashboard";
 import { getProfileCompletion } from "@/lib/dashboard";
@@ -33,7 +32,6 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
     usageSnapshot,
     aiLimit,
     applicationsCount,
-    activities,
     emailAccount,
     hasCompletedScan,
     matching,
@@ -41,7 +39,6 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
     completeness,
     nextAction,
     savedPreview,
-    recentApplications,
     recommendations,
   } = data;
   const isAusbildung = profile.selected_goal === "ausbildung";
@@ -200,7 +197,6 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
           <RecommendationsCard recommendations={recommendations} t={t} locale={locale} />
           <SavedPreviewCard items={savedPreview} t={t} />
           <MatchingCard matching={matching} t={t} locale={locale} />
-          <RecentApplicationsCard items={recentApplications} t={t} locale={locale} />
         </div>
         <div className="min-w-0">
           <CompletenessCard
@@ -237,34 +233,6 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
               />
             </dl>
           </Card>
-          <section className="mt-5">
-            <Card className="overflow-hidden" as="section">
-              <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-5 sm:px-6">
-                <div>
-                  <h2 className="font-bold text-ink">{t("dash.sections.activity.title")}</h2>
-                  <p className="mt-1 text-xs text-muted">
-                    {t("dash.sections.activity.hint")}
-                  </p>
-                </div>
-                <span className="rounded-lg bg-surface-2 px-2 py-1 text-[10px] font-bold text-muted">
-                  {t("dash.live")}
-                </span>
-              </div>
-              {activities.length ? (
-                <div className="divide-y divide-line">
-                  {activities.map((activity) => (
-                    <ActivityRow key={activity.id} {...activity} locale={locale} />
-                  ))}
-                </div>
-              ) : (
-                <EmptyState
-                  icon="activity"
-                  title={t("dash.empty.noActivity.title")}
-                  body={t("dash.empty.noActivity.body")}
-                />
-              )}
-            </Card>
-          </section>
         </div>
       </section>
 
@@ -553,125 +521,6 @@ function SavedPreviewCard({
             icon="bookmark"
             title={t("dash.empty.nothingSaved.title")}
             body={t("dash.empty.nothingSaved.body")}
-          />
-        )}
-      </Card>
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Recent applications (real drafts + persisted campaign state)
-// ---------------------------------------------------------------------------
-
-export function RecentApplicationsCard({
-  items,
-  t,
-  locale,
-}: {
-  items: RecentApplication[];
-  t: T;
-  locale: string;
-}) {
-  return (
-    <section className="mt-5">
-      <Card className="overflow-hidden" as="section">
-        <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-5 sm:px-6">
-          <div>
-            <h2 className="font-bold text-ink">{t("dash.sections.recentApplications.title")}</h2>
-            <p className="mt-1 text-xs text-muted">
-              {t("dash.sections.recentApplications.hint")}
-            </p>
-          </div>
-          <Link
-            href="/applications/new"
-            className="shrink-0 rounded-xl border border-line-strong px-3 py-2 text-xs font-bold text-accent transition-colors hover:bg-accent-soft"
-          >
-            {t("apps.new")}
-          </Link>
-        </div>
-        {items.length > 0 ? (
-          <div className="divide-y divide-line">
-            {items.map((item) => (
-              <div
-                key={item.id}
-                className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 sm:px-6"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-ink">
-                    {item.subject || t("apps.untitled")}
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted">
-                    {[
-                      item.company,
-                      item.opportunity_title
-                        ? t("apps.for", { title: item.opportunity_title })
-                        : null,
-                      t("apps.created", {
-                        date: formatDate(item.created_at, locale),
-                      }),
-                      item.sent_at
-                        ? t("apps.sent", {
-                            date: formatDate(item.sent_at, locale),
-                          })
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || t("apps.noDetails")}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {item.campaign_status && (
-                    <span
-                      className={`rounded-lg px-2 py-1 text-[11px] font-bold ${
-                        item.campaign_status === "completed"
-                          ? "bg-success-soft text-success"
-                          : item.campaign_status === "failed" ||
-                              item.campaign_status === "partially_failed"
-                            ? "bg-danger-soft text-danger"
-                            : "bg-surface-2 text-muted"
-                      }`}
-                    >
-                      {t(`campaign.status.${item.campaign_status}`)}
-                    </span>
-                  )}
-                  {!item.campaign_status && !item.has_content && (
-                    <span className="rounded-lg bg-surface-2 px-2 py-1 text-[11px] font-bold text-muted">
-                      {t("apps.emptyDraft")}
-                    </span>
-                  )}
-                  <Link
-                    href="/applications/new"
-                    className="rounded-lg border border-line-strong px-2.5 py-1.5 text-xs font-bold text-accent transition-colors hover:bg-accent-soft"
-                  >
-                    {t("apps.openDraft")}
-                  </Link>
-                  {item.campaign_id && (
-                    <Link
-                      href={`/applications/campaign/${item.campaign_id}`}
-                      className="rounded-lg bg-accent-soft px-2.5 py-1.5 text-xs font-bold text-accent transition-colors hover:bg-accent hover:text-white"
-                    >
-                      {t("apps.campaign")}
-                    </Link>
-                  )}
-                  {item.opportunity_key && (
-                    <Link
-                      href={`/opportunities/${encodeURIComponent(item.opportunity_key)}`}
-                      className="rounded-lg border border-line-strong px-2.5 py-1.5 text-xs font-bold text-accent transition-colors hover:bg-accent-soft"
-                    >
-                      {t("apps.opportunity")}
-                    </Link>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <EmptyState
-            icon="file"
-            title={t("dash.empty.noApplications.title")}
-            body={t("dash.empty.noApplications.body")}
-            cta={{ label: t("apps.new"), href: "/applications/new" }}
           />
         )}
       </Card>
@@ -1071,51 +920,6 @@ function Detail({ label, value }: { label: string; value: string }) {
       <dd className="max-w-[62%] text-end text-xs font-semibold text-ink-soft">
         {value}
       </dd>
-    </div>
-  );
-}
-
-function ActivityRow({
-  activity_type,
-  title,
-  description,
-  created_at,
-  locale,
-}: {
-  activity_type: string;
-  title: string;
-  description: string | null;
-  created_at: string;
-  locale: string;
-}) {
-  const icon: IconName =
-    activity_type === "bewerbung_scan_completed"
-      ? "scan"
-      : activity_type === "opportunity_saved" ||
-          activity_type === "opportunity_removed"
-        ? "bookmark"
-        : activity_type.startsWith("campaign")
-          ? "send"
-          : activity_type === "quota_upgrade_activated"
-            ? "settings"
-            : "file";
-  return (
-    <div className="flex items-start gap-3 px-5 py-4 sm:px-6">
-      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-        <Icon name={icon} size={15} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-ink-soft">{title}</p>
-        {description && (
-          <p className="mt-1 text-xs leading-5 text-muted">{description}</p>
-        )}
-      </div>
-      <time
-        className="shrink-0 text-[10px] text-faint"
-        dateTime={created_at}
-      >
-        {formatDate(created_at, locale)}
-      </time>
     </div>
   );
 }
