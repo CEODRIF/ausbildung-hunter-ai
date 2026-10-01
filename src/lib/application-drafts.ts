@@ -177,6 +177,44 @@ export async function createBlankDraft(
   return { ...data, recipients: [], attachments: [] };
 }
 
+/**
+ * Load ONE of the user's drafts (ownership-scoped server read) with its
+ * recipients and attachments. Used by the composer to open a SPECIFIC draft
+ * (?draft=<id> from the Applications list) instead of only the most recent
+ * one. An unknown or foreign id resolves to null — the caller falls back
+ * to the default draft rather than leaking ownership details.
+ */
+export async function loadOwnedDraft(
+  userId: string,
+  draftId: string,
+): Promise<ApplicationDraft | null> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("application_drafts")
+    .select("*")
+    .eq("id", draftId)
+    .eq("user_id", userId)
+    .maybeSingle<ApplicationDraft>();
+  if (error || !data) return null;
+  const [{ data: recipients }, { data: attachments }] = await Promise.all([
+    admin
+      .from("application_draft_recipients")
+      .select("id, email, company_name, validation_status")
+      .eq("draft_id", data.id)
+      .order("created_at"),
+    admin
+      .from("application_draft_attachments")
+      .select("id, filename, mime_type, size_bytes, storage_path")
+      .eq("draft_id", data.id)
+      .order("created_at"),
+  ]);
+  return {
+    ...data,
+    recipients: (recipients ?? []) as DraftRecipient[],
+    attachments: (attachments ?? []) as DraftAttachment[],
+  };
+}
+
 export async function assertDraftOwnership(userId: string, draftId: string) {
   const admin = createAdminClient();
   const { data, error } = await admin

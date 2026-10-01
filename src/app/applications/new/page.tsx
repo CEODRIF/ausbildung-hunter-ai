@@ -1,5 +1,9 @@
 import Link from "next/link";
-import { getApplicationComposerData } from "@/lib/application-drafts";
+import {
+  createBlankDraft,
+  getApplicationComposerData,
+  loadOwnedDraft,
+} from "@/lib/application-drafts";
 import { ApplicationComposer } from "@/components/application-composer";
 import { Card } from "@/components/ui";
 import { applyOpportunityPrefill } from "@/lib/opportunity-prefill";
@@ -40,17 +44,48 @@ export default async function NewApplicationPage({
       </div>
     );
 
+  const params = await searchParams;
+  const rawOpp = typeof params.opp === "string" ? params.opp : "";
+  const rawDraft = typeof params.draft === "string" ? params.draft : "";
+  const wantsNew = params.new === "1" || params.new === "true";
+  const uuidPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  // Draft resolution (multi-campaign management):
+  //  - ?draft=<id> opens THAT specific draft (linked from the Applications
+  //    list); ownership is enforced server-side — a stale or foreign id
+  //    falls back to the default draft instead of erroring.
+  //  - ?new=1 (the "New application" button) opens a fresh, independent
+  //    draft; an already-blank draft is reused so empty drafts never pile
+  //    up, and non-blank work is never overwritten.
+  //  - otherwise the most recent draft is resumed (previous behaviour).
+  let activeDraft = data.draft!;
+  if (rawDraft && uuidPattern.test(rawDraft)) {
+    const specific = await loadOwnedDraft(data.userId, rawDraft);
+    if (specific) activeDraft = specific;
+  }
+  if (wantsNew) {
+    const blank =
+      activeDraft.subject.trim() === "" &&
+      activeDraft.body_text.trim() === "" &&
+      activeDraft.recipients.length === 0 &&
+      activeDraft.attachments.length === 0;
+    if (!blank)
+      activeDraft = await createBlankDraft(
+        data.userId,
+        data.profile.selected_goal ?? "ausbildung",
+        data.accounts[0].id,
+      );
+  }
+
   // Optional server-derived prefill from an opportunity (?opp=<key>).
   // The key is validated and the opportunity re-resolved from the
   // authoritative source — nothing is trusted from the URL beyond the key.
-  const params = await searchParams;
-  const rawOpp = typeof params.opp === "string" ? params.opp : "";
-  let activeDraft = data.draft!;
   let prefillNotice: string | null = null;
   let prefillError: string | null = null;
   if (rawOpp) {
     const outcome = await applyOpportunityPrefill(
-      { userId: data.userId, accounts: data.accounts, draft: data.draft! },
+      { userId: data.userId, accounts: data.accounts, draft: activeDraft },
       rawOpp,
     );
     if (outcome.ok) {

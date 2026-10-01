@@ -169,6 +169,7 @@ describe("opening a campaign runs deterministic recovery", () => {
 
 describe("Applications page: real data, no account management", () => {
   const PAGE = readFileSync("src/app/applications/page.tsx", "utf8");
+  const TABLE = readFileSync("src/components/applications-table.tsx", "utf8");
   const LOADER = readFileSync("src/lib/dashboard.ts", "utf8");
 
   it("maps the engine's live counters (no invented numbers)", () => {
@@ -181,38 +182,43 @@ describe("Applications page: real data, no account management", () => {
       "cancelled_count",
     ])
       expect(LOADER).toContain(column);
-    expect(PAGE).toContain("item.total_recipients");
-    expect(PAGE).toContain("item.sent_count");
-    expect(PAGE).toContain("item.failed_count");
-    expect(PAGE).toContain("item.sender_email");
+    expect(TABLE).toContain("row.total_recipients");
+    expect(TABLE).toContain("row.sent_count");
+    expect(TABLE).toContain("row.failed_count");
+    expect(TABLE).toContain("row.sender_email");
   });
 
   it("derives the overview stats from real campaign statuses", () => {
-    expect(PAGE).toContain('item.campaign_status === "queued"');
-    expect(PAGE).toContain('item.campaign_status === "sending"');
-    expect(PAGE).toContain('item.campaign_status === "completed"');
-    expect(PAGE).toContain('item.campaign_status === "partially_failed"');
+    // The list is campaign-centric: one row per campaign (item.status is the
+    // engine status; drafts carry no campaign_id).
+    expect(PAGE).toContain("listUserCampaigns(user.id)");
+    expect(PAGE).toContain('item.status === "queued"');
+    expect(PAGE).toContain('item.status === "sending"');
+    expect(PAGE).toContain('item.status === "completed"');
+    expect(PAGE).toContain('item.status === "partially_failed"');
     expect(PAGE).toContain("!item.campaign_id");
-    expect(PAGE).toContain("Cancelled");
+    expect(TABLE).toContain("Cancelled");
   });
 
   it("keeps account management out of Applications", () => {
-    for (const forbidden of [
-      "Disconnect",
-      "Reconnect",
-      "Connect Gmail",
-      "Connect Outlook",
-      "ACTIVE CAMPAIGN",
-      "Connected accounts",
-    ])
-      expect(PAGE).not.toContain(forbidden);
+    for (const file of [PAGE, TABLE])
+      for (const forbidden of [
+        "Disconnect",
+        "Reconnect",
+        "Connect Gmail",
+        "Connect Outlook",
+        "ACTIVE CAMPAIGN",
+        "Connected accounts",
+      ])
+        expect(file).not.toContain(forbidden);
     // …while the sender is still visible per application.
-    expect(PAGE).toContain("Sender:");
+    expect(TABLE).toContain("Sender:");
+    expect(TABLE).toContain("Sending from:");
   });
 
   it("renders a table on desktop and cards on mobile", () => {
-    expect(PAGE).toContain("hidden overflow-x-auto lg:block");
-    expect(PAGE).toContain("lg:hidden");
+    expect(TABLE).toContain("hidden overflow-x-auto lg:block");
+    expect(TABLE).toContain("lg:hidden");
     for (const column of [
       "Application",
       "Type",
@@ -224,6 +230,6 @@ describe("Applications page: real data, no account management", () => {
       "Created",
       "Actions",
     ])
-      expect(PAGE).toContain(`>${column}<`);
+      expect(TABLE).toContain(`>${column}<`);
   });
 });

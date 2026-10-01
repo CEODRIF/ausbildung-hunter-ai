@@ -439,6 +439,83 @@ export async function getCampaign(userId: string, campaignId: string) {
   return { campaign, messages: messages ?? [], usage };
 }
 
+/** Raised when a campaign must not be deleted yet (its queue is live). */
+export class CampaignDeleteBlockedError extends Error {}
+
+/**
+ * Delete ONE campaign and its messages.
+ *
+ * Scope: the campaign row itself. `email_messages.campaign_id` is
+ * `on delete cascade`, so the messages are removed atomically by the database
+ * — the queue can never be left with orphaned rows, and no other campaign,
+ * email account, token or credit is touched.
+ *
+ * Capacity: every message holds one unit of `daily_usage.emails_reserved`
+ * (released by the engine when a message is finalized or cancelled), so the
+ * messages that will never be sent (still queued) are released here against
+ * the campaign's own usage date — exactly like cancelCampaign does.
+ *
+ * A campaign that is actively `sending` is refused: its messages are locked
+ * by the running worker, which finalizes them itself. Deletion is refused on
+ * the MESSAGE state as well — a `sending` message means the worker has
+ * already claimed it, even for a campaign row that still reads `queued`.
+ */
+export async function deleteCampaign(userId: string, campaignId: string) {
+  const admin = createAdminClient();
+  const { data: campaign, error: loadError } = await admin
+    .from("email_campaigns")
+    .select("id, status, queued_count, usage_date")
+    .eq("id", campaignId)
+    .eq("user_id", userId)
+    .single();
+  if (loadError || !campaign) throw new Error("Campaign not found.");
+
+  if (campaign.status === "sending")
+    throw new CampaignDeleteBlockedError(
+      "This campaign is currently being sent. Please wait until sending finishes before deleting it.",
+    );
+
+  // In-flight guard: the campaign row can still read `queued` for a moment
+  // after the worker claims its first message (the `sending` flip commits in
+  // the same worker tick). A claimed message means live in-flight work —
+  // deleting now would strand it, so refuse on the message state too.
+  const { count: inFlight, error: inFlightError } = await admin
+    .from("email_messages")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", campaignId)
+    .eq("user_id", userId)
+    .eq("status", "sending");
+  if (inFlightError) throw new Error("Unable to delete campaign.");
+  if ((inFlight ?? 0) > 0)
+    throw new CampaignDeleteBlockedError(
+      "This campaign is currently being sent. Please wait until sending finishes before deleting it.",
+    );
+
+  const queued = Number(campaign.queued_count ?? 0);
+  if (queued > 0 && campaign.usage_date) {
+    await admin.rpc("release_email_capacity", {
+      target_user_id: userId,
+      reservation_date: campaign.usage_date,
+      released: queued,
+    });
+  }
+
+  const { error } = await admin
+    .from("email_campaigns")
+    .delete()
+    .eq("id", campaignId)
+    .eq("user_id", userId);
+  if (error) throw new Error("Unable to delete campaign.");
+
+  await admin.from("activity_logs").insert({
+    user_id: userId,
+    activity_type: "campaign_deleted",
+    title: "Application campaign deleted",
+    metadata: { campaign_id: campaignId, released_capacity: queued },
+  });
+  return { campaignId, releasedCapacity: queued };
+}
+
 export async function cancelCampaign(userId: string, campaignId: string) {
   const admin = createAdminClient();
   const result = await admin.rpc("cancel_queued_campaign", {
@@ -453,4 +530,172 @@ export async function cancelCampaign(userId: string, campaignId: string) {
     title: "Application campaign cancelled",
     metadata: { campaign_id: campaignId },
   });
+}
+
+/** One row of the Applications list. Either a campaign (one row PER
+ *  campaign — campaigns never overwrite each other) or a composer draft
+ *  that has not been sent yet. Every value is read from the database,
+ *  user-scoped; nothing is synthesised. */
+export interface ApplicationListItem {
+  kind: "campaign" | "draft";
+  /** Primary id of the row: the campaign id, or the draft id. */
+  id: string;
+  campaign_id: string | null;
+  draft_id: string | null;
+  title: string;
+  company: string | null;
+  goal: string;
+  /** Engine status for campaign rows; always "draft" for draft rows. */
+  status: string;
+  total_recipients: number | null;
+  sent_count: number | null;
+  failed_count: number | null;
+  /** Sender address only (display; the account itself lives in Email). */
+  sender_email: string | null;
+  created_at: string;
+}
+
+function applicationTitle(
+  subject: string,
+  opportunityTitle: string | null,
+): string {
+  const trimmed = subject.trim();
+  return trimmed || opportunityTitle || "Untitled application";
+}
+
+/**
+ * The user's complete Applications list: every campaign as its own row
+ * (independent ids, recipients, counters and errors per campaign) plus
+ * each draft that has no campaign yet. A draft with several campaigns
+ * appears once PER campaign — the list never collapses rows, so nothing
+ * from one campaign can leak into another.
+ */
+export async function listUserCampaigns(
+  userId: string,
+): Promise<ApplicationListItem[]> {
+  const admin = createAdminClient();
+  const [campaignsResult, draftsResult] = await Promise.all([
+    admin
+      .from("email_campaigns")
+      .select(
+        "id, draft_id, email_account_id, status, total_recipients, sent_count, failed_count, created_at",
+      )
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false }),
+    admin
+      .from("application_drafts")
+      .select(
+        "id, goal, subject, created_at, opportunity_title, opportunity_company, sender_email_account_id",
+      )
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false }),
+  ]);
+  if (campaignsResult.error) throw new Error("Unable to load campaigns.");
+  if (draftsResult.error) throw new Error("Unable to load applications.");
+
+  const campaigns = (campaignsResult.data ?? []) as Array<{
+    id: string;
+    draft_id: string;
+    email_account_id: string | null;
+    status: string;
+    total_recipients: number | null;
+    sent_count: number | null;
+    failed_count: number | null;
+    created_at: string;
+  }>;
+  const drafts = (draftsResult.data ?? []) as Array<{
+    id: string;
+    goal: string;
+    subject: string;
+    created_at: string;
+    opportunity_title: string | null;
+    opportunity_company: string | null;
+    sender_email_account_id: string;
+  }>;
+  const draftById = new Map(drafts.map((draft) => [draft.id, draft]));
+  const draftedIds = new Set(campaigns.map((campaign) => campaign.draft_id));
+
+  // Sender addresses for the accounts referenced by campaigns and drafts
+  // (address only — safe to display; tokens never leave the server).
+  const accountIds = new Set<string>();
+  for (const campaign of campaigns)
+    if (campaign.email_account_id) accountIds.add(campaign.email_account_id);
+  for (const draft of drafts) accountIds.add(draft.sender_email_account_id);
+  const senderByAccount = new Map<string, string>();
+  if (accountIds.size > 0) {
+    const { data: accounts } = await admin
+      .from("email_accounts")
+      .select("id, email_address")
+      .in("id", [...accountIds]);
+    for (const account of (accounts ?? []) as Array<{
+      id: string;
+      email_address: string;
+    }>)
+      senderByAccount.set(account.id, account.email_address);
+  }
+
+  // Recipient counts, only for the drafts that still have no campaign.
+  const pendingDrafts = drafts.filter((draft) => !draftedIds.has(draft.id));
+  const recipientCountByDraft = new Map<string, number>();
+  if (pendingDrafts.length > 0) {
+    const { data: recipients } = await admin
+      .from("application_draft_recipients")
+      .select("draft_id")
+      .in("draft_id", pendingDrafts.map((draft) => draft.id));
+    for (const recipient of (recipients ?? []) as Array<{
+      draft_id: string;
+    }>)
+      recipientCountByDraft.set(
+        recipient.draft_id,
+        (recipientCountByDraft.get(recipient.draft_id) ?? 0) + 1,
+      );
+  }
+
+  const items: ApplicationListItem[] = [];
+  for (const campaign of campaigns) {
+    // The campaign's draft always exists (draft_id is ON DELETE RESTRICT),
+    // so the lookup can only miss for corrupt historical data — in which
+    // case the row still renders with its own real counters.
+    const draft = draftById.get(campaign.draft_id);
+    items.push({
+      kind: "campaign",
+      id: campaign.id,
+      campaign_id: campaign.id,
+      draft_id: campaign.draft_id,
+      title: draft
+        ? applicationTitle(draft.subject, draft.opportunity_title)
+        : "Untitled application",
+      company: draft?.opportunity_company ?? null,
+      goal: draft?.goal ?? "",
+      status: campaign.status,
+      total_recipients: campaign.total_recipients,
+      sent_count: campaign.sent_count,
+      failed_count: campaign.failed_count,
+      sender_email: campaign.email_account_id
+        ? (senderByAccount.get(campaign.email_account_id) ?? null)
+        : null,
+      created_at: campaign.created_at,
+    });
+  }
+  for (const draft of pendingDrafts) {
+    items.push({
+      kind: "draft",
+      id: draft.id,
+      campaign_id: null,
+      draft_id: draft.id,
+      title: applicationTitle(draft.subject, draft.opportunity_title),
+      company: draft.opportunity_company ?? null,
+      goal: draft.goal,
+      status: "draft",
+      total_recipients: recipientCountByDraft.get(draft.id) ?? 0,
+      sent_count: null,
+      failed_count: null,
+      sender_email: senderByAccount.get(draft.sender_email_account_id) ?? null,
+      created_at: draft.created_at,
+    });
+  }
+  return items.sort(
+    (a, b) =>
+      b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id),
+  );
 }

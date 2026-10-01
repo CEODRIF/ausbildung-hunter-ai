@@ -1,6 +1,8 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import { createAdminClient } from "@/lib/supabase/admin";
 import {
   recoverStaleCampaigns, getCampaign } from "@/lib/email-campaigns";
 import { getServerT } from "@/lib/i18n/server";
@@ -35,12 +37,45 @@ export default async function CampaignPage({
     "failed",
     "cancelled",
   ].includes(campaignState.status);
+  // Read-only display context for THIS campaign (address + subject only —
+  // nothing is written, the sending engine is untouched).
+  const admin = createAdminClient();
+  const [accountResult, draftResult] = await Promise.all([
+    data.campaign.email_account_id
+      ? admin
+          .from("email_accounts")
+          .select("email_address")
+          .eq("id", data.campaign.email_account_id)
+          .maybeSingle<{ email_address: string }>()
+      : Promise.resolve({ data: null as { email_address: string } | null }),
+    admin
+      .from("application_drafts")
+      .select("subject, opportunity_title")
+      .eq("id", data.campaign.draft_id)
+      .maybeSingle<{ subject: string; opportunity_title: string | null }>(),
+  ]);
+  const senderEmail = accountResult.data?.email_address ?? null;
+  const title =
+    draftResult.data?.subject?.trim() || draftResult.data?.opportunity_title ||
+    null;
   return (
     <div className="px-4 py-6 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-6xl">
+        <Link
+          href="/applications"
+          className="mt-2 text-xs font-semibold text-muted hover:text-ink-soft"
+        >
+          ← Applications
+        </Link>
         <div className="mt-2 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
-            <p className="text-sm text-muted">{t("account.monitorNote")}</p>
+            <h1 className="text-2xl font-bold text-ink">
+              {title ?? "Application campaign"}
+            </h1>
+            <p className="mt-1 text-sm text-muted">
+              {t("account.monitorNote")}
+              {senderEmail ? ` · Sending from: ${senderEmail}` : ""}
+            </p>
             <CampaignMonitor campaignId={id} />
           </div>
           <div className="flex gap-2">
