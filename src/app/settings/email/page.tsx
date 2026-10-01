@@ -20,6 +20,10 @@ export const dynamic = "force-dynamic";
 type SearchParams = Promise<{
   connected?: string;
   error?: string;
+  /** Safe reason code from the OAuth callback (e.g. invalid_grant). */
+  reason?: string;
+  /** Provider HTTP status when the failure came from the provider. */
+  status?: string;
   disconnected?: string;
   reassigned?: string;
 }>;
@@ -78,6 +82,14 @@ export default async function EmailSettingsPage({
         {params.error && (
           <Notice tone="error">
             {t(ERROR_KEYS[params.error] ?? "account.genericConnectionError")}
+            {params.reason && (
+              <span className="mt-1 block text-xs font-normal">
+                {t("account.errProviderReason", {
+                  reason: params.reason,
+                  status: params.status ? ` · HTTP ${params.status}` : "",
+                })}
+              </span>
+            )}
           </Notice>
         )}
         <section className="mt-2 grid gap-4 md:grid-cols-2">

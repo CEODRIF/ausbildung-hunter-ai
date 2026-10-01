@@ -599,6 +599,7 @@ const de = {
       "Der Anbieter hat nicht die für die Verbindung erforderlichen Berechtigungen erteilt.",
     errConnectionFailed:
       "Wir konnten dieses Konto nicht verifizieren. Bitte versuchen Sie es erneut.",
+    errProviderReason: "Grund des Anbieters: {reason}{status}",
     errAccountNotFound: "Dieses Konto wurde nicht gefunden.",
     errDisconnectFailed:
       "Wir konnten dieses Konto nicht trennen. Bitte versuchen Sie es erneut.",
@@ -1696,6 +1697,7 @@ const en: Dict = {
       "The provider did not grant the permissions required for a future connection.",
     errConnectionFailed:
       "We could not verify that account. Please try again.",
+    errProviderReason: "Provider reason: {reason}{status}",
     errAccountNotFound: "That account could not be found.",
     errDisconnectFailed:
       "We could not disconnect this account. Please try again.",
@@ -2778,6 +2780,7 @@ const fr: Dict = {
       "Le fournisseur n'a pas accordé les permissions requises pour la connexion.",
     errConnectionFailed:
       "Nous n'avons pas pu vérifier ce compte. Veuillez réessayer.",
+    errProviderReason: "Raison du fournisseur : {reason}{status}",
     errAccountNotFound: "Ce compte n'a pas été trouvé.",
     errDisconnectFailed:
       "Nous n'avons pas pu déconnecter ce compte. Veuillez réessayer.",
@@ -3864,6 +3867,7 @@ const ar: Dict = {
     errInsufficientPermissions:
       "لم يمنح المزود الأذونات المطلوبة للصلة.",
     errConnectionFailed: "تعذر التحقق من هذا الحساب. يرجى المحاولة مرة أخرى.",
+    errProviderReason: "سبب المزوّد: {reason}{status}",
     errAccountNotFound: "لم يتم العثور على هذا الحساب.",
     errDisconnectFailed: "تعذر فصل هذا الحساب. يرجى المحاولة مرة أخرى.",
     errActiveCampaigns:

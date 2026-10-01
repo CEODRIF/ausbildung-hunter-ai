@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { consumeOAuthState } from "@/lib/oauth-state";
 import {
+  classifyOAuthFailure,
   exchangeGoogleCode,
   exchangeMicrosoftCode,
   fetchGoogleIdentity,
@@ -22,7 +23,18 @@ export async function GET(
     destination.searchParams.set("error", "unsupported_provider");
     return NextResponse.redirect(destination);
   }
-  if (!(await consumeOAuthState(provider, url.searchParams.get("state")))) {
+  const submittedState = url.searchParams.get("state");
+  const stateVerified = await consumeOAuthState(provider, submittedState);
+  // Safe callback diagnostics: booleans + Google's error CODE only — the
+  // authorization code, tokens, cookies and secrets are never logged.
+  console.info("[GOOGLE_OAUTH] callback", {
+    provider,
+    hasCode: Boolean(url.searchParams.get("code")),
+    providerErrorCode: url.searchParams.get("error"),
+    hasState: Boolean(submittedState),
+    stateVerified,
+  });
+  if (!stateVerified) {
     destination.searchParams.set("error", "invalid_oauth_state");
     return NextResponse.redirect(destination);
   }
@@ -61,7 +73,7 @@ export async function GET(
     const scopes = tokens.scope?.split(" ") ?? getProviderScopes(provider);
     // Stage logging (temporary, diagnostic): metadata/booleans only — never
     // tokens, secrets or other credentials.
-    console.info("Email OAuth stage: token_exchange ok", {
+    console.info("[GOOGLE_OAUTH] token_exchange ok", {
       provider,
       hasAccessToken: Boolean(tokens.access_token),
       hasRefreshToken: Boolean(tokens.refresh_token),
@@ -70,7 +82,7 @@ export async function GET(
     });
     if (provider === "gmail") {
       const identity = await fetchGoogleIdentity(tokens.access_token);
-      console.info("Email OAuth stage: identity ok", {
+      console.info("[GOOGLE_OAUTH] identity ok", {
         provider,
         hasSub: Boolean(identity.sub),
         hasEmail: Boolean(identity.email),
@@ -88,7 +100,7 @@ export async function GET(
         expiresAt,
         scopes,
       });
-      console.info("Email OAuth stage: account_saved ok", { provider });
+      console.info("[GOOGLE_OAUTH] account_saved ok", { provider });
     } else {
       const identity = await fetchMicrosoftIdentity(tokens.access_token);
       const email = identity.mail ?? identity.userPrincipalName;
@@ -107,11 +119,17 @@ export async function GET(
     }
     destination.searchParams.set("connected", provider);
   } catch (error) {
-    console.error("Email OAuth callback failed", {
+    // The real cause, classified into a fixed safe set (never a secret).
+    const { reason, status } = classifyOAuthFailure(error);
+    console.error("[GOOGLE_OAUTH] callback failed", {
       provider,
-      reason: error instanceof Error ? error.message : "unknown",
+      reason,
+      providerHttpStatus: status,
+      detail: error instanceof Error ? error.message : "unknown",
     });
     destination.searchParams.set("error", "connection_failed");
+    destination.searchParams.set("reason", reason);
+    if (status) destination.searchParams.set("status", String(status));
   }
   return NextResponse.redirect(destination);
 }

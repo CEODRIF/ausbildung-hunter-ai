@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createOAuthState } from "@/lib/oauth-state";
 import {
+  clientIdSuffix,
   getProviderConfig,
   getProviderScopes,
+  oauthConfigStatus,
   type EmailProvider,
 } from "@/lib/email-oauth";
 import { checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
@@ -25,7 +27,35 @@ export async function GET(
   const limited = await checkRateLimit("email_oauth", user.id);
   if (!limited.allowed) return tooManyRequests(limited);
   const config = getProviderConfig(provider);
-  if (!config.clientId || !config.redirectUri)
+  const configStatus = oauthConfigStatus(provider);
+  const origin = new URL(request.url).origin;
+  const callbackRoute = `/api/email/callback/${provider}`;
+  // Safe start diagnostics: public identifier suffix + URLs + booleans only.
+  console.info("[GOOGLE_OAUTH] start", {
+    provider,
+    clientIdSuffix: clientIdSuffix(config.clientId),
+    redirectUri: config.redirectUri ?? null,
+    origin,
+    callbackRoute,
+    configured: configStatus,
+  });
+  // The redirect_uri sent to Google must match the Authorized redirect URI
+  // literally (scheme, host incl. www, path, no stray trailing slash).
+  const expectedRedirectUri = `${origin}${callbackRoute}`;
+  if (config.redirectUri && config.redirectUri !== expectedRedirectUri)
+    console.warn("[GOOGLE_OAUTH] redirect_uri differs from this deployment", {
+      configuredRedirectUri: config.redirectUri,
+      expectedForThisOrigin: expectedRedirectUri,
+      hint: "Add the configured value VERBATIM under Google Cloud → Clients → Authorized redirect URIs.",
+    });
+  // Fail fast BEFORE the user consents when the flow cannot succeed (this
+  // also narrows the config type for the request below).
+  if (
+    !config.clientId ||
+    !config.clientSecret ||
+    !config.redirectUri ||
+    !configStatus.complete
+  )
     return NextResponse.redirect(
       new URL(`/settings/email?error=${provider}_not_configured`, request.url),
     );

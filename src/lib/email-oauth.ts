@@ -49,26 +49,138 @@ export function getProviderConfig(provider: EmailProvider) {
  * (e.g. Google's `invalid_client`, a PostgREST `42P01`) survives into the
  * callback log instead of a generic message that hides it.
  */
+class OAuthProviderFailure extends Error {
+  /** HTTP status returned by the provider (400/401/403/…). */
+  readonly status: number;
+  /** Provider error code, e.g. Google's `invalid_grant` (safe to log). */
+  readonly providerError: string | null;
+  /** Provider's human description (never contains the secret). */
+  readonly providerDescription: string | null;
+  constructor(
+    fallback: string,
+    status: number,
+    providerError: string | null,
+    providerDescription: string | null,
+  ) {
+    super(
+      `${fallback} (HTTP ${status}${providerError ? `: ${providerError}` : ""}` +
+        `${providerDescription ? `: ${providerDescription}` : ""})`,
+    );
+    this.name = "OAuthProviderFailure";
+    this.status = status;
+    this.providerError = providerError;
+    this.providerDescription = providerDescription;
+  }
+}
+
 async function describeProviderFailure(
   response: Response,
   fallback: string,
 ): Promise<Error> {
-  let detail = "";
+  let providerError: string | null = null;
+  let providerDescription: string | null = null;
   try {
     const body = (await response.json()) as {
-      error?: string;
-      error_description?: string;
-      message?: string;
+      error?: unknown;
+      error_description?: unknown;
+      message?: unknown;
     };
-    detail = [body.error, body.error_description ?? body.message]
-      .filter(Boolean)
-      .join(": ");
+    providerError =
+      typeof body.error === "string"
+        ? body.error
+        : typeof body.message === "string"
+          ? null
+          : null;
+    const description = body.error_description ?? body.message;
+    providerDescription =
+      typeof description === "string" ? description : null;
   } catch {
     // Non-JSON error body (gateway HTML, empty body) — fallback suffices.
   }
-  return new Error(
-    `${fallback} (HTTP ${response.status}${detail ? `: ${detail}` : ""})`,
+  return new OAuthProviderFailure(
+    fallback,
+    response.status,
+    providerError,
+    providerDescription,
   );
+}
+
+/** Safe, fixed-set reason codes surfaced to the UI (never a secret). */
+export type OAuthFailureReason =
+  | "redirect_uri_mismatch"
+  | "invalid_client"
+  | "invalid_grant"
+  | "unauthorized_client"
+  | "access_denied"
+  | "invalid_request"
+  | "permission_denied"
+  | "identity_check_failed"
+  | "token_save_failed"
+  | "config_incomplete"
+  | "network_error";
+
+/**
+ * Classify an OAuth failure into a safe code so the real cause is visible in
+ * the UI and the logs — no secrets, no tokens, no personal data.
+ */
+export function classifyOAuthFailure(error: unknown): {
+  reason: OAuthFailureReason;
+  status: number | null;
+} {
+  if (error instanceof OAuthProviderFailure) {
+    const code = error.providerError ?? "";
+    if (/redirect_uri_mismatch/i.test(code))
+      return { reason: "redirect_uri_mismatch", status: error.status };
+    if (/invalid_client/i.test(code))
+      return { reason: "invalid_client", status: error.status };
+    if (/invalid_grant/i.test(code))
+      return { reason: "invalid_grant", status: error.status };
+    if (/unauthorized_client/i.test(code))
+      return { reason: "unauthorized_client", status: error.status };
+    if (/access_denied/i.test(code))
+      return { reason: "access_denied", status: error.status };
+    if (/invalid_request/i.test(code))
+      return { reason: "invalid_request", status: error.status };
+    if (error.status === 401 || error.status === 403)
+      return { reason: "permission_denied", status: error.status };
+    return { reason: "invalid_request", status: error.status };
+  }
+  const message = error instanceof Error ? error.message : "";
+  if (/EMAIL_TOKEN_ENCRYPTION_KEY is not configured/i.test(message))
+    return { reason: "config_incomplete", status: null };
+  if (/Unable to verify provider account/i.test(message))
+    return { reason: "identity_check_failed", status: null };
+  if (/Saving email account failed/i.test(message))
+    return { reason: "token_save_failed", status: null };
+  if (/is not configured/i.test(message))
+    return { reason: "config_incomplete", status: null };
+  return { reason: "network_error", status: null };
+}
+
+/**
+ * Which parts of the OAuth configuration are present (booleans only — the
+ * values, and especially the secret, are never returned or logged).
+ */
+export function oauthConfigStatus(provider: EmailProvider) {
+  const config = getProviderConfig(provider);
+  return {
+    clientId: Boolean(config.clientId),
+    clientSecret: Boolean(config.clientSecret),
+    redirectUri: Boolean(config.redirectUri),
+    encryptionKey: Boolean(process.env.EMAIL_TOKEN_ENCRYPTION_KEY),
+    complete: Boolean(
+      config.clientId &&
+        config.clientSecret &&
+        config.redirectUri &&
+        process.env.EMAIL_TOKEN_ENCRYPTION_KEY,
+    ),
+  };
+}
+
+/** Public identifier suffix only (a client id is public, still kept short). */
+export function clientIdSuffix(clientId: string | undefined): string {
+  if (!clientId) return "none";
+  return clientId.length <= 8 ? clientId : `…${clientId.slice(-8)}`;
 }
 
 export async function saveEmailAccount(input: {
