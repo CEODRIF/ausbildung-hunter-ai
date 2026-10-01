@@ -3,8 +3,18 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { deleteCampaignAction } from "@/app/applications/actions";
+import {
+  deleteCampaignAction,
+  deleteCampaignsAction,
+} from "@/app/applications/actions";
 import { discardDraft } from "@/app/applications/new/actions";
+import {
+  bulkDeleteSummary,
+  campaignIds,
+  pruneSelection,
+  selectAllVisible,
+  toggleSelection,
+} from "@/lib/bulk-selection";
 
 /** One row of the Applications list. `kind: "campaign"` = an
  *  email_campaigns row (one row PER campaign, fully independent);
@@ -80,8 +90,10 @@ type PendingDelete =
 
 /**
  * Applications list: search, status filter, newest/oldest sort, Open and
- * Delete (with an explicit confirmation). Every value rendered here comes
- * from the database; the component only filters and sorts what it is given.
+ * Delete (single, with an explicit confirmation) plus bulk selection and
+ * bulk delete for CAMPAIGNS only (drafts keep their own single-row Delete).
+ * Every value rendered here comes from the database; the component only
+ * filters, sorts and selects what it is given.
  */
 export function ApplicationsTable({
   items,
@@ -99,10 +111,38 @@ export function ApplicationsTable({
   );
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState("");
+  // Bulk selection — campaign ids only (draft rows are never selectable).
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  const [pendingBulk, setPendingBulk] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{
+    text: string;
+    warning: boolean;
+  } | null>(null);
+
+  // Derived, always-current views: ids that no longer exist in the server
+  // data (deleted + revalidated) are pruned at render time — no effect, no
+  // stale state; a deleted id can never survive in the selection or in the
+  // hidden set.
+  const effectiveHidden = useMemo(
+    () => pruneSelection(hiddenIds, items),
+    [hiddenIds, items],
+  );
+  const effectiveSelected = useMemo(
+    () => pruneSelection(selected, items),
+    [selected, items],
+  );
+  // Rows removed locally after a bulk delete, until the server data
+  // revalidates (no full page reload needed for the list itself).
+  const visibleItems = useMemo(
+    () => items.filter((row) => !effectiveHidden.has(row.id)),
+    [items, effectiveHidden],
+  );
 
   const rows = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return items
+    return visibleItems
       .filter((row) => {
         if (status !== "all" && row.status !== status) return false;
         if (!needle) return true;
@@ -116,11 +156,32 @@ export function ApplicationsTable({
           ? b.created_at.localeCompare(a.created_at)
           : a.created_at.localeCompare(b.created_at),
       );
-  }, [items, query, status, newestFirst]);
+  }, [visibleItems, query, status, newestFirst]);
 
   const statusesPresent = useMemo(
     () => [...new Set(items.map((row) => row.status))].sort(),
     [items],
+  );
+
+  // The bulk UI only exists when there are campaign rows at all.
+  const viewCampaignIds = useMemo(() => campaignIds(rows), [rows]);
+  const selectedInView = viewCampaignIds.filter(
+    (id) => effectiveSelected.has(id),
+  ).length;
+  const allVisibleSelected =
+    viewCampaignIds.length > 0 && selectedInView === viewCampaignIds.length;
+  const someVisibleSelected = selectedInView > 0;
+  // Client-side hint (the engine is authoritative): how many selected
+  // campaigns currently read `sending` — they will be skipped, not forced.
+  const selectedSending = useMemo(
+    () =>
+      items.filter(
+        (row) =>
+          row.kind === "campaign" &&
+          effectiveSelected.has(row.id) &&
+          row.status === "sending",
+      ).length,
+    [items, effectiveSelected],
   );
 
   async function confirmDelete() {
@@ -158,6 +219,48 @@ export function ApplicationsTable({
     }
   }
 
+  async function confirmBulkDelete() {
+    // Double-click / double-confirm guard: one bulk operation at a time.
+    if (isBulkDeleting || effectiveSelected.size === 0) return;
+    setIsBulkDeleting(true);
+    setBulkResult(null);
+    try {
+      const result = await deleteCampaignsAction([...effectiveSelected]);
+      // Only the ids the engine actually deleted leave the list.
+      if (result.deleted.length > 0) {
+        setHiddenIds((prev) => new Set([...prev, ...result.deleted]));
+      }
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const id of result.deleted) next.delete(id);
+        return next;
+      });
+      if (result.deleted.length === 0 && result.blocked.length > 0) {
+        setBulkResult({
+          warning: true,
+          text: "All selected campaigns are currently being sent. Please wait until sending finishes before deleting them.",
+        });
+      } else {
+        const summary = bulkDeleteSummary(
+          result.deleted,
+          result.blocked,
+          result.failed,
+        );
+        if (summary)
+          setBulkResult({
+            warning: result.blocked.length > 0 || result.failed.length > 0,
+            text: summary,
+          });
+      }
+      setPendingBulk(false);
+      router.refresh();
+    } catch {
+      setBulkResult({ warning: true, text: "Unable to delete campaigns." });
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  }
+
   return (
     <div>
       {/* Toolbar */}
@@ -189,9 +292,47 @@ export function ApplicationsTable({
         </button>
       </div>
 
+      {/* Bulk actions bar — only while something is selected */}
+      {effectiveSelected.size > 0 && (
+        <div className="flex flex-col gap-3 border-b border-line bg-warning-soft/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm font-semibold text-ink-soft">
+            {effectiveSelected.size} campaign
+            {effectiveSelected.size === 1 ? "" : "s"} selected
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelected(new Set())}
+              disabled={isBulkDeleting}
+              className="h-9 rounded-xl border border-line-strong px-3 text-sm font-semibold text-muted disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Clear selection
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingBulk(true)}
+              disabled={isBulkDeleting}
+              className="h-9 rounded-xl bg-warning px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              Delete selected
+            </button>
+          </div>
+        </div>
+      )}
+
       {error && (
         <p className="border-b border-line px-4 py-3 text-xs font-semibold text-warning">
           {error}
+        </p>
+      )}
+
+      {bulkResult && (
+        <p
+          className={`border-b border-line px-4 py-3 text-xs font-semibold ${
+            bulkResult.warning ? "text-warning" : "text-success"
+          }`}
+        >
+          {bulkResult.text}
         </p>
       )}
 
@@ -204,6 +345,24 @@ export function ApplicationsTable({
             <table className="w-full text-left text-sm">
               <thead className="text-[11px] uppercase tracking-wide text-muted">
                 <tr className="border-b border-line">
+                  <th className="w-10 px-4 py-3">
+                    {viewCampaignIds.length > 0 && (
+                      <input
+                        type="checkbox"
+                        aria-label="Select all visible campaigns"
+                        checked={allVisibleSelected}
+                        ref={(element) => {
+                          if (element)
+                            element.indeterminate =
+                              someVisibleSelected && !allVisibleSelected;
+                        }}
+                        onChange={() =>
+                          setSelected(selectAllVisible(effectiveSelected, rows))
+                        }
+                        className="h-4 w-4 cursor-pointer accent-accent-deep"
+                      />
+                    )}
+                  </th>
                   <th className="px-4 py-3 font-semibold">Application</th>
                   <th className="px-4 py-3 font-semibold">Type</th>
                   <th className="px-4 py-3 font-semibold">Sender</th>
@@ -221,6 +380,19 @@ export function ApplicationsTable({
                     key={row.id}
                     className="border-b border-line last:border-0"
                   >
+                    <td className="w-10 px-4 py-3">
+                      {row.kind === "campaign" ? (
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${row.title}`}
+                          checked={effectiveSelected.has(row.id)}
+                          onChange={() =>
+                            setSelected(toggleSelection(selected, row.id))
+                          }
+                          className="h-4 w-4 cursor-pointer accent-accent-deep"
+                        />
+                      ) : null}
+                    </td>
                     <td className="px-4 py-3">
                       <p className="font-semibold text-ink-soft">{row.title}</p>
                       {row.company && (
@@ -303,7 +475,20 @@ export function ApplicationsTable({
             {rows.map((row) => (
               <div key={row.id} className="px-4 py-4">
                 <div className="flex items-start justify-between gap-3">
-                  <p className="font-semibold text-ink-soft">{row.title}</p>
+                  <div className="flex items-start gap-3">
+                    {row.kind === "campaign" && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${row.title}`}
+                        checked={selected.has(row.id)}
+                        onChange={() =>
+                          setSelected(toggleSelection(selected, row.id))
+                        }
+                        className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-accent-deep"
+                      />
+                    )}
+                    <p className="font-semibold text-ink-soft">{row.title}</p>
+                  </div>
                   <span
                     className={`shrink-0 rounded-lg px-2 py-1 text-xs font-semibold ${
                       STATUS_TONES[row.status] ?? "bg-surface-2 text-ink-soft"
@@ -362,7 +547,72 @@ export function ApplicationsTable({
         </>
       )}
 
-      {/* Confirmation — a deletion is never one click */}
+      {/* Bulk confirmation — a bulk deletion is never one click */}
+      {pendingBulk && effectiveSelected.size > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-5">
+            <h2 className="text-base font-bold text-ink">
+              Delete selected campaigns?
+            </h2>
+            <p className="mt-2 text-sm text-muted">
+              You are about to permanently delete {effectiveSelected.size}{" "}
+              campaign{effectiveSelected.size === 1 ? "" : "s"}.
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              This action cannot be undone.
+            </p>
+            {selectedSending > 0 && (
+              <p className="mt-3 rounded-xl bg-warning-soft px-3 py-2 text-xs font-semibold text-warning">
+                {selectedSending} selected campaign
+                {selectedSending === 1 ? " is" : "s are"} currently being sent
+                {selectedSending === effectiveSelected.size
+                  ? "."
+                  : " and will be skipped."}
+              </p>
+            )}
+            {selectedSending === effectiveSelected.size && (
+              <p className="mt-2 text-sm text-muted">
+                Please wait until sending finishes before deleting them.
+              </p>
+            )}
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setPendingBulk(false)}
+                disabled={isBulkDeleting}
+                className="h-10 rounded-xl border border-line-strong px-4 text-sm font-semibold text-muted disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmBulkDelete}
+                disabled={
+                  isBulkDeleting ||
+                  effectiveSelected.size === 0 ||
+                  selectedSending === effectiveSelected.size
+                }
+                aria-busy={isBulkDeleting}
+                className="flex h-10 items-center gap-2 rounded-xl bg-warning px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isBulkDeleting && (
+                  <span
+                    aria-hidden="true"
+                    className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                  />
+                )}
+                {isBulkDeleting
+                  ? "Deleting…"
+                  : `Delete ${effectiveSelected.size} campaign${
+                      effectiveSelected.size === 1 ? "" : "s"
+                    }`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation — a single deletion is never one click */}
       {pendingDelete?.kind === "campaign" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">
           <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-5">
