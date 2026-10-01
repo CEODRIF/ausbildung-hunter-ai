@@ -1083,12 +1083,17 @@ export interface ProviderErrorDetail {
   geminiStatus: string | null;
   /** Controlled key-free message (safe to display). */
   message: string;
+  /** Google's OWN error text (truncated, key-scrubbed) — the literal root
+   *  cause ("models/… is not found for API version v1beta, …"), shown in
+   *  the UI so no dashboard access is needed to read it. */
+  providerMessage: string | null;
 }
 
 function providerErrorDetail(
   provider: string,
   error: WebSearchError,
 ): ProviderErrorDetail {
+  const raw = error.geminiMessage?.replace(/\s+/g, " ").trim() ?? "";
   return {
     provider,
     model: error.model,
@@ -1096,6 +1101,7 @@ function providerErrorDetail(
     code: error.geminiCode,
     geminiStatus: error.geminiStatus,
     message: error.message,
+    providerMessage: raw ? raw.slice(0, 300) : null,
   };
 }
 

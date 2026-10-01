@@ -945,6 +945,8 @@ describe("runWebDiscovery (source registry discipline)", () => {
       geminiStatus: "PERMISSION_DENIED",
       message:
         "The web search provider rejected the configured key (HTTP 401, PERMISSION_DENIED)",
+      // Google's own words are surfaced too (readable without the logs).
+      providerMessage: "API key not valid. Please pass a valid API key.",
     });
     // The detail must never contain a key-shaped token.
     const detail = JSON.stringify(result.firstProviderError);

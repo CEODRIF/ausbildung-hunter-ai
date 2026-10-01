@@ -67,6 +67,8 @@ interface ProviderErrorDetail {
   code: number | null;
   geminiStatus: string | null;
   message: string;
+  /** Google's own (truncated, key-scrubbed) error text. */
+  providerMessage?: string | null;
 }
 interface Discovery {
   configured: boolean;
@@ -987,6 +989,11 @@ export function AISearchClient({
                   })}
                   {" · "}
                   {discovery.firstProviderError.message}
+                </p>
+              )}
+              {discovery.firstProviderError?.providerMessage && (
+                <p className="mt-1 font-mono text-xs font-normal break-words opacity-80">
+                  {discovery.firstProviderError.providerMessage}
                 </p>
               )}
             </div>
