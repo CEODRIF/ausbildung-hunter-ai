@@ -1,6 +1,7 @@
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { summarizeProfile } from "@/lib/opportunities/ai-search";
 import { getCandidateProfile } from "@/lib/opportunities/search";
+import { getSearchCreditStatus } from "@/lib/search-credits";
 import { getServerT } from "@/lib/i18n/server";
 import { AISearchClient } from "@/components/ai-search";
 
@@ -20,6 +21,15 @@ export default async function AISearchPage() {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active") return null;
   const candidateProfile = await getCandidateProfile(user.id);
+  // Search credits (read-only here; the balance is charged server-side by the
+  // search endpoint — this page only displays it).
+  const credits = await getSearchCreditStatus(user.id).catch(() => ({
+    creditsRemaining: 0,
+    creditLimit: 0,
+    resetHours: 0,
+    resetsAt: null,
+    premium: false,
+  }));
   const t = await getServerT();
 
   return (
@@ -43,6 +53,12 @@ export default async function AISearchPage() {
             defaultGoal={
               candidateProfile?.goal ?? profile.selected_goal ?? "ausbildung"
             }
+            // Server-resolved balance (the page is a server component, so the
+            // client never computes its own credits).
+            initialCredits={{
+              creditsRemaining: credits.creditsRemaining,
+              creditLimit: credits.creditLimit,
+            }}
           />
         </div>
       </div>

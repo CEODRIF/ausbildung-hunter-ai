@@ -9,6 +9,11 @@ import {
   type AiSearchProgress,
 } from "@/lib/opportunities/ai-search";
 import {
+  chargeSearchCredits,
+  InvalidSearchCountError,
+  setSearchStatus,
+} from "@/lib/search-credits";
+import {
   checkRateLimit,
   rateLimitHeaders,
   tooManyRequests,
@@ -33,12 +38,18 @@ export const runtime = "nodejs";
  * via the shared provider + cache — the AI never contributes content.
  */
 
-type AiSearchEvent = AiSearchProgress | { type: "error"; message: string };
+type AiSearchEvent =
+  | AiSearchProgress
+  | { type: "credits"; creditsRemaining: number; creditLimit: number }
+  | { type: "error"; message: string };
 
 const bodySchema = z
   .object({
     goal: aiSearchGoalSchema,
     targetCount: aiSearchCountSchema,
+    /** Client-generated idempotency key: a replayed request (double click,
+     *  retry, refresh) with the same id is never charged twice. */
+    requestId: z.string().uuid().optional(),
   })
   .strict();
 
@@ -62,10 +73,49 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   const { goal, targetCount } = parsed.data;
+  const searchId = parsed.data.requestId ?? crypto.randomUUID();
+
+  // ---------------------------------------------------------------------
+  // Credits are charged BEFORE the search starts (atomic, idempotent by
+  // searchId) and are NEVER refunded afterwards — not on client disconnect,
+  // not on timeout, not on a pipeline failure.
+  // ---------------------------------------------------------------------
+  let charge;
+  try {
+    charge = await chargeSearchCredits({
+      userId: user.id,
+      searchId,
+      selectedCount: targetCount,
+    });
+  } catch (error) {
+    if (error instanceof InvalidSearchCountError)
+      return NextResponse.json(
+        { error: "Invalid search count." },
+        { status: 400 },
+      );
+    return NextResponse.json(
+      { error: "Search credits are unavailable." },
+      { status: 503 },
+    );
+  }
+
+  if (charge.status === "insufficient_credits")
+    return NextResponse.json(
+      {
+        error: "insufficient_credits",
+        creditsRemaining: charge.creditsRemaining,
+        required: charge.required,
+      },
+      // No search starts and nothing is charged.
+      { status: 402 },
+    );
 
   try {
     await reserveAIUsage(user.id);
   } catch (error) {
+    // The run cannot start — the search is recorded as failed. The charged
+    // credits stay spent (the search was confirmed, per policy).
+    await setSearchStatus({ userId: user.id, searchId, status: "failed" });
     return NextResponse.json(
       {
         error:
@@ -84,6 +134,12 @@ export async function POST(request: Request) {
           // The client closed the stream (cancellation) — stop emitting.
         }
       };
+      // The post-charge balance travels to the UI with the run.
+      emit({
+        type: "credits",
+        creditsRemaining: charge.creditsRemaining,
+        creditLimit: charge.creditLimit,
+      });
       try {
         await runAISearch({
           userId: user.id,
@@ -91,7 +147,9 @@ export async function POST(request: Request) {
           targetCount,
           onProgress: emit,
         });
+        await setSearchStatus({ userId: user.id, searchId, status: "completed" });
       } catch (error) {
+        await setSearchStatus({ userId: user.id, searchId, status: "failed" });
         const message =
           error instanceof Error && error.message.length
             ? error.message
@@ -101,6 +159,15 @@ export async function POST(request: Request) {
         controller.close();
       }
     },
+    async cancel() {
+      // The client navigated away / aborted: the run is recorded honestly as
+      // interrupted. No refund.
+      await setSearchStatus({
+        userId: user.id,
+        searchId,
+        status: "interrupted",
+      });
+    },
   });
 
   return new Response(stream, {
@@ -108,6 +175,7 @@ export async function POST(request: Request) {
       "content-type": "text/plain; charset=utf-8",
       "cache-control": "no-cache",
       "x-content-type-options": "nosniff",
+      "x-search-id": searchId,
       ...rateLimitHeaders(limited),
     },
   });

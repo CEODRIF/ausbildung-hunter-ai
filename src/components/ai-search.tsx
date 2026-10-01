@@ -176,6 +176,7 @@ function matchesFilters(opportunity: Opportunity, filters: Filters): boolean {
 }
 type AiSearchEvent =
   | { type: "profile"; summary: ProfileSummary }
+  | { type: "credits"; creditsRemaining: number; creditLimit: number }
   | { type: "plan"; plan: Plan }
   | { type: "web_status"; configured: boolean; provider: string | null }
   | { type: "discover"; category: SourceCategory; results: number }
@@ -269,14 +270,20 @@ export function AISearchClient({
   hasProfile,
   profileSummary,
   defaultGoal,
+  initialCredits,
 }: {
   hasProfile: boolean;
   profileSummary: ProfileSummary | null;
   defaultGoal: Goal;
+  /** Server-resolved balance. Display only — the server charges atomically. */
+  initialCredits: { creditsRemaining: number; creditLimit: number };
 }) {
   const { t } = useI18n();
   const [goal, setGoal] = useState<Goal>(defaultGoal);
   const [count, setCount] = useState<(typeof COUNTS)[number]>(25);
+  const [credits, setCredits] = useState(initialCredits);
+  /** The selected count IS the price (10/25/50/100 credits). */
+  const sufficientCredits = credits.creditsRemaining >= count;
   const [stage, setStage] = useState<Stage>("setup");
   const [error, setError] = useState("");
   const [summary, setSummary] = useState<ProfileSummary | null>(null);
@@ -349,6 +356,14 @@ export function AISearchClient({
       case "profile":
         setSummary(event.summary);
         break;
+      case "credits":
+        // Balance AFTER the charge, sent with the run (server is the source
+        // of truth — the client only displays it).
+        setCredits({
+          creditsRemaining: event.creditsRemaining,
+          creditLimit: event.creditLimit,
+        });
+        break;
       case "plan":
         setPlan(event.plan);
         break;
@@ -398,6 +413,8 @@ export function AISearchClient({
   }
 
   function start() {
+    // Guard: never start a search the balance cannot pay for.
+    if (!sufficientCredits) return;
     setStage("running");
     setError("");
     setSummary(null);
@@ -430,13 +447,36 @@ export function AISearchClient({
         const response = await fetch("/api/opportunities/ai-search", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ goal, targetCount: count }),
+          // requestId = idempotency key: a replayed request (retry, duplicate
+          // tab, refreshed browser) is never charged twice.
+          body: JSON.stringify({
+            goal,
+            targetCount: count,
+            requestId: crypto.randomUUID(),
+          }),
           signal: controller.signal,
         });
         if (!response.ok) {
           const payload = (await response.json().catch(() => null)) as {
             error?: string;
+            creditsRemaining?: number;
           } | null;
+          if (payload?.error === "insufficient_credits") {
+            // Nothing was charged and the search never started — show the
+            // server's balance and return to the setup screen.
+            if (typeof payload.creditsRemaining === "number")
+              setCredits((current) => ({
+                ...current,
+                creditsRemaining: payload.creditsRemaining as number,
+              }));
+            setError(
+              `Not enough search credits. You have ${
+                payload.creditsRemaining ?? credits.creditsRemaining
+              } credits remaining, but this search requires ${count} credits.`,
+            );
+            setStage("setup");
+            return;
+          }
           throw new Error(payload?.error ?? "The AI search could not be started.");
         }
         const reader = response.body?.getReader();
@@ -636,6 +676,27 @@ export function AISearchClient({
               </button>
             ))}
           </div>
+          <div className="mt-4 rounded-xl border border-line p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <p className="text-xs font-bold text-ink-soft">Search Credits</p>
+              <p className="text-sm font-bold text-ink-soft">
+                {credits.creditsRemaining} / {credits.creditLimit} credits
+                remaining
+              </p>
+            </div>
+            <p className="mt-1.5 text-xs leading-5 text-muted">
+              This search will use {count} credits.
+              <br />
+              Remaining after search:{" "}
+              {Math.max(0, credits.creditsRemaining - count)} credits.
+            </p>
+            {!sufficientCredits && (
+              <p className="mt-2 text-xs font-semibold text-warning">
+                Not enough search credits. You have {credits.creditsRemaining}{" "}
+                credits remaining, but this search requires {count} credits.
+              </p>
+            )}
+          </div>
           <div className="mt-5 rounded-xl bg-surface-2 p-4 text-xs leading-5 text-muted">
             The AI reads your profile, creates focused queries, and searches
             the official Bundesagentur für Arbeit Jobsuche plus publicly
@@ -648,7 +709,7 @@ export function AISearchClient({
             className="mt-5 w-full"
             size="lg"
             onClick={start}
-            disabled={!hasProfile}
+            disabled={!hasProfile || !sufficientCredits}
           >
             Start AI search
           </Button>
