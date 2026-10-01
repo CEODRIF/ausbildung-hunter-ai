@@ -19,16 +19,23 @@ import "server-only";
  * used for URLs at all — it cannot smuggle in invented links.
  *
  * Configuration (smallest required set — see .env.example + check-env):
- *   GEMINI_API_KEY           Google Gemini API key (AI Studio)
+ *   GEMINI_GROUNDING_API_KEY DEDICATED key for web search / Google Search
+ *                            grounding ONLY (highest priority for this
+ *                            provider). Other Gemini services keep using
+ *                            GEMINI_API_KEY.
+ *   GEMINI_API_KEY           shared Google Gemini API key (AI Studio) —
+ *                            fallback for grounding when no dedicated
+ *                            grounding key is configured
  *   GEMINI_GROUNDING_MODEL   optional, default gemini-2.5-flash-lite — the
  *                            lightest/lowest-cost model that supports
  *                            Google Search Grounding
  *
- * Key reuse: if the app's AI provider is already Gemini, the existing key
- * is reused automatically — when AI_API_URL points at the Google AI Studio
- * OpenAI-compatible endpoint (generativelanguage.googleapis.com),
- * AI_API_KEY is the same key the native Gemini API accepts. (Vertex AI
- * endpoints use different auth; set GEMINI_API_KEY explicitly there.)
+ * Key reuse: if no Gemini key is configured at all and the app's AI
+ * provider is already Gemini, the existing key is reused automatically —
+ * when AI_API_URL points at the Google AI Studio OpenAI-compatible
+ * endpoint (generativelanguage.googleapis.com), AI_API_KEY is the same key
+ * the native Gemini API accepts. (Vertex AI endpoints use different auth;
+ * set GEMINI_API_KEY explicitly there.)
  *
  * The key is never exposed to the client: only this module (server-only)
  * reads it, and every error path returns a controlled message. With NO
@@ -129,6 +136,8 @@ const MAX_RESULTS_HARD_CAP = 20;
 // ---------------------------------------------------------------------------
 interface GroundingDiagnostic {
   model: string;
+  /** Which env var supplied the key (NAME only — never a value). */
+  keySource: string;
   httpStatus: number | null;
   geminiCode: number | null;
   geminiStatus: string | null;
@@ -156,7 +165,7 @@ function scrubSecrets(value: string): string {
 
 function logGrounding(kind: "ok" | "warn", d: GroundingDiagnostic): void {
   const line =
-    `[GEMINI_GROUNDING] ${kind} model=${d.model} key=present ` +
+    `[GEMINI_GROUNDING] ${kind} model=${d.model} key=present source=${d.keySource} ` +
     `http=${d.httpStatus ?? "n/a"} gemini=${d.geminiCode ?? "n/a"}/${d.geminiStatus ?? "n/a"}` +
     (d.durationMs !== null ? ` durationMs=${d.durationMs}` : "") +
     (d.geminiMessage
@@ -234,6 +243,7 @@ function isModelNotFound(
 async function fallbackOnModelNotFound<T>(
   error: unknown,
   model: string,
+  keySource: string,
   retry: () => Promise<T>,
 ): Promise<T> {
   if (
@@ -247,6 +257,7 @@ async function fallbackOnModelNotFound<T>(
   ) {
     logGrounding("warn", {
       model,
+      keySource,
       httpStatus: error.status,
       geminiCode: error.geminiCode,
       geminiStatus: error.geminiStatus,
@@ -265,6 +276,7 @@ async function geminiGenerateContent(
   model: string,
   body: Record<string, unknown>,
   key: string,
+  keySource: string,
 ): Promise<GeminiCallResult> {
   const startedAt = Date.now();
   let response: Response;
@@ -285,6 +297,7 @@ async function geminiGenerateContent(
   } catch (error) {
     logGrounding("warn", {
       model,
+      keySource,
       httpStatus: null,
       geminiCode: null,
       geminiStatus: null,
@@ -303,6 +316,7 @@ async function geminiGenerateContent(
     const gemini = await readGeminiError(response);
     logGrounding("warn", {
       model,
+      keySource,
       httpStatus: response.status,
       geminiCode: gemini.code,
       geminiStatus: gemini.status,
@@ -345,18 +359,40 @@ function isAiStudioEndpoint(value: string | undefined): boolean {
 }
 
 /**
- * Resolve the Gemini key for search grounding:
- *   1. explicit GEMINI_API_KEY (when it is a real key, not a placeholder)
- *   2. reuse AI_API_KEY when the AI provider endpoint is Google AI Studio
+ * Resolve the Gemini key for search grounding. Priority:
+ *   1. GEMINI_GROUNDING_API_KEY — the DEDICATED web-search/grounding key
+ *      (used ONLY by this provider; other Gemini services keep using
+ *      GEMINI_API_KEY)
+ *   2. GEMINI_API_KEY — shared Gemini key (fallback when no dedicated
+ *      grounding key is configured)
+ *   3. reuse AI_API_KEY when the AI provider endpoint is Google AI Studio
  *   otherwise null (web layer stays disabled — graceful degradation)
  */
-export function resolveGeminiGroundingKey(): string | null {
+function resolveGroundingKeyInternal(): {
+  key: string;
+  source: string;
+} | null {
+  const dedicated = process.env.GEMINI_GROUNDING_API_KEY?.trim();
+  if (dedicated && !isPlaceholder(dedicated))
+    return { key: dedicated, source: "GEMINI_GROUNDING_API_KEY" };
   const explicit = process.env.GEMINI_API_KEY?.trim();
-  if (explicit && !isPlaceholder(explicit)) return explicit;
+  if (explicit && !isPlaceholder(explicit))
+    return { key: explicit, source: "GEMINI_API_KEY" };
   const aiKey = process.env.AI_API_KEY?.trim();
   if (aiKey && !isPlaceholder(aiKey) && isAiStudioEndpoint(process.env.AI_API_URL))
-    return aiKey;
+    return { key: aiKey, source: "AI_API_KEY" };
   return null;
+}
+
+export function resolveGeminiGroundingKey(): string | null {
+  return resolveGroundingKeyInternal()?.key ?? null;
+}
+
+/** Which env var provided the grounding key (NAME only — never a value).
+ *  Used in the safe [GEMINI_GROUNDING] diagnostics so the function logs
+ *  prove which key the production requests were sent with. */
+export function resolveGeminiGroundingKeySource(): string | null {
+  return resolveGroundingKeyInternal()?.source ?? null;
 }
 
 function groundingModel(): string {
@@ -370,13 +406,20 @@ async function geminiGroundingSearch(
   query: string,
   maxResults: number,
   key: string,
+  keySource: string,
 ): Promise<WebSearchResult[]> {
   const model = groundingModel();
   try {
-    return await geminiGroundingSearchCore(query, maxResults, key, model);
+    return await geminiGroundingSearchCore(query, maxResults, key, model, keySource);
   } catch (error) {
-    return fallbackOnModelNotFound(error, model, () =>
-      geminiGroundingSearchCore(query, maxResults, key, FALLBACK_GROUNDING_MODEL),
+    return fallbackOnModelNotFound(error, model, keySource, () =>
+      geminiGroundingSearchCore(
+        query,
+        maxResults,
+        key,
+        FALLBACK_GROUNDING_MODEL,
+        keySource,
+      ),
     );
   }
 }
@@ -396,10 +439,12 @@ function logGroundingOutcome(
   model: string,
   metadata: GroundingMetadata | undefined,
   durationMs: number,
+  keySource: string,
 ): void {
   const chunkCount = groundingChunkCount(metadata);
   logGrounding(chunkCount > 0 ? "ok" : "warn", {
     model,
+    keySource,
     httpStatus: 200,
     geminiCode: 200,
     geminiStatus: "OK",
@@ -419,6 +464,7 @@ async function geminiGroundingSearchCore(
   maxResults: number,
   key: string,
   model: string,
+  keySource: string,
 ): Promise<WebSearchResult[]> {
   const prompt =
     `Search Google for the exact query below, then list the most relevant ` +
@@ -435,6 +481,7 @@ async function geminiGroundingSearchCore(
       generationConfig: { temperature: 0, maxOutputTokens: 256 },
     },
     key,
+    keySource,
   );
   const metadata = (
     (data.candidates as
@@ -445,7 +492,7 @@ async function geminiGroundingSearchCore(
     Math.max(maxResults, 1),
     MAX_RESULTS_HARD_CAP,
   );
-  logGroundingOutcome(model, metadata, durationMs);
+  logGroundingOutcome(model, metadata, durationMs, keySource);
   const results: WebSearchResult[] = [];
   const seen = new Set<string>();
   const add = (uri: unknown, title: unknown) => {
@@ -480,20 +527,27 @@ async function geminiGroundingSearchCore(
  * callers MUST still verify any URL against fetched content; the JSON is
  * a discovery hint, never the source of truth.
  */
-async function geminiStructuredSearch(
-  query: string,
-  schema: StructuredSearchSchema,
-  key: string,
-): Promise<WebSearchStructuredResult<Record<string, unknown>>> {
-  const model = groundingModel();
-  try {
-    return await geminiStructuredSearchCore(query, schema, key, model);
-  } catch (error) {
-    return fallbackOnModelNotFound(error, model, () =>
-      geminiStructuredSearchCore(query, schema, key, FALLBACK_GROUNDING_MODEL),
-    );
-  }
-}
+ async function geminiStructuredSearch(
+   query: string,
+   schema: StructuredSearchSchema,
+   key: string,
+   keySource: string,
+ ): Promise<WebSearchStructuredResult<Record<string, unknown>>> {
+   const model = groundingModel();
+   try {
+     return await geminiStructuredSearchCore(query, schema, key, model, keySource);
+   } catch (error) {
+     return fallbackOnModelNotFound(error, model, keySource, () =>
+       geminiStructuredSearchCore(
+         query,
+         schema,
+         key,
+         FALLBACK_GROUNDING_MODEL,
+         keySource,
+       ),
+     );
+   }
+ }
 
 type StructuredCandidate = {
   content?: { parts?: Array<{ text?: unknown }> };
@@ -505,6 +559,7 @@ async function geminiStructuredSearchCore(
   schema: StructuredSearchSchema,
   key: string,
   model: string,
+  keySource: string,
 ): Promise<WebSearchStructuredResult<Record<string, unknown>>> {
   const { data, durationMs } = await geminiGenerateContent(
     model,
@@ -523,6 +578,7 @@ async function geminiStructuredSearchCore(
       },
     },
     key,
+    keySource,
   );
   const candidate = (
     data.candidates as Array<StructuredCandidate> | undefined
@@ -553,7 +609,7 @@ async function geminiStructuredSearchCore(
     if (!ok) parsed[field] = expected === "BOOLEAN" ? false : "";
   }
   const metadata = candidate?.groundingMetadata;
-  logGroundingOutcome(model, metadata, durationMs);
+  logGroundingOutcome(model, metadata, durationMs, keySource);
   const results: WebSearchResult[] = [];
   const seen = new Set<string>();
   const add = (uri: unknown, title: unknown) => {
@@ -582,18 +638,20 @@ async function geminiStructuredSearchCore(
 }
 
 /**
- * Resolve the configured web-search client. Gemini Google Search Grounding
- * is the single provider: returns a client when a usable key exists
- * (explicit GEMINI_API_KEY, or the reused AI_API_KEY on a Google AI Studio
- * endpoint), otherwise null — the discovery layer then degrades gracefully
- * to the official BA source only.
- */
-export function getWebSearchClient(): WebSearchClient | null {
-  const key = resolveGeminiGroundingKey();
-  if (!key) return null;
-  return {
-    name: "gemini_grounding",
-    search: (q, n) => geminiGroundingSearch(q, n, key),
-    searchStructured: (q, schema) => geminiStructuredSearch(q, schema, key),
-  };
-}
+  * Resolve the configured web-search client. Gemini Google Search Grounding
+  * is the single provider: returns a client when a usable key exists
+  * (dedicated GEMINI_GROUNDING_API_KEY, else GEMINI_API_KEY, else the reused
+  * AI_API_KEY on a Google AI Studio endpoint), otherwise null — the
+  * discovery layer then degrades gracefully to the official BA source only.
+  */
+ export function getWebSearchClient(): WebSearchClient | null {
+   const key = resolveGeminiGroundingKey();
+   if (!key) return null;
+   // Which env var supplied the key (name only — used in safe diagnostics).
+   const keySource = resolveGeminiGroundingKeySource() ?? "GEMINI_API_KEY";
+   return {
+     name: "gemini_grounding",
+     search: (q, n) => geminiGroundingSearch(q, n, key, keySource),
+     searchStructured: (q, schema) => geminiStructuredSearch(q, schema, key, keySource),
+   };
+ }

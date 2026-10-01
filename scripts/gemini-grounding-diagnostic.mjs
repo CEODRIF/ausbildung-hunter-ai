@@ -40,9 +40,13 @@ function truncate(value, max = 200) {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
-/** Same key resolution as the production client: explicit GEMINI_API_KEY,
- *  otherwise AI_API_KEY when AI_API_URL points at Google AI Studio. */
+/** Same key resolution as the production client:
+ *  1. GEMINI_GROUNDING_API_KEY (dedicated grounding key)
+ *  2. GEMINI_API_KEY
+ *  3. AI_API_KEY when AI_API_URL is a Google AI Studio host */
 function resolveKey() {
+  const dedicated = process.env.GEMINI_GROUNDING_API_KEY?.trim();
+  if (dedicated) return { key: dedicated, source: "GEMINI_GROUNDING_API_KEY" };
   const g = process.env.GEMINI_API_KEY?.trim();
   if (g) return { key: g, source: "GEMINI_API_KEY" };
   const url = process.env.AI_API_URL?.trim();

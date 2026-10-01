@@ -3,6 +3,7 @@ import {
   getWebSearchClient,
   resetGroundingDiagnostics,
   resolveGeminiGroundingKey,
+  resolveGeminiGroundingKeySource,
   WebSearchError,
 } from "@/lib/web-search";
 
@@ -37,6 +38,7 @@ describe("getWebSearchClient / resolveGeminiGroundingKey", () => {
   });
 
   function clean() {
+    delete process.env.GEMINI_GROUNDING_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.GEMINI_GROUNDING_MODEL;
     delete process.env.AI_API_KEY;
@@ -54,6 +56,45 @@ describe("getWebSearchClient / resolveGeminiGroundingKey", () => {
     process.env.GEMINI_API_KEY = "AIzaSy-test-gemini-key-12345";
     expect(resolveGeminiGroundingKey()).toBe("AIzaSy-test-gemini-key-12345");
     expect(getWebSearchClient()?.name).toBe("gemini_grounding");
+  });
+
+  it("dedicated GEMINI_GROUNDING_API_KEY wins over GEMINI_API_KEY", () => {
+    clean();
+    process.env.GEMINI_API_KEY = "AIzaSy-shared-gemini-key-11111";
+    process.env.GEMINI_GROUNDING_API_KEY = "AIzaSy-dedicated-grounding-22222";
+    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-dedicated-grounding-22222");
+    expect(resolveGeminiGroundingKeySource()).toBe("GEMINI_GROUNDING_API_KEY");
+  });
+
+  it("dedicated GEMINI_GROUNDING_API_KEY wins over the reused AI key", () => {
+    clean();
+    process.env.AI_API_KEY = "AIzaSy-existing-ai-key-12345";
+    process.env.AI_API_URL = AI_STUDIO_URL;
+    process.env.GEMINI_GROUNDING_API_KEY = "AIzaSy-dedicated-grounding-22222";
+    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-dedicated-grounding-22222");
+    expect(resolveGeminiGroundingKeySource()).toBe("GEMINI_GROUNDING_API_KEY");
+  });
+
+  it("falls back to GEMINI_API_KEY when no dedicated grounding key is set", () => {
+    clean();
+    process.env.GEMINI_API_KEY = "AIzaSy-shared-gemini-key-11111";
+    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-shared-gemini-key-11111");
+    expect(resolveGeminiGroundingKeySource()).toBe("GEMINI_API_KEY");
+  });
+
+  it("treats a placeholder dedicated key as unconfigured (falls through)", () => {
+    clean();
+    process.env.GEMINI_GROUNDING_API_KEY = "your-dedicated-grounding-key";
+    process.env.GEMINI_API_KEY = "AIzaSy-shared-gemini-key-11111";
+    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-shared-gemini-key-11111");
+    expect(resolveGeminiGroundingKeySource()).toBe("GEMINI_API_KEY");
+  });
+
+  it("reports AI_API_KEY as the source when reused on a Google endpoint", () => {
+    clean();
+    process.env.AI_API_KEY = "AIzaSy-existing-ai-key-12345";
+    process.env.AI_API_URL = AI_STUDIO_URL;
+    expect(resolveGeminiGroundingKeySource()).toBe("AI_API_KEY");
   });
 
   it("treats placeholder keys as unconfigured", () => {
@@ -356,6 +397,33 @@ describe("gemini grounding diagnostics & model fallback", () => {
     expect(line).toContain("[key-redacted]");
     // Duration is captured (the user asked to keep it for triage).
     expect(line).toMatch(/durationMs=\d+/);
+  });
+
+  it("diagnostic line names the env var that supplied the key (never its value)", async () => {
+    resetGroundingDiagnostics();
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.AI_API_KEY;
+    delete process.env.AI_API_URL;
+    process.env.GEMINI_GROUNDING_API_KEY = "AIzaSy-dedicated-grounding-33333";
+    const client = getWebSearchClient();
+    if (!client) throw new Error("expected a client from the dedicated key");
+    fetchMock.mockResolvedValue(
+      geminiError(403, {
+        error: {
+          code: 403,
+          status: "PERMISSION_DENIED",
+          message: "API key invalid.",
+        },
+      }),
+    );
+    await client.search("q", 10).catch(() => {});
+    const line = warnSpy
+      .mock.calls.map((c) => String(c[0]))
+      .find((l) => l.startsWith("[GEMINI_GROUNDING]"));
+    // Production can verify WHICH key was used from the function logs —
+    // by name only.
+    expect(line).toContain("source=GEMINI_GROUNDING_API_KEY");
+    expect(line).not.toContain("AIzaSy-dedicated-grounding-33333");
   });
 
   it("HTTP 200 but NO grounding metadata → [] + honest warning (tool not accepted?)", async () => {
