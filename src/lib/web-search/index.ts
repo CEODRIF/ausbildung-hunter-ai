@@ -26,9 +26,12 @@ import "server-only";
  *   GEMINI_API_KEY           shared Google Gemini API key (AI Studio) —
  *                            fallback for grounding when no dedicated
  *                            grounding key is configured
- *   GEMINI_GROUNDING_MODEL   optional, default gemini-2.5-flash-lite — the
- *                            lightest/lowest-cost model that supports
- *                            Google Search Grounding
+ *   GEMINI_GROUNDING_MODEL   DEPRECATED / ignored — the grounding model is
+ *                            pinned in code to gemini-2.5-flash-lite. A
+ *                            conflicting value is logged once
+ *                            (`model-pinned configured=... used=...`) so a
+ *                            stale deployment value is provable, but it can
+ *                            no longer change which model is requested.
  *
  * Key reuse: if no Gemini key is configured at all and the app's AI
  * provider is already Gemini, the existing key is reused automatically —
@@ -120,12 +123,25 @@ export class WebSearchError extends Error {
 
 const GROUNDING_TIMEOUT_MS = 20_000;
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
-const DEFAULT_GROUNDING_MODEL = "gemini-2.5-flash-lite";
-/** One-shot fallback when the configured model no longer exists (404 /
- *  "model not found" on 400) — gemini-2.5-flash is a stable model with
- *  documented Google Search grounding support. Self-heals stale
- *  GEMINI_GROUNDING_MODEL values without touching the provider. */
-const FALLBACK_GROUNDING_MODEL = "gemini-2.5-flash";
+/**
+ * The ONE model this provider sends (AI Search 2.3 — PINNED).
+ *
+ * Why pinned: the provider used to (a) honor `GEMINI_GROUNDING_MODEL` from
+ * the environment and (b) retry once with `gemini-2.5-flash` when the model
+ * was reported missing. A stale production value therefore steered the
+ * grounding calls to a model that answered `404 NOT_FOUND`, and the retry
+ * made the diagnostics display the *fallback* model (`gemini-2.5-flash`)
+ * instead of the model the default would send — hiding the real request.
+ *
+ * Now nothing in the environment can change the model that is sent:
+ * `gemini-2.5-flash-lite` is the only value ever used. A conflicting
+ * `GEMINI_GROUNDING_MODEL` is still READ, but only so it is loudly logged
+ * (provable in the function logs) instead of silently changing behaviour.
+ * `gemini-2.5-flash-lite` is documented as supporting Google Search
+ * grounding (ai.google.dev/gemini-api/docs/google-search) and is the
+ * lightest grounding-capable model.
+ */
+const GROUNDING_MODEL = "gemini-2.5-flash-lite";
 const MAX_RESULTS_HARD_CAP = 20;
 
 // ---------------------------------------------------------------------------
@@ -155,7 +171,12 @@ let okLogged = false;
 export function resetGroundingDiagnostics(): void {
   warnDetailBudget = 3;
   okLogged = false;
+  modelOverrideLogged = false;
 }
+
+/** The model this provider sends — exported for tests + the standalone
+ *  diagnostic so both can assert the pinned value. */
+export const GROUNDING_MODEL_ID = GROUNDING_MODEL;
 
 /** Defense in depth: even though Google's error messages never contain
  *  the key, strip any key-shaped token before it reaches the logs. */
@@ -224,54 +245,17 @@ function controlledMessage(http: number, gemini: GeminiErrorInfo): string {
   return "The web search provider rejected the request" + suffix;
 }
 
-/** True when the error means "this model no longer exists" — the only
- *  class of error where a one-shot model fallback is safe. */
-function isModelNotFound(
-  http: number | null,
-  gemini: GeminiErrorInfo,
-): boolean {
-  if (http === 404) return true;
-  return (
-    http === 400 &&
-    /not found|does not exist|unknown model|no such model|invalid model/i.test(
-      `${gemini.status ?? ""} ${gemini.message ?? ""}`,
-    )
-  );
-}
-
-/** Retry ONCE with the fallback model for model-not-found errors only. */
-async function fallbackOnModelNotFound<T>(
-  error: unknown,
-  model: string,
-  keySource: string,
-  retry: () => Promise<T>,
-): Promise<T> {
-  if (
-    model !== FALLBACK_GROUNDING_MODEL &&
-    error instanceof WebSearchError &&
-    isModelNotFound(error.status, {
-      code: error.geminiCode,
-      status: error.geminiStatus,
-      message: error.geminiMessage,
-    })
-  ) {
-    logGrounding("warn", {
-      model,
-      keySource,
-      httpStatus: error.status,
-      geminiCode: error.geminiCode,
-      geminiStatus: error.geminiStatus,
-      geminiMessage: `model not available — retrying once with ${FALLBACK_GROUNDING_MODEL}`,
-      groundingChunks: null,
-      durationMs: null,
-    });
-    return retry();
-  }
-  throw error;
-}
-
-/** The single generateContent call: fetch + error mapping + diagnostics.
- *  Returns parsed JSON + duration on 200; throws WebSearchError otherwise. */
+/**
+ * The single generateContent call: fetch + error mapping + diagnostics.
+ * Returns parsed JSON + duration on 200; throws WebSearchError otherwise.
+ *
+ * There is deliberately NO automatic model fallback here (removed in AI
+ * Search 2.3): a silent retry with a different model made the failing
+ * request invisible — the error that surfaced carried the *retry's* model,
+ * so the UI reported `Model: gemini-2.5-flash` while the default would send
+ * `gemini-2.5-flash-lite`. Every error now names the exact model that was
+ * sent, and only that model is ever called.
+ */
 async function geminiGenerateContent(
   model: string,
   body: Record<string, unknown>,
@@ -395,9 +379,26 @@ export function resolveGeminiGroundingKeySource(): string | null {
   return resolveGroundingKeyInternal()?.source ?? null;
 }
 
+/** Set once per process when a conflicting GEMINI_GROUNDING_MODEL is seen. */
+let modelOverrideLogged = false;
+
+/**
+ * The model sent to Gemini — ALWAYS `GROUNDING_MODEL`
+ * (`gemini-2.5-flash-lite`). `GEMINI_GROUNDING_MODEL` can no longer change
+ * the model; a conflicting value is logged once so its presence in a
+ * deployment is provable from the function logs.
+ */
 function groundingModel(): string {
   const configured = (process.env.GEMINI_GROUNDING_MODEL ?? "").trim();
-  return configured || DEFAULT_GROUNDING_MODEL;
+  if (configured && configured !== GROUNDING_MODEL && !modelOverrideLogged) {
+    modelOverrideLogged = true;
+    console.warn(
+      `[GEMINI_GROUNDING] model-pinned configured=${truncateText(configured, 60)} ` +
+        `used=${GROUNDING_MODEL} — GEMINI_GROUNDING_MODEL is ignored; the ` +
+        `grounding model is pinned in code`,
+    );
+  }
+  return GROUNDING_MODEL;
 }
 
 /** The grounding response is untrusted input: every field is type-checked
@@ -408,20 +409,14 @@ async function geminiGroundingSearch(
   key: string,
   keySource: string,
 ): Promise<WebSearchResult[]> {
-  const model = groundingModel();
-  try {
-    return await geminiGroundingSearchCore(query, maxResults, key, model, keySource);
-  } catch (error) {
-    return fallbackOnModelNotFound(error, model, keySource, () =>
-      geminiGroundingSearchCore(
-        query,
-        maxResults,
-        key,
-        FALLBACK_GROUNDING_MODEL,
-        keySource,
-      ),
-    );
-  }
+  // PINNED model — no env override, no fallback (AI Search 2.3).
+  return geminiGroundingSearchCore(
+    query,
+    maxResults,
+    key,
+    groundingModel(),
+    keySource,
+  );
 }
 
 type GroundingMetadata = {
@@ -527,27 +522,21 @@ async function geminiGroundingSearchCore(
  * callers MUST still verify any URL against fetched content; the JSON is
  * a discovery hint, never the source of truth.
  */
- async function geminiStructuredSearch(
-   query: string,
-   schema: StructuredSearchSchema,
-   key: string,
-   keySource: string,
- ): Promise<WebSearchStructuredResult<Record<string, unknown>>> {
-   const model = groundingModel();
-   try {
-     return await geminiStructuredSearchCore(query, schema, key, model, keySource);
-   } catch (error) {
-     return fallbackOnModelNotFound(error, model, keySource, () =>
-       geminiStructuredSearchCore(
-         query,
-         schema,
-         key,
-         FALLBACK_GROUNDING_MODEL,
-         keySource,
-       ),
-     );
-   }
- }
+async function geminiStructuredSearch(
+  query: string,
+  schema: StructuredSearchSchema,
+  key: string,
+  keySource: string,
+): Promise<WebSearchStructuredResult<Record<string, unknown>>> {
+  // PINNED model — no env override, no fallback (AI Search 2.3).
+  return geminiStructuredSearchCore(
+    query,
+    schema,
+    key,
+    groundingModel(),
+    keySource,
+  );
+}
 
 type StructuredCandidate = {
   content?: { parts?: Array<{ text?: unknown }> };

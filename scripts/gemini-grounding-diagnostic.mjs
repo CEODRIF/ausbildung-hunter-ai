@@ -10,8 +10,12 @@
  * the sources/pipeline problem.
  *
  * Usage:
+ *   GEMINI_GROUNDING_API_KEY=*** npm run gemini:diag
  *   GEMINI_API_KEY=*** npm run gemini:diag
- *   GEMINI_API_KEY=*** GEMINI_GROUNDING_MODEL=gemini-2.5-flash npm run gemini:diag
+ *
+ * The grounding MODEL is pinned in code to gemini-2.5-flash-lite (identical
+ * to the production provider) — this script deliberately does not honor
+ * GEMINI_GROUNDING_MODEL, so it always tests what production actually sends.
  *
  * Never prints: the API key, the full prompt, any credential, any
  * personal data. Prints: key presence, model, HTTP status, Gemini
@@ -22,8 +26,10 @@
  */
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
-const DEFAULT_MODEL = "gemini-2.5-flash-lite";
-const FALLBACK_MODEL = "gemini-2.5-flash";
+/** PINNED — identical to the production provider (src/lib/web-search/index.ts).
+ *  GEMINI_GROUNDING_MODEL is ignored there, so it is ignored here too: the
+ *  diagnostic must test exactly what production sends. */
+const PINNED_MODEL = "gemini-2.5-flash-lite";
 const TIMEOUT_MS = 20_000;
 const QUERY = "Kaufmann im E-Commerce Ausbildung 2027 Deutschland";
 
@@ -154,15 +160,15 @@ function verdict(result, model) {
   const { http, gemini } = result;
   const detail = `${gemini?.status ?? ""} ${gemini?.message ?? ""}`.toLowerCase();
   if (http === 404 || /not found|does not exist|unknown model|no such model/.test(detail)) {
-    log(`VERDICT: FAILED — model "${model}" does not exist (shut down or typo). Set GEMINI_GROUNDING_MODEL to a current model (e.g. ${DEFAULT_MODEL} or ${FALLBACK_MODEL}).`);
+    log(`VERDICT: FAILED — HTTP 404 for the PINNED model "${model}". Because the model id is fixed in code, a 404 cannot be a configuration/typo on the app side: Google is rejecting this model for THIS key/project/API version. The literal message above is authoritative — if it says "is not found for API version v1beta, or is not supported for generateContent", the key's project has no access to it (Google AI Studio → the project behind the key → verify the key + billing). Do NOT change the model.`);
     return 1;
   }
   if (http === 401 || http === 403 || /api key not valid|permission denied|not accepted|quota|billing|no access/.test(detail)) {
-    log(`VERDICT: FAILED — key/permission/billing (HTTP ${http}). The KEY is the problem, not the model: in Google AI Studio (aistudio.google.com/apikey) verify the key exists and the project has billing enabled; then update GEMINI_API_KEY in Vercel → Settings → Environment Variables → Production and redeploy.`);
+    log(`VERDICT: FAILED — key/permission/billing (HTTP ${http}). The KEY is the problem, not the model: in Google AI Studio (aistudio.google.com/apikey) verify the key exists and its project has billing enabled; then update GEMINI_GROUNDING_API_KEY (the dedicated grounding key) wherever the environment is configured, and redeploy.`);
     return 1;
   }
   if (http === 429 || /rate limit|resource exhausted/.test(detail)) {
-    log(`VERDICT: FAILED — rate limit/quota (HTTP 429). Free-tier limits are strict: retry later, or set GEMINI_GROUNDING_MODEL to ${FALLBACK_MODEL}, or enable billing for higher quota.`);
+    log(`VERDICT: FAILED — rate limit/quota (HTTP 429). Enable billing for higher quota, or retry later (the model is pinned; changing it is not an option).`);
     return 1;
   }
   if (http && http >= 500) {
@@ -175,7 +181,7 @@ function verdict(result, model) {
   }
   if (http === 200) {
     if (!result.metadata) {
-      log(`VERDICT: FAILED — HTTP 200 but NO grounding metadata: the google_search tool was not accepted for model "${model}" (or Google returned no pages). Try GEMINI_GROUNDING_MODEL=${FALLBACK_MODEL}.`);
+      log(`VERDICT: FAILED — HTTP 200 but NO grounding metadata: the google_search tool was not accepted for the pinned model "${model}" (or Google returned no pages). The request itself is valid — this is a model/tool-entitlement question on Google's side; report this exact line.`);
       return 1;
     }
     if (result.urls.length === 0) {
@@ -191,24 +197,18 @@ function verdict(result, model) {
 
 async function main() {
   const { key, source } = resolveKey();
-  log(`key=${key ? "present" : "MISSING"} source=${source ?? "none"} model-configured=${process.env.GEMINI_GROUNDING_MODEL || `(default ${DEFAULT_MODEL})`}`);
+  const configured = process.env.GEMINI_GROUNDING_MODEL?.trim();
+  log(
+    `key=${key ? "present" : "MISSING"} source=${source ?? "none"} ` +
+      `model=${PINNED_MODEL} (pinned)${configured && configured !== PINNED_MODEL ? ` GEMINI_GROUNDING_MODEL=${configured} IGNORED` : ""}`,
+  );
   if (!key) {
-    log(`VERDICT: CANNOT TEST — no key found. Set GEMINI_API_KEY (Google AI Studio) in the environment, or make sure Vercel production has it. Nothing was called.`);
+    log(`VERDICT: CANNOT TEST — no key found. Set GEMINI_GROUNDING_API_KEY (dedicated grounding key) or GEMINI_API_KEY in the environment. Nothing was called.`);
     return 2;
   }
-  const model = process.env.GEMINI_GROUNDING_MODEL?.trim() || DEFAULT_MODEL;
-  const first = await oneAttempt(key, model);
-  if (
-    !first.ok &&
-    !first.network &&
-    (first.http === 404 || /not found|does not exist|unknown model|no such model/.test(`${first.gemini?.status} ${first.gemini?.message}`.toLowerCase())) &&
-    model !== FALLBACK_MODEL
-  ) {
-    log(`fallback: configured model missing → one retry with ${FALLBACK_MODEL}`);
-    const second = await oneAttempt(key, FALLBACK_MODEL);
-    return verdict(second, FALLBACK_MODEL);
-  }
-  return verdict(first, model);
+  // ONE call, to the pinned model — exactly what production sends.
+  const result = await oneAttempt(key, PINNED_MODEL);
+  return verdict(result, PINNED_MODEL);
 }
 
 main().then(

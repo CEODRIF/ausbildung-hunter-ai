@@ -175,14 +175,18 @@ describe("geminiGroundingSearch (mocked fetch)", () => {
     }
   });
 
-  it("honors GEMINI_GROUNDING_MODEL", async () => {
+  it("IGNORES GEMINI_GROUNDING_MODEL — always sends the pinned gemini-2.5-flash-lite", async () => {
+    resetGroundingDiagnostics();
+    // A stale production value must NEVER be able to steer the request.
     process.env.GEMINI_GROUNDING_MODEL = "gemini-2.5-flash";
     fetchMock.mockResolvedValue(groundingResponse([]));
     const client = clientWithKey();
     await client.search("q", 5);
-    expect(String(fetchMock.mock.calls[0][0])).toContain(
-      "/models/gemini-2.5-flash:generateContent",
-    );
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("/models/gemini-2.5-flash-lite:generateContent");
+    expect(url).not.toContain("/models/gemini-2.5-flash:generateContent");
+    // Exactly one request — no model switching.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("maps grounding chunks to results (https only, deduped, capped)", async () => {
@@ -311,41 +315,43 @@ describe("gemini grounding diagnostics & model fallback", () => {
     });
   }
 
-  it("stale/shut-down model (404) → ONE fallback to gemini-2.5-flash, then success", async () => {
-    // Production scenario: GEMINI_GROUNDING_MODEL still points at a
-    // shut-down model (e.g. gemini-2.0-flash) → every call 404s.
+  it("stale GEMINI_GROUNDING_MODEL is ignored: NO model switch, error names the model actually sent", async () => {
+    // Production scenario that caused the outage: the deployment still had
+    // GEMINI_GROUNDING_MODEL set (e.g. gemini-2.0-flash) AND the retry
+    // switched to gemini-2.5-flash, so the UI reported the retry's model.
+    resetGroundingDiagnostics();
     process.env.GEMINI_GROUNDING_MODEL = "gemini-2.0-flash";
-    fetchMock
-      .mockResolvedValueOnce(
-        geminiError(404, {
-          error: {
-            code: 404,
-            status: "NOT_FOUND",
-            message: "models/gemini-2.0-flash is not found for API key.",
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        groundingResponse([
-          { web: { uri: "https://example.test/job", title: "Ausbildung 2027" } },
-        ]),
-      );
+    fetchMock.mockResolvedValue(
+      geminiError(404, {
+        error: {
+          code: 404,
+          status: "NOT_FOUND",
+          message:
+            "models/gemini-2.5-flash-lite is not found for API version v1beta, or is not supported for generateContent.",
+        },
+      }),
+    );
     const client = clientWithKey();
-    const results = await client.search("q", 5);
+    const error = (await client
+      .search("q", 5)
+      .catch((e: unknown) => e)) as WebSearchError;
 
-    expect(results).toEqual([
-      { title: "Ausbildung 2027", url: "https://example.test/job", snippet: "" },
-    ]);
-    // Exactly two calls: the failed model + the fallback — no retry loops.
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(String(fetchMock.mock.calls[0][0])).toContain(
-      "/models/gemini-2.0-flash:generateContent",
-    );
-    expect(String(fetchMock.mock.calls[1][0])).toContain(
-      "/models/gemini-2.5-flash:generateContent",
-    );
-    // The fallback was announced in the safe diagnostics.
-    expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("retrying once with gemini-2.5-flash"))).toBe(true);
+    // Exactly ONE request — the pinned model — for the stale env value too.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("/models/gemini-2.5-flash-lite:generateContent");
+    expect(url).not.toContain("/models/gemini-2.0-flash:generateContent");
+    expect(url).not.toContain("/models/gemini-2.5-flash:generateContent");
+    // The error carries the model that was REALLY sent.
+    expect(error.model).toBe("gemini-2.5-flash-lite");
+    expect(error.status).toBe(404);
+    expect(error.geminiStatus).toBe("NOT_FOUND");
+    // The stale env value is loudly logged (provable in production logs).
+    expect(
+      warnSpy.mock.calls.some((c) =>
+        String(c[0]).includes("model-pinned configured=gemini-2.0-flash"),
+      ),
+    ).toBe(true);
   });
 
   it("401 (bad key) → NO model fallback, structured error detail kept", async () => {
@@ -443,7 +449,8 @@ describe("gemini grounding diagnostics & model fallback", () => {
     expect(line).toContain("model=gemini-2.5-flash-lite");
   });
 
-  it("searchStructured: same fallback + diagnostics apply", async () => {
+  it("searchStructured: sends the pinned model even with a stale env value", async () => {
+    resetGroundingDiagnostics();
     process.env.GEMINI_GROUNDING_MODEL = "gemini-2.0-flash";
     const schema = {
       properties: {
@@ -451,38 +458,33 @@ describe("gemini grounding diagnostics & model fallback", () => {
       },
       required: ["officialWebsite"],
     };
-    fetchMock
-      .mockResolvedValueOnce(
-        geminiError(404, {
-          error: {
-            code: 404,
-            status: "NOT_FOUND",
-            message: "models/gemini-2.0-flash is not found.",
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  { text: '{"officialWebsite":"https://www.beispiel-gmbh.de"}' },
-                ],
-              },
-              groundingMetadata: {
-                groundingChunks: [
-                  { web: { uri: "https://www.beispiel-gmbh.de", title: "Beispiel" } },
-                ],
-              },
+    fetchMock.mockResolvedValue(
+      Response.json({
+        candidates: [
+          {
+            content: {
+              parts: [
+                { text: '{"officialWebsite":"https://www.beispiel-gmbh.de"}' },
+              ],
             },
-          ],
-        }),
-      );
+            groundingMetadata: {
+              groundingChunks: [
+                { web: { uri: "https://www.beispiel-gmbh.de", title: "Beispiel" } },
+              ],
+            },
+          },
+        ],
+      }),
+    );
     const client = clientWithKey();
     const out = await client.searchStructured!("official website of Beispiel GmbH", schema);
     expect(out.data.officialWebsite).toBe("https://www.beispiel-gmbh.de");
     expect(out.results).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Exactly one call, to the pinned model — the stale env value and a
+    // retry can never change what production requests.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      "/models/gemini-2.5-flash-lite:generateContent",
+    );
   });
 });
