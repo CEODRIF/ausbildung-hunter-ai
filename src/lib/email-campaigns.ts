@@ -14,6 +14,10 @@ import {
   type ProviderFailure,
 } from "@/lib/email-providers";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import {
+  SENDER_SLOT_WAIT_BUDGET_MS,
+  sendIntervalMs,
+} from "@/lib/email-rate-limit";
 
 export type CampaignStatus =
   | "draft"
@@ -309,6 +313,80 @@ export async function recoverStaleCampaigns(
   };
 }
 
+/**
+ * Safe-by-construction rate-limit log line. Only the provider name, the
+ * action, the sender account UUID and (for send_allowed) the message UUID
+ * are ever logged — never credentials, message content, or any personal
+ * data.
+ */
+function logRateLimit(
+  action: "slot_reserved" | "waiting" | "send_allowed",
+  accountId: string,
+  extra = "",
+) {
+  console.info(
+    `[EMAIL_RATE_LIMIT] provider=gmail action=${action} account=${accountId}${
+      extra ? ` ${extra}` : ""
+    }`,
+  );
+}
+
+/**
+ * Smart Sending — reserve the sender account's atomic slot BEFORE claiming
+ * a message. The slot is one Postgres row per Gmail account, shared by ALL
+ * of the account's campaigns, workers, tabs and reloads; the reservation is
+ * a single conditional UPDATE in the database, so exactly one caller can
+ * win per interval window (no check-then-act race, no in-process state).
+ *
+ * If the slot is busy, wait (bounded by the wait budget) and retry. If it
+ * is still busy when the budget is exhausted, return false WITHOUT having
+ * claimed anything — the caller stops the batch and the messages simply
+ * stay `queued` for the next tick. They are never failed, never sent and
+ * never deleted while waiting.
+ */
+export async function reserveSenderSlot(
+  admin: ReturnType<typeof createAdminClient>,
+  accountId: string,
+): Promise<boolean> {
+  const deadline = Date.now() + SENDER_SLOT_WAIT_BUDGET_MS;
+  for (;;) {
+    const { data, error } = await admin.rpc("reserve_sender_slot", {
+      target_account_id: accountId,
+      min_interval_ms: sendIntervalMs(),
+    });
+    if (error) throw new Error("Unable to reserve the sending slot.");
+    if (data?.reserved) {
+      logRateLimit("slot_reserved", accountId);
+      return true;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    const waitMs = Math.min(Number(data?.wait_ms ?? sendIntervalMs()), remaining);
+    logRateLimit("waiting", accountId, `wait_ms=${Math.round(waitMs)}`);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+}
+
+/**
+ * How long the campaign's sender slot is busy right now (0 = free). Used
+ * by the UI to show a REAL "waiting for sending slot" state — never a
+ * faked one. Throws like the rest of the engine on database errors.
+ */
+export async function getSenderSlotWaitMs(
+  userId: string,
+  campaignId: string,
+): Promise<number> {
+  const campaign = await getCampaignContext(userId, campaignId);
+  if (!campaign.email_account_id) return 0;
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc("get_sender_slot_wait_ms", {
+    target_account_id: campaign.email_account_id,
+  });
+  if (error) throw new Error("Unable to load the sending state.");
+  const wait = Number(data ?? 0);
+  return Number.isFinite(wait) ? wait : 0;
+}
+
 export async function processCampaignBatch(
   userId: string,
   campaignId: string,
@@ -343,6 +421,15 @@ export async function processCampaignBatch(
     .eq("draft_id", campaign.draft_id);
   let processed = 0;
   for (let index = 0; index < Math.min(batchSize, 5); index += 1) {
+    // Smart Sending — reserve the sender's atomic slot BEFORE claiming a
+    // message. The slot is per Gmail account and shared by every campaign
+    // on that account, so no combination of workers, campaigns, tabs or
+    // reloads can ever put two sends from this account less than the
+    // minimum interval apart. If the slot is still busy after the wait
+    // budget, stop WITHOUT claiming: nothing changed state, the messages
+    // stay queued for the next tick (never failed, never sent).
+    const slotFree = await reserveSenderSlot(admin, campaign.email_account_id);
+    if (!slotFree) break;
     const { data: message } = await admin.rpc("claim_next_email_message", {
       target_user_id: userId,
       target_campaign_id: campaignId,
@@ -375,6 +462,7 @@ export async function processCampaignBatch(
           storagePath: attachment.storage_path,
         })),
       );
+      logRateLimit("send_allowed", campaign.email_account_id, `message=${message.id}`);
       const result = await provider.sendEmail({
         to: recipient.recipient_email,
         subject: recipient.subject,
@@ -402,7 +490,7 @@ export async function processCampaignBatch(
           retry_message: providerError.message ?? "Temporary provider error.",
         });
       else
-        await admin.rpc("finalize_email_message", {
+         await admin.rpc("finalize_email_message", {
           target_message_id: message.id,
           succeeded: false,
           provider_id: null,
@@ -411,7 +499,9 @@ export async function processCampaignBatch(
             providerError.message ?? "Message could not be sent.",
         });
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    // Pacing note: the old fixed 250ms micro-pause is gone on purpose —
+    // the sender slot reservation at the top of the loop is now the ONLY
+    // pacing mechanism (real, atomic, per-account, 5–6 second guarantee).
   }
   return {
     processed,

@@ -1,7 +1,11 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { cancelCampaign, processCampaignBatch } from "@/lib/email-campaigns";
+import {
+  cancelCampaign,
+  getSenderSlotWaitMs,
+  processCampaignBatch,
+} from "@/lib/email-campaigns";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 
 export async function processCampaign(formData: FormData) {
@@ -25,12 +29,24 @@ export async function processCampaign(formData: FormData) {
  */
 export async function drainCampaign(campaignId: string) {
   const { user } = await getCurrentUserAndProfile();
-  if (!user) return { ok: false as const, processed: 0, status: null };
+  if (!user)
+    return { ok: false as const, processed: 0, status: null, slotWaitMs: 0 };
   try {
     const result = await processCampaignBatch(user.id, campaignId, 5);
-    return { ok: true as const, processed: result.processed, status: result.status };
+    // Real Smart-Sending state for the UI: how long this campaign's sender
+    // slot is busy RIGHT NOW (0 = free). Never faked — read from Postgres.
+    const active = ![
+      "completed",
+      "partially_failed",
+      "failed",
+      "cancelled",
+    ].includes(result.status);
+    const slotWaitMs = active
+      ? await getSenderSlotWaitMs(user.id, campaignId)
+      : 0;
+    return { ok: true as const, processed: result.processed, status: result.status, slotWaitMs };
   } catch {
-    return { ok: false as const, processed: 0, status: null };
+    return { ok: false as const, processed: 0, status: null, slotWaitMs: 0 };
   }
 }
 

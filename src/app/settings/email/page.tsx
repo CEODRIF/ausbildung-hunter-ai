@@ -108,6 +108,54 @@ export default async function EmailSettingsPage({
             href="/api/email/connect/outlook"
           />
         </section>
+        {/* Smart Sending — always-on sender pacing. Deliberately static:
+            there is no control that can lower the interval below the
+            5-second floor (the floor is also enforced in the database). */}
+        <section className="mt-8">
+          <h2 className="text-lg font-bold text-ink-soft">Smart Sending</h2>
+          <Card className="mt-4 p-6">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex items-center gap-2 text-sm font-bold text-ink-soft">
+                <span
+                  aria-hidden="true"
+                  className="h-2.5 w-2.5 rounded-full bg-success"
+                />
+                Enabled
+              </span>
+              <span className="rounded-lg bg-success-soft px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-success">
+                Always on
+              </span>
+            </div>
+            <p className="mt-3 text-sm leading-6 text-muted">
+              Your emails are sent gradually with a minimum 5-second interval
+              between messages from the same account.
+            </p>
+            <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+              <div className="rounded-xl bg-surface-2 px-4 py-3">
+                <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  Minimum interval
+                </dt>
+                <dd className="mt-1 font-bold text-ink-soft">5–6 seconds</dd>
+              </div>
+              <div className="rounded-xl bg-surface-2 px-4 py-3">
+                <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  Recommended
+                </dt>
+                <dd className="mt-1 font-bold text-ink-soft">6 seconds</dd>
+              </div>
+              <div className="rounded-xl bg-surface-2 px-4 py-3">
+                <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  Minimum allowed
+                </dt>
+                <dd className="mt-1 font-bold text-ink-soft">5 seconds</dd>
+              </div>
+            </dl>
+            <p className="mt-4 text-xs text-faint">
+              The interval applies per sender account across all of your
+              campaigns and workers — it cannot be lowered below 5 seconds.
+            </p>
+          </Card>
+        </section>
         <section className="mt-8">
           <h2 className="text-lg font-bold text-ink-soft">
             {t("account.connectedAccounts")}

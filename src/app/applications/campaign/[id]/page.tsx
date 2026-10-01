@@ -4,7 +4,7 @@ import { Card } from "@/components/ui";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
-  recoverStaleCampaigns, getCampaign } from "@/lib/email-campaigns";
+  recoverStaleCampaigns, getCampaign, getSenderSlotWaitMs } from "@/lib/email-campaigns";
 import { getServerT } from "@/lib/i18n/server";
 import {
   cancelCampaignAction,
@@ -58,6 +58,19 @@ export default async function CampaignPage({
   const title =
     draftResult.data?.subject?.trim() || draftResult.data?.opportunity_title ||
     null;
+  // Smart Sending — the REAL sender-slot state for this campaign, read from
+  // Postgres (never a faked progress number): busy slot = waiting, free
+  // slot while `sending` = a send is in flight.
+  const senderSlotWaitMs = terminal
+    ? 0
+    : await getSenderSlotWaitMs(user.id, id).catch(() => 0);
+  const sendingState = terminal
+    ? null
+    : senderSlotWaitMs > 0
+      ? "Waiting for sending slot…"
+      : campaignState.status === "sending"
+        ? "Sending…"
+        : null;
   return (
     <div className="px-4 py-6 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-6xl">
@@ -76,6 +89,11 @@ export default async function CampaignPage({
               {t("account.monitorNote")}
               {senderEmail ? ` · Sending from: ${senderEmail}` : ""}
             </p>
+            {sendingState && (
+              <p className="mt-1 text-xs font-semibold text-accent-deep">
+                {sendingState}
+              </p>
+            )}
             <CampaignMonitor campaignId={id} />
           </div>
           <div className="flex gap-2">

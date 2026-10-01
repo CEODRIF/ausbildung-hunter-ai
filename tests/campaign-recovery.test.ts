@@ -345,8 +345,14 @@ describe("processCampaignBatch hook", () => {
         table === "email_messages" && filters["status"] === "sending"
           ? [{ id: "msg-1" }]
           : [],
-      // claim_next_email_message → null (nothing left to claim)
-      rpc: (name) => (name === "finalize_email_message" ? true : null),
+      // claim_next_email_message → null (nothing left to claim);
+      // reserve_sender_slot → slot free (Smart Sending pacing enabled)
+      rpc: (name) =>
+        name === "finalize_email_message"
+          ? true
+          : name === "reserve_sender_slot"
+            ? { reserved: true, wait_ms: 0 }
+            : null,
     });
     const result = await processCampaignBatch(USER_ID, CAMPAIGN_ID);
     expect(result).toEqual({ processed: 0, status: "sending" });
