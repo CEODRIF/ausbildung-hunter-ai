@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { Button, Card, ErrorState } from "@/components/ui";
+import { activateSearchUpgrade } from "@/app/opportunities/ai-search/actions";
 import { Icon } from "@/components/icon";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
 import type {
@@ -276,12 +277,23 @@ export function AISearchClient({
   profileSummary: ProfileSummary | null;
   defaultGoal: Goal;
   /** Server-resolved balance. Display only — the server charges atomically. */
-  initialCredits: { creditsRemaining: number; creditLimit: number };
+  initialCredits: {
+    creditsRemaining: number;
+    creditLimit: number;
+    resetHours?: number;
+    premium?: boolean;
+  };
 }) {
   const { t } = useI18n();
   const [goal, setGoal] = useState<Goal>(defaultGoal);
   const [count, setCount] = useState<(typeof COUNTS)[number]>(25);
   const [credits, setCredits] = useState(initialCredits);
+  // Search upgrade code — verified server-side only (never in the bundle).
+  const [upgradeCode, setUpgradeCode] = useState("");
+  const [upgradeState, setUpgradeState] = useState<
+    "idle" | "loading" | "ok" | "error"
+  >("idle");
+  const [upgradeMessage, setUpgradeMessage] = useState("");
   /** The selected count IS the price (10/25/50/100 credits). */
   const sufficientCredits = credits.creditsRemaining >= count;
   const [stage, setStage] = useState<Stage>("setup");
@@ -409,6 +421,36 @@ export function AISearchClient({
         setError(event.message);
         setStage("error");
         break;
+    }
+  }
+
+  async function submitUpgradeCode(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const code = upgradeCode.trim();
+    if (upgradeState === "loading" || !code) return;
+    setUpgradeState("loading");
+    setUpgradeMessage("");
+    try {
+      const result = await activateSearchUpgrade(code);
+      if (!result.ok) {
+        setUpgradeState("error");
+        setUpgradeMessage(result.message);
+        return;
+      }
+      // The entitlement comes back FROM THE SERVER (database state).
+      setCredits((current) => ({
+        ...current,
+        creditsRemaining: result.creditsRemaining ?? current.creditsRemaining,
+        creditLimit: result.creditLimit ?? current.creditLimit,
+        resetHours: result.resetHours ?? current.resetHours,
+        premium: result.premium ?? true,
+      }));
+      setUpgradeState("ok");
+      setUpgradeMessage(result.message);
+      setUpgradeCode("");
+    } catch {
+      setUpgradeState("error");
+      setUpgradeMessage("Unable to activate the upgrade code.");
     }
   }
 
@@ -695,6 +737,59 @@ export function AISearchClient({
                 Not enough search credits. You have {credits.creditsRemaining}{" "}
                 credits remaining, but this search requires {count} credits.
               </p>
+            )}
+
+            {credits.premium ? (
+              <p className="mt-3 rounded-xl bg-surface-2 px-3 py-2 text-xs font-semibold text-ink-soft">
+                Search upgrade active — {credits.creditLimit} credits every{" "}
+                {credits.resetHours ?? 24} h.
+              </p>
+            ) : (
+              <div className="mt-4 border-t border-line pt-4">
+                <p className="text-xs font-bold text-ink-soft">
+                  Have a search upgrade code?
+                </p>
+                <form
+                  className="mt-2.5 flex flex-col gap-3 sm:flex-row"
+                  onSubmit={submitUpgradeCode}
+                >
+                  <input
+                    value={upgradeCode}
+                    onChange={(event) => {
+                      setUpgradeCode(event.target.value);
+                      if (upgradeState !== "loading") {
+                        setUpgradeState("idle");
+                        setUpgradeMessage("");
+                      }
+                    }}
+                    className="h-11 flex-1 rounded-xl border border-line-strong bg-surface px-3.5 text-sm uppercase tracking-[0.12em] outline-none focus:border-accent"
+                    placeholder="UPGRADE CODE"
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={upgradeState === "loading"}
+                  />
+                  <Button
+                    type="submit"
+                    className="h-11 px-5"
+                    disabled={
+                      upgradeState === "loading" ||
+                      upgradeCode.trim().length === 0
+                    }
+                  >
+                    {upgradeState === "loading" ? "Activating…" : "Activate"}
+                  </Button>
+                </form>
+                {upgradeState === "ok" && (
+                  <p className="mt-2 text-xs font-semibold text-ink-soft">
+                    {upgradeMessage}
+                  </p>
+                )}
+                {upgradeState === "error" && (
+                  <p className="mt-2 text-xs font-semibold text-warning">
+                    {upgradeMessage}
+                  </p>
+                )}
+              </div>
             )}
           </div>
           <div className="mt-5 rounded-xl bg-surface-2 p-4 text-xs leading-5 text-muted">

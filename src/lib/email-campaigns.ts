@@ -64,8 +64,10 @@ export async function activateQuotaCode(code: string) {
   await admin.from("activity_logs").insert({
     user_id: current.user.id,
     activity_type: "quota_upgrade_activated",
-    title: "100 daily application emails activated",
-    description: "The DRIF089 quota upgrade is active.",
+    // Generic wording: the same code system also carries search upgrade
+    // codes, so the log must not claim a specific entitlement.
+    title: "Upgrade code activated",
+    description: "A quota upgrade code was activated on this account.",
     metadata: { daily_limit: data },
   });
   return Number(data);

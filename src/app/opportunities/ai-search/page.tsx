@@ -58,6 +58,8 @@ export default async function AISearchPage() {
             initialCredits={{
               creditsRemaining: credits.creditsRemaining,
               creditLimit: credits.creditLimit,
+              resetHours: credits.resetHours,
+              premium: credits.premium,
             }}
           />
         </div>
