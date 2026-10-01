@@ -8,6 +8,7 @@ import {
 } from "@/lib/opportunities/search";
 import {
   normalizeSearchParams,
+  parseCitiesParam,
   searchParamsSchema,
 } from "@/lib/opportunities/types";
 import {
@@ -36,13 +37,24 @@ export async function GET(request: Request) {
       role: raw.get("role") ?? "",
       company: raw.get("company") ?? "",
       location: raw.get("location") ?? "",
+      // Work place: comma-separated curated cities (validated + deduped by
+      // parseCitiesParam; unknown names dropped, never trusted).
+      cities: raw.get("cities") ? parseCitiesParam(raw.get("cities")!) : [],
+      beginn: raw.get("beginn") ?? "any",
       freshness: raw.get("freshness") ?? "any",
       sort: raw.get("sort") ?? "relevance",
       employment: raw.get("employment") ?? "any",
       training_type: raw.get("training_type") ?? "any",
       home_office: raw.get("home_office") ?? "any",
       match: raw.get("match") ?? "false",
-      salary_documented: raw.get("salary") === "1",
+      // Legacy compatibility: old clients send salary=1/0.
+      salary:
+        raw.get("salary") === "1"
+          ? "documented"
+          : raw.get("salary") === "0"
+            ? "any"
+            : raw.get("salary") ?? "any",
+      contact_email: raw.get("email") ?? "any",
     };
     if (raw.get("radius")) candidate.radius = raw.get("radius");
     if (raw.get("distance_max"))

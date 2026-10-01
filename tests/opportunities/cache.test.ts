@@ -82,14 +82,24 @@ describe("buildCacheKey", () => {
     const base = buildCacheKey(baseParams());
     expect(buildCacheKey(baseParams({ location: "Hamburg" }))).not.toBe(base);
     expect(buildCacheKey(baseParams({ goal: "ausbildung" }))).not.toBe(base);
-    expect(buildCacheKey(baseParams({ freshness: "14d" }))).not.toBe(base);
+    expect(buildCacheKey(baseParams({ freshness: "2w" }))).not.toBe(base);
     expect(buildCacheKey(baseParams({ sort: "newest" }))).not.toBe(base);
     expect(buildCacheKey(baseParams({ employment: "full_time" }))).not.toBe(
       base,
     );
-    expect(buildCacheKey(baseParams({ salary_documented: true }))).not.toBe(
-      base,
-    );
+    expect(buildCacheKey(baseParams({ salary: "documented" }))).not.toBe(base);
+  });
+
+  it("changes with the Pro filters (cities, beginn, contact_email)", () => {
+    const base = buildCacheKey(baseParams());
+    expect(
+      buildCacheKey(baseParams({ cities: ["Berlin", "Hamburg"] })),
+    ).not.toBe(base);
+    expect(buildCacheKey(baseParams({ beginn: "2026-11" }))).not.toBe(base);
+    expect(buildCacheKey(baseParams({ beginn: "now" }))).not.toBe(base);
+    expect(
+      buildCacheKey(baseParams({ contact_email: "available" })),
+    ).not.toBe(base);
   });
 });
 

@@ -27,10 +27,15 @@ import { matchResultSchema } from "./matching/types";
  * hr/general/unknown — a classification of a FOUND address, never a guess)
  * and `department`; the opportunity gained `aggregator_url` (kept when the
  * official company application URL wins — both links stay available).
- * Defaults keep v6 payloads parseable; the bump discards v6 caches for a
- * clean cutover.
- */
-export const OPPORTUNITY_SCHEMA_VERSION = 7;
+  * Defaults keep v6 payloads parseable; the bump discards v6 caches for a
+  * clean cutover.
+  * v8 (Opportunities Pro filters): the search state gained Work place
+  * cities, Beginn (documented start), "Published since" day buckets, the
+  * 3-way salary filter and the contact-email filter; the scan window now
+  * carries REAL per-option filter counts, so v7 cache payloads are
+  * refreshable but not reusable.
+  */
+export const OPPORTUNITY_SCHEMA_VERSION = 8;
 
 /**
  * The BA source only exposes its first ~10,000 listings per query (verified:
@@ -42,6 +47,45 @@ export const SEARCH_SOURCE_LIMIT = 10_000;
 
 export type OpportunitySort =
   "relevance" | "newest" | "oldest" | "salary" | "distance" | "match";
+
+/**
+ * Curated Work place filter — the major German cities, in rough order of
+ * population. Values are the CANONICAL GERMAN city names because the source
+ * documents German locations ("10115 Berlin", "80331 München"); matching is
+ * normalization-based, never a fake list. Extend by adding entries here.
+ */
+export const WORKPLACE_CITIES = [
+  "Berlin",
+  "München",
+  "Hamburg",
+  "Düsseldorf",
+  "Frankfurt am Main",
+  "Köln",
+  "Stuttgart",
+  "Dresden",
+  "Leipzig",
+  "Hannover",
+  "Nürnberg",
+  "Bremen",
+  "Essen",
+  "Dortmund",
+  "Bonn",
+  "Mannheim",
+  "Karlsruhe",
+  "Münster",
+  "Augsburg",
+  "Aachen",
+  "Wolfsburg",
+  "Bochum",
+  "Duisburg",
+  "Rostock",
+  "Kiel",
+  "Freiburg im Breisgau",
+  "Halle (Saale)",
+  "Bielefeld",
+  "Braunschweig",
+  "Lübeck",
+] as const;
 
 /**
  * Sort semantics (documented, deterministic):
@@ -70,18 +114,22 @@ export const opportunitySortSchema = z.enum([
 ]);
 
 /**
- * Freshness is explicit about what the source actually supports:
- * - "today" is applied by the BA API itself (veroeffentlichtseit=1, verified).
- * - "14d" / "30d" are applied server-side on the source's publication date
- *   (datumErsteVeroeffentlichung) via a bounded scan; results may be marked
- *   scan_truncated when the scan budget ends before the source does.
- * Anything else is "any". The API never pretends to honor unsupported values.
+ * "Published since" buckets, ALL applied server-side on the source's REAL
+ * publication date (datumErsteVeroeffentlichung → posted_at) via a bounded
+ * scan; results may be marked scan_truncated when the scan budget ends
+ * before the source does. Day boundaries are Europe/Berlin calendar days.
+ * "today"/"yesterday" are single days; "1w"/"2w"/"4w" are cumulative
+ * ("published since N days ago", including today). Items without a
+ * documented publication date never match a specific bucket (no guessing).
+ * Legacy values "14d"/"30d" in old shareable URLs map to "2w"/"4w".
  */
 export const opportunityFreshnessSchema = z.enum([
   "any",
   "today",
-  "14d",
-  "30d",
+  "yesterday",
+  "1w",
+  "2w",
+  "4w",
 ]);
 
 export const searchParamsSchema = z.object({
@@ -94,10 +142,22 @@ export const searchParamsSchema = z.object({
   /** Company filter. Applied server-side on the source's company field — the
    *  BA REST API does not support `arbeitgeber` as a text filter (verified). */
   company: z.string().trim().max(160).default(""),
-  /** City, PLZ or Bundesland. Mapped to the API's `wo` parameter. */
+  /** City, PLZ or Bundesland. Mapped to the API's `wo` parameter. The /opportunities UI no longer exposes free text — a single selected Work place city is normalized into this field; legacy shareable URLs keep working. */
   location: z.string().trim().max(120).default(""),
-  /** Radius in km (5–100), only applied together with a location. */
+  /** Radius in km (5–100), only applied together with a location. No longer exposed in the /opportunities UI (kept for API compatibility). */
   radius: z.coerce.number().int().min(5).max(100).optional(),
+  /** Work place selection (curated German cities, max 20). Exactly one city
+   *  is applied natively as the source location; two or more become a
+   *  bounded server-side filter. Invalid names are dropped in
+   *  normalizeSearchParams (never trusted). */
+  cities: z.array(z.string().trim().min(2).max(40)).max(20).default([]),
+  /** Planned start (source: `valid_from` / eintrittszeitraum). "now" =
+   *  documented start on/after today; "YYYY-MM" = that calendar month.
+   *  Items without a documented start are excluded by a specific value. */
+  beginn: z
+    .enum(["any", "now"])
+    .or(z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/))
+    .default("any"),
   freshness: opportunityFreshnessSchema.default("any"),
   sort: opportunitySortSchema.default("relevance"),
   /** Employment filter on the source's full/part-time flags. */
@@ -106,10 +166,19 @@ export const searchParamsSchema = z.object({
    *  ausbildungsart for training postings, not for jobs). */
   training_type: z.enum(["any", "AUSBILDUNG", "DUALES_STUDIUM"]).default("any"),
   /** Home-office filter (Ausbildung only — the source does not provide
-   *  homeofficemoeglich on job postings). */
+   *  homeofficemoeglich on job postings). No longer exposed in the
+ *  /opportunities UI (kept for API compatibility; the matching engine still
+   *  evaluates the documented home-office fact). */
   home_office: z.enum(["any", "yes"]).default("any"),
-  /** Only postings where the source documents a numeric salary. */
-  salary_documented: z.coerce.boolean().default(false),
+  /** Salary filter. "documented": the source documents a numeric salary
+   *  (Ausbildung: Ausbildungsvergütung, Job: salary) — never estimated.
+   *  "missing": the source documents none. Legacy URL "salary=1" maps to
+   *  "documented", "salary=0" to "any". */
+  salary: z.enum(["any", "documented", "missing"]).default("any"),
+  /** Contact-email filter. "available": at least ONE real email is documented
+   *  (source contact block or the provenance-checked company enrichment).
+   *  Websites, URLs and phone numbers are never treated as emails. */
+  contact_email: z.enum(["any", "available"]).default("any"),
   /** Maximum distance in km (5–100), only together with a location; items
    *  without a documented distance are excluded (never guessed). */
   distance_max: z.coerce.number().int().min(5).max(100).optional(),
@@ -131,13 +200,15 @@ export function usesScanWindow(params: OpportunitySearchParams): boolean {
   return (
     params.role !== "" ||
     params.company !== "" ||
-    params.freshness === "14d" ||
-    params.freshness === "30d" ||
+    params.cities.length >= 2 ||
+    params.freshness !== "any" ||
+    params.beginn !== "any" ||
+    params.salary !== "any" ||
+    params.contact_email !== "any" ||
     params.sort !== "relevance" ||
     params.employment !== "any" ||
     params.training_type !== "any" ||
     params.home_office !== "any" ||
-    params.salary_documented === true ||
     params.distance_max !== undefined
   );
 }
@@ -176,6 +247,19 @@ export function normalizeSearchParams(
   if (params.sort === "match" && !params.match) {
     params.sort = "relevance";
   }
+  // Work place normalization (documented): keep only curated city names
+  // (deduplicated, order preserved); exactly one selected city becomes the
+  // native source location (`wo`); two or more are a bounded server-side
+  // filter, so the native location is cleared to avoid conflicting queries.
+  const knownCities = new Set<string>(WORKPLACE_CITIES);
+  params.cities = [
+    ...new Set(params.cities.filter((city) => knownCities.has(city))),
+  ];
+  if (params.cities.length === 1) {
+    params.location = params.cities[0];
+  } else if (params.cities.length >= 2) {
+    params.location = "";
+  }
   return params;
 }
 
@@ -192,16 +276,33 @@ const URL_STATE_KEYS = [
   "company",
   "location",
   "radius",
+  "cities",
+  "beginn",
   "freshness",
   "sort",
   "employment",
   "training_type",
   "home_office",
   "salary",
+  "email",
   "distance_max",
   "page",
   "match",
 ] as const;
+
+/** Legacy → current value mapping for shareable URLs from older UI builds. */
+const LEGACY_VALUE_MAP: Record<string, Record<string, string>> = {
+  freshness: { "14d": "2w", "30d": "4w" },
+  salary: { "1": "documented", "0": "any" },
+};
+
+/** Parse the `cities` URL value: comma-separated, curated names only,
+ *  deduplicated, capped — invalid entries are dropped, never trusted. */
+export function parseCitiesParam(value: string): string[] {
+  const known = new Set<string>(WORKPLACE_CITIES);
+  const cities = value.split(",").map((part) => part.trim());
+  return [...new Set(cities.filter((city) => known.has(city)))].slice(0, 20);
+}
 
 /**
  * Sanitize a raw query string into a safe, shareable search URL query.
@@ -224,7 +325,8 @@ export function sanitizeSearchUrlState(
   const kept: Array<[string, string]> = [];
   for (const [key, value] of entries) {
     if (!(URL_STATE_KEYS as readonly string[]).includes(key)) continue;
-    kept.push([key, value]);
+    const mapped = LEGACY_VALUE_MAP[key]?.[value] ?? value;
+    kept.push([key, mapped]);
   }
   if (kept.length === 0) return "";
   // Validate via the search schema (goal is required: only keep a valid state
@@ -235,34 +337,42 @@ export function sanitizeSearchUrlState(
   for (const [key, value] of kept) {
     if (key === "goal") continue;
     if (key === "q") candidate["keyword"] = value;
-    else if (key === "salary") candidate["salary_documented"] = value === "1";
+    else if (key === "cities") candidate["cities"] = parseCitiesParam(value);
+    else if (key === "email") candidate["contact_email"] = value;
     else candidate[key] = value;
   }
   const parsed = searchParamsSchema.safeParse(candidate);
   if (!parsed.success) return "";
+  const normalized = normalizeSearchParams(parsed.data);
   // Re-serialize only the non-default values.
   const out = new URLSearchParams();
-  out.set("goal", parsed.data.goal);
-  if (parsed.data.keyword) out.set("q", parsed.data.keyword);
-  if (parsed.data.role) out.set("role", parsed.data.role);
-  if (parsed.data.company) out.set("company", parsed.data.company);
-  if (parsed.data.location) out.set("location", parsed.data.location);
-  if (parsed.data.radius !== undefined)
-    out.set("radius", String(parsed.data.radius));
-  if (parsed.data.freshness !== "any")
-    out.set("freshness", parsed.data.freshness);
-  if (parsed.data.sort !== "relevance") out.set("sort", parsed.data.sort);
-  if (parsed.data.employment !== "any")
-    out.set("employment", parsed.data.employment);
-  if (parsed.data.training_type !== "any")
-    out.set("training_type", parsed.data.training_type);
-  if (parsed.data.home_office !== "any")
-    out.set("home_office", parsed.data.home_office);
-  if (parsed.data.salary_documented) out.set("salary", "1");
-  if (parsed.data.distance_max !== undefined)
-    out.set("distance_max", String(parsed.data.distance_max));
-  if (parsed.data.page !== 1) out.set("page", String(parsed.data.page));
-  if (parsed.data.match) out.set("match", "1");
+  out.set("goal", normalized.goal);
+  if (normalized.keyword) out.set("q", normalized.keyword);
+  if (normalized.role) out.set("role", normalized.role);
+  if (normalized.company) out.set("company", normalized.company);
+  // Work place round-trips as `cities` (the normalized single-city location
+  // is intentionally NOT re-serialized as legacy `location`).
+  if (normalized.cities.length > 0)
+    out.set("cities", normalized.cities.join(","));
+  else if (normalized.location) out.set("location", normalized.location);
+  if (normalized.beginn !== "any") out.set("beginn", normalized.beginn);
+  if (normalized.radius !== undefined)
+    out.set("radius", String(normalized.radius));
+  if (normalized.freshness !== "any")
+    out.set("freshness", normalized.freshness);
+  if (normalized.sort !== "relevance") out.set("sort", normalized.sort);
+  if (normalized.employment !== "any") out.set("employment", normalized.employment);
+  if (normalized.training_type !== "any")
+    out.set("training_type", normalized.training_type);
+  if (normalized.home_office !== "any")
+    out.set("home_office", normalized.home_office);
+  if (normalized.salary !== "any") out.set("salary", normalized.salary);
+  if (normalized.contact_email !== "any")
+    out.set("email", normalized.contact_email);
+  if (normalized.distance_max !== undefined)
+    out.set("distance_max", String(normalized.distance_max));
+  if (normalized.page !== 1) out.set("page", String(normalized.page));
+  if (normalized.match) out.set("match", "1");
   return out.toString();
 }
 
@@ -272,14 +382,21 @@ export interface SearchUrlState {
   keyword: string;
   role: string;
   company: string;
+  /** Free-text location from legacy shareable URLs (no longer editable in
+   *  the UI — the Work place filter uses `cities`). */
   location: string;
+  /** Curated Work place cities (max 20; one → native source location). */
+  cities: string[];
+  /** Beginn filter: "any" | "now" | "YYYY-MM". */
+  beginn: string;
   radius: number | null;
-  freshness: "any" | "today" | "14d" | "30d";
+  freshness: "any" | "today" | "yesterday" | "1w" | "2w" | "4w";
   sort: OpportunitySort;
   employment: "any" | "full_time" | "part_time";
   training_type: "any" | "AUSBILDUNG" | "DUALES_STUDIUM";
   home_office: "any" | "yes";
-  salary_documented: boolean;
+  salary: "any" | "documented" | "missing";
+  contact_email: "any" | "available";
   distance_max: number | null;
   page: number;
   match: boolean;
@@ -292,33 +409,33 @@ export function parseSearchUrlState(
   fallbackGoal: "ausbildung" | "arbeit",
 ): SearchUrlState {
   const sanitized = sanitizeSearchUrlState(rawQuery);
-  const defaults: OpportunitySearchParams = {
-    goal: fallbackGoal,
-    keyword: "",
-    role: "",
-    company: "",
-    location: "",
-    freshness: "any",
-    sort: "relevance",
-    employment: "any",
-    training_type: "any",
-    home_office: "any",
-    salary_documented: false,
-    page: 1,
-    pageSize: 20,
-    match: true,
-  };
   if (!sanitized) {
     return {
-      ...defaults,
+      goal: fallbackGoal,
+      keyword: "",
+      role: "",
+      company: "",
+      location: "",
+      cities: [],
+      beginn: "any",
       radius: null,
+      freshness: "any",
+      sort: "relevance",
+      employment: "any",
+      training_type: "any",
+      home_office: "any",
+      salary: "any",
+      contact_email: "any",
       distance_max: null,
+      page: 1,
+      match: true,
     };
   }
   const candidate: Record<string, unknown> = { goal: fallbackGoal };
   for (const [key, value] of new URLSearchParams(sanitized).entries()) {
     if (key === "q") candidate.keyword = value;
-    else if (key === "salary") candidate.salary_documented = value === "1";
+    else if (key === "cities") candidate.cities = parseCitiesParam(value);
+    else if (key === "email") candidate.contact_email = value;
     else candidate[key] = value;
   }
   const parsed = searchParamsSchema.parse(candidate);
@@ -332,13 +449,16 @@ export function parseSearchUrlState(
     role: normalized.role,
     company: normalized.company,
     location: normalized.location,
+    cities: normalized.cities,
+    beginn: normalized.beginn,
     radius: normalized.radius ?? null,
     freshness: normalized.freshness,
     sort: normalized.sort,
     employment: normalized.employment,
     training_type: normalized.training_type,
     home_office: normalized.home_office,
-    salary_documented: normalized.salary_documented,
+    salary: normalized.salary,
+    contact_email: normalized.contact_email,
     distance_max: normalized.distance_max ?? null,
     page: normalized.page,
     match: hasMatchKey ? normalized.match : true,
@@ -352,7 +472,9 @@ export function serializeSearchState(state: SearchUrlState): string {
   if (state.keyword) out.set("q", state.keyword);
   if (state.role) out.set("role", state.role);
   if (state.company) out.set("company", state.company);
-  if (state.location) out.set("location", state.location);
+  if (state.cities.length > 0) out.set("cities", state.cities.join(","));
+  else if (state.location) out.set("location", state.location);
+  if (state.beginn !== "any") out.set("beginn", state.beginn);
   if (state.radius !== null) out.set("radius", String(state.radius));
   if (state.freshness !== "any") out.set("freshness", state.freshness);
   if (state.sort !== "relevance") out.set("sort", state.sort);
@@ -360,7 +482,9 @@ export function serializeSearchState(state: SearchUrlState): string {
   if (state.training_type !== "any")
     out.set("training_type", state.training_type);
   if (state.home_office !== "any") out.set("home_office", state.home_office);
-  if (state.salary_documented) out.set("salary", "1");
+  if (state.salary !== "any") out.set("salary", state.salary);
+  if (state.contact_email !== "any")
+    out.set("email", state.contact_email);
   if (state.distance_max !== null)
     out.set("distance_max", String(state.distance_max));
   if (state.page !== 1) out.set("page", String(state.page));
@@ -629,6 +753,9 @@ export interface OpportunityWindow {
    *  after controlled retries (scan mode) — the results it carries are real,
    *  just incomplete. Never true for upstream mode (single request). */
   degraded: boolean;
+  /** REAL per-option counts for the "Published since" / "Beginn" filter UI
+   *  (scan mode; null in upstream mode — never fake numbers). */
+  filter_counts: SearchFilterCounts | null;
 }
 
 /** Per-source availability surfaced to the UI so a transient BA failure can
@@ -644,6 +771,32 @@ export interface SourceStatus {
   retryable: boolean;
 }
 
+/** REAL filter-option counts, computed from the bounded scan window AFTER
+ *  every other post-filter (goal/keyword/location/cities/role/company/salary/
+ *  email/employment/training/sort) — independent of the selected freshness /
+ *  beginn option, so switching options never changes the numbers. Present in
+ *  scan mode only (upstream mode has no server-side window to count from);
+ *  the UI shows no numbers rather than fake ones. When the window is
+ *  truncated the counts are the real counts within that window. */
+export interface SearchFilterCounts {
+  freshness: {
+    /** Base window size after all other filters (the "Show all" row). */
+    any: number;
+    today: number;
+    yesterday: number;
+    week: number;
+    twoWeeks: number;
+    fourWeeks: number;
+  };
+  beginn: {
+    /** Base window size after all other filters (the "Show all" row). */
+    any: number;
+    from_now: number;
+    /** Real documented start months present in the window (ascending). */
+    months: Array<{ month: string; count: number }>;
+  };
+}
+
 export interface OpportunitySearchResponse {
   /** The requested page of results (after any per-user match computation). */
   results: Opportunity[];
@@ -653,6 +806,8 @@ export interface OpportunitySearchResponse {
   /** True when the authenticated user has a candidate profile and match was
    *  requested — otherwise results carry match: null (not an empty match). */
   match_available: boolean;
+  /** Real option counts from the scanned window (scan mode), or null. */
+  filter_counts: SearchFilterCounts | null;
   /** Present when a source returned partial or no data for this request, so
    *  the UI can show a non-blocking notice. Omitted when everything is ok. */
   sources?: SourceStatus[];

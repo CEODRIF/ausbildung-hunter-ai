@@ -8,6 +8,7 @@ import {
   type Opportunity,
   type OpportunitySearchParams,
   type OpportunityWindow,
+  type SearchFilterCounts,
 } from "@/lib/opportunities/types";
 
 const SEARCH_URL =
@@ -90,15 +91,19 @@ function subObject(value: unknown): RawRecord | null {
  *   - arbeitszeit (remote filter returns 0 results for every value)
  *   - beruf (free-text role returns 0 results)
  *   - arbeitgeber (free-text company returns 0 results)
- * Role/company/freshness(14d,30d) are applied server-side in
- * searchArbeitsagentur() instead of pretending the API handled them.
+ * All "Published since" buckets are applied server-side on the documented
+ * publication date (unified semantics + consistent per-option counts),
+ * instead of pretending the API handled them (veroeffentlichtseit=1 was the
+ * only verified value; the day buckets need Berlin calendar-day precision).
  */
 export function buildSearchQuery(params: {
   goal: "ausbildung" | "arbeit";
   keyword: string;
   location: string;
   radius?: number;
-  freshness: "any" | "today" | "14d" | "30d";
+  /** Accepted for signature stability; no freshness parameter is sent —
+   *  see the note above. */
+  freshness: string;
   page: number;
   size: number;
 }): URLSearchParams {
@@ -111,7 +116,6 @@ export function buildSearchQuery(params: {
   if (params.location) query.set("wo", params.location);
   if (params.radius !== undefined && params.location)
     query.set("umkreis", String(params.radius));
-  if (params.freshness === "today") query.set("veroeffentlichtseit", "1");
   return query;
 }
 
@@ -875,13 +879,15 @@ export async function fetchBaJson(
   });
 }
 
-function berlinDay(offsetDays: number): string {
+/** Berlin calendar day (YYYY-MM-DD) `offsetDays` before `now`. Exported and
+ *  injectable so the freshness/beginn matchers stay deterministic in tests. */
+export function berlinDay(offsetDays: number, now: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Berlin",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date(Date.now() - offsetDays * 86_400_000));
+  }).format(new Date(now.getTime() - offsetDays * 86_400_000));
 }
 
 const foldNorm = (value: string) =>
@@ -891,13 +897,98 @@ const foldNorm = (value: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+/** Work place (multi-city): the documented location must name one of the
+ *  selected cities. Compared on the structured city first, then the display
+ *  location string ("10115 Berlin") — normalization-based, never a guess. */
+export function cityMatcher(cities: string[]) {
+  const folded = cities.map((city) => foldNorm(city)).filter(Boolean);
+  return (item: Opportunity) => {
+    const structured = item.location_detail?.city
+      ? foldNorm(item.location_detail.city)
+      : null;
+    const display = item.location ? foldNorm(item.location) : null;
+    return folded.some(
+      (city) =>
+        (structured !== null && structured.includes(city)) ||
+        (display !== null && display.includes(city)),
+    );
+  };
+}
+
+/** Real, documented contact email on the record: the source contact block or
+ *  the provenance-checked company enrichment. Only dedicated email fields are
+ *  read (never website/URL/phone, never free-text extraction); the shape
+ *  check guards against malformed stored values. */
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+export function hasRealContactEmail(item: Opportunity): boolean {
+  const contactEmail = item.contact?.email;
+  const enrichmentEmail = item.enrichment?.email;
+  return (
+    (contactEmail !== null && contactEmail !== undefined && EMAIL_SHAPE.test(contactEmail)) ||
+    (enrichmentEmail !== null && enrichmentEmail !== undefined && EMAIL_SHAPE.test(enrichmentEmail))
+  );
+}
+
+/** "Published since" bucket for a documented publication day (YYYY-MM-DD). */
+function freshnessBucketMatches(
+  item: Opportunity,
+  freshness: OpportunitySearchParams["freshness"],
+  now: Date,
+): boolean {
+  const day = item.posted_at ? item.posted_at.slice(0, 10) : null;
+  if (!day) return false; // never guess a missing publication date
+  switch (freshness) {
+    case "today":
+      return day === berlinDay(0, now);
+    case "yesterday":
+      return day === berlinDay(1, now);
+    case "1w":
+      return day >= berlinDay(7, now);
+    case "2w":
+      return day >= berlinDay(14, now);
+    case "4w":
+      return day >= berlinDay(28, now);
+    default:
+      return true;
+  }
+}
+
+/** Beginn (planned start) from the documented `valid_from` only. */
+function beginnMatches(
+  item: Opportunity,
+  beginn: OpportunitySearchParams["beginn"],
+  now: Date,
+): boolean {
+  if (beginn === "any") return true;
+  const start = item.valid_from ? item.valid_from.slice(0, 10) : null;
+  if (!start) return false; // no documented start → never matches a bucket
+  return beginn === "now"
+    ? start >= berlinDay(0, now)
+    : item.valid_from!.slice(0, 7) === beginn;
+}
+
+export interface BuildMatchersOptions {
+  /** Deterministic "now" (Berlin-day boundaries) — injectable for tests. */
+  now?: Date;
+  /** Exclude a filter from the set (used to compute per-option counts). */
+  exclude?: Array<"freshness" | "beginn">;
+}
+
 /**
  * Server-side filters the BA REST API cannot express. Each matcher returns
  * false for items that cannot be verified against the source (no data) rather
  * than guessing.
  */
-export function buildMatchers(params: OpportunitySearchParams) {
+export function buildMatchers(
+  params: OpportunitySearchParams,
+  options: BuildMatchersOptions = {},
+) {
+  const now = options.now ?? new Date();
+  const excluded = new Set(options.exclude ?? []);
   const matchers: Array<(item: Opportunity) => boolean> = [];
+  if (params.cities.length >= 2) {
+    matchers.push(cityMatcher(params.cities));
+  }
   if (params.role) {
     const queryTokens = foldNorm(params.role).split(" ").filter(Boolean);
     if (queryTokens.length) {
@@ -925,11 +1016,11 @@ export function buildMatchers(params: OpportunitySearchParams) {
       );
     }
   }
-  if (params.freshness === "14d" || params.freshness === "30d") {
-    const cutoff = berlinDay(params.freshness === "14d" ? 14 : 30);
-    matchers.push((item) =>
-      item.posted_at ? item.posted_at.slice(0, 10) >= cutoff : false,
-    );
+  if (params.freshness !== "any" && !excluded.has("freshness")) {
+    matchers.push((item) => freshnessBucketMatches(item, params.freshness, now));
+  }
+  if (params.beginn !== "any" && !excluded.has("beginn")) {
+    matchers.push((item) => beginnMatches(item, params.beginn, now));
   }
   if (params.employment === "full_time") {
     matchers.push((item) =>
@@ -947,8 +1038,14 @@ export function buildMatchers(params: OpportunitySearchParams) {
   if (params.home_office === "yes") {
     matchers.push((item) => item.home_office === true);
   }
-  if (params.salary_documented) {
+  if (params.salary === "documented") {
     matchers.push((item) => item.salary !== null);
+  }
+  if (params.salary === "missing") {
+    matchers.push((item) => item.salary === null);
+  }
+  if (params.contact_email === "available") {
+    matchers.push(hasRealContactEmail);
   }
   if (params.distance_max !== undefined) {
     const max = params.distance_max;
@@ -957,6 +1054,51 @@ export function buildMatchers(params: OpportunitySearchParams) {
     );
   }
   return matchers;
+}
+
+/**
+ * REAL per-option counts for the filter UI, computed from the bounded scan
+ * window (after every post-filter EXCEPT freshness/beginn, so the numbers
+ * stay stable while the user switches those options). Nothing is estimated:
+ * items without a documented publication date or start are counted in NO
+ * bucket. In upstream mode there is no server-side window → null (the UI
+ * shows no numbers rather than fake ones).
+ */
+export function computeFilterCounts(
+  items: Opportunity[],
+  now: Date = new Date(),
+): SearchFilterCounts {
+  let today = 0;
+  let yesterday = 0;
+  let week = 0;
+  let twoWeeks = 0;
+  let fourWeeks = 0;
+  let fromNow = 0;
+  const months = new Map<string, number>();
+  const todayStr = berlinDay(0, now);
+  for (const item of items) {
+    const day = item.posted_at ? item.posted_at.slice(0, 10) : null;
+    if (day) {
+      if (day === todayStr) today += 1;
+      if (day === berlinDay(1, now)) yesterday += 1;
+      if (day >= berlinDay(7, now)) week += 1;
+      if (day >= berlinDay(14, now)) twoWeeks += 1;
+      if (day >= berlinDay(28, now)) fourWeeks += 1;
+    }
+    if (item.valid_from) {
+      if (item.valid_from.slice(0, 10) >= todayStr) fromNow += 1;
+      const month = item.valid_from.slice(0, 7);
+      months.set(month, (months.get(month) ?? 0) + 1);
+    }
+  }
+  const monthList = [...months.entries()]
+    .map(([month, count]) => ({ month, count }))
+    .sort((a, b) => (a.month < b.month ? -1 : a.month > b.month ? 1 : 0))
+    .slice(0, 24);
+  return {
+    freshness: { any: items.length, today, yesterday, week, twoWeeks, fourWeeks },
+    beginn: { any: items.length, from_now: fromNow, months: monthList },
+  };
 }
 
 /**
@@ -1071,16 +1213,18 @@ export async function fetchOpportunityWindow(
       scan_truncated: false,
       exhausted: true,
       degraded: false,
+      // Upstream mode has no server-side window to count from — the UI shows
+      // no option numbers rather than fake ones.
+      filter_counts: null,
     };
   }
 
-  const matchers = buildMatchers(params);
-  // Collect the full bounded window before filtering/sorting. We do NOT stop
+  // Collect the full bounded window BEFORE filtering/sorting. We do NOT stop
   // early at `page*pageSize`: with a non-relevance sort the items that sort to
   // the front are not the first items in source (relevance) order, so a
   // partial collection would sort an incomplete subset. The window is cached
   // page-independently, so turning pages never re-hits the provider.
-  const collected: Opportunity[] = [];
+  const rawWindow: Opportunity[] = [];
   const seen = new Set<string>();
   let sourceTotal = Number.MAX_SAFE_INTEGER;
   let exhausted = false;
@@ -1091,8 +1235,9 @@ export async function fetchOpportunityWindow(
       keyword: params.keyword,
       location: params.location,
       radius: params.radius,
-      // "today" still maps to the API parameter here; "14d"/"30d" are no-ops
-      // for the API and handled by the date matcher above.
+      // No freshness parameter is sent: every "Published since" bucket is a
+      // server-side matcher on the documented publication date (consistent
+      // semantics + consistent per-option counts from one window).
       freshness: params.freshness,
       page,
       size: SCAN_PAGE_SIZE,
@@ -1121,14 +1266,27 @@ export async function fetchOpportunityWindow(
       const normalized = normalizeSearchItem(item, params.goal);
       if (!normalized || seen.has(normalized.id)) continue;
       seen.add(normalized.id);
-      if (matchers.every((matcher) => matcher(normalized)))
-        collected.push(normalized);
+      rawWindow.push(normalized);
     }
     if (items.length < SCAN_PAGE_SIZE || page * SCAN_PAGE_SIZE >= sourceTotal) {
       exhausted = true;
       break;
     }
   }
+  // REAL option counts: every post-filter applied EXCEPT freshness/beginn
+  // (the two filters the numbers belong to), so the counts stay stable while
+  // the user switches those options. Deterministic for the window.
+  const filter_counts = computeFilterCounts(
+    rawWindow.filter(
+      (item) =>
+        buildMatchers(params, {
+          exclude: ["freshness", "beginn"],
+        }).every((matcher) => matcher(item)),
+    ),
+  );
+  const collected = rawWindow.filter((item) =>
+    buildMatchers(params).every((matcher) => matcher(item)),
+  );
   const sorted = sortWindow(collected, params.sort);
   return {
     mode: "scan",
@@ -1137,6 +1295,7 @@ export async function fetchOpportunityWindow(
     scan_truncated: !exhausted || degraded,
     exhausted,
     degraded,
+    filter_counts,
   };
 }
 

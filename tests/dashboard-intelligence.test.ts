@@ -645,6 +645,7 @@ describe("getDashboardData", () => {
       scan_truncated: false,
       mode: "upstream",
       match_available: true,
+      filter_counts: null,
     });
   });
 
@@ -783,6 +784,7 @@ describe("getDashboardData", () => {
       scan_truncated: false,
       mode: "upstream",
       match_available: true,
+      filter_counts: null,
     });
     vi.mocked(listSavedOpportunities).mockResolvedValue([
       {

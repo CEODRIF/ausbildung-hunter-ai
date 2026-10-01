@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { CopyEmailButton } from "@/components/copy-email";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import {
@@ -69,18 +70,32 @@ export default async function OpportunityDetailsPage({
   const backHref = backQuery ? `/opportunities?${backQuery}` : "/opportunities";
   const [t, lang] = await Promise.all([getServerT(), getRequestLang()]);
   const locale = localeForLang(lang);
-  let details: Awaited<ReturnType<typeof getOpportunityDetails>> | null = null;
-  let stateError: string | null = null;
-  try {
-    details = await getOpportunityDetails(id, { userId: user.id });
-  } catch (error) {
-    if (error instanceof OpportunityNotFoundError) {
-      stateError = error.message;
-    } else {
-      stateError = t("account.unavailableTitle");
-    }
-  }
-  const savedRows = stateError ? [] : await listSavedOpportunities(user.id);
+  // Parallel server-side fetch: details (details-cache → BA), the user's
+  // saved rows (save-state badge + snapshot provenance) and the profile
+  // revision (snapshot staleness) all resolve in ONE round-trip instead of
+  // three sequential awaits — this is the main latency fix for the page.
+  const [detailsResult, savedRows, profileRevision] = await Promise.all([
+    (async () => {
+      try {
+        return {
+          details: await getOpportunityDetails(id, { userId: user.id }),
+          error: null as string | null,
+        };
+      } catch (error) {
+        return {
+          details: null,
+          error:
+            error instanceof OpportunityNotFoundError
+              ? error.message
+              : t("account.unavailableTitle"),
+        };
+      }
+    })(),
+    listSavedOpportunities(user.id),
+    getProfileRevision(user.id),
+  ]);
+  const details = detailsResult.details;
+  const stateError = detailsResult.error;
   const savedKeys = new Set(savedRows.map((row) => row.opportunity_key));
 
   if (stateError || !details) {
@@ -114,7 +129,6 @@ export default async function OpportunityDetailsPage({
     (row) => row.opportunity_key === opportunity.id,
   );
   if (savedRow && match) {
-    const profileRevision = await getProfileRevision(user.id);
     const staleness = evaluateSnapshotStaleness(savedRow, {
       profileUpdatedAt: profileRevision,
       matcherVersion: MATCHER_VERSION,
@@ -211,6 +225,14 @@ export default async function OpportunityDetailsPage({
               label={t("account.occupation")}
               value={opportunity.profession || t("account.notSpecified")}
             />
+            <Info
+              label={
+                opportunity.goal === "ausbildung"
+                  ? t("account.trainingSalary")
+                  : t("account.salary")
+              }
+              value={opportunity.salary?.label ?? t("account.notSpecified")}
+            />
             {opportunity.goal === "ausbildung" && (
               <Info
                 label={t("account.requiredEducation")}
@@ -275,22 +297,78 @@ export default async function OpportunityDetailsPage({
             </div>
           )}
 
-          {opportunity.contact && (
-            <div className="mt-8 rounded-2xl bg-surface-2 p-5">
-              <h3 className="text-xs font-bold uppercase tracking-[0.08em] text-ink">
-                {t("account.contact")}
-              </h3>
-              <p className="mt-2 text-sm text-muted">
-                {[
-                  opportunity.contact.person,
-                  opportunity.contact.phone,
-                  opportunity.contact.email,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </p>
-            </div>
-          )}
+          {(() => {
+            // Same source-of-truth as the "Contact email" search filter:
+            // the source contact block first, then the provenance-checked
+            // company enrichment; a structural shape check guards both.
+            // Websites, URLs and phone numbers are never treated as emails.
+            const emailShape = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+            const sourceEmail =
+              opportunity.contact?.email &&
+              emailShape.test(opportunity.contact.email)
+                ? opportunity.contact.email
+                : null;
+            const companyEmail =
+              !sourceEmail &&
+              opportunity.enrichment?.email &&
+              emailShape.test(opportunity.enrichment.email)
+                ? opportunity.enrichment.email
+                : null;
+            const email = sourceEmail ?? companyEmail;
+            const person = opportunity.contact?.person;
+            const phone = opportunity.contact?.phone;
+            return (
+              <div className="mt-8 rounded-2xl bg-surface-2 p-5">
+                <h3 className="text-xs font-bold uppercase tracking-[0.08em] text-ink">
+                  {t("account.contact")}
+                </h3>
+                <div className="mt-3 space-y-2.5">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-faint">
+                      {t("account.email")}
+                    </span>
+                    {email ? (
+                      <>
+                        <span className="break-all text-sm font-semibold text-ink-soft">
+                          {email}
+                        </span>
+                        <CopyEmailButton email={email} />
+                        {companyEmail && (
+                          <span className="text-xs text-muted">
+                            {t("account.emailFromCompany")}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-sm text-muted">
+                        {t("account.emailNotAvailable")}
+                      </span>
+                    )}
+                  </div>
+                  {person && (
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-faint">
+                        {t("account.person")}
+                      </span>
+                      <span className="text-sm font-semibold text-ink-soft">
+                        {person}
+                      </span>
+                    </div>
+                  )}
+                  {phone && (
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-faint">
+                        {t("account.phone")}
+                      </span>
+                      <span className="text-sm font-semibold text-ink-soft">
+                        {phone}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           <p className="mt-8 text-xs text-muted">
             {t("account.retrievedFrom", {

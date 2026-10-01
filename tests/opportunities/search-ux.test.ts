@@ -158,7 +158,7 @@ describe("search route validation", () => {
     await GET(
       new Request(
         searchUrl(
-          "goal=ausbildung&role=Kaufmann&company=Perzukunft&location=Berlin&freshness=30d&sort=newest&employment=full_time&training_type=AUSBILDUNG&home_office=yes&salary=1&distance_max=20",
+          "goal=ausbildung&role=Kaufmann&company=Perzukunft&location=Berlin&freshness=4w&sort=newest&employment=full_time&training_type=AUSBILDUNG&home_office=yes&salary=1&distance_max=20",
         ),
       ),
     );
@@ -167,7 +167,7 @@ describe("search route validation", () => {
       expect(url).not.toContain("arbeitszeit=");
       expect(url).not.toContain("beruf=");
       expect(url).not.toContain("arbeitgeber=");
-      expect(url).not.toContain("veroeffentlichtseit="); // 30d is server-side
+      expect(url).not.toContain("veroeffentlichtseit="); // 4w is server-side
     }
   });
 });
@@ -210,12 +210,61 @@ describe("shareable URL state", () => {
     expect(params.get("goal")).toBe("ausbildung");
     expect(params.get("q")).toBe("marketing");
     expect(params.get("location")).toBe("Berlin");
-    expect(params.get("freshness")).toBe("14d");
+    // Legacy value mapping: 14d → 2w.
+    expect(params.get("freshness")).toBe("2w");
     expect(params.get("sort")).toBe("newest");
     expect(params.has("token")).toBe(false);
     expect(params.has("user_id")).toBe(false);
     expect(params.has("id")).toBe(false);
     expect(params.has("service_role")).toBe(false);
+  });
+
+  it("maps legacy freshness values (14d→2w, 30d→4w) and salary (1→documented, 0→any)", () => {
+    const twoWeeks = new URLSearchParams(
+      sanitizeSearchUrlState("goal=arbeit&freshness=14d"),
+    );
+    expect(twoWeeks.get("freshness")).toBe("2w");
+    const fourWeeks = new URLSearchParams(
+      sanitizeSearchUrlState("goal=arbeit&freshness=30d"),
+    );
+    expect(fourWeeks.get("freshness")).toBe("4w");
+    const documented = new URLSearchParams(
+      sanitizeSearchUrlState("goal=arbeit&salary=1"),
+    );
+    expect(documented.get("salary")).toBe("documented");
+    const anySalary = new URLSearchParams(
+      sanitizeSearchUrlState("goal=arbeit&salary=0"),
+    );
+    // "any" is the default — not re-serialized.
+    expect(anySalary.get("salary")).toBeNull();
+  });
+
+  it("round-trips Work place cities (curated only, deduped, invalid dropped)", () => {
+    const raw = "goal=arbeit&cities=Berlin,München,Bogus,Berlin";
+    const state = parseSearchUrlState(raw, "ausbildung");
+    expect(state.cities).toEqual(["Berlin", "München"]);
+    const serialized = serializeSearchState(state);
+    expect(serialized).toContain("cities=Berlin%2CM%C3%BCnchen");
+    // A normalized city selection serializes as cities, not as legacy location.
+    expect(serialized).not.toContain("location=");
+  });
+
+  it("round-trips beginn (now + real months) and the contact-email filter", () => {
+    const state = parseSearchUrlState(
+      "goal=ausbildung&beginn=2026-11&email=available",
+      "arbeit",
+    );
+    expect(state.beginn).toBe("2026-11");
+    expect(state.contact_email).toBe("available");
+    const again = parseSearchUrlState(serializeSearchState(state), "arbeit");
+    expect(again).toEqual(state);
+    const nowState = parseSearchUrlState("goal=arbeit&beginn=now", "ausbildung");
+    expect(nowState.beginn).toBe("now");
+  });
+
+  it("drops invalid beginn months (schema-validated)", () => {
+    const state = parseSearchUrlState("goal=arbeit&beginn=2026-13", "arbeit");
+    expect(state.beginn).toBe("any");
   });
 
   it("drops the whole state when goal is missing or invalid", () => {
@@ -239,7 +288,7 @@ describe("shareable URL state", () => {
     expect(state.keyword).toBe("mechanik");
     expect(state.location).toBe("Hamburg");
     expect(state.sort).toBe("newest");
-    expect(state.salary_documented).toBe(true);
+    expect(state.salary).toBe("documented"); // legacy salary=1 mapped
     expect(state.page).toBe(2);
     expect(state.match).toBe(true); // UI default when absent
     const serialized = serializeSearchState(state);

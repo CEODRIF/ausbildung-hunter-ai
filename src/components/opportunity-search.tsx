@@ -1,17 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
 import { Icon } from "@/components/icon";
 import { EmptyState } from "@/components/empty-state";
 import {
   SEARCH_SOURCE_LIMIT,
+  WORKPLACE_CITIES,
   parseSearchUrlState,
   serializeSearchState,
   type Opportunity,
   type OpportunitySearchResponse,
+  type SearchFilterCounts,
   type SearchUrlState,
   type SourceStatus,
 } from "@/lib/opportunities/types";
@@ -35,12 +43,20 @@ const SORT_OPTIONS: Array<{ value: SearchUrlState["sort"]; key: string }> = [
   { value: "match", key: "search.sort.match" },
 ];
 
+/** "Published since" buckets (cumulative; REAL counts when the server
+ *  scanned a window — upstream mode has no counts, never fake numbers). */
 const FRESHNESS_OPTIONS = [
-  { value: "any", key: "search.freshness.any" },
-  { value: "today", key: "search.freshness.today" },
-  { value: "14d", key: "search.freshness.days14" },
-  { value: "30d", key: "search.freshness.days30" },
+  { value: "today", key: "search.freshness.today", countKey: "today" as const },
+  { value: "yesterday", key: "search.freshness.yesterday", countKey: "yesterday" as const },
+  { value: "1w", key: "search.freshness.week", countKey: "week" as const },
+  { value: "2w", key: "search.freshness.twoWeeks", countKey: "twoWeeks" as const },
+  { value: "4w", key: "search.freshness.fourWeeks", countKey: "fourWeeks" as const },
 ] as const;
+
+/** Bounded detail prefetch: at most N rows per loaded result set (hover
+ *  intent, idempotent per URL — never a request storm; details consume no
+ *  search credits and no quota). */
+const MAX_DETAIL_PREFETCHES = 3;
 
 function formatDay(iso: string | null, locale: string): string | null {
   if (!iso) return null;
@@ -54,11 +70,105 @@ function formatDay(iso: string | null, locale: string): string | null {
       });
 }
 
+/** "YYYY-MM" → localized short month (e.g. "Nov. 2026"). Noon UTC avoids
+ *  off-by-one-day at zone boundaries. */
+function formatMonth(ym: string, locale: string): string {
+  const parsed = new Date(`${ym}-01T12:00:00Z`);
+  return Number.isNaN(parsed.getTime())
+    ? ym
+    : parsed.toLocaleDateString(locale, {
+        month: "short",
+        year: "numeric",
+        timeZone: "UTC",
+      });
+}
+
+function FilterGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div>
+      <p className="text-xs font-bold uppercase tracking-[0.08em] text-faint">
+        {title}
+      </p>
+      <div className="mt-2">{children}</div>
+    </div>
+  );
+}
+
+function RadioRow({
+  name,
+  checked,
+  onSelect,
+  label,
+  count,
+  locale,
+}: {
+  name: string;
+  checked: boolean;
+  onSelect: () => void;
+  label: string;
+  count: number | null;
+  locale: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-ink-soft transition hover:bg-surface-2">
+      <input
+        type="radio"
+        name={name}
+        checked={checked}
+        onChange={() => onSelect()}
+        className="h-4 w-4 accent-accent"
+      />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {count !== null && (
+        <span className="text-xs font-semibold text-muted">
+          {count.toLocaleString(locale)}
+        </span>
+      )}
+    </label>
+  );
+}
+
+/** View Details with double-click protection and bounded hover prefetch. */
+function ViewDetailsButton({
+  href,
+  opportunityId,
+  openingId,
+  onOpen,
+  onHoverPrefetch,
+  t,
+}: {
+  href: string;
+  opportunityId: string;
+  openingId: string | null;
+  onOpen: (id: string, href: string) => void;
+  onHoverPrefetch: (id: string, href: string) => void;
+  t: (path: string, vars?: Record<string, string | number>) => string;
+}) {
+  const opening = openingId === opportunityId;
+  return (
+    <button
+      type="button"
+      disabled={openingId !== null}
+      onClick={() => onOpen(opportunityId, href)}
+      onPointerEnter={() => onHoverPrefetch(opportunityId, href)}
+      onFocus={() => onHoverPrefetch(opportunityId, href)}
+      className={`rounded-xl px-4 py-2 text-xs font-semibold text-white transition ${
+        opening
+          ? "cursor-wait bg-accent"
+          : "bg-navy hover:bg-accent disabled:opacity-60"
+      }`}
+    >
+      {opening ? t("search.viewDetailsLoading") : t("search.viewDetails")}
+    </button>
+  );
+}
+
 export function OpportunitySearch({
   defaultGoal,
   initialUrlState,
 }: OpportunitySearchProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const { t, lang } = useI18n();
   const locale = localeForLang(lang);
   const [state, setState] = useState<SearchUrlState>(() =>
@@ -69,11 +179,21 @@ export function OpportunitySearch({
   const [scanTruncated, setScanTruncated] = useState(false);
   const [mode, setMode] = useState<"upstream" | "scan" | null>(null);
   const [matchAvailable, setMatchAvailable] = useState(false);
+  const [filterCounts, setFilterCounts] = useState<SearchFilterCounts | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   /** Non-blocking source-status notice (degraded window) or retryable
    *  failure context (source_status from a structured 502). */
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
+  // View Details double-click guard: the id currently opening (any row
+  // stays disabled while one is).
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  const openingIdRef = useRef<string | null>(null);
+  // Bounded prefetch bookkeeping (one entry per hovered row, capped).
+  const prefetchedRef = useRef<Set<string>>(new Set());
   const startedRef = useRef(false);
   // Latest state mirror so handlers can compute the next state without side
   // effects inside a setState updater. commitSearch/scheduleSearch update it
@@ -86,6 +206,21 @@ export function OpportunitySearch({
   const searchSeqRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // A new result set gets a fresh prefetch budget, and leaving the page
+  // resets the opening guard.
+  useEffect(() => {
+    prefetchedRef.current = new Set();
+  }, [results]);
+  // Release the opening guard once the route actually changed (deferred —
+  // covers an aborted transition where this list stays mounted).
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      openingIdRef.current = null;
+      setOpeningId(null);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [pathname]);
 
   const search = useCallback(async (next: SearchUrlState) => {
     // Every search supersedes the previous one: abort the in-flight request
@@ -108,8 +243,14 @@ export function OpportunitySearch({
       if (next.keyword) query.set("q", next.keyword);
       if (next.role) query.set("role", next.role);
       if (next.company) query.set("company", next.company);
-      if (next.location) query.set("location", next.location);
+      // Work place: curated cities (single city becomes the native source
+      // location server-side). Legacy free-text location from old shareable
+      // URLs is passed through when no city is selected.
+      if (next.cities.length > 0) query.set("cities", next.cities.join(","));
+      if (next.location && next.cities.length === 0)
+        query.set("location", next.location);
       if (next.radius !== null) query.set("radius", String(next.radius));
+      if (next.beginn !== "any") query.set("beginn", next.beginn);
       if (next.freshness !== "any") query.set("freshness", next.freshness);
       if (next.sort !== "relevance") query.set("sort", next.sort);
       if (next.employment !== "any") query.set("employment", next.employment);
@@ -117,7 +258,9 @@ export function OpportunitySearch({
         query.set("training_type", next.training_type);
       if (next.home_office !== "any")
         query.set("home_office", next.home_office);
-      if (next.salary_documented) query.set("salary", "1");
+      if (next.salary !== "any") query.set("salary", next.salary);
+      if (next.contact_email !== "any")
+        query.set("email", next.contact_email);
       if (next.distance_max !== null)
         query.set("distance_max", String(next.distance_max));
       const response = await fetch(
@@ -149,24 +292,26 @@ export function OpportunitySearch({
       setScanTruncated(data.scan_truncated);
       setMode(data.mode);
       setMatchAvailable(data.match_available);
+      setFilterCounts(data.filter_counts ?? null);
       // Non-blocking notice only when a source actually degraded.
       const failed = data.sources?.find((s) => s.status !== "ok");
       if (failed) setSourceStatus(failed);
-     } catch (searchError) {
-       if (controller.signal.aborted || seq !== searchSeqRef.current) return;
-       setResults(null);
-       setTotal(null);
-       setScanTruncated(false);
-       setSourceStatus(null);
-       setError(
-         searchError instanceof Error
-           ? searchError.message
-           : t("search.error"),
-       );
-     } finally {
-       if (seq === searchSeqRef.current) setLoading(false);
-     }
-   }, [t]);
+    } catch (searchError) {
+      if (controller.signal.aborted || seq !== searchSeqRef.current) return;
+      setResults(null);
+      setTotal(null);
+      setScanTruncated(false);
+      setSourceStatus(null);
+      setFilterCounts(null);
+      setError(
+        searchError instanceof Error
+          ? searchError.message
+          : t("search.error"),
+      );
+    } finally {
+      if (seq === searchSeqRef.current) setLoading(false);
+    }
+  }, [t]);
 
   const syncUrl = (next: SearchUrlState) => {
     const qs = serializeSearchState(next);
@@ -218,21 +363,36 @@ export function OpportunitySearch({
     [],
   );
 
-  const hasLocation = state.location.trim().length > 0;
   const isAusbildung = state.goal === "ausbildung";
+  const legacyLocation =
+    state.location.trim().length > 0 && state.cities.length === 0;
   const hasActiveFilters =
     state.keyword !== "" ||
     state.role !== "" ||
     state.company !== "" ||
-    state.location !== "" ||
+    legacyLocation ||
+    state.cities.length > 0 ||
     state.radius !== null ||
+    state.beginn !== "any" ||
     state.freshness !== "any" ||
     state.sort !== "relevance" ||
     state.employment !== "any" ||
     state.training_type !== "any" ||
     state.home_office !== "any" ||
-    state.salary_documented ||
+    state.salary !== "any" ||
+    state.contact_email !== "any" ||
     state.distance_max !== null;
+
+  const activeFilterCount =
+    (state.cities.length > 0 ? 1 : 0) +
+    (state.freshness !== "any" ? 1 : 0) +
+    (state.beginn !== "any" ? 1 : 0) +
+    (state.salary !== "any" ? 1 : 0) +
+    (state.contact_email !== "any" ? 1 : 0) +
+    (state.employment !== "any" ? 1 : 0) +
+    (state.training_type !== "any" ? 1 : 0) +
+    (state.home_office !== "any" ? 1 : 0) +
+    (legacyLocation ? 1 : 0);
 
   const clearFilters = () =>
     commitSearch((current) => ({
@@ -241,15 +401,39 @@ export function OpportunitySearch({
       role: "",
       company: "",
       location: "",
+      cities: [],
       radius: null,
+      beginn: "any",
       freshness: "any",
       sort: "relevance",
       employment: "any",
       training_type: "any",
       home_office: "any",
-      salary_documented: false,
+      salary: "any",
+      contact_email: "any",
       distance_max: null,
     }));
+
+  // --- View Details: double-click guard + bounded hover prefetch ----------
+  const openDetails = useCallback(
+    (opportunityId: string, href: string) => {
+      if (openingIdRef.current) return; // a row is already opening
+      openingIdRef.current = opportunityId;
+      setOpeningId(opportunityId);
+      router.push(href);
+    },
+    [router],
+  );
+  const hoverPrefetch = useCallback(
+    (opportunityId: string, href: string) => {
+      if (openingIdRef.current) return;
+      if (prefetchedRef.current.size >= MAX_DETAIL_PREFETCHES) return;
+      if (prefetchedRef.current.has(opportunityId)) return;
+      prefetchedRef.current.add(opportunityId);
+      void router.prefetch(href);
+    },
+    [router],
+  );
 
   const maxReachable =
     mode === "scan" ? (total ?? 0) : Math.min(total ?? 0, SEARCH_SOURCE_LIMIT);
@@ -259,7 +443,8 @@ export function OpportunitySearch({
   const fromState = serializeSearchState(state);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      {/* Search bar: goal + keyword/role/company */}
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -267,28 +452,36 @@ export function OpportunitySearch({
         }}
         className="rounded-2xl border border-line bg-surface p-5 sm:p-6"
       >
-        {/* Goal */}
-        <div className="flex flex-wrap items-center gap-2">
-          {(["ausbildung", "arbeit"] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => commitSearch((current) => ({ ...current, goal: value }))}
-              className={
-                state.goal === value
-                  ? "rounded-lg bg-navy px-4 py-2 text-xs font-bold text-white"
-                  : "rounded-lg bg-surface-2 px-4 py-2 text-xs font-semibold text-muted"
-              }
-            >
-              {t(value === "ausbildung" ? "dash.goalAusbildung" : "dash.goalArbeit")}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {(["ausbildung", "arbeit"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() =>
+                  commitSearch((current) => ({ ...current, goal: value }))
+                }
+                className={
+                  state.goal === value
+                    ? "rounded-lg bg-navy px-4 py-2 text-xs font-bold text-white"
+                    : "rounded-lg bg-surface-2 px-4 py-2 text-xs font-semibold text-muted"
+                }
+              >
+                {t(value === "ausbildung" ? "dash.goalAusbildung" : "dash.goalArbeit")}
+              </button>
+            ))}
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-deep disabled:opacity-60"
+          >
+            {loading ? t("search.searching") : t("search.search")}
+          </button>
         </div>
-
-        {/* Primary row */}
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <input
-            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent sm:col-span-2"
+            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent sm:col-span-1"
             placeholder={t("search.ph.keyword")}
             value={state.keyword}
             maxLength={120}
@@ -302,153 +495,14 @@ export function OpportunitySearch({
           />
           <input
             className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
-            placeholder={t("search.ph.location")}
-            value={state.location}
-            maxLength={120}
-            onChange={(event) =>
-              scheduleSearch((current) => ({
-                ...current,
-                location: event.target.value,
-              }))
-            }
-            aria-label={t("search.ph.location")}
-          />
-          <input
-            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
-            placeholder={t("search.ph.radius")}
-            inputMode="numeric"
-            value={state.radius === null ? "" : String(state.radius)}
-            onChange={(event) => {
-              const raw = event.target.value.replace(/[^0-9]/g, "");
-              const value = raw === "" ? null : Number(raw);
-              scheduleSearch((current) => ({
-                ...current,
-                radius:
-                  value !== null && value >= 5 && value <= 100 ? value : null,
-              }));
-            }}
-            aria-label={t("search.ph.radius")}
-          />
-        </div>
-
-        {/* Filters row */}
-        <div className="mt-3 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          <select
-            className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
-            value={state.freshness}
-            onChange={(event) =>
-              commitSearch((current) => ({
-                ...current,
-                freshness: event.target.value as SearchUrlState["freshness"],
-              }))
-            }
-            aria-label={t("search.freshness.any")}
-          >
-            {FRESHNESS_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {t(option.key)}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
-            value={state.sort}
-            onChange={(event) =>
-              commitSearch((current) => ({
-                ...current,
-                sort: event.target.value as SearchUrlState["sort"],
-              }))
-            }
-            aria-label={t("search.sort.relevance")}
-          >
-            {SORT_OPTIONS.map((option) => (
-              <option
-                key={option.value}
-                value={option.value}
-                disabled={option.value === "match" && !state.match}
-              >
-                {t(option.key)}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
-            value={state.employment}
-            onChange={(event) =>
-              commitSearch((current) => ({
-                ...current,
-                employment: event.target.value as SearchUrlState["employment"],
-              }))
-            }
-            aria-label={t("search.employment.any")}
-          >
-            <option value="any">{t("search.employment.any")}</option>
-            <option value="full_time">{t("search.employment.fullTime")}</option>
-            <option value="part_time">{t("search.employment.partTime")}</option>
-          </select>
-          {isAusbildung && (
-            <select
-              className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
-              value={state.training_type}
-              onChange={(event) =>
-                commitSearch((current) => ({
-                  ...current,
-                  training_type: event.target
-                    .value as SearchUrlState["training_type"],
-                }))
-              }
-              aria-label={t("search.trainingType.any")}
-            >
-              <option value="any">{t("search.trainingType.any")}</option>
-              <option value="AUSBILDUNG">{t("search.trainingType.vocational")}</option>
-              <option value="DUALES_STUDIUM">{t("search.trainingType.dualStudy")}</option>
-            </select>
-          )}
-          {isAusbildung && (
-            <select
-              className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
-              value={state.home_office}
-              onChange={(event) =>
-                commitSearch((current) => ({
-                  ...current,
-                  home_office: event.target
-                    .value as SearchUrlState["home_office"],
-                }))
-              }
-              aria-label={t("search.homeOffice.any")}
-            >
-              <option value="any">{t("search.homeOffice.any")}</option>
-              <option value="yes">{t("search.homeOffice.yes")}</option>
-            </select>
-          )}
-          <select
-            className="rounded-xl border border-line bg-surface px-3 py-3 text-sm text-ink outline-none focus:border-accent"
-            value={state.salary_documented ? "1" : "0"}
-            onChange={(event) =>
-              commitSearch((current) => ({
-                ...current,
-                salary_documented: event.target.value === "1",
-              }))
-            }
-            aria-label={t("search.salary.any")}
-          >
-            <option value="0">{t("search.salary.any")}</option>
-            <option value="1">{t("search.salary.documented")}</option>
-          </select>
-        </div>
-
-        {/* Secondary row */}
-        <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <input
-            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
             placeholder={t("search.ph.role")}
             value={state.role}
             maxLength={120}
             onChange={(event) =>
-              commitSearch(
-                (current) => ({ ...current, role: event.target.value }),
-                false,
-              )
+              scheduleSearch((current) => ({
+                ...current,
+                role: event.target.value,
+              }))
             }
             aria-label={t("search.ph.role")}
           />
@@ -458,153 +512,441 @@ export function OpportunitySearch({
             value={state.company}
             maxLength={160}
             onChange={(event) =>
-              commitSearch(
-                (current) => ({ ...current, company: event.target.value }),
-                false,
-              )
+              scheduleSearch((current) => ({
+                ...current,
+                company: event.target.value,
+              }))
             }
             aria-label={t("search.ph.company")}
           />
-          {hasLocation && (
-            <input
-              className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
-              placeholder={t("search.ph.distanceMax")}
-              inputMode="numeric"
-              value={
-                state.distance_max === null ? "" : String(state.distance_max)
-              }
-              onChange={(event) => {
-                const raw = event.target.value.replace(/[^0-9]/g, "");
-                const value = raw === "" ? null : Number(raw);
-                commitSearch(
-                  (current) => ({
-                    ...current,
-                    distance_max:
-                      value !== null && value >= 5 && value <= 100
-                        ? value
-                        : null,
-                  }),
-                  false,
-                );
-              }}
-              aria-label={t("search.ph.distanceMax")}
+        </div>
+      </form>
+
+      <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start lg:gap-6">
+        {/* Mobile filter toggle */}
+        <div className="flex items-center justify-between lg:hidden">
+          <button
+            type="button"
+            onClick={() => setShowMobileFilters((value) => !value)}
+            className="rounded-xl bg-surface-2 px-4 py-2.5 text-xs font-semibold text-ink-soft"
+            aria-expanded={showMobileFilters}
+          >
+            {t("search.filters")}
+            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+            <Icon
+              name="chevronRight"
+              size={14}
+              className={`ml-1 inline transition-transform ${showMobileFilters ? "-rotate-90" : ""} rtl:-scale-x-100`}
             />
-          )}
+          </button>
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-          <label className="flex items-center gap-2 text-sm font-medium text-muted">
-            <input
-              type="checkbox"
-              checked={state.match}
-              onChange={(event) =>
-                commitSearch((current) => ({
-                  ...current,
-                  match: event.target.checked,
-                  sort:
-                    event.target.checked || current.sort !== "match"
-                      ? current.sort
-                      : "relevance",
-                }))
-              }
-              className="h-4 w-4 accent-accent"
-            />
-            {t("search.matchToggle")}
-          </label>
-          <div className="flex items-center gap-2">
+        {/* Filter panel */}
+        <aside
+          className={`${
+            showMobileFilters ? "block" : "hidden"
+          } rounded-2xl border border-line bg-surface lg:sticky lg:top-6 lg:block`}
+        >
+          <div className="flex items-center justify-between border-b border-line px-5 py-4">
+            <span className="text-sm font-bold text-ink">{t("search.filters")}</span>
             {hasActiveFilters && (
               <button
                 type="button"
                 onClick={clearFilters}
-                className="rounded-xl bg-surface-2 px-4 py-2.5 text-xs font-semibold text-muted transition hover:bg-line"
+                className="text-xs font-semibold text-accent hover:text-accent-deep"
               >
                 {t("search.clear")}
               </button>
             )}
-            <button
-              type="submit"
-              disabled={loading}
-              className="rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-deep disabled:opacity-60"
-            >
-              {loading ? t("search.searching") : t("search.search")}
-            </button>
           </div>
-        </div>
+          <div className="space-y-6 p-5">
+            {/* Work place */}
+            <FilterGroup title={t("search.workplace")}>
+              <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-surface-2 px-2 py-2 text-sm font-semibold text-ink-soft">
+                <input
+                  type="checkbox"
+                  checked={state.cities.length === 0}
+                  onChange={() =>
+                    commitSearch((current) => ({ ...current, cities: [] }))
+                  }
+                  className="h-4 w-4 accent-accent"
+                />
+                {t("search.showAll")}
+              </label>
+              <div className="mt-1 max-h-56 space-y-0.5 overflow-y-auto pr-1">
+                {WORKPLACE_CITIES.map((city) => {
+                  const checked = state.cities.includes(city);
+                  return (
+                    <label
+                      key={city}
+                      className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-ink-soft transition hover:bg-surface-2"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          commitSearch((current) => ({
+                            ...current,
+                            cities: checked
+                              ? current.cities.filter((c) => c !== city)
+                              : [...current.cities, city],
+                          }))
+                        }
+                        className="h-4 w-4 accent-accent"
+                      />
+                      <span className="min-w-0 flex-1 truncate">{city}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </FilterGroup>
 
-        {error && (
-          <div className="mt-4 rounded-xl bg-warning-soft p-3 text-sm font-medium text-danger">
-            <p>{error}</p>
-            {sourceStatus?.retryable && (
-              <button
-                type="button"
-                disabled={loading}
-                onClick={() => void search(state)}
-                className="mt-2 rounded-lg border border-danger/30 px-3 py-1.5 text-xs font-bold text-danger transition hover:bg-danger/10 disabled:opacity-60"
+            {/* Published since */}
+            <FilterGroup title={t("search.publishedSince")}>
+              <div className="space-y-0.5">
+                <RadioRow
+                  name="freshness"
+                  checked={state.freshness === "any"}
+                  onSelect={() =>
+                    commitSearch((current) => ({
+                      ...current,
+                      freshness: "any",
+                    }))
+                  }
+                  label={t("search.showAll")}
+                  count={filterCounts?.freshness.any ?? null}
+                  locale={locale}
+                />
+                {FRESHNESS_OPTIONS.map((option) => (
+                  <RadioRow
+                    key={option.value}
+                    name="freshness"
+                    checked={state.freshness === option.value}
+                    onSelect={() =>
+                      commitSearch((current) => ({
+                        ...current,
+                        freshness: option.value,
+                      }))
+                    }
+                    label={t(option.key)}
+                    count={filterCounts?.freshness[option.countKey] ?? null}
+                    locale={locale}
+                  />
+                ))}
+              </div>
+            </FilterGroup>
+
+            {/* Beginn */}
+            <FilterGroup title={t("search.beginn")}>
+              <div className="space-y-0.5">
+                <RadioRow
+                  name="beginn"
+                  checked={state.beginn === "any"}
+                  onSelect={() =>
+                    commitSearch((current) => ({ ...current, beginn: "any" }))
+                  }
+                  label={t("search.showAll")}
+                  count={filterCounts?.beginn.any ?? null}
+                  locale={locale}
+                />
+                <RadioRow
+                  name="beginn"
+                  checked={state.beginn === "now"}
+                  onSelect={() =>
+                    commitSearch((current) => ({ ...current, beginn: "now" }))
+                  }
+                  label={t("search.fromNowOn")}
+                  count={filterCounts?.beginn.from_now ?? null}
+                  locale={locale}
+                />
+                {(filterCounts?.beginn.months ?? []).map((entry) => (
+                  <RadioRow
+                    key={entry.month}
+                    name="beginn"
+                    checked={state.beginn === entry.month}
+                    onSelect={() =>
+                      commitSearch((current) => ({
+                        ...current,
+                        beginn: entry.month,
+                      }))
+                    }
+                    label={formatMonth(entry.month, locale)}
+                    count={entry.count}
+                    locale={locale}
+                  />
+                ))}
+              </div>
+            </FilterGroup>
+
+            {/* Salary */}
+            <FilterGroup
+              title={
+                isAusbildung ? t("search.trainingSalary") : t("search.salaryLabel")
+              }
+            >
+              <div className="space-y-0.5">
+                <RadioRow
+                  name="salary"
+                  checked={state.salary === "any"}
+                  onSelect={() =>
+                    commitSearch((current) => ({ ...current, salary: "any" }))
+                  }
+                  label={t("search.showAll")}
+                  count={null}
+                  locale={locale}
+                />
+                <RadioRow
+                  name="salary"
+                  checked={state.salary === "documented"}
+                  onSelect={() =>
+                    commitSearch((current) => ({
+                      ...current,
+                      salary: "documented",
+                    }))
+                  }
+                  label={t("search.salary.documented")}
+                  count={null}
+                  locale={locale}
+                />
+                <RadioRow
+                  name="salary"
+                  checked={state.salary === "missing"}
+                  onSelect={() =>
+                    commitSearch((current) => ({ ...current, salary: "missing" }))
+                  }
+                  label={t("search.salary.missing")}
+                  count={null}
+                  locale={locale}
+                />
+              </div>
+            </FilterGroup>
+
+            {/* Contact email */}
+            <FilterGroup title={t("search.contactEmail")}>
+              <div className="space-y-0.5">
+                <RadioRow
+                  name="contactEmail"
+                  checked={state.contact_email === "any"}
+                  onSelect={() =>
+                    commitSearch((current) => ({
+                      ...current,
+                      contact_email: "any",
+                    }))
+                  }
+                  label={t("search.showAll")}
+                  count={null}
+                  locale={locale}
+                />
+                <RadioRow
+                  name="contactEmail"
+                  checked={state.contact_email === "available"}
+                  onSelect={() =>
+                    commitSearch((current) => ({
+                      ...current,
+                      contact_email: "available",
+                    }))
+                  }
+                  label={t("search.emailAvailable")}
+                  count={null}
+                  locale={locale}
+                />
+              </div>
+            </FilterGroup>
+
+            {/* Employment / training type */}
+            <FilterGroup title={t("search.employment.any")}>
+              <select
+                className="w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent"
+                value={state.employment}
+                onChange={(event) =>
+                  commitSearch((current) => ({
+                    ...current,
+                    employment: event.target.value as SearchUrlState["employment"],
+                  }))
+                }
+                aria-label={t("search.employment.any")}
               >
-                {t("search.retry")}
-              </button>
+                <option value="any">{t("search.employment.any")}</option>
+                <option value="full_time">{t("search.employment.fullTime")}</option>
+                <option value="part_time">{t("search.employment.partTime")}</option>
+              </select>
+              {isAusbildung && (
+                <select
+                  className="mt-3 w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent"
+                  value={state.training_type}
+                  onChange={(event) =>
+                    commitSearch((current) => ({
+                      ...current,
+                      training_type: event.target
+                        .value as SearchUrlState["training_type"],
+                    }))
+                  }
+                  aria-label={t("search.trainingType.any")}
+                >
+                  <option value="any">{t("search.trainingType.any")}</option>
+                  <option value="AUSBILDUNG">{t("search.trainingType.vocational")}</option>
+                  <option value="DUALES_STUDIUM">{t("search.trainingType.dualStudy")}</option>
+                </select>
+              )}
+            </FilterGroup>
+
+            {/* Legacy location from an old shareable URL (not editable) */}
+            {legacyLocation && (
+              <div className="flex items-center justify-between gap-2 rounded-xl bg-surface-2 px-3 py-2 text-xs font-medium text-muted">
+                <span className="min-w-0 truncate">
+                  {t("search.locationChip", {
+                    value:
+                      state.radius !== null
+                        ? `${state.location} (${state.radius} km)`
+                        : state.location,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    commitSearch((current) => ({
+                      ...current,
+                      location: "",
+                      radius: null,
+                      distance_max: null,
+                    }))
+                  }
+                  className="shrink-0 font-bold text-accent hover:text-accent-deep"
+                  aria-label={t("search.clear")}
+                >
+                  ✕
+                </button>
+              </div>
             )}
           </div>
-        )}
-      </form>
+        </aside>
 
-      {results !== null && (
-        <div>
+        {/* Results column */}
+        <div className="min-w-0">
           {/* Source notice — only when the official source actually degraded */}
           {sourceStatus && sourceStatus.status === "degraded" && !error && (
             <div className="mb-4 rounded-xl bg-warning-soft p-3 text-sm font-medium text-warning">
               {t("search.sourcePartial")}
             </div>
           )}
-          {/* Result meta */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-             <p className="text-sm font-semibold text-muted">
-               {total !== null &&
-                 t(
-                   mode === "scan" && scanTruncated
-                     ? "search.resultsScanWindow"
-                     : "search.results",
-                   { count: total.toLocaleString(locale) },
-                 )}
-               {mode === "upstream" &&
-                 total !== null &&
-                 total >= SEARCH_SOURCE_LIMIT &&
-                 t("search.sourceLimit", {
-                   count: SEARCH_SOURCE_LIMIT.toLocaleString(locale),
-                 })}
-             </p>
-            <div className="flex flex-wrap items-center gap-2">
-              {mode === "scan" && scanTruncated && (
-                <span className="rounded-xl bg-warning-soft px-3 py-2 text-xs font-semibold text-warning">
-                  {t("search.scanTruncated")}
-                </span>
-              )}
-              {state.match && !matchAvailable && (
-                <Link
-                  href="/bewerbung-scanner"
-                  className="rounded-xl bg-warning-soft px-3 py-2 text-xs font-bold text-warning"
+
+          {error && (
+            <div className="mb-4 rounded-xl bg-warning-soft p-3 text-sm font-medium text-danger">
+              <p>{error}</p>
+              {sourceStatus?.retryable && (
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => void search(stateRef.current)}
+                  className="mt-2 rounded-lg border border-danger/30 px-3 py-1.5 text-xs font-bold text-danger transition hover:bg-danger/10 disabled:opacity-60"
                 >
-{t("search.matchUnavailable")}
-                </Link>
+                  {t("search.retry")}
+                </button>
               )}
             </div>
-          </div>
+          )}
+
+          {/* Result meta + toolbar */}
+          {results !== null && (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-muted">
+                {total !== null &&
+                  t(
+                    mode === "scan" && scanTruncated
+                      ? "search.resultsScanWindow"
+                      : "search.results",
+                    { count: total.toLocaleString(locale) },
+                  )}
+                {mode === "upstream" &&
+                  total !== null &&
+                  total >= SEARCH_SOURCE_LIMIT &&
+                  t("search.sourceLimit", {
+                    count: SEARCH_SOURCE_LIMIT.toLocaleString(locale),
+                  })}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {mode === "scan" && scanTruncated && (
+                  <span className="rounded-xl bg-warning-soft px-3 py-2 text-xs font-semibold text-warning">
+                    {t("search.scanTruncated")}
+                  </span>
+                )}
+                {state.match && !matchAvailable && (
+                  <Link
+                    href="/bewerbung-scanner"
+                    className="rounded-xl bg-warning-soft px-3 py-2 text-xs font-bold text-warning"
+                  >
+                    {t("search.matchUnavailable")}
+                  </Link>
+                )}
+                <select
+                  className="rounded-xl border border-line bg-surface px-3 py-2 text-xs font-semibold text-ink outline-none focus:border-accent"
+                  value={state.sort}
+                  onChange={(event) =>
+                    commitSearch((current) => ({
+                      ...current,
+                      sort: event.target.value as SearchUrlState["sort"],
+                    }))
+                  }
+                  aria-label={t("search.sort.relevance")}
+                >
+                  {SORT_OPTIONS.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      disabled={
+                        (option.value === "match" && !state.match) ||
+                        (option.value === "distance" && !state.location)
+                      }
+                    >
+                      {t(option.key)}
+                    </option>
+                  ))}
+                </select>
+                <label className="flex items-center gap-2 rounded-xl bg-surface px-3 py-2 text-xs font-medium text-muted">
+                  <input
+                    type="checkbox"
+                    checked={state.match}
+                    onChange={(event) =>
+                      commitSearch((current) => ({
+                        ...current,
+                        match: event.target.checked,
+                        sort:
+                          event.target.checked || current.sort !== "match"
+                            ? current.sort
+                            : "relevance",
+                      }))
+                    }
+                    className="h-4 w-4 accent-accent"
+                  />
+                  {t("search.matchToggle")}
+                </label>
+              </div>
+            </div>
+          )}
 
           {/* Results */}
-          <div className="mt-4 space-y-4">
-            {loading && (
+          <div
+            className={`mt-4 space-y-4 transition-opacity ${
+              loading && results !== null && results.length > 0
+                ? "pointer-events-none opacity-50"
+                : ""
+            }`}
+          >
+            {loading && (results === null || results.length === 0) && (
               <div className="rounded-2xl border border-line bg-surface p-10 text-center text-sm text-muted">
                 {t("search.loading")}
               </div>
             )}
-            {!loading && results.length === 0 && (
-              <EmptyState
-                icon="search"
-                title={t("search.none")}
-              />
+            {!loading && results !== null && results.length === 0 && (
+              <EmptyState icon="search" title={t("search.none")} />
             )}
-            {!loading &&
-              results.map((opportunity) => (
+            {results?.map((opportunity) => {
+              const detailHref =
+                `/opportunities/${encodeURIComponent(opportunity.id)}` +
+                (fromState
+                  ? `?from=${encodeURIComponent(fromState)}`
+                  : "");
+              return (
                 <article
                   key={opportunity.id}
                   className="rounded-2xl border border-line bg-surface p-5"
@@ -612,13 +954,13 @@ export function OpportunitySearch({
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                         <span className="rounded-lg bg-accent-soft px-2 py-1 text-[10px] font-bold uppercase text-accent">
-                           {t(
-                             opportunity.goal === "ausbildung"
-                               ? "dash.goalAusbildung"
-                               : "dash.goalArbeit",
-                           )}
-                         </span>
+                        <span className="rounded-lg bg-accent-soft px-2 py-1 text-[10px] font-bold uppercase text-accent">
+                          {t(
+                            opportunity.goal === "ausbildung"
+                              ? "dash.goalAusbildung"
+                              : "dash.goalArbeit",
+                          )}
+                        </span>
                         {opportunity.training_type && (
                           <span className="rounded-lg bg-ai-soft px-2 py-1 text-[10px] font-bold uppercase text-ai">
                             {opportunity.training_type
@@ -626,9 +968,13 @@ export function OpportunitySearch({
                               .replaceAll("_", " ")}
                           </span>
                         )}
-                        {opportunity.salary?.label && (
+                        {opportunity.salary?.label ? (
                           <span className="rounded-lg bg-success-soft px-2 py-1 text-[10px] font-bold text-success">
                             {opportunity.salary.label}
+                          </span>
+                        ) : (
+                          <span className="rounded-lg bg-surface-2 px-2 py-1 text-[10px] font-semibold text-faint">
+                            {t("search.salaryNotSpecified")}
                           </span>
                         )}
                         {opportunity.employment_type && (
@@ -664,6 +1010,12 @@ export function OpportunitySearch({
                                 date: formatDay(opportunity.posted_at, locale) ?? "",
                               })
                             : null,
+                          formatDay(opportunity.valid_from, locale)
+                            ? t("search.start", {
+                                date:
+                                  formatDay(opportunity.valid_from, locale) ?? "",
+                              })
+                            : null,
                         ]
                           .filter(Boolean)
                           .join(" · ")}
@@ -689,9 +1041,9 @@ export function OpportunitySearch({
                             </>
                           ) : (
                             <>
-                               <p className="text-xs font-bold text-warning">
-                                 {t("search.matchIncomplete")}
-                               </p>
+                              <p className="text-xs font-bold text-warning">
+                                {t("search.matchIncomplete")}
+                              </p>
                               <ul className="mt-1 space-y-0.5 text-xs text-muted">
                                 {opportunity.match.missing_information
                                   .slice(0, 2)
@@ -705,21 +1057,16 @@ export function OpportunitySearch({
                       )}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-3">
-                      <Link
-                        href={
-                          `/opportunities/${encodeURIComponent(opportunity.id)}` +
-                          (fromState
-                            ? `?from=${encodeURIComponent(fromState)}`
-                            : "")
-                        }
-                        className="rounded-xl bg-navy px-4 py-2 text-xs font-semibold text-white"
-                      >
-                        {t("search.viewDetails")}
-                      </Link>
+                      <ViewDetailsButton
+                        href={detailHref}
+                        opportunityId={opportunity.id}
+                        openingId={openingId}
+                        onOpen={openDetails}
+                        onHoverPrefetch={hoverPrefetch}
+                        t={t}
+                      />
                       <a
-                        href={
-                          opportunity.application_url ?? opportunity.source_url
-                        }
+                        href={opportunity.application_url ?? opportunity.source_url}
                         target="_blank"
                         rel="noreferrer"
                         className="text-xs font-bold text-accent"
@@ -734,50 +1081,53 @@ export function OpportunitySearch({
                     </div>
                   </div>
                 </article>
-              ))}
+              );
+            })}
           </div>
 
           {/* Pagination */}
-          <div className="mt-6 flex items-center justify-center gap-3">
-            <button
-              type="button"
-              disabled={!hasPrev || loading}
-              onClick={() =>
-                commitSearch(
-                  (current) => ({ ...current, page: current.page - 1 }),
-                  false,
-                )
-              }
-              className="rounded-xl bg-surface px-4 py-2.5 text-sm font-semibold text-accent shadow-sm transition hover:bg-background disabled:opacity-40"
-            >
-              <Icon name="chevronLeft" size={15} className="rtl:hidden" />
-              <Icon name="chevronRight" size={15} className="hidden rtl:block" />
-              {t("search.previous")}
-            </button>
-            <span className="text-sm font-semibold text-muted">
-              {t("search.page", {
-                page: state.page,
-                total: Math.max(1, Math.ceil(maxReachable / PAGE_SIZE)),
-              })}
-            </span>
-            <button
-              type="button"
-              disabled={!hasNext || loading}
-              onClick={() =>
-                commitSearch(
-                  (current) => ({ ...current, page: current.page + 1 }),
-                  false,
-                )
-              }
-              className="rounded-xl bg-surface px-4 py-2.5 text-sm font-semibold text-accent shadow-sm transition hover:bg-background disabled:opacity-40"
-            >
-              {t("search.next")}
-              <Icon name="chevronRight" size={15} className="rtl:hidden" />
-              <Icon name="chevronLeft" size={15} className="hidden rtl:block" />
-            </button>
-          </div>
+          {results !== null && results.length > 0 && (
+            <div className="mt-6 flex items-center justify-center gap-3">
+              <button
+                type="button"
+                disabled={!hasPrev || loading}
+                onClick={() =>
+                  commitSearch(
+                    (current) => ({ ...current, page: current.page - 1 }),
+                    false,
+                  )
+                }
+                className="rounded-xl bg-surface px-4 py-2.5 text-sm font-semibold text-accent shadow-sm transition hover:bg-background disabled:opacity-40"
+              >
+                <Icon name="chevronLeft" size={15} className="rtl:hidden" />
+                <Icon name="chevronRight" size={15} className="hidden rtl:block" />
+                {t("search.previous")}
+              </button>
+              <span className="text-sm font-semibold text-muted">
+                {t("search.page", {
+                  page: state.page,
+                  total: Math.max(1, Math.ceil(maxReachable / PAGE_SIZE)),
+                })}
+              </span>
+              <button
+                type="button"
+                disabled={!hasNext || loading}
+                onClick={() =>
+                  commitSearch(
+                    (current) => ({ ...current, page: current.page + 1 }),
+                    false,
+                  )
+                }
+                className="rounded-xl bg-surface px-4 py-2.5 text-sm font-semibold text-accent shadow-sm transition hover:bg-background disabled:opacity-40"
+              >
+                {t("search.next")}
+                <Icon name="chevronRight" size={15} className="rtl:hidden" />
+                <Icon name="chevronLeft" size={15} className="hidden rtl:block" />
+              </button>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -50,6 +50,27 @@ export const BA_SOURCE_ID = "bundesagentur";
  * v4: payload shape unchanged — `match` stays null in the shared window; the
  * explainable MatchResult is attached only in-memory, per user.
  */
+const freshnessCountsSchema = z.object({
+  any: z.number().int().min(0),
+  today: z.number().int().min(0),
+  yesterday: z.number().int().min(0),
+  week: z.number().int().min(0),
+  twoWeeks: z.number().int().min(0),
+  fourWeeks: z.number().int().min(0),
+});
+const filterCountsSchema = z.object({
+  freshness: freshnessCountsSchema,
+  beginn: z.object({
+    any: z.number().int().min(0),
+    from_now: z.number().int().min(0),
+    months: z.array(
+      z.object({
+        month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+        count: z.number().int().min(0),
+      }),
+    ),
+  }),
+});
 const cachePayloadSchema = z.object({
   mode: z.enum(["upstream", "scan"]),
   window: z.array(opportunitySchema),
@@ -59,6 +80,8 @@ const cachePayloadSchema = z.object({
   /** Partial window from a mid-scan upstream failure. `default(false)` keeps
    *  older cached payloads valid (they were never degraded). */
   degraded: z.boolean().default(false),
+  /** Real per-option counts (scan mode); v8 payloads always carry the field. */
+  filter_counts: filterCountsSchema.nullable().default(null),
   generated_at: z.string(),
 });
 type CachePayload = z.infer<typeof cachePayloadSchema>;
@@ -72,12 +95,15 @@ function providerQueryHash(params: OpportunitySearchParams, withPage: boolean) {
     company: params.company,
     location: params.location,
     radius: params.radius ?? null,
+    cities: params.cities,
+    beginn: params.beginn,
     freshness: params.freshness,
     sort: params.sort,
     employment: params.employment,
     training_type: params.training_type,
     home_office: params.home_office,
-    salary_documented: params.salary_documented,
+    salary: params.salary,
+    contact_email: params.contact_email,
     distance_max: params.distance_max ?? null,
     pageSize: params.pageSize,
   };
@@ -221,6 +247,7 @@ export async function searchOpportunities(
   const candidate =
     params.match && auth ? await getCandidateProfile(auth.userId) : null;
   const matchAvailable = candidate !== null;
+  const filter_counts = payload.filter_counts ?? null;
 
   let window = payload.window;
   if (matchAvailable && params.sort === "match") {
@@ -245,6 +272,7 @@ export async function searchOpportunities(
       scan_truncated: payload.scan_truncated,
       mode: payload.mode,
       match_available: true,
+      filter_counts,
       ...(sources ? { sources } : {}),
     };
   }
@@ -254,6 +282,7 @@ export async function searchOpportunities(
     scan_truncated: payload.scan_truncated,
     mode: payload.mode,
     match_available: matchAvailable,
+    filter_counts,
     ...(sources ? { sources } : {}),
   };
 }
@@ -349,14 +378,20 @@ export interface OpportunityDetailsResult {
  * when the user has a candidate profile, compute the match. Classification
  * (Ausbildung vs Arbeit) always comes from the source record — never from
  * query params.
+ *
+ * Performance: the opportunity lookup and the profile lookup are INDEPENDENT
+ * — they run in parallel (previously sequential: a cold details cache waited
+ * for the full BA detail call AND then for the profile round-trip).
  */
 export async function getOpportunityDetails(
   id: string,
   auth: { userId: string } | null,
 ): Promise<OpportunityDetailsResult> {
   if (!auth) throw new Error("Not authorized.");
-  const opportunity = await resolveOpportunityCached(id);
-  const candidate = await getCandidateProfile(auth.userId);
+  const [opportunity, candidate] = await Promise.all([
+    resolveOpportunityCached(id),
+    getCandidateProfile(auth.userId),
+  ]);
   if (!candidate) return { opportunity, match_available: false };
   return {
     opportunity: applyMatch(candidate, opportunity),

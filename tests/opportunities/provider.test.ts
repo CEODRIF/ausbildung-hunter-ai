@@ -61,13 +61,8 @@ describe("buildSearchQuery (verified BA v6 parameter surface)", () => {
     ).toBe("4");
   });
 
-  it("uses ver关于entlichtseit=1 only for freshness=today", () => {
-    for (const [freshness, expected] of [
-      ["today", "1"],
-      ["any", null],
-      ["14d", null],
-      ["30d", null],
-    ] as const) {
+  it("never sends a native freshness parameter (all buckets are server-side)", () => {
+    for (const freshness of ["any", "today", "yesterday", "1w", "2w", "4w"] as const) {
       expect(
         buildSearchQuery({
           goal: "arbeit",
@@ -77,7 +72,7 @@ describe("buildSearchQuery (verified BA v6 parameter surface)", () => {
           page: 1,
           size: 20,
         }).get("veroeffentlichtseit"),
-      ).toBe(expected);
+      ).toBeNull();
     }
   });
 
@@ -87,7 +82,7 @@ describe("buildSearchQuery (verified BA v6 parameter surface)", () => {
       keyword: "service",
       location: "Berlin",
       radius: 20,
-      freshness: "30d",
+      freshness: "4w",
       page: 1,
       size: 20,
     });
@@ -227,7 +222,7 @@ describe("freshness behavior (explicit, never silently ignored)", () => {
   const day = (offsetDays: number) =>
     new Date(Date.now() - offsetDays * 86_400_000).toISOString().slice(0, 10);
 
-  it("sends the API parameter for today and nothing for 14d/30d", async () => {
+  it("sends no native freshness parameter for any bucket (server-side semantics)", async () => {
     const urls: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -237,12 +232,12 @@ describe("freshness behavior (explicit, never silently ignored)", () => {
       }),
     );
     await fetchOpportunityWindow(baseParams({ freshness: "today" }));
-    expect(urls[0]).toContain("veroeffentlichtseit=1");
-    await fetchOpportunityWindow(baseParams({ freshness: "14d" }));
+    expect(urls[0]).not.toContain("veroeffentlichtseit");
+    await fetchOpportunityWindow(baseParams({ freshness: "4w" }));
     expect(urls[1]).not.toContain("veroeffentlichtseit");
   });
 
-  it("applies 14d server-side on the source publication date", async () => {
+  it("applies 2w server-side on the source publication date", async () => {
     const pages: Record<string, unknown> = {
       "1": {
         ergebnisliste: [
@@ -263,7 +258,7 @@ describe("freshness behavior (explicit, never silently ignored)", () => {
       ),
     );
     const page = await fetchOpportunityWindow(
-      baseParams({ freshness: "14d", pageSize: 20 }),
+      baseParams({ freshness: "2w", pageSize: 20 }),
     );
     expect(page.window.map((item) => item.external_id)).toEqual([
       "A-1-S",
@@ -284,7 +279,7 @@ describe("freshness behavior (explicit, never silently ignored)", () => {
       ),
     );
     const page = await fetchOpportunityWindow(
-      baseParams({ freshness: "14d", pageSize: 20 }),
+      baseParams({ freshness: "2w", pageSize: 20 }),
     );
     expect(page.mode).toBe("scan");
     expect(page.scan_truncated).toBe(true);
@@ -309,7 +304,7 @@ describe("freshness behavior (explicit, never silently ignored)", () => {
         ),
       ),
     );
-    const page = await fetchOpportunityWindow(baseParams({ freshness: "14d" }));
+    const page = await fetchOpportunityWindow(baseParams({ freshness: "2w" }));
     expect(page.exhausted).toBe(true);
     expect(page.scan_truncated).toBe(false);
     expect(page.mode).toBe("scan");
@@ -365,7 +360,7 @@ describe("freshness behavior (explicit, never silently ignored)", () => {
       ),
     );
     const page = await fetchOpportunityWindow(
-      baseParams({ freshness: "30d", pageSize: 20 }),
+      baseParams({ freshness: "4w", pageSize: 20 }),
     );
     expect(page.window.map((item) => item.external_id)).toEqual(["D-1-S"]);
   });
@@ -680,12 +675,20 @@ describe("buildMatchers (new Phase 3 filters, source-faithful)", () => {
     expect(m(mkOpp({ home_office: null }))).toBe(false);
   });
 
-  it("salary_documented matches only items with a documented salary", () => {
-    const [m] = buildMatchers(baseParams({ salary_documented: true }));
+  it("salary=documented matches only items with a documented salary", () => {
+    const [m] = buildMatchers(baseParams({ salary: "documented" }));
     expect(
       m(mkOpp({ salary: { amount: 5, unit: "hourly", label: "5" } })),
     ).toBe(true);
     expect(m(mkOpp({ salary: null }))).toBe(false);
+  });
+
+  it("salary=missing matches only items WITHOUT a documented salary", () => {
+    const [m] = buildMatchers(baseParams({ salary: "missing" }));
+    expect(
+      m(mkOpp({ salary: { amount: 5, unit: "hourly", label: "5" } })),
+    ).toBe(false);
+    expect(m(mkOpp({ salary: null }))).toBe(true);
   });
 
   it("distance_max excludes items beyond the bound and undocumented distance", () => {
