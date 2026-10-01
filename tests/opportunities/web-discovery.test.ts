@@ -686,7 +686,8 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
     expect(completeEvent).toBe("complete");
     expect(result.stats.found).toBe(1);
     expect(result.stats.withPublicEmail).toBe(1);
-    expect(result.stats.withApplicationUrl).toBe(0);
+    // The company's own career page is now extracted as an application link.
+    expect(result.stats.withApplicationUrl).toBe(1);
     expect(result.stats.withOfficialSource).toBe(1);
     // Broad discovery: 1 (BA) + the registry sources that matched a result.
     // This mock's single URL matches no registry domain → the honest value

@@ -153,10 +153,21 @@ export function applyCompanyEnrichment(
     official_company_source: existing?.official_company_source ?? false,
   };
 
+  // An application page on the company's own domain (extracted during
+  // enrichment) becomes the row's official application link when the row has
+  // none — never a guessed URL.
+  const officialApplyPage = company.career_url ?? existing?.career_url ?? null;
+  const applicationUrl =
+    row.application_url ??
+    (officialApplyPage && isAllowedCompanyDomain(officialApplyPage)
+      ? officialApplyPage
+      : null);
+
   return opportunitySchema.parse({
     ...row,
     contact: email || phone || person ? { person, email, phone } : null,
     company_url: companyUrl,
+    application_url: applicationUrl,
     enrichment,
   });
 }
@@ -388,15 +399,70 @@ async function enrichOneCompany(args: {
   let websiteUrl: string | null = null;
   /** Addresses the provider response already published for this company. */
   let seededEmails: ContactEmail[] = [];
+  // The page an opportunity was extracted FROM is first-hand evidence: it was
+  // fetched through the guards and the company name was read out of it. Its
+  // origin is therefore the company's own domain — unless the host is a
+  // portal/review/social/public-employer domain, which isAllowedCompanyDomain
+  // already excludes (so a portal row can never become a "company website").
+  /** Requirement: a company page URL (…/karriere/ausbildung/…) yields the
+   *  company's ROOT domain as the official website. */
+  const allowedOrigin = (url: string | null | undefined): string | null => {
+    if (!url || !isAllowedCompanyDomain(url)) return null;
+    try {
+      return new URL(url).origin;
+    } catch {
+      return null;
+    }
+  };
+
+  const selfEvidence = (() => {
+    for (const row of rows) {
+      // Only a row the pipeline ALREADY classified as a page on a company's
+      // own website qualifies (BA rows are official_source, portal rows are
+      // job_portal) — so a portal or aggregator can never become a website.
+      if (row.source_type !== "company_website") continue;
+      const candidate = row.company_url ?? row.source_url;
+      if (!candidate || !isAllowedCompanyDomain(candidate)) continue;
+      try {
+        return { origin: new URL(candidate).origin, sourceUrl: candidate };
+      } catch {
+        // keep looking
+      }
+    }
+    return null;
+  })();
+
   if (documented?.company_url) {
-    websiteUrl = documented.company_url;
+    websiteUrl = allowedOrigin(documented.company_url) ?? documented.company_url;
     base.website_url = websiteUrl;
     // Evidence = the public page that documented the URL.
     base.website_source = documented.source_url;
+  } else if (selfEvidence) {
+    websiteUrl = selfEvidence.origin;
+    base.website_url = websiteUrl;
+    base.website_source = selfEvidence.sourceUrl;
   } else {
     // 2) Contact seed from the provider response (no extra request): a
     //    company/career/contact page that names this company.
-    const seed = findContactSeed(companyName, contactSeeds, documented?.company_url);
+    const sourceHosts = new Set(
+      rows
+        .map((row) => row.source_url)
+        .filter((url): url is string => Boolean(url))
+        .map((url) => {
+          try {
+            return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+          } catch {
+            return "";
+          }
+        })
+        .filter(Boolean),
+    );
+    const seed = findContactSeed(
+      companyName,
+      contactSeeds,
+      documented?.company_url,
+      sourceHosts,
+    );
     if (seed) {
       seededEmails = seed.emails;
       if (seed.websiteUrl) {
@@ -485,6 +551,35 @@ async function enrichOneCompany(args: {
       }
     }
   }
+
+  // A career/application page on the company's OWN domain is a real official
+  // application link (extracted, never assumed).
+  if (!base.career_url) {
+    const applyPage = pages.find(
+      (page) =>
+        hostOf(page.url) === companyDomain &&
+        (/bewerbung/i.test(page.url) ||
+          (page.kind === "karriere" && /bewerb/i.test(page.text.slice(0, 4000)))),
+    );
+    const careerPage =
+      applyPage ??
+      pages.find(
+        (page) => hostOf(page.url) === companyDomain && page.kind === "karriere",
+      );
+    if (careerPage) base.career_url = careerPage.url;
+  }
+
+  // Safe per-company diagnostics: names/domains/booleans only — never an API
+  // key, never an email address, never personal data.
+  console.info(
+    "[COMPANY_ENRICHMENT] company=%s domain=%s website=%s pages=%d email=%s applyLink=%s",
+    companyName.slice(0, 60),
+    companyDomain || "n/a",
+    websiteUrl ? "ok" : "none",
+    pages.length,
+    base.email ? "yes" : "no",
+    base.career_url ? "yes" : "no",
+  );
 
   // No company page yielded an address, but the provider response may have
   // published one (title/snippet/content) — attributed and ranked by the

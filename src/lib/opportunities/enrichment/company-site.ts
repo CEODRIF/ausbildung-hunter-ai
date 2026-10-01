@@ -38,6 +38,9 @@ const SITE_PAGE_PATHS = [
   "/unternehmen",
 ] as const;
 
+/** Cheap "an address is printed on this page" probe (early-stop helper). */
+const EMAIL_IN_TEXT_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
+
 /** Maximum page fetches per company per run (budget, never unbounded). */
 export const MAX_PAGES_PER_COMPANY = 4;
 /** Maximum page text passed to extraction (memory bound). */
@@ -60,6 +63,8 @@ export interface FetchedSitePage {
   siteName: string | null;
   /** Truncated, extraction-ready text (real page content only). */
   text: string;
+  /** Public same-origin links found on the page. */
+  links: string[];
 }
 
 /**
@@ -100,6 +105,7 @@ function toSitePage(url: string, page: FetchedPage): FetchedSitePage {
     title: page.title,
     siteName: page.siteName,
     text: page.text.slice(0, MAX_PAGE_TEXT_CHARS),
+    links: page.links ?? [],
   };
 }
 
@@ -110,6 +116,10 @@ function toSitePage(url: string, page: FetchedPage): FetchedSitePage {
  * budget. Fetch order is fixed; every skipped/blocked page is counted,
  * never faked.
  */
+/** Paths/links that lead to contact, career or application information. */
+const CONTACT_LINK_RE =
+  /(karriere|career|jobs?|stellen|bewerbung|ausbildung|azubi|kontakt|contact|impressum|team|ueber-uns|about)/i;
+
 export async function fetchCompanyPages(
   websiteUrl: string,
   robotsCache: Map<string, RobotsPolicy>,
@@ -121,16 +131,28 @@ export async function fetchCompanyPages(
   } catch {
     return { pages: [], failures: 1 };
   }
-  const wanted: Array<{ url: string; kind: PageKind }> = [
-    { url: origin, kind: "home" },
-  ];
-  for (const path of SITE_PAGE_PATHS) {
-    if (wanted.length >= MAX_PAGES_PER_COMPANY) break;
-    wanted.push({ url: `${origin}${path}`, kind: classifyPageUrl(`${origin}${path}`) });
-  }
-
   const pages: FetchedSitePage[] = [];
   let failures = 0;
+
+  // 1) The homepage first: its own links reveal the site's REAL contact /
+  //    career / application pages, which fixed paths often miss.
+  const home = await fetchSitePage(origin, robotsCache, limiter);
+  if (home.ok) pages.push(toSitePage(origin, home.page));
+  else failures += 1;
+
+  const seenTargets = new Set(pages.map((page) => page.url));
+  const wanted: Array<{ url: string; kind: PageKind }> = [];
+  const addTarget = (url: string) => {
+    if (pages.length + wanted.length >= MAX_PAGES_PER_COMPANY) return;
+    if (seenTargets.has(url)) return;
+    if (wanted.some((target) => target.url === url)) return;
+    wanted.push({ url, kind: classifyPageUrl(url) });
+  };
+  for (const link of pages[0]?.links ?? []) {
+    if (CONTACT_LINK_RE.test(link)) addTarget(link);
+  }
+  for (const path of SITE_PAGE_PATHS) addTarget(`${origin}${path}`);
+
   for (const target of wanted) {
     const result = await fetchSitePage(target.url, robotsCache, limiter);
     if (!result.ok) {
@@ -140,10 +162,17 @@ export async function fetchCompanyPages(
       continue;
     }
     pages.push(toSitePage(target.url, result.page));
-    // Early stop: the two most authoritative contact pages were checked.
+    // Early stop: a contact page was reached AND a page already published an
+    // address. Without an address we keep going (still inside the page
+    // budget) — a career/application page is exactly where the address and
+    // the application link live.
     const kinds = new Set(pages.map((page) => page.kind));
+    const emailSeen = pages.some((page) =>
+      EMAIL_IN_TEXT_RE.test(page.text.slice(0, 4000)),
+    );
     if (
       pages.length >= 2 &&
+      emailSeen &&
       (kinds.has("impressum") || kinds.has("kontakt"))
     )
       break;

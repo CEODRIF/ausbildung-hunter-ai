@@ -40,6 +40,48 @@ export interface FetchedPage {
   metaDescription: string | null;
   siteName: string | null;
   text: string;
+  /** Same-origin public links found on the page (hrefs resolved, deduped,
+   *  capped). Used to discover a company's contact/career pages from its
+   *  homepage instead of relying on fixed paths only. */
+  links?: string[];
+}
+
+const MAX_PAGE_LINKS = 40;
+
+/** Public same-origin links on a page (http/https, hash + mailto/tel dropped). */
+function extractSameOriginLinks(html: string, baseUrl: string): string[] {
+  let base: URL;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    return [];
+  }
+  const baseHost = base.hostname.toLowerCase().replace(/^www\./, "");
+  const links: string[] = [];
+  const seen = new Set<string>();
+  const re = /<a\b[^>]*\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(html)) !== null) {
+    const raw = (match[2] ?? match[3] ?? match[4] ?? "").trim();
+    if (!raw || raw.startsWith("#") || /^(mailto|tel|javascript):/i.test(raw))
+      continue;
+    let resolved: URL;
+    try {
+      resolved = new URL(raw, base);
+    } catch {
+      continue;
+    }
+    if (resolved.protocol !== "https:" && resolved.protocol !== "http:") continue;
+    if (resolved.hostname.toLowerCase().replace(/^www\./, "") !== baseHost)
+      continue;
+    resolved.hash = "";
+    const value = resolved.toString();
+    if (seen.has(value)) continue;
+    seen.add(value);
+    links.push(value);
+    if (links.length >= MAX_PAGE_LINKS) break;
+  }
+  return links;
 }
 
 export type PageFetchResult =
@@ -317,6 +359,7 @@ export async function fetchPublicPage(
       metaDescription: metaContent(html, "description"),
       siteName: metaContent(html, "og:site_name"),
       text: text.slice(0, textBudget),
+      links: extractSameOriginLinks(html, response.url || parsed.toString()),
     },
   };
 }

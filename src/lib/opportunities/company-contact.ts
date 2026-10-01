@@ -261,6 +261,7 @@ export function findContactSeed(
   companyName: string,
   seeds: CompanyContactSeed[],
   documentedCompanyUrl?: string | null,
+  sourceHosts?: Set<string>,
 ): CompanyContactSeed | null {
   const documentedHost = documentedCompanyUrl
     ? domainOf(hostFromUrl(documentedCompanyUrl))
@@ -268,6 +269,8 @@ export function findContactSeed(
   let best: CompanyContactSeed | null = null;
   for (const seed of seeds) {
     if (documentedHost && seed.domain === documentedHost) return seed;
+    // A seed on a host we already fetched for this company is evidence too.
+    if (sourceHosts?.has(seed.domain)) return seed;
     if (!textNamesCompany(seed.text, companyName)) continue;
     const better =
       !best ||
