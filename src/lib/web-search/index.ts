@@ -27,7 +27,7 @@ import "server-only";
  *                            fallback for grounding when no dedicated
  *                            grounding key is configured
  *   GEMINI_GROUNDING_MODEL   DEPRECATED / ignored — the grounding model is
- *                            pinned in code to gemini-2.5-flash-lite. A
+ *                            pinned in code to gemini-3.5-flash-lite. A
  *                            conflicting value is logged once
  *                            (`model-pinned configured=... used=...`) so a
  *                            stale deployment value is provable, but it can
@@ -134,14 +134,20 @@ const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
  * instead of the model the default would send — hiding the real request.
  *
  * Now nothing in the environment can change the model that is sent:
- * `gemini-2.5-flash-lite` is the only value ever used. A conflicting
+ * `gemini-3.5-flash-lite` is the only value ever used. A conflicting
  * `GEMINI_GROUNDING_MODEL` is still READ, but only so it is loudly logged
  * (provable in the function logs) instead of silently changing behaviour.
- * `gemini-2.5-flash-lite` is documented as supporting Google Search
+ * `gemini-3.5-flash-lite` is documented as supporting Google Search
  * grounding (ai.google.dev/gemini-api/docs/google-search) and is the
  * lightest grounding-capable model.
+ *
+ * Why 3.5 (do not "fix" this back): production returned
+ * `models/gemini-2.5-flash-lite is no longer available to new users.
+ * Please update your code to use models/gemini-3.5-flash-lite` — Google's
+ * own message. The 2.5 generation is closed to new users, so the pinned id
+ * is the 3.5 one.
  */
-const GROUNDING_MODEL = "gemini-2.5-flash-lite";
+const GROUNDING_MODEL = "gemini-3.5-flash-lite";
 const MAX_RESULTS_HARD_CAP = 20;
 
 // ---------------------------------------------------------------------------
@@ -253,7 +259,7 @@ function controlledMessage(http: number, gemini: GeminiErrorInfo): string {
  * Search 2.3): a silent retry with a different model made the failing
  * request invisible — the error that surfaced carried the *retry's* model,
  * so the UI reported `Model: gemini-2.5-flash` while the default would send
- * `gemini-2.5-flash-lite`. Every error now names the exact model that was
+ * `gemini-3.5-flash-lite`. Every error now names the exact model that was
  * sent, and only that model is ever called.
  */
 async function geminiGenerateContent(
@@ -384,7 +390,7 @@ let modelOverrideLogged = false;
 
 /**
  * The model sent to Gemini — ALWAYS `GROUNDING_MODEL`
- * (`gemini-2.5-flash-lite`). `GEMINI_GROUNDING_MODEL` can no longer change
+ * (`gemini-3.5-flash-lite`). `GEMINI_GROUNDING_MODEL` can no longer change
  * the model; a conflicting value is logged once so its presence in a
  * deployment is provable from the function logs.
  */

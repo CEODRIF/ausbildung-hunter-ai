@@ -13,7 +13,7 @@
  *   GEMINI_GROUNDING_API_KEY=*** npm run gemini:diag
  *   GEMINI_API_KEY=*** npm run gemini:diag
  *
- * The grounding MODEL is pinned in code to gemini-2.5-flash-lite (identical
+ * The grounding MODEL is pinned in code to gemini-3.5-flash-lite (identical
  * to the production provider) — this script deliberately does not honor
  * GEMINI_GROUNDING_MODEL, so it always tests what production actually sends.
  *
@@ -29,7 +29,7 @@ const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 /** PINNED — identical to the production provider (src/lib/web-search/index.ts).
  *  GEMINI_GROUNDING_MODEL is ignored there, so it is ignored here too: the
  *  diagnostic must test exactly what production sends. */
-const PINNED_MODEL = "gemini-2.5-flash-lite";
+const PINNED_MODEL = "gemini-3.5-flash-lite";
 const TIMEOUT_MS = 20_000;
 const QUERY = "Kaufmann im E-Commerce Ausbildung 2027 Deutschland";
 

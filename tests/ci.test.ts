@@ -78,7 +78,7 @@ describe("environment documentation (deployment contract)", () => {
         value.startsWith("http://localhost") ||
         value.startsWith("https://api.openai.com") ||
         value === "custom" ||
-        value === "gemini-2.5-flash-lite" ||
+        value === "gemini-3.5-flash-lite" ||
         value.startsWith("https://your-project") ||
         value.startsWith("https://your-app");
       expect(

@@ -919,7 +919,7 @@ describe("runWebDiscovery (source registry discipline)", () => {
         status: "PERMISSION_DENIED",
         message: "API key not valid. Please pass a valid API key.",
       },
-      "gemini-2.5-flash-lite",
+      "gemini-3.5-flash-lite",
     );
     const client = {
       name: "gemini_grounding",
@@ -939,7 +939,7 @@ describe("runWebDiscovery (source registry discipline)", () => {
     expect(result.providerErrors).toBeGreaterThanOrEqual(1);
     expect(result.firstProviderError).toEqual({
       provider: "gemini_grounding",
-      model: "gemini-2.5-flash-lite",
+      model: "gemini-3.5-flash-lite",
       http: 401,
       code: 401,
       geminiStatus: "PERMISSION_DENIED",

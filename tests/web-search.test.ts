@@ -161,7 +161,7 @@ describe("geminiGroundingSearch (mocked fetch)", () => {
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
     );
     expect(init?.headers["x-goog-api-key"]).toBe(keyValue());
     const body = JSON.parse(init?.body as string);
@@ -175,7 +175,7 @@ describe("geminiGroundingSearch (mocked fetch)", () => {
     }
   });
 
-  it("IGNORES GEMINI_GROUNDING_MODEL — always sends the pinned gemini-2.5-flash-lite", async () => {
+  it("IGNORES GEMINI_GROUNDING_MODEL — always sends the pinned gemini-3.5-flash-lite", async () => {
     resetGroundingDiagnostics();
     // A stale production value must NEVER be able to steer the request.
     process.env.GEMINI_GROUNDING_MODEL = "gemini-2.5-flash";
@@ -183,7 +183,7 @@ describe("geminiGroundingSearch (mocked fetch)", () => {
     const client = clientWithKey();
     await client.search("q", 5);
     const url = String(fetchMock.mock.calls[0][0]);
-    expect(url).toContain("/models/gemini-2.5-flash-lite:generateContent");
+    expect(url).toContain("/models/gemini-3.5-flash-lite:generateContent");
     expect(url).not.toContain("/models/gemini-2.5-flash:generateContent");
     // Exactly one request — no model switching.
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -327,7 +327,7 @@ describe("gemini grounding diagnostics & model fallback", () => {
           code: 404,
           status: "NOT_FOUND",
           message:
-            "models/gemini-2.5-flash-lite is not found for API version v1beta, or is not supported for generateContent.",
+            "models/gemini-3.5-flash-lite is not found for API version v1beta, or is not supported for generateContent.",
         },
       }),
     );
@@ -339,11 +339,11 @@ describe("gemini grounding diagnostics & model fallback", () => {
     // Exactly ONE request — the pinned model — for the stale env value too.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = String(fetchMock.mock.calls[0][0]);
-    expect(url).toContain("/models/gemini-2.5-flash-lite:generateContent");
+    expect(url).toContain("/models/gemini-3.5-flash-lite:generateContent");
     expect(url).not.toContain("/models/gemini-2.0-flash:generateContent");
     expect(url).not.toContain("/models/gemini-2.5-flash:generateContent");
     // The error carries the model that was REALLY sent.
-    expect(error.model).toBe("gemini-2.5-flash-lite");
+    expect(error.model).toBe("gemini-3.5-flash-lite");
     expect(error.status).toBe(404);
     expect(error.geminiStatus).toBe("NOT_FOUND");
     // The stale env value is loudly logged (provable in production logs).
@@ -371,7 +371,7 @@ describe("gemini grounding diagnostics & model fallback", () => {
     expect(error.geminiCode).toBe(401);
     expect(error.geminiStatus).toBe("PERMISSION_DENIED");
     // The model the call was sent to travels with the error (UI detail).
-    expect(error.model).toBe("gemini-2.5-flash-lite");
+    expect(error.model).toBe("gemini-3.5-flash-lite");
     // Controlled, key-free phrase — safe for UI/log surfaces.
     expect(error.message).toContain("rejected the configured key");
     expect(error.message).toContain("HTTP 401");
@@ -396,7 +396,7 @@ describe("gemini grounding diagnostics & model fallback", () => {
 
     const line = warnSpy.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith("[GEMINI_GROUNDING]"));
     expect(line).toBeDefined();
-    expect(line).toContain("model=gemini-2.5-flash-lite");
+    expect(line).toContain("model=gemini-3.5-flash-lite");
     expect(line).toContain("http=403");
     expect(line).toContain("gemini=403/PERMISSION_DENIED");
     expect(line).not.toContain("AIzaSy-super-secret-key-1234567");
@@ -446,7 +446,7 @@ describe("gemini grounding diagnostics & model fallback", () => {
       .find((l) => l.includes("groundingChunks=0"));
     expect(line).toBeDefined();
     expect(line).toContain("NO grounding metadata");
-    expect(line).toContain("model=gemini-2.5-flash-lite");
+    expect(line).toContain("model=gemini-3.5-flash-lite");
   });
 
   it("searchStructured: sends the pinned model even with a stale env value", async () => {
@@ -484,7 +484,7 @@ describe("gemini grounding diagnostics & model fallback", () => {
     // retry can never change what production requests.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0][0])).toContain(
-      "/models/gemini-2.5-flash-lite:generateContent",
+      "/models/gemini-3.5-flash-lite:generateContent",
     );
   });
 });
