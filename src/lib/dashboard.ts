@@ -79,6 +79,16 @@ export interface RecentApplication {
   campaign_id: string | null;
   campaign_status: string | null;
   sent_at: string | null;
+  /** Live counters maintained by the sending engine (email_campaigns). */
+  total_recipients: number | null;
+  queued_count: number | null;
+  sending_count: number | null;
+  sent_count: number | null;
+  failed_count: number | null;
+  cancelled_count: number | null;
+  /** Account the campaign sends from (never a secret — the address only). */
+  sender_email: string | null;
+  campaign_updated_at: string | null;
 }
 
 export interface SavedPreviewItem {
@@ -405,7 +415,10 @@ export async function loadRecentApplications(
       .in("draft_id", draftIds),
     admin
       .from("email_campaigns")
-      .select("id, draft_id, status, created_at, updated_at")
+      // Single literal: Supabase's typed client needs a literal select.
+      .select(
+        "id, draft_id, status, created_at, updated_at, email_account_id, total_recipients, queued_count, sending_count, sent_count, failed_count, cancelled_count",
+      )
       .in("draft_id", draftIds)
       .order("updated_at", { ascending: false }),
   ]);
@@ -416,7 +429,35 @@ export async function loadRecentApplications(
     status: string;
     created_at: string;
     updated_at: string;
+    email_account_id: string | null;
+    total_recipients: number | null;
+    queued_count: number | null;
+    sending_count: number | null;
+    sent_count: number | null;
+    failed_count: number | null;
+    cancelled_count: number | null;
   }>;
+
+  // Sender addresses for those accounts (address only — safe to display).
+  const senderByAccount = new Map<string, string>();
+  const accountIds = [
+    ...new Set(
+      campaignRows
+        .map((row) => row.email_account_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (accountIds.length > 0) {
+    const { data: accounts } = await admin
+      .from("email_accounts")
+      .select("id, email_address")
+      .in("id", accountIds);
+    for (const account of (accounts ?? []) as Array<{
+      id: string;
+      email_address: string;
+    }>)
+      senderByAccount.set(account.id, account.email_address);
+  }
   const sentAtByCampaign = new Map<string, string | null>();
   if (campaignRows.length > 0) {
     const { data: messages } = await admin
@@ -481,6 +522,16 @@ export async function loadRecentApplications(
       sent_at: campaignRow
         ? (sentAtByCampaign.get(campaignRow.id) ?? null)
         : null,
+      total_recipients: campaignRow?.total_recipients ?? null,
+      queued_count: campaignRow?.queued_count ?? null,
+      sending_count: campaignRow?.sending_count ?? null,
+      sent_count: campaignRow?.sent_count ?? null,
+      failed_count: campaignRow?.failed_count ?? null,
+      cancelled_count: campaignRow?.cancelled_count ?? null,
+      sender_email: campaignRow?.email_account_id
+        ? (senderByAccount.get(campaignRow.email_account_id) ?? null)
+        : null,
+      campaign_updated_at: campaignRow?.updated_at ?? null,
     };
   });
 }

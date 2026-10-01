@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { createCampaign } from "@/lib/email-campaigns";
+import { createCampaign, processCampaignBatch } from "@/lib/email-campaigns";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 
 export async function sendApplications(formData: FormData) {
@@ -28,5 +28,18 @@ export async function sendApplications(formData: FormData) {
     goal,
     recipientEmails: recipients,
   });
+
+  // Consume the queue right away: the campaign is created with queued
+  // messages, and the bounded, idempotent batch runner is what actually
+  // hands them to Gmail. Without this the messages would sit in `queued`
+  // until someone triggered a worker — which is exactly why nothing was
+  // being sent. A failure here is never fatal: the campaign exists and the
+  // campaign page keeps draining it (bounded batches + stale recovery).
+  try {
+    await processCampaignBatch(user.id, result.campaignId, 5);
+  } catch {
+    // Intentional: never block the redirect on a send attempt.
+  }
+
   redirect(`/applications/campaign/${result.campaignId}`);
 }

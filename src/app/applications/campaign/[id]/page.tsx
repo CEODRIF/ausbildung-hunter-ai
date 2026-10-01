@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui";
 import { getCurrentUserAndProfile } from "@/lib/auth";
-import { getCampaign } from "@/lib/email-campaigns";
+import {
+  recoverStaleCampaigns, getCampaign } from "@/lib/email-campaigns";
 import { getServerT } from "@/lib/i18n/server";
 import {
   cancelCampaignAction,
@@ -20,20 +21,27 @@ export default async function CampaignPage({
     redirect("/login");
   const { id } = await params;
   const data = await getCampaign(user.id, id);
+  // Deterministic recovery on every visit: a stalled `sending` message is
+  // finalized (never left hanging) and a never-started campaign past its TTL
+  // is cancelled — which is also what keeps "active campaigns" honest.
+  const recovery = await recoverStaleCampaigns(user.id, id).catch(() => null);
+  const campaignState = recovery
+    ? { ...data.campaign, status: recovery.status }
+    : data.campaign;
   const t = await getServerT();
   const terminal = [
     "completed",
     "partially_failed",
     "failed",
     "cancelled",
-  ].includes(data.campaign.status);
+  ].includes(campaignState.status);
   return (
     <div className="px-4 py-6 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-6xl">
         <div className="mt-2 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <p className="text-sm text-muted">{t("account.monitorNote")}</p>
-            <CampaignMonitor />
+            <CampaignMonitor campaignId={id} />
           </div>
           <div className="flex gap-2">
             <form action={processCampaign}>
