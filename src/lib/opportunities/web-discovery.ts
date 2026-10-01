@@ -24,6 +24,12 @@ import {
 import { normalizeOpportunityEmail } from "@/lib/opportunities/email-export";
 import { classifyEmailType } from "@/lib/opportunities/enrichment/text-extract";
 import {
+  buildDiscoveryQueries,
+  companyWebsiteFromResult,
+  emailsFromSearchResult,
+  type CompanyContactSeed,
+} from "@/lib/opportunities/company-contact";
+import {
   buildSourceQuery,
   enabledWebSources,
   hostToSourceId,
@@ -1153,6 +1159,10 @@ export async function runWebDiscovery(args: {
    providerErrors: number;
    /** Detail of the first provider error (safe — no keys), or null. */
    firstProviderError: ProviderErrorDetail | null;
+  /** Company contact seeds (candidate website + published addresses) read
+   *  from the provider's own response — consumed by the enrichment with no
+   *  further provider request. */
+  companyContacts: CompanyContactSeed[];
    failures: Partial<Record<PageFetchFailure, number>>;
    aiDuplicates: Array<{ fromUrl: string; toUrl: string }>;
  }> {
@@ -1174,6 +1184,7 @@ export async function runWebDiscovery(args: {
       aiUsed: false,
       providerErrors: 0,
       firstProviderError: null,
+      companyContacts: [],
       failures: {},
       aiDuplicates: [],
     };
@@ -1190,10 +1201,9 @@ export async function runWebDiscovery(args: {
     company_website: new Set(),
     social_media: new Set(),
   };
-  const broadQueries = webQueries
-    .map((query) => query.trim())
-    .filter(Boolean)
-    .slice(0, MAX_DISCOVERY_CALLS);
+  // Three distinct intents (job / company-career-contact / email-contact-
+  // website) instead of three near-identical queries — same hard cap.
+  const discoveryQueries = buildDiscoveryQueries(webQueries, MAX_DISCOVERY_CALLS);
 
   /** Classify ONE broad-search result by its OWN domain: a registry hit
    *  keeps that source's id + category; otherwise social hosts → social
@@ -1237,10 +1247,15 @@ export async function runWebDiscovery(args: {
   };
 
   let groundingCallsOk = 0;
+  /** Company contact seeds gathered from the provider response. */
+  const companyContacts: CompanyContactSeed[] = [];
+  /** Run-level URL dedupe: the three intents overlap by design, so the same
+   *  page must never be counted (or verified) twice. */
+  const seenCandidateUrls = new Set<string>();
   // Broad discovery (Tavily): at most MAX_DISCOVERY_CALLS requests for the
   // WHOLE search operation — one request per planned web query, each
   // returning many results. No per-source and no per-company request.
-  for (const query of broadQueries) {
+  for (const { query } of discoveryQueries) {
     let results: WebSearchResult[];
     try {
       results = await client.search(query, DISCOVERY_RESULTS_PER_REQUEST);
@@ -1260,13 +1275,43 @@ export async function runWebDiscovery(args: {
       continue;
     }
     const candidates: DiscoveredCandidate[] = [];
-    const seenInQuery = new Set<string>();
     for (const result of results) {
       const candidate = broadCandidate(result, query);
+
+      // Company contact data straight from the provider's OWN response — no
+      // extra request: the address(es) printed in the result text and the
+      // candidate official website (non-portal hosts only). Collected even
+      // when the result is not itself a job posting, because a Kontakt/
+      // Karriere page is exactly what the enrichment needs.
+      let resultDomain = "";
+      try {
+        resultDomain = hostDomain(new URL(result.url).hostname);
+      } catch {
+        resultDomain = "";
+      }
+      const seedWebsite = companyWebsiteFromResult(
+        result.url,
+        PORTAL_HOSTS.has(resultDomain),
+        SOCIAL_HOSTS.has(resultDomain),
+      );
+      const seedEmails = emailsFromSearchResult({
+        title: result.title,
+        snippet: result.snippet,
+        url: result.url,
+      });
+      if (seedWebsite || seedEmails.length > 0)
+        companyContacts.push({
+          domain: resultDomain,
+          websiteUrl: seedWebsite,
+          sourceUrl: result.url,
+          text: `${result.title} ${result.snippet}`,
+          emails: seedEmails,
+        });
+
       if (!candidate) continue;
       const key = normalizeUrlForDedupe(candidate.url);
-      if (seenInQuery.has(key)) continue;
-      seenInQuery.add(key);
+      if (seenCandidateUrls.has(key)) continue;
+      seenCandidateUrls.add(key);
       candidates.push(candidate);
     }
     console.info(
@@ -1345,6 +1390,7 @@ export async function runWebDiscovery(args: {
     aiUsed,
     providerErrors,
     firstProviderError,
+    companyContacts,
     failures,
     aiDuplicates,
   };

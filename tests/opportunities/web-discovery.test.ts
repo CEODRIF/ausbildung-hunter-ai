@@ -676,10 +676,10 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
     expect(row.enrichment?.email_source).toBe(
       "https://example.com/karriere/ausbildung-2027",
     );
-    // Discovery-only phase: company enrichment deliberately runs WITHOUT the
-    // provider client (no per-company request), so no website is discovered
-    // through it — the row keeps the email provenance from the verified page.
-    expect(row.enrichment?.website_url).toBeNull();
+    // The official website now comes from the provider's OWN response (no
+    // per-company request): the karriere page the discovery already found is
+    // the company's website seed.
+    expect(row.enrichment?.website_url).toBe("https://example.com");
     expect(row.enrichment?.last_verified_at).not.toBeNull();
     // Honest result statistics on the complete event.
     const completeEvent = events.at(-1);
@@ -695,8 +695,8 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
     expect(result.stats.webSearchesExecuted).toBeGreaterThan(0);
     expect(result.stats.companiesEnriched).toBe(1);
     expect(result.stats.companiesWithPublicEmail).toBe(1);
-    // No provider-based website discovery in the discovery-only phase.
-    expect(result.stats.officialWebsitesFound).toBe(0);
+    // The website seed from the provider response is applied to the company.
+    expect(result.stats.officialWebsitesFound).toBe(1);
   });
 });
 

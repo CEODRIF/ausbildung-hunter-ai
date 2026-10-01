@@ -532,6 +532,7 @@ describe("6. multi-source resilience", () => {
       aiUsed: false,
       providerErrors: 0,
       firstProviderError: null,
+      companyContacts: [],
       failures: {},
       aiDuplicates: [],
     });

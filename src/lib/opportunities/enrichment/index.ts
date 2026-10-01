@@ -22,6 +22,12 @@ import {
 } from "./company-site";
 import { isAllowedCompanyDomain } from "../sources";
 import {
+  findContactSeed,
+  pickCompanyEmail,
+  type CompanyContactSeed,
+  type ContactEmail,
+} from "../company-contact";
+import {
   bestEmail,
   classifyEmailType,
   extractContactPerson,
@@ -184,6 +190,10 @@ export async function runCompanyEnrichment(
   opportunities: Opportunity[],
   args: {
     client: WebSearchClient | null;
+    /** Contact data the discovery already read from the provider response —
+     *  reused here so the official website and any published address are
+     *  applied WITHOUT an extra provider request per company. */
+    contactSeeds?: CompanyContactSeed[];
     onProgress?: (done: number, total: number) => void;
     /** Optional telemetry sink (UI stats + [COMPANY_ENRICHMENT] log). */
     telemetry?: EnrichmentTelemetry;
@@ -229,6 +239,7 @@ export async function runCompanyEnrichment(
               ?.location_detail?.city ?? null,
             rows,
             client: args.client,
+            contactSeeds: args.contactSeeds ?? [],
             robotsCache,
             pageLimiter,
             consumeDiscoveryCall: () => {
@@ -323,6 +334,10 @@ async function enrichOneCompany(args: {
   city: string | null;
   rows: Opportunity[];
   client: WebSearchClient | null;
+  /** Contact data the discovery already read from the provider response
+   *  (candidate website + published addresses) — used WITHOUT any extra
+   *  provider request. */
+  contactSeeds: CompanyContactSeed[];
   robotsCache: Map<string, RobotsPolicy>;
   pageLimiter: ConcurrencyLimiter;
   consumeDiscoveryCall: () => boolean;
@@ -331,8 +346,16 @@ async function enrichOneCompany(args: {
   webSearches: number;
   pagesFetched: number;
 }> {
-  const { key, companyName, city, rows, client, robotsCache, pageLimiter } =
-    args;
+  const {
+    key,
+    companyName,
+    city,
+    rows,
+    client,
+    contactSeeds,
+    robotsCache,
+    pageLimiter,
+  } = args;
   const base: CompanyEnrichmentRecord = {
     company_key: key,
     company_name: companyName,
@@ -363,14 +386,29 @@ async function enrichOneCompany(args: {
     row.company_url ? isAllowedCompanyDomain(row.company_url) : false,
   );
   let websiteUrl: string | null = null;
+  /** Addresses the provider response already published for this company. */
+  let seededEmails: ContactEmail[] = [];
   if (documented?.company_url) {
     websiteUrl = documented.company_url;
     base.website_url = websiteUrl;
     // Evidence = the public page that documented the URL.
     base.website_source = documented.source_url;
-  } else if (client) {
-    // 2) Guarded Google Search grounding (1-2 calls) + content
-    //    verification (never a guessed domain).
+  } else {
+    // 2) Contact seed from the provider response (no extra request): a
+    //    company/career/contact page that names this company.
+    const seed = findContactSeed(companyName, contactSeeds, documented?.company_url);
+    if (seed) {
+      seededEmails = seed.emails;
+      if (seed.websiteUrl) {
+        websiteUrl = seed.websiteUrl;
+        base.website_url = seed.websiteUrl;
+        base.website_source = seed.sourceUrl;
+      }
+    }
+  }
+  if (!websiteUrl && client) {
+    // 3) Guarded provider discovery (1-2 calls) + content verification
+    //    (never a guessed domain).
     const discovered = await discoverCompanyWebsite(
       companyName,
       city,
@@ -445,6 +483,21 @@ async function enrichOneCompany(args: {
         base.contact_source = page.url;
         base.data_confidence = maxConfidence(base.data_confidence, confidence);
       }
+    }
+  }
+
+  // No company page yielded an address, but the provider response may have
+  // published one (title/snippet/content) — attributed and ranked by the
+  // deterministic contact rules, never invented.
+  if (!base.email && seededEmails.length > 0) {
+    const pick = pickCompanyEmail(
+      seededEmails.filter((entry) => entry.confidence !== "low"),
+    );
+    if (pick) {
+      base.email = pick.email;
+      base.email_type = classifyEmailType(pick.email);
+      base.email_source = pick.sourceUrl;
+      base.data_confidence = maxConfidence(base.data_confidence, "medium");
     }
   }
 

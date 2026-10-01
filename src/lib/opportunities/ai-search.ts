@@ -674,12 +674,14 @@ export async function runAISearch(args: {
   let results: Opportunity[] = ranked;
   try {
     results = await runCompanyEnrichment(ranked, {
-      // Discovery-only phase: company enrichment must NOT spend a web-search
-      // request per company, so the provider client is deliberately not
-      // passed here. Rows that already carry a documented company URL are
-      // still enriched (their pages are fetched directly); the rest are
-      // reported honestly as "website not found".
+      // No provider client: the enrichment must NOT spend a web-search
+      // request per company. Instead it reuses the contact data the
+      // discovery already read from the provider response (candidate company
+      // website + addresses published in the result text) and the guarded
+      // pages of that website — so official websites and public emails are
+      // found without a single extra provider request.
       client: null,
+      contactSeeds: webResult?.companyContacts ?? [],
       telemetry,
       onProgress: (done, total) =>
         emit({ type: "company_enrich", done, total }),
