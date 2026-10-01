@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { Card, Input } from "@/components/ui";
 import { RecipientManager } from "@/components/recipient-manager";
 import { RecipientTable } from "@/components/recipient-table";
@@ -13,6 +19,7 @@ import {
 } from "@/app/applications/new/actions";
 import { DiscardDraftButton } from "@/components/discard-draft-button";
 import { sendApplications } from "@/app/applications/new/send-action";
+import { createSendGate } from "@/lib/send-gate";
 import type {
   ApplicationDraft,
   ApplicationGoal,
@@ -73,6 +80,10 @@ export function ApplicationComposer({
   const [uploading, setUploading] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
+  // Dedicated to the send flow — the save/upload transition is untouched.
+  const [isSending, startSend] = useTransition();
+  // Synchronous guard: two clicks in the same tick can never start two sends.
+  const sendGate = useRef(createSendGate()).current;
   const sender = useMemo(
     () => accounts.find((account) => account.id === senderId) ?? accounts[0],
     [accounts, senderId],
@@ -98,6 +109,31 @@ export function ApplicationComposer({
     }, 900);
     return () => window.clearTimeout(timer);
   }, [body, draft.id, goal, recipients, senderId, subject]);
+  /**
+   * Continue (Confirm applications) → send.
+   *
+   * The loading state is bound to the REAL server action promise: the
+   * transition sets `isSending` before the request leaves the browser, and
+   * clears it when the action settles (success, redirect or failure). The
+   * action is deliberately NOT wrapped in catch — it redirects on success and
+   * its errors must keep reaching the existing error handling unchanged.
+   */
+  function handleSendSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    // One send per operation: a double click re-enters this handler, the gate
+    // rejects the second call outright.
+    if (!sendGate.begin()) return;
+    const formData = new FormData(event.currentTarget);
+    startSend(async () => {
+      try {
+        await sendApplications(formData);
+      } finally {
+        // Runs on success AND failure — the UI can never stay stuck.
+        sendGate.end();
+      }
+    });
+  }
+
   const applyTemplate = (templateGoal: ApplicationGoal) => {
     setGoal(templateGoal);
     setSubject(templates[templateGoal].subject);
@@ -364,6 +400,7 @@ export function ApplicationComposer({
               disabled={
                 !recipients.some((recipient) => recipient.status === "valid") ||
                 isPending ||
+                isSending ||
                 saveState !== "saved"
               }
               className="mt-4 h-11 w-full rounded-xl bg-accent text-sm font-semibold text-white hover:bg-accent-deep disabled:cursor-not-allowed disabled:opacity-50"
@@ -417,15 +454,29 @@ export function ApplicationComposer({
                 Only valid recipients will be queued. Sending will continue
                 server-side after confirmation.
               </p>
+              {isSending && (
+                <p
+                  role="status"
+                  aria-live="polite"
+                  className="mt-4 flex items-center gap-2 text-xs font-semibold text-ink-soft"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-line-strong border-t-accent"
+                  />
+                  Sending applications… Please keep this page open.
+                </p>
+              )}
               <div className="mt-6 flex justify-end gap-3">
                 <button
                   type="button"
                   onClick={() => setConfirmOpen(false)}
-                  className="h-10 rounded-xl border border-line-strong px-4 text-sm font-semibold text-muted"
+                  disabled={isSending}
+                  className="h-10 rounded-xl border border-line-strong px-4 text-sm font-semibold text-muted disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Review again
                 </button>
-                <form action={sendApplications}>
+                <form action={sendApplications} onSubmit={handleSendSubmit}>
                   <input type="hidden" name="draftId" value={draft.id} />
                   <input
                     type="hidden"
@@ -444,9 +495,17 @@ export function ApplicationComposer({
                   />
                   <button
                     type="submit"
-                    className="h-10 rounded-xl bg-accent px-4 text-sm font-semibold text-white"
+                    disabled={isSending}
+                    aria-busy={isSending}
+                    className="flex h-10 items-center gap-2 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-70"
                   >
-                    Continue
+                    {isSending && (
+                      <span
+                        aria-hidden="true"
+                        className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                      />
+                    )}
+                    {isSending ? "Sending…" : "Continue"}
                   </button>
                 </form>
               </div>
