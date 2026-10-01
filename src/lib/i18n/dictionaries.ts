@@ -912,6 +912,21 @@ const de = {
     confidenceLabel: "Vertrauen",
     enrichingStep: "Unternehmenskontakte ermitteln",
     emailSourceLabel: "E-Mail-Quelle",
+    // ---- AI Search 2.1: diagnostics + extended stats -------------------
+    diagTitle: "Quellendiagnostik",
+    sourcesSearched: "Quellen geprüft",
+    sourcesWithResults: "Quellen mit Treffern",
+    companiesEnriched: "Unternehmen angereichert",
+    companiesWithEmail: "Unternehmen mit öffentl. E-Mail",
+    officialWebsites: "Offizielle Websites gefunden",
+    officialApplyLinks: "Offizielle Bewerbungslinks",
+    webSearchesExecuted: "Web-Suchen ausgeführt",
+    providerErrors:
+      "Websuche: {n} Provider-Fehler — GEMINI_API_KEY / Grounding-Modell prüfen (Details in den Function-Logs).",
+    statusOk: "erfolgreich",
+    statusDegraded: "teilweise",
+    statusFailed: "fehlgeschlagen",
+    statusSkipped: "Budget übersprungen",
   },
   chat: {
     fileHint:
@@ -1990,6 +2005,21 @@ const en: Dict = {
     confidenceLabel: "Confidence",
     enrichingStep: "Collecting company contacts",
     emailSourceLabel: "Email source",
+    // ---- AI Search 2.1: diagnostics + extended stats -------------------
+    diagTitle: "Source diagnostics",
+    sourcesSearched: "Sources searched",
+    sourcesWithResults: "Sources with results",
+    companiesEnriched: "Companies enriched",
+    companiesWithEmail: "Companies with public email",
+    officialWebsites: "Official websites found",
+    officialApplyLinks: "Official application links",
+    webSearchesExecuted: "Web searches executed",
+    providerErrors:
+      "Web search: {n} provider errors — check GEMINI_API_KEY / grounding model (details in the function logs).",
+    statusOk: "success",
+    statusDegraded: "degraded",
+    statusFailed: "failed",
+    statusSkipped: "skipped (budget)",
   },
   chat: {
     fileHint:
@@ -3057,6 +3087,21 @@ const fr: Dict = {
     confidenceLabel: "Confiance",
     enrichingStep: "Collecte des contacts des entreprises",
     emailSourceLabel: "Source de l'e-mail",
+    // ---- AI Search 2.1: diagnostics + extended stats -------------------
+    diagTitle: "Diagnostic des sources",
+    sourcesSearched: "Sources interrogées",
+    sourcesWithResults: "Sources avec résultats",
+    companiesEnriched: "Entreprises enrichies",
+    companiesWithEmail: "Entreprises avec e-mail public",
+    officialWebsites: "Sites officiels trouvés",
+    officialApplyLinks: "Liens de candidature officiels",
+    webSearchesExecuted: "Recherches web exécutées",
+    providerErrors:
+      "Recherche web : {n} erreurs fournisseur — vérifier GEMINI_API_KEY / modèle grounding (détails dans les logs).",
+    statusOk: "réussi",
+    statusDegraded: "partiel",
+    statusFailed: "échoué",
+    statusSkipped: "ignoré (budget)",
   },
   chat: {
     fileHint:
@@ -4114,6 +4159,21 @@ const ar: Dict = {
     confidenceLabel: "مستوى الثقة",
     enrichingStep: "تجميع جهات الاتصال بالشركات",
     emailSourceLabel: "مصدر البريد",
+    // ---- AI Search 2.1: diagnostics + extended stats -------------------
+    diagTitle: "تشخيص المصادر",
+    sourcesSearched: "المصادر التي فُحصت",
+    sourcesWithResults: "مصادر ذات نتائج",
+    companiesEnriched: "شركات مُثراء",
+    companiesWithEmail: "شركات ببريد عام",
+    officialWebsites: "مواقع رسمية وُجدت",
+    officialApplyLinks: "روابط تقديم رسمية",
+    webSearchesExecuted: "عمليات بحث منفذة",
+    providerErrors:
+      "البحث web: {n} أخطاء مزود — تحقق من GEMINI_API_KEY / نموذج grounding (التفاصيل في السجلات).",
+    statusOk: "ناجح",
+    statusDegraded: "جزئي",
+    statusFailed: "فشل",
+    statusSkipped: "تخطي (ميزانية)",
   },
   chat: {
     fileHint:

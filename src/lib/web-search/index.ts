@@ -44,12 +44,36 @@ export interface WebSearchResult {
   snippet: string;
 }
 
+/** JSON-schema fragment for structured grounding (Gemini responseSchema
+ *  subset: flat object of string/boolean fields). */
+export interface StructuredFieldSchema {
+  type: "STRING" | "BOOLEAN";
+  description?: string;
+}
+export interface StructuredSearchSchema {
+  properties: Record<string, StructuredFieldSchema>;
+  required: string[];
+}
+export interface WebSearchStructuredResult<T> {
+  /** The model's JSON output, validated against `schema.required`. */
+  data: T;
+  /** Grounding metadata: the real public pages behind the answer. */
+  results: WebSearchResult[];
+}
+
 export interface WebSearchClient {
   name: WebSearchProviderName;
   search(
     query: string,
     maxResults: number,
   ): Promise<WebSearchResult[]>;
+  /** Optional: Google Search grounding with structured JSON output.
+   *  Company-website discovery (AI Search 2.1) uses this when present;
+   *  providers without it fall back to plain `search` + verification. */
+  searchStructured?(
+    query: string,
+    schema: StructuredSearchSchema,
+  ): Promise<WebSearchStructuredResult<Record<string, unknown>>>;
 }
 
 /** Controlled error: provider reachable but rejected/failed the query. */
@@ -192,6 +216,119 @@ async function geminiGroundingSearch(
 }
 
 /**
+ * Structured grounding: the model answers a question with a JSON object
+ * (responseSchema) while Google Search Grounding provides the pages.
+ * The grounding metadata (real public URLs) is returned alongside —
+ * callers MUST still verify any URL against fetched content; the JSON is
+ * a discovery hint, never the source of truth.
+ */
+async function geminiStructuredSearch(
+  query: string,
+  schema: StructuredSearchSchema,
+  key: string,
+): Promise<WebSearchStructuredResult<Record<string, unknown>>> {
+  const model = groundingModel();
+  const response = await fetch(
+    `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": key,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: query.slice(0, 1200) }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 512,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: schema.properties,
+            required: schema.required,
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(GROUNDING_TIMEOUT_MS),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok)
+    throw new WebSearchError(
+      response.status === 401 || response.status === 403
+        ? "The web search provider rejected the configured key."
+        : response.status === 429
+          ? "The web search provider rate limit was reached."
+          : response.status >= 500
+            ? "The web search provider is temporarily unavailable."
+            : "The web search provider rejected the request.",
+      response.status,
+    );
+  const data = (await response.json()) as {
+    candidates?: Array<{
+      content?: { parts?: Array<{ text?: unknown }> };
+      groundingMetadata?: {
+        groundingChunks?: Array<{ web?: { uri?: unknown; title?: unknown } }>;
+        searchGroundingMetadata?: { dynamicSearchPages?: unknown };
+      };
+    }>;
+  };
+  const candidate = data.candidates?.[0];
+  const rawText = candidate?.content?.parts
+    ?.map((part) => (typeof part?.text === "string" ? part.text : ""))
+    .join("")
+    .trim();
+  let parsed: Record<string, unknown> = {};
+  if (rawText) {
+    try {
+      const obj = JSON.parse(rawText) as unknown;
+      if (obj && typeof obj === "object" && !Array.isArray(obj))
+        parsed = obj as Record<string, unknown>;
+    } catch {
+      parsed = {};
+    }
+  }
+  // Required fields must be present (right types) — otherwise treat the
+  // answer as unusable (nulls), never as an implicit "yes".
+  for (const field of schema.required) {
+    const value = parsed[field];
+    const expected = schema.properties[field]?.type;
+    const ok =
+      expected === "BOOLEAN"
+        ? typeof value === "boolean"
+        : typeof value === "string";
+    if (!ok) parsed[field] = expected === "BOOLEAN" ? false : "";
+  }
+  const results: WebSearchResult[] = [];
+  const seen = new Set<string>();
+  const add = (uri: unknown, title: unknown) => {
+    if (typeof uri !== "string" || uri.length === 0) return;
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(uri);
+    } catch {
+      return;
+    }
+    if (parsedUrl.protocol !== "https:") return;
+    const canonical = `${parsedUrl.origin}${parsedUrl.pathname}${parsedUrl.search}`;
+    if (seen.has(canonical)) return;
+    seen.add(canonical);
+    results.push({
+      title: typeof title === "string" ? title.slice(0, 300) : "",
+      url: canonical,
+      snippet: "",
+    });
+  };
+  const metadata = candidate?.groundingMetadata;
+  for (const chunk of metadata?.groundingChunks ?? [])
+    add(chunk?.web?.uri, chunk?.web?.title);
+  const pages = metadata?.searchGroundingMetadata?.dynamicSearchPages;
+  if (Array.isArray(pages)) for (const page of pages) add(page, "");
+  return { data: parsed, results: results.slice(0, 10) };
+}
+
+/**
  * Resolve the configured web-search client. Gemini Google Search Grounding
  * is the single provider: returns a client when a usable key exists
  * (explicit GEMINI_API_KEY, or the reused AI_API_KEY on a Google AI Studio
@@ -204,5 +341,6 @@ export function getWebSearchClient(): WebSearchClient | null {
   return {
     name: "gemini_grounding",
     search: (q, n) => geminiGroundingSearch(q, n, key),
+    searchStructured: (q, schema) => geminiStructuredSearch(q, schema, key),
   };
 }

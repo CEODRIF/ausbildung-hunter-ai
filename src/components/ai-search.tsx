@@ -54,12 +54,23 @@ interface ProfileSummary {
   skills: string[];
   keywords: string[];
 }
+interface SourceRunStatus {
+  source: string;
+  status: "ok" | "degraded" | "failed" | "skipped_budget";
+  candidates: number;
+}
 interface Discovery {
   configured: boolean;
   provider: string | null;
   categories: Record<SourceCategory, number>;
   /** Raw candidate hits per registry source (AI Search 2.0). */
   sources?: Record<string, number>;
+  /** Per-source run status — powers the diagnostics card (2.1). */
+  sourceStatuses?: SourceRunStatus[];
+  /** Grounding calls that actually succeeded (honest metric). */
+  webSearchesOk?: number;
+  /** Provider-level errors (key rejected, 429, 5xx) — surfaced visibly. */
+  providerErrors?: number;
   checked: number;
   webFound: number;
   duplicatesRemoved: number;
@@ -69,6 +80,13 @@ interface Stats {
   withPublicEmail: number;
   withApplicationUrl: number;
   withOfficialSource: number;
+  sourcesSearched?: number;
+  sourcesWithResults?: number;
+  webSearchesExecuted?: number;
+  companiesEnriched?: number;
+  companiesWithPublicEmail?: number;
+  officialWebsitesFound?: number;
+  officialApplicationLinks?: number;
 }
 
 /** Client-side result filters (AI Search 2.0). All values are plain
@@ -917,6 +935,51 @@ export function AISearchClient({
             </p>
           </div>
         </div>
+      )}
+      {/* AI Search 2.1: extended pipeline stats — every number is an
+          honest, server-computed counter (executed calls, found sites),
+          never an estimate. */}
+      {stats && stats.found > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          <Chip>{t("aiSearch.sourcesSearched")}: {stats.sourcesSearched ?? 0}</Chip>
+          <Chip>{t("aiSearch.sourcesWithResults")}: {stats.sourcesWithResults ?? 0}</Chip>
+          <Chip>{t("aiSearch.webSearchesExecuted")}: {stats.webSearchesExecuted ?? 0}</Chip>
+          <Chip>{t("aiSearch.companiesEnriched")}: {stats.companiesEnriched ?? 0}</Chip>
+          <Chip>{t("aiSearch.companiesWithEmail")}: {stats.companiesWithPublicEmail ?? 0}</Chip>
+          <Chip>{t("aiSearch.officialWebsites")}: {stats.officialWebsitesFound ?? 0}</Chip>
+          <Chip>{t("aiSearch.officialApplyLinks")}: {stats.officialApplicationLinks ?? 0}</Chip>
+        </div>
+      )}
+      {/* Source diagnostics: one line per registry source (results +
+          status). A dead web provider is NEVER invisible again. */}
+      {discovery?.sourceStatuses && discovery.sourceStatuses.length > 0 && (
+        <Card className="p-4">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-faint">
+            {t("aiSearch.diagTitle")}
+          </p>
+          {(discovery.providerErrors ?? 0) > 0 && (
+            <div className="mt-2 rounded-xl bg-warning-soft p-3 text-sm font-medium text-warning">
+              {t("aiSearch.providerErrors", { n: discovery.providerErrors ?? 0 })}
+            </div>
+          )}
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {discovery.sourceStatuses.map((status) => {
+              const label =
+                status.candidates > 0
+                  ? `${status.candidates} → ${t("aiSearch.statusOk")}`
+                  : status.status === "skipped_budget"
+                    ? t("aiSearch.statusSkipped")
+                    : status.status === "degraded"
+                      ? t("aiSearch.statusDegraded")
+                      : t("aiSearch.statusFailed");
+              return (
+                <Chip key={status.source}>
+                  {sourceLabel(status.source)}: {label}
+                </Chip>
+              );
+            })}
+          </div>
+        </Card>
       )}
       {(sourceStatuses ?? []).some((s) => s.status !== "ok") && (
         <div className="rounded-xl bg-warning-soft p-3 text-sm font-medium text-warning">

@@ -18,6 +18,7 @@ import {
   type OpportunitySourceType,
 } from "@/lib/opportunities/types";
 import { normalizeOpportunityEmail } from "@/lib/opportunities/email-export";
+import { classifyEmailType } from "@/lib/opportunities/enrichment/text-extract";
 import {
   buildSourceQuery,
   enabledWebSources,
@@ -955,6 +956,11 @@ export function mergeOpportunities(args: {
           !backfilled.application_url ||
           hostOf(backfilled.application_url) !== hostOf(follower.application_url)
         ) {
+          // The official link wins; the aggregator link is PRESERVED
+          // (never discarded) for provenance + fallback.
+          if (backfilled.application_url && !backfilled.aggregator_url) {
+            backfilled.aggregator_url = backfilled.application_url;
+          }
           backfilled.application_url = follower.application_url;
         }
         break;
@@ -995,10 +1001,12 @@ export function mergeOpportunities(args: {
             ? "found"
             : "invalid"
           : "unknown",
+        email_type: mergeEmail ? classifyEmailType(mergeEmail) : null,
         phone: backfilled.contact?.phone ?? null,
         phone_source: null,
         contact_name: backfilled.contact?.person ?? null,
         contact_source: null,
+        department: null,
         last_verified_at: null,
         data_confidence: null,
         official_company_source: officialCompanySource,
@@ -1060,6 +1068,9 @@ export async function runWebDiscovery(args: {
   webQueries: string[];
   goal: "ausbildung" | "arbeit";
   userId: string;
+  /** Registry source ids in preferred order (per-profile prioritization).
+   *  Unknown/absent ids keep their registry position. */
+  prioritySourceIds?: string[];
   onCategoryResults?: (category: SourceCategory, results: number) => void;
   onSourceResults?: (sourceId: string, results: number) => void;
   onCheckProgress?: (done: number, total: number) => void;
@@ -1071,6 +1082,9 @@ export async function runWebDiscovery(args: {
   sourceCounts: Record<string, number>;
   /** Per-source run status (ok/degraded/failed/skipped_budget). */
   sourceStatuses: SourceRunStatus[];
+  /** Grounding calls that actually succeeded (honest usage metric —
+   *  the "Google / web search" number must never count attempts). */
+  groundingCallsOk: number;
   verifiedCount: number;
   aiUsed: boolean;
   providerErrors: number;
@@ -1090,6 +1104,7 @@ export async function runWebDiscovery(args: {
       categoryCounts,
       sourceCounts: {},
       sourceStatuses: [],
+      groundingCallsOk: 0,
       verifiedCount: 0,
       aiUsed: false,
       providerErrors: 0,
@@ -1113,6 +1128,7 @@ export async function runWebDiscovery(args: {
     .filter(Boolean);
 
   let callsRemaining = MAX_DISCOVERY_CALLS;
+  let groundingCallsOk = 0;
   // 1) General net: the AI's plain web queries (no site: scoping).
   const plain = plainQueries.slice(0, Math.max(0, callsRemaining));
   callsRemaining -= plain.length;
@@ -1123,15 +1139,31 @@ export async function runWebDiscovery(args: {
       webQueries: plain,
     });
     providerErrors += errors;
+    groundingCallsOk += Math.max(0, plain.length - errors);
+    console.info(
+      "[WEB_DISCOVERY] search_engine calls=%d ok=%d errors=%d candidates=%d",
+      plain.length,
+      Math.max(0, plain.length - errors),
+      errors,
+      candidates.length,
+    );
     collected.push(...candidates);
     for (const candidate of candidates)
       uniqueByCategory[candidate.category].add(candidate.url);
   }
 
   // 2) Registry sources in priority order — one grounding call each, on the
-  //    AI's first (highest-priority) web query.
+  //    AI's first (highest-priority) web query. Per-profile prioritization
+  //    (mechanik → HWK, öffentlicher Dienst → Bund, kaufmännisch → IHK).
+  const rank = new Map<string, number>();
+  (args.prioritySourceIds ?? []).forEach((id, index) => {
+    if (!rank.has(id)) rank.set(id, index);
+  });
+  const orderedSources = [...enabledWebSources()].sort(
+    (a, b) => (rank.get(a.id) ?? 1_000) - (rank.get(b.id) ?? 1_000),
+  );
   const firstQuery = plain[0];
-  for (const source of enabledWebSources()) {
+  for (const source of orderedSources) {
     if (!firstQuery || callsRemaining <= 0) {
       sourceStatuses.push({
         source: source.id,
@@ -1147,6 +1179,14 @@ export async function runWebDiscovery(args: {
       webQueries: [firstQuery],
     });
     providerErrors += errors;
+    groundingCallsOk += Math.max(0, 1 - errors);
+    console.info(
+      "[WEB_DISCOVERY] %s calls=1 ok=%d errors=%d candidates=%d",
+      source.id,
+      Math.max(0, 1 - errors),
+      errors,
+      candidates.length,
+    );
     sourceCounts[source.id] = candidates.length;
     sourceStatuses.push({
       source: source.id,
@@ -1158,6 +1198,12 @@ export async function runWebDiscovery(args: {
       uniqueByCategory[candidate.category].add(candidate.url);
     args.onSourceResults?.(source.id, candidates.length);
   }
+  console.info(
+    "[WEB_DISCOVERY] summary groundingCallsOk=%d providerErrors=%d collected=%d",
+    groundingCallsOk,
+    providerErrors,
+    collected.length,
+  );
 
   for (const category of SOURCE_CATEGORIES) {
     categoryCounts[category] = uniqueByCategory[category].size;
@@ -1192,6 +1238,7 @@ export async function runWebDiscovery(args: {
     categoryCounts,
     sourceCounts,
     sourceStatuses,
+    groundingCallsOk,
     verifiedCount: verified.length,
     aiUsed,
     providerErrors,

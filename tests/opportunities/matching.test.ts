@@ -41,6 +41,7 @@ function opp(overrides: Partial<Opportunity> = {}): Opportunity {
     source_ids: [],
     enrichment: null,
     application_url: null,
+    aggregator_url: null,
     title: "Ausbildung Mechatroniker/in",
     goal: "ausbildung",
     stellenangebotsart: "AUSBILDUNG",

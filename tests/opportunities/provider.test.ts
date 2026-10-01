@@ -517,6 +517,7 @@ function mkOpp(overrides: Record<string, unknown>): Opportunity {
     source_ids: [],
     enrichment: null,
     application_url: null,
+    aggregator_url: null,
     title: "T",
     goal: "arbeit",
     stellenangebotsart: "ARBEIT",

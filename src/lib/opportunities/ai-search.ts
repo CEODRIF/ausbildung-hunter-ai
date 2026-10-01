@@ -14,8 +14,9 @@ import {
   computeResultStats,
   runCompanyEnrichment,
   type AiSearchStats,
+  type EnrichmentTelemetry,
 } from "@/lib/opportunities/enrichment";
-import { sourceLabel } from "@/lib/opportunities/sources";
+import { prioritizeSources, sourceLabel } from "@/lib/opportunities/sources";
 import {
   BA_SOURCE_ID,
   getCandidateProfile,
@@ -188,10 +189,11 @@ function planPrompt(
    "Kaufmann im E-Commerce" Ausbildung ${startYear}
    "Ausbildung ${startYear}" "Köln" Marketing
    "Ausbildung" "m/w/d" "${startYear}"
- Rules for web_queries:
- - Each is ONE search string (max 120 chars) combining the target role (in double quotes) + "Ausbildung" + the year ${startYear}, plus one location (city/PLZ/Bundesland from the profile) when documented.
- - Vary them: one with a location, one with an industry/keyword, one with "m/w/d", one combining role + year + "Bewerbung".
- - Use ONLY profile facts; do not invent companies or roles.
+  Rules for web_queries:
+  - Each is ONE search string (max 120 chars) combining the target role (in double quotes) + "Ausbildung" + the year ${startYear}, plus one location (city/PLZ/Bundesland from the profile) when documented.
+  - Vary them: one with a location, one with an industry/keyword, one with "m/w/d", one combining role + year + "Bewerbung".
+  - Include SYNONYM / spelling variants of the target role so the multi-source registry finds the same posting phrased differently (e.g. "Kaufmann im E-Commerce" → also "Kaufmann/-frau E-Commerce", "Online Marketing", "E-Commerce Ausbildung"; "Kaufmann für Büromanagement" → also "Bürokaufmann/-frau"). Derived from the profile's roles/skills/keywords only — no invented professions.
+  - Use ONLY profile facts; do not invent companies or roles.
 
  Return ONLY valid JSON, no markdown, exactly:
  {"rationale":"<one short sentence>","queries":[{"keyword":"...","role":"...","location":"..."}],"web_queries":["...","..."]}
@@ -258,6 +260,17 @@ export interface AiSearchDiscovery {
   categories: Record<SourceCategory, number>;
   /** Raw candidate hits per registry source id (AI Search 2.0). */
   sources: Record<string, number>;
+  /** Per-source run status (ok/degraded/failed/skipped_budget) — the
+   *  diagnostics the UI shows so a dead provider is never invisible. */
+  sourceStatuses: Array<{
+    source: string;
+    status: "ok" | "degraded" | "failed" | "skipped_budget";
+    candidates: number;
+  }>;
+  /** Grounding calls that actually succeeded (honest usage metric). */
+  webSearchesOk: number;
+  /** Provider-level errors (key rejected, 429, 5xx) — surfaced in the UI. */
+  providerErrors: number;
   /** Unique candidates that were page-checked (guarded fetch). */
   checked: number;
   /** Web opportunities extracted before dedupe. */
@@ -511,6 +524,9 @@ const emptyDiscovery = (): AiSearchDiscovery => ({
     social_media: 0,
   },
   sources: {},
+  sourceStatuses: [],
+  webSearchesOk: 0,
+  providerErrors: 0,
   checked: 0,
   webFound: 0,
   duplicatesRemoved: 0,
@@ -552,12 +568,28 @@ export async function runAISearch(args: {
   // Broad web discovery (only when a provider is configured + planned).
   const client = getWebSearchClient();
   const hasWeb = client !== null && plan.web_queries.length > 0;
+  // Per-profile source prioritization (mechanik → HWK, öffentlicher Dienst
+  // → Bund, kaufmännisch → IHK + company career pages) — registry order
+  // otherwise.
+  const profileText = [
+    (profile.target_roles ?? []).map((role) => role.role).join(" "),
+    Object.values(profile.skills ?? {})
+      .flat()
+      .join(" "),
+    (profile.keywords ?? []).join(" "),
+    plan.queries
+      .map((query) => `${query.keyword} ${query.role} ${query.location}`)
+      .join(" "),
+  ]
+    .filter(Boolean)
+    .join(" ");
   const webPromise = hasWeb
     ? runWebDiscovery({
         client: client!,
         webQueries: plan.web_queries,
         goal: args.goal,
         userId: args.userId,
+        prioritySourceIds: prioritizeSources(profileText),
         onCategoryResults: (category, results) =>
           emit({ type: "discover", category, results }),
         onCheckProgress: (done, total) => emit({ type: "check", done, total }),
@@ -582,6 +614,9 @@ export async function runAISearch(args: {
         provider: client!.name,
         categories: webResult.categoryCounts,
         sources: webResult.sourceCounts,
+        sourceStatuses: webResult.sourceStatuses,
+        webSearchesOk: webResult.groundingCallsOk,
+        providerErrors: webResult.providerErrors,
         checked: webResult.verifiedCount,
         webFound: webResult.opportunities.length,
         duplicatesRemoved: 0,
@@ -622,28 +657,61 @@ export async function runAISearch(args: {
     total: merge.merged.length,
   });
 
-  // Company enrichment (AI Search 2.0): website + career page + contact /
-  // email discovery with provenance, per company (cache-first). Runs on
-  // the MERGED rows so every vacancy gets a chance to gain a real email /
-  // application contact — discovery quality never depends on the source
-  // that happened to publish the listing. Failures are contained: an
-  // enrichment problem degrades a row, never the whole run.
-  let enrichedMerged: Opportunity[] = merge.merged;
+  // Ranking FIRST (dedupe → rank → enrich, AI Search 2.1): the bounded
+  // company budget (12 companies/run) goes to the rows the user actually
+  // sees, not to raw duplicates that may be filtered out.
+  const ranked = rankOpportunities(merge.merged, profile, args.targetCount);
+  console.info(
+    "[SEARCH] raw=%d dedupeRemoved=%d final=%d webSources=%d providerErrors=%d",
+    collected.length,
+    merge.duplicatesRemoved,
+    ranked.length,
+    discovery.sources ? Object.keys(discovery.sources).length : 0,
+    discovery.providerErrors,
+  );
+
+  // Company enrichment (AI Search 2.0): official-website discovery (Google
+  // Search grounding, structured + content-verified) → career/impressum
+  // pages → contact/email extraction with provenance, per company
+  // (cache-first). Failures are contained: an enrichment problem degrades
+  // a row, never the whole run.
+  const telemetry: EnrichmentTelemetry = {
+    companiesEnriched: 0,
+    webSearchesExecuted: 0,
+    companiesWithEmail: 0,
+    pagesFetched: 0,
+  };
+  let results: Opportunity[] = ranked;
   try {
-    enrichedMerged = await runCompanyEnrichment(merge.merged, {
+    results = await runCompanyEnrichment(ranked, {
       client,
+      telemetry,
       onProgress: (done, total) =>
         emit({ type: "company_enrich", done, total }),
     });
   } catch (error) {
     console.warn(
-      "[ai-search] company enrichment failed (rows kept as merged)",
+      "[ai-search] company enrichment failed (rows kept as ranked)",
       error instanceof Error ? error.message : String(error),
     );
   }
 
-  const results = rankOpportunities(enrichedMerged, profile, args.targetCount);
-  const stats = computeResultStats(results);
+  const sourcesSearched =
+    1 +
+    (discovery.sourceStatuses ?? []).filter(
+      (status) => status.status !== "skipped_budget",
+    ).length;
+  const sourcesWithResults = Object.values(discovery.sources ?? {}).filter(
+    (count) => count > 0,
+  ).length;
+  const stats = computeResultStats(results, {
+    sourcesSearched,
+    sourcesWithResults,
+    webSearchesExecuted:
+      discovery.webSearchesOk + telemetry.webSearchesExecuted,
+    companiesEnriched: telemetry.companiesEnriched,
+    companiesWithPublicEmail: telemetry.companiesWithEmail,
+  });
   const elapsedMs = Date.now() - startedAt;
   const result: AiSearchResult = {
     plan,
@@ -696,6 +764,14 @@ export interface OpportunityExportRow {
   additional_sources: string;
   /** Registry sources this vacancy was found on (labels, " · " joined). */
   sources: string;
+  /** Official company application link ("" when the application URL is
+   *  itself the aggregator one or absent). */
+  official_application_url: string;
+  /** Preserved aggregator application link ("" when not applicable). */
+  aggregator_url: string;
+  /** Classification of the found email (application/career/hr/contact/
+   *  general, "" when none). Deterministic, never guessed. */
+  email_type: string;
 }
 
 export function buildExportRow(opportunity: Opportunity): OpportunityExportRow {
@@ -735,5 +811,11 @@ export function buildExportRow(opportunity: Opportunity): OpportunityExportRow {
       )
       .join("\n"),
     sources: opportunity.source_ids.map((id) => sourceLabel(id)).join(" · "),
+    official_application_url:
+      opportunity.enrichment?.official_company_source === true
+        ? (opportunity.application_url ?? "")
+        : "",
+    aggregator_url: opportunity.aggregator_url ?? "",
+    email_type: opportunity.enrichment?.email_type ?? "",
   };
 }

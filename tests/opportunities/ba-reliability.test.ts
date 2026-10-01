@@ -204,6 +204,7 @@ function baItem(ref: string): Opportunity {
     source_ids: [],
     enrichment: null,
     application_url: null,
+    aggregator_url: null,
     title: "Stelle",
     goal: "ausbildung",
     stellenangebotsart: null,
@@ -251,6 +252,7 @@ function webOpportunity(): Opportunity {
     source_ids: [],
     enrichment: null,
     application_url: null,
+    aggregator_url: null,
     title: "Ausbildung Industriekaufmann (web)",
     goal: "ausbildung",
     stellenangebotsart: null,
@@ -525,6 +527,7 @@ describe("6. multi-source resilience", () => {
       sourceStatuses: [
         { source: "company_career", status: "ok", candidates: 1 },
       ],
+      groundingCallsOk: 1,
       verifiedCount: 1,
       aiUsed: false,
       providerErrors: 0,

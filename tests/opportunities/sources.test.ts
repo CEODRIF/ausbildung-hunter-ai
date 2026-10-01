@@ -5,6 +5,8 @@ import {
   enabledWebSources,
   getSource,
   hostToSourceId,
+  isAllowedCompanyDomain,
+  prioritizeSources,
   SOURCE_CATEGORIES,
   SOURCE_REGISTRY,
   sourceLabel,
@@ -145,5 +147,84 @@ describe("hostToSourceId + sourceLabel", () => {
   it("sourceLabel falls back to the id for unknown ids (honest)", () => {
     expect(sourceLabel("azubiyo")).toBe("Azubiyo");
     expect(sourceLabel("unknown-source")).toBe("unknown-source");
+  });
+});
+
+describe("prioritizeSources (per-profile reordering)", () => {
+  const base = enabledWebSources().map((source) => source.id);
+
+  it("returns every enabled web source exactly once (stable permutation)", () => {
+    const result = prioritizeSources("Mechatroniker Kaufmann");
+    expect(result).toHaveLength(base.length);
+    expect(new Set(result).size).toBe(base.length);
+    for (const id of result) expect(base).toContain(id);
+  });
+
+  it("no matching profile → registry order unchanged", () => {
+    expect(prioritizeSources("irrelevant text without signals")).toEqual(base);
+  });
+
+  it("craft profile (Mechatronik) → HWK raised to the front", () => {
+    const result = prioritizeSources("Ausbildung als Mechatroniker");
+    expect(result[0]).toBe("hwk");
+    // The raised source keeps its set; the rest follows unchanged.
+    expect(result.slice(1)).toEqual(base.filter((id) => id !== "hwk"));
+  });
+
+  it("office profile (Kaufmann / E-Commerce) → IHK + company career pages first", () => {
+    const result = prioritizeSources('Kaufmann im E-Commerce, "Bürokaufmann"');
+    expect(result[0]).toBe("ihk");
+    expect(result[1]).toBe("company_career");
+    expect(result).toEqual([
+      ...base.filter((id) => id === "ihk" || id === "company_career"),
+      ...base.filter((id) => id !== "ihk" && id !== "company_career"),
+    ]);
+  });
+
+  it("public-sector profile (Feuerwehr / Behörde) → Bund raised first", () => {
+    const result = prioritizeSources("Ausbildung Feuerwehr / öffentliche Verwaltung");
+    expect(result[0]).toBe("bund");
+  });
+});
+
+describe("isAllowedCompanyDomain (anti-portal guard)", () => {
+  it("accepts a plausible company's own domain", () => {
+    expect(isAllowedCompanyDomain("https://www.muster-technik.de")).toBe(true);
+    expect(isAllowedCompanyDomain("https://beispiel.de/impressum")).toBe(true);
+  });
+
+  it("rejects job portals, review sites and social networks", () => {
+    expect(isAllowedCompanyDomain("https://www.azubiyo.de/firmen/muster")).toBe(false);
+    expect(isAllowedCompanyDomain("https://ausbildung.de/stellenangebot/1")).toBe(false);
+    expect(isAllowedCompanyDomain("https://www.kununu.com/de/muster")).toBe(false);
+    expect(isAllowedCompanyDomain("https://www.linkedin.com/company/muster")).toBe(false);
+    expect(isAllowedCompanyDomain("https://www.arbeitsagentur.de/jobsuche/1")).toBe(false);
+    expect(isAllowedCompanyDomain("https://www.handwerk.de/x")).toBe(false);
+  });
+
+  it("subdomains of blocked domains are blocked too", () => {
+    expect(isAllowedCompanyDomain("https://de.indeed.com/viewjob?jk=1")).toBe(false);
+    expect(isAllowedCompanyDomain("https://job.stepstone.de/jobs/1")).toBe(false);
+  });
+
+  it("rejects unparseable URLs (never a false allow)", () => {
+    expect(isAllowedCompanyDomain("not a url")).toBe(false);
+    expect(isAllowedCompanyDomain("")).toBe(false);
+  });
+});
+
+describe("buildSourceQuery multilingual passthrough", () => {
+  it("keeps English / synonym terms intact (site: wrapping only)", () => {
+    const azubiyo = getSource("azubiyo")!;
+    const built = buildSourceQuery(
+      azubiyo,
+      '"Kaufmann im E-Commerce" Ausbildung 2027 Online Marketing',
+    );
+    expect(built).toBe(
+      '"Kaufmann im E-Commerce" Ausbildung 2027 Online Marketing site:azubiyo.de',
+    );
+    // No translation, no dropped synonym — deterministic wrapping only.
+    expect(built).toContain("E-Commerce");
+    expect(built).toContain("Online Marketing");
   });
 });

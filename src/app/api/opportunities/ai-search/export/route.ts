@@ -73,6 +73,9 @@ const EXPORT_COLUMNS = [
   { header: "Source Type", key: "source_type", width: 18 },
   { header: "Additional Sources", key: "additional_sources", width: 55 },
   { header: "Sources", key: "sources", width: 40 },
+  { header: "Official Application URL", key: "official_application_url", width: 45 },
+  { header: "Aggregator URL", key: "aggregator_url", width: 45 },
+  { header: "Email Type", key: "email_type", width: 14 },
 ] as const;
 
 export interface EmailExportStats {

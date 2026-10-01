@@ -156,6 +156,7 @@ function mkOpp(
     source_ids: [],
     enrichment: null,
     application_url: null,
+    aggregator_url: null,
     title: `Stelle ${ref}`,
     goal: "arbeit",
     stellenangebotsart: "ARBEIT",

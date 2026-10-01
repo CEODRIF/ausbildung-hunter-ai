@@ -77,12 +77,16 @@ export interface SourceDefinition {
 }
 
 /**
- * The registry, in PRIORITY order (higher = searched earlier within the
- * per-run discovery budget). Job portals come first because they publish
- * Ausbildung listings with the most structured data; company career pages
- * are the next priority (they carry the official application links); public
- * social media last.
- */
+  * The registry, in PRIORITY order (higher = searched earlier within the
+  * per-run discovery budget). Order is tuned so the highest-value sources
+  * stay inside the budget even in the worst case (4 plain queries → only
+  * 12 source calls): the big Ausbildung/job portals first (most structured
+  * listings), then company career pages (they carry the OFFICIAL
+  * application links + contact data — the enrichment gold source), then the
+  * public-employer portal, then the smaller regional portals; gojobs/XING
+  * and public social media last (least useful for applying). A profile can
+  * still raise HWK/IHK/Bund further via prioritizeSources().
+  */
 export const SOURCE_REGISTRY: readonly SourceDefinition[] = [
   {
     id: "arbeitsagentur",
@@ -157,6 +161,24 @@ export const SOURCE_REGISTRY: readonly SourceDefinition[] = [
     enabled: true,
   },
   {
+    id: "company_career",
+    label: "Company Career Pages",
+    kind: "web",
+    category: "company_website",
+    domains: [],
+    officialSearchUrl: null,
+    enabled: true,
+  },
+  {
+    id: "bund",
+    label: "Öffentlicher Dienst (Bund)",
+    kind: "web",
+    category: "job_portal",
+    domains: ["service.bund.de", "wir-sind-bund.de"],
+    officialSearchUrl: "https://www.wir-sind-bund.de/",
+    enabled: true,
+  },
+  {
     id: "meinestadt",
     label: "Meinestadt",
     kind: "web",
@@ -194,12 +216,57 @@ export const SOURCE_REGISTRY: readonly SourceDefinition[] = [
     enabled: true,
   },
   {
-    id: "company_career",
-    label: "Company Career Pages",
+    id: "azubi",
+    label: "Azubi.de",
     kind: "web",
-    category: "company_website",
-    domains: [],
-    officialSearchUrl: null,
+    category: "job_portal",
+    domains: ["azubi.de"],
+    officialSearchUrl: "https://www.azubi.de/",
+    enabled: true,
+  },
+  {
+    id: "meine_ausbildung",
+    label: "Meine Ausbildung in Deutschland",
+    kind: "web",
+    category: "job_portal",
+    domains: ["meine-ausbildung-in-deutschland.de"],
+    officialSearchUrl: "https://www.meine-ausbildung-in-deutschland.de/",
+    enabled: true,
+  },
+  {
+    id: "lehrstellen_radar",
+    label: "Lehrstellen-Radar",
+    kind: "web",
+    category: "job_portal",
+    domains: ["lehrstellen-radar.de"],
+    officialSearchUrl: "https://www.lehrstellen-radar.de/",
+    enabled: true,
+  },
+  {
+    id: "ausbildung_nrw",
+    label: "Ausbildung.NRW",
+    kind: "web",
+    category: "job_portal",
+    domains: ["ausbildung.nrw"],
+    officialSearchUrl: "https://www.ausbildung.nrw/",
+    enabled: true,
+  },
+  {
+    id: "ausbildungsatlas",
+    label: "Der Ausbildungsatlas",
+    kind: "web",
+    category: "job_portal",
+    domains: ["derausbildungsatlas.de"],
+    officialSearchUrl: "https://www.derausbildungsatlas.de/",
+    enabled: true,
+  },
+  {
+    id: "hallo_beruf",
+    label: "Hallo Beruf",
+    kind: "web",
+    category: "job_portal",
+    domains: ["hallo-beruf.de"],
+    officialSearchUrl: "https://www.hallo-beruf.de/",
     enabled: true,
   },
   {
@@ -285,4 +352,121 @@ export function hostToSourceId(url: string): string | null {
       return source.id;
   }
   return null;
+}
+
+/**
+ * Hosts that can NEVER be a company's official website — job portals,
+ * company-review sites, business directories and public-employer portals.
+ * They are legitimate DISCOVERY sources (how we find the job), but a
+ * website discovered on one of them is a portal page, not the company.
+ * (kununu/glassdoor/northdata/… are company-info sites, not the company.)
+ */
+export const BLOCKED_COMPANY_DOMAINS = [
+  // discovery/job portals (registry domains + extras)
+  "arbeitsagentur.de",
+  "ausbildung.de",
+  "aubi-plus.de",
+  "azubiyo.de",
+  "azubi.de",
+  "meine-ausbildung-in-deutschland.de",
+  "lehrstellen-radar.de",
+  "ausbildung.nrw",
+  "derausbildungsatlas.de",
+  "hallo-beruf.de",
+  "ihk.de",
+  "ihk-lehrstellenboerse.de",
+  "hwk.de",
+  "handwerk.de",
+  "stepstone.de",
+  "indeed.de",
+  "indeed.com",
+  "meinestadt.de",
+  "stellenanzeigen.de",
+  "gojobs.de",
+  "xing.com",
+  "ausbildungihrerstadt.de",
+  "azubimessenger.de",
+  "jobvector.de",
+  "service.bund.de",
+  "wir-sind-bund.de",
+  "bund.de",
+  // company review / directory / data sites
+  "kununu.com",
+  "glassdoor.com",
+  "northdata.de",
+  "firmenwissen.de",
+  "gelbe-seiten.de",
+  "wer-weiss-was.de",
+  "companyhouse.de",
+  "handelsregister.de",
+  // social
+  "facebook.com",
+  "linkedin.com",
+  "instagram.com",
+  "youtube.com",
+  "tiktok.com",
+] as const;
+
+/** True when a URL's host may plausibly be the company's own website
+ *  (i.e. it is NOT a known portal / review / directory / social host). */
+export function isAllowedCompanyDomain(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  const bare = host.toLowerCase().replace(/^www\./, "");
+  const domain = hostDomain(bare);
+  for (const blocked of BLOCKED_COMPANY_DOMAINS) {
+    if (domain === blocked || bare === blocked || bare.endsWith(`.${blocked}`))
+      return false;
+  }
+  return true;
+}
+
+/**
+ * Deterministic per-profile source prioritization (AI Search 2.1).
+ *
+ * The registry order is the default priority; a profile's keywords can
+ * raise clearly relevant source groups (they keep their relative order,
+ * the rest follows unchanged). This is a transparency rule, not a guess:
+ * - Mechatronik / Handwerk / Elektro / Kälte… → HWK / Handwerk first
+ *   (craft professions are primarily trained in the Handwerk).
+ * - öffentlicher Dienst / Verwaltung / Behörde / Stadt / Feuerwehr…
+ *   → public-employer portals first (Bund, Behörden).
+ * - kaufmännisch (Kaufmann, Büro, Marketing, E-Commerce, Controlling,
+ *   Buchhaltung, Personal, Vertrieb…) → IHK + company career pages first
+ *   (office professions are predominantly IHK-regulated / company sites).
+ */
+export function prioritizeSources(profileText: string): string[] {
+  const text = profileText.toLowerCase();
+  const craft =
+    /(mechatronik|handwerk|elektro|elektriker|kälte|klimatisier|dreh-?techn|zulassungs-|instandhalt|kessel|sanitär|heizungs-|tischler|schlosser|metallbauer|fliesen|maler|dachdecker|bäcker|fleisch|kfm\.? für das handwerk)/.test(
+      text,
+    );
+  const publicSector =
+    /(öffentlic|oeffentlic|verwaltung|behörde|behoerde|kommunal|landkreis|stadtrat|feuerwehr|polizei|justiz|zoll|beamten|bund (job|dienst)|wir-sind-bund)/.test(
+      text,
+    );
+  const office =
+    /(kaufmann|kauffrau|büro|buro|marketing|e-?commerce|controlling|buchhalt|personal|vertrieb|buchhaltung|buromanagement|digital|online marketing|seo|social media|eventkaufmann|versicherungskaufmann)/.test(
+      text,
+    );
+
+  const raised = new Set<string>();
+  if (craft) raised.add("hwk");
+  if (publicSector) raised.add("bund");
+  if (office) {
+    raised.add("ihk");
+    raised.add("company_career");
+  }
+  const base = enabledWebSources().map((source) => source.id);
+  // Stable reorder: raised ids first (registry order among themselves),
+  // then the remaining ids in registry order.
+  const reordered = [
+    ...base.filter((id) => raised.has(id)),
+    ...base.filter((id) => !raised.has(id)),
+  ];
+  return reordered;
 }

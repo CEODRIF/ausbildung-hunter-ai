@@ -8,7 +8,8 @@ import {
   type RobotsPolicy,
 } from "@/lib/web-search/fetch-page";
 import { type WebSearchClient } from "@/lib/web-search";
-import { isAggregatorHost, normalizeIdentity } from "../web-discovery";
+import { normalizeIdentity } from "../web-discovery";
+import { isAllowedCompanyDomain } from "../sources";
 import { classifyPageUrl, type PageKind } from "./text-extract";
 
 /**
@@ -152,27 +153,31 @@ export async function fetchCompanyPages(
 
 /**
  * Discover the company's official website from public search indexes when
- * no source row documented one. Candidate pages are fetched through the
- * guards and ACCEPTED only when the fetched content itself contains the
- * company name — otherwise null (no invention, no guess-by-domain).
+ * no source row documented one.
+ *
+ * AI Search 2.1 flow (1-2 grounding calls, never more):
+ *   1) STRUCTURED Google Search grounding (the app's existing Gemini
+ *      client, responseSchema JSON):
+ *        "<company>" "<city>" Germany → officialWebsite?
+ *   2) if (1) found nothing: "<company>" Impressum OR Karriere
+ *   3) CANDIDATE ACCEPTANCE (deterministic, anti-fabrication):
+ *      - https only;
+ *      - host NOT on the portal/review/directory/social blocklist
+ *        (ausbildung.de, azubiyo.de, kununu.com, linkedin.com, … are
+ *        discovery sources — never the company's official website);
+ *      - the page is FETCHED through the guards and the fetched content
+ *        itself must contain the company name (first word + ≥ half of the
+ *        significant words). A candidate whose content cannot verify the
+ *        company is rejected.
+ * Returns null on provider failure — never a guessed domain.
  */
 export async function discoverCompanyWebsite(
   companyName: string,
+  city: string | null,
   client: WebSearchClient,
   robotsCache: Map<string, RobotsPolicy>,
   limiter: ConcurrencyLimiter,
-): Promise<{ url: string; evidenceUrl: string } | null> {
-  const query = `"${companyName}" Impressum OR Kontakt OR Ausbildung`;
-  let results: Array<{ url: string; title: string; snippet: string }>;
-  try {
-    results = await client.search(query, 8);
-  } catch {
-    return null; // provider failure → no website, never a guessed one
-  }
-  if (!normalizeIdentity(companyName)) return null;
-  // Significant words of the company name (≥3 chars) — a candidate page is
-  // accepted only when the FIRST word is present and at least half of the
-  // words occur in the fetched content.
+): Promise<{ url: string; evidenceUrl: string; searched: number } | null> {
   const words = companyName
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -180,35 +185,103 @@ export async function discoverCompanyWebsite(
     .split(/[^a-z0-9]+/)
     .filter((word) => word.length >= 3);
   if (words.length === 0) return null;
+  let searched = 0;
+  const candidates: string[] = [];
 
-  for (const result of results.slice(0, 3)) {
+  const structured = client.searchStructured?.bind(client);
+  if (structured) {
+    const schema = {
+      properties: {
+        officialWebsite: {
+          type: "STRING" as const,
+          description:
+            "The company's OWN official website URL (https), or empty " +
+            "string when it is not clearly the company's own site. " +
+            "NEVER a job portal (ausbildung.de, azubiyo.de, stepstone.de, " +
+            "indeed.de, arbeitsagentur.de, ihk.de, hwk.de, service.bund.de), " +
+            "a company review site (kununu.com, glassdoor.com), a business " +
+            "directory or a social media page.",
+        },
+        confidence: {
+          type: "STRING" as const,
+          description: "high | medium | low",
+        },
+      },
+      required: ["officialWebsite", "confidence"],
+    };
+    const queries = [
+      `"${companyName}"${city ? ` "${city}"` : ""} Germany official website`,
+      `"${companyName}" Impressum OR Karriere`,
+    ];
+    for (const query of queries) {
+      try {
+        const { data } = await structured(query, schema);
+        searched += 1;
+        const website =
+          typeof data.officialWebsite === "string"
+            ? data.officialWebsite.trim()
+            : "";
+        if (website) candidates.push(website);
+        if (candidates.length > 0) break; // 1-2 calls, not more
+      } catch {
+        break; // provider failure → stop, do not burn the budget
+      }
+    }
+  } else {
+    // Fallback: plain grounding list (legacy providers without structured
+    // output). Same acceptance rules below.
+    try {
+      const results = await client.search(
+        `"${companyName}" Impressum OR Kontakt OR Ausbildung`,
+        8,
+      );
+      searched += 1;
+      for (const result of results) candidates.push(result.url);
+    } catch {
+      // provider failure → no website, never a guessed one
+    }
+  }
+
+  for (const candidate of candidates.slice(0, 3)) {
     const url = (() => {
       try {
-        return new URL(result.url);
+        return new URL(candidate);
       } catch {
         return null;
       }
     })();
     if (!url || url.protocol !== "https:") continue;
-    if (isAggregatorHost(result.url)) continue;
-    const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
-    if (hostname === "arbeitsagentur.de" || hostname.endsWith(".arbeitsagentur.de"))
-      continue;
-    const fetched = await fetchSitePage(result.url, robotsCache, limiter, {
+    if (!isAllowedCompanyDomain(candidate)) continue; // portal/review/social
+    const fetched = await fetchSitePage(candidate, robotsCache, limiter, {
       maxAttempts: 2,
     });
-    if (!fetched.ok) continue;
+    if (!fetched.ok) continue; // blocked/404 → respect, try next candidate
     const haystack = normalizeIdentity(
       `${fetched.page.title ?? ""} ${fetched.page.siteName ?? ""} ${fetched.page.text.slice(0, 4000)}`,
     );
     const matchCount = words.filter((word) => haystack.includes(word)).length;
     if (!haystack.includes(words[0]) || matchCount < Math.ceil(words.length / 2))
       continue;
+    console.info(
+      "[GOOGLE_SEARCH] official website found: %s (company=%s, searched=%d)",
+      url.origin,
+      companyName,
+      searched,
+    );
     try {
-      return { url: url.origin, evidenceUrl: fetched.page.finalUrl || result.url };
+      return {
+        url: url.origin,
+        evidenceUrl: fetched.page.finalUrl || candidate,
+        searched,
+      };
     } catch {
       return null;
     }
   }
+  console.info(
+    "[GOOGLE_SEARCH] official website NOT found: %s (searched=%d)",
+    companyName,
+    searched,
+  );
   return null;
 }

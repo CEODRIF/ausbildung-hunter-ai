@@ -8,11 +8,14 @@ import {
 } from "@/lib/opportunities/enrichment";
 import {
   bestEmail,
+  classifyEmailType,
   classifyPageUrl,
   extractContactPerson,
+  extractDepartment,
   extractEmails,
   extractPhone,
 } from "@/lib/opportunities/enrichment/text-extract";
+import { discoverCompanyWebsite } from "@/lib/opportunities/enrichment/company-site";
 import {
   cityOf,
   fingerprintOpportunity,
@@ -21,10 +24,16 @@ import {
 } from "@/lib/opportunities/web-discovery";
 import type { Opportunity } from "@/lib/opportunities/types";
 import { clearCompanyMemoryCache } from "@/lib/opportunities/enrichment/cache";
+import { ConcurrencyLimiter } from "@/lib/concurrency";
+import { WebSearchError } from "@/lib/web-search";
 
 const { createAdminClient } = await import("@/lib/supabase/admin");
+const { lookup } = await import("node:dns/promises");
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: vi.fn(),
+}));
+vi.mock("node:dns/promises", () => ({
+  lookup: vi.fn(),
 }));
 
 afterEach(() => {
@@ -46,6 +55,7 @@ function mkOpp(overrides: Partial<Opportunity> = {}): Opportunity {
     source_ids: [],
     enrichment: null,
     application_url: null,
+    aggregator_url: null,
     title: "Ausbildung Mechatroniker/in",
     goal: "ausbildung",
     stellenangebotsart: "AUSBILDUNG",
@@ -94,6 +104,8 @@ function mkCompany(overrides: Partial<CompanyEnrichmentRecord> = {}): CompanyEnr
     ausbildung_url: null,
     email: null,
     email_source: null,
+    email_type: null,
+    department: null,
     phone: null,
     phone_source: null,
     contact_name: null,
@@ -141,6 +153,45 @@ describe("email extraction", () => {
     expect(bestEmail(text, { companyDomain: "beispiel.de" })).toBe(
       "karriere@beispiel.de",
     );
+  });
+
+  it("multiple emails: strict tier priority bewerbung > karriere > hr > kontakt > info", () => {
+    const domain = { companyDomain: "firma.de" };
+    expect(
+      bestEmail("info@firma.de karriere@firma.de hr@firma.de bewerbung@firma.de", domain),
+    ).toBe("bewerbung@firma.de");
+    expect(
+      bestEmail("info@firma.de karriere@firma.de hr@firma.de", domain),
+    ).toBe("karriere@firma.de");
+    expect(bestEmail("info@firma.de hr@firma.de", domain)).toBe("hr@firma.de");
+    expect(
+      bestEmail("info@firma.de kontakt@firma.de", domain),
+    ).toBe("kontakt@firma.de");
+  });
+});
+
+describe("email type + department classification (found data only)", () => {
+  it("classifyEmailType maps each tier deterministically", () => {
+    expect(classifyEmailType("bewerbung@firma.de")).toBe("application");
+    expect(classifyEmailType("ausbildung@firma.de")).toBe("application");
+    expect(classifyEmailType("azubi@firma.de")).toBe("application");
+    expect(classifyEmailType("karriere@firma.de")).toBe("career");
+    expect(classifyEmailType("personal@firma.de")).toBe("career");
+    expect(classifyEmailType("hr@firma.de")).toBe("hr");
+    expect(classifyEmailType("recruiting@firma.de")).toBe("hr");
+    expect(classifyEmailType("kontakt@firma.de")).toBe("contact");
+    expect(classifyEmailType("info@firma.de")).toBe("general");
+  });
+
+  it("extractDepartment only returns a documented department", () => {
+    expect(extractDepartment("Ihre Bewerbung an die Personalabteilung")).toBe(
+      "Personalabteilung",
+    );
+    expect(extractDepartment("Abteilung: IT – wir freuen uns")).toBe(
+      "Abteilung: IT",
+    );
+    // No department documented → null (never invented).
+    expect(extractDepartment("Wir freuen uns auf Ihre Bewerbung.")).toBeNull();
   });
 });
 
@@ -212,6 +263,8 @@ describe("applyCompanyEnrichment", () => {
         email: "azubi@quelle.de",
         email_source: "https://quelle.de/stelle/1",
         email_status: "found",
+        email_type: null,
+        department: null,
         phone: null,
         phone_source: null,
         contact_name: null,
@@ -254,6 +307,8 @@ describe("applyCompanyEnrichment", () => {
         ausbildung_url: null,
         email: null,
         email_source: null,
+    email_type: null,
+    department: null,
         email_status: "unknown",
         phone: null,
         phone_source: null,
@@ -298,6 +353,230 @@ describe("runCompanyEnrichment", () => {
     // No website known → no page may be fetched.
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("cache: a SECOND run for the same company performs ZERO fetches", async () => {
+    vi.mocked(lookup).mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+    ] as never);
+    const rows = [
+      mkOpp({
+        id: "arbeitsagentur:C1",
+        company_name: "Cachebank AG",
+        company_url: "https://cachebank.de",
+      }),
+    ];
+    const impressum = `<html><head><title>Impressum – Cachebank AG</title></head>
+      <body><p>Cachebank AG, Musterstraße 1, 10115 Berlin. Vertreten durch
+      Vorstand. E-Mail für Bewerbungen: bewerbung@cachebank.de Telefon 030 99988877.</p></body></html>`;
+    let fetchCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        fetchCalls += 1;
+        const url = String(input);
+        if (url.endsWith("/robots.txt"))
+          return new Response("not found", { status: 404 });
+        if (url === "https://cachebank.de/impressum")
+          return new Response(impressum, {
+            status: 200,
+            headers: { "content-type": "text/html; charset=utf-8" },
+          });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const first = await runCompanyEnrichment(rows, { client: null });
+    expect(first[0].contact?.email).toBe("bewerbung@cachebank.de");
+    expect(first[0].enrichment?.email_type).toBe("application");
+    expect(first[0].enrichment?.website_url).toBe("https://cachebank.de");
+    expect(fetchCalls).toBeGreaterThan(0); // first run really worked
+
+    // Second run: the network now REJECTS — a cache miss would fail loudly.
+    const callsBefore = fetchCalls;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network must not be touched (cache hit expected)");
+      }),
+    );
+    const second = await runCompanyEnrichment(rows, { client: null });
+    expect(second[0].contact?.email).toBe("bewerbung@cachebank.de");
+    expect(fetchCalls).toBe(callsBefore); // zero additional fetches
+  });
+
+  it("website discovery provider failure: no crash, honest not_found", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const rows = [
+      mkOpp({
+        id: "arbeitsagentur:F1",
+        company_name: "Fehlende Firma GmbH",
+        company_url: null,
+      }),
+    ];
+    const structured = vi.fn(async () => {
+      throw new WebSearchError("The web search provider is unavailable.");
+    });
+    const failingClient = {
+      name: "gemini_grounding",
+      search: vi.fn(async () => {
+        throw new WebSearchError("The web search provider is unavailable.");
+      }),
+      searchStructured: structured,
+    };
+    const result = await runCompanyEnrichment(rows, {
+      client: failingClient as never,
+    });
+    // One structured attempt (break on first provider error — budget safe),
+    // then honest nulls: checked, but nothing found.
+    expect(structured).toHaveBeenCalledTimes(1);
+    expect(result[0].enrichment?.website_url).toBeNull();
+    expect(result[0].enrichment?.email).toBeNull();
+    expect(result[0].enrichment?.email_status).toBe("not_found");
+    // No page was fetched (discovery produced nothing to verify).
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Structured company-website discovery (blocklist + content verification)
+// ---------------------------------------------------------------------------
+describe("discoverCompanyWebsite (structured grounding, anti-fabrication)", () => {
+  const COMPANY = "Muster Technik GmbH";
+  const CITY = "Berlin";
+
+  it("NEVER accepts a portal/review/social domain as the official website", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const run = async (answers: string[]) => {
+      let call = 0;
+      const client = {
+        name: "gemini_grounding",
+        search: vi.fn(),
+        searchStructured: vi.fn(async () => {
+          call += 1;
+          return {
+            data: {
+              officialWebsite: answers[Math.min(call - 1, answers.length - 1)],
+              confidence: "high",
+            },
+            results: [],
+          };
+        }),
+      };
+      return {
+        found: await discoverCompanyWebsite(
+          COMPANY,
+          CITY,
+          client as never,
+          new Map(),
+          new ConcurrencyLimiter(2),
+        ),
+        calls: client.searchStructured.mock.calls.length,
+      };
+    };
+
+    // Scenario A: first answer is a job-portal company page → rejected at
+    // the domain gate (non-empty candidate → the 1-2 call cap stops here).
+    const a = await run(["https://www.azubiyo.de/firmen/muster-technik"]);
+    expect(a.found).toBeNull();
+    expect(a.calls).toBe(1);
+
+    // Scenario B: empty first answer → second call → review site → rejected.
+    const b = await run([
+      "",
+      "https://www.kununu.com/de/muster-technik-gmbh",
+    ]);
+    expect(b.found).toBeNull();
+    expect(b.calls).toBe(2);
+
+    // Blocked at the DOMAIN gate — the guarded fetcher was never even asked.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a verified company site (fetched content must prove the name)", async () => {
+    vi.mocked(lookup).mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+    ] as never);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.endsWith("/robots.txt"))
+          return new Response("not found", { status: 404 });
+        if (url.startsWith("https://www.muster-technik.de"))
+          return new Response(
+            `<html><head><title>Muster Technik GmbH – Über uns</title></head>
+             <body>Muster Technik GmbH entwickelt Automatisierungslösungen
+             in Berlin. Wir bilden Auszubildende im Bereich Elektrotechnik aus.</body></html>`,
+            { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
+          );
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const client = {
+      name: "gemini_grounding",
+      search: vi.fn(),
+      searchStructured: vi.fn(async () => ({
+        data: { officialWebsite: "https://www.muster-technik.de", confidence: "high" },
+        results: [],
+      })),
+    };
+    const found = await discoverCompanyWebsite(
+      COMPANY,
+      CITY,
+      client as never,
+      new Map(),
+      new ConcurrencyLimiter(2),
+    );
+    expect(found).toEqual({
+      url: "https://www.muster-technik.de",
+      // URL canonicalization keeps the trailing slash of the origin.
+      evidenceUrl: "https://www.muster-technik.de/",
+      searched: 1,
+    });
+    // One grounding call — the 1-2 call cap held.
+    expect(client.searchStructured).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an allowed domain whose FETCHED content cannot verify the company", async () => {
+    vi.mocked(lookup).mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+    ] as never);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.endsWith("/robots.txt"))
+          return new Response("not found", { status: 404 });
+        if (url.startsWith("https://www.unbekannt-verlag.de"))
+          return new Response(
+            `<html><head><title>Unbekannt Verlag</title></head>
+             <body>Willkommen beim Unbekannt Verlag. Wir verlegen Bücher,
+             Zeitschriften und digitale Medien für den gesamten DACH-Raum.</body></html>`,
+            { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
+          );
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const client = {
+      name: "gemini_grounding",
+      search: vi.fn(),
+      searchStructured: vi.fn(async () => ({
+        data: { officialWebsite: "https://www.unbekannt-verlag.de", confidence: "high" },
+        results: [],
+      })),
+    };
+    const found = await discoverCompanyWebsite(
+      COMPANY,
+      CITY,
+      client as never,
+      new Map(),
+      new ConcurrencyLimiter(2),
+    );
+    // The page is real, but it is NOT Muster Technik GmbH → honest null.
+    expect(found).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -312,7 +591,9 @@ describe("computeResultStats", () => {
         enrichment: {
           website_url: null, website_source: null, career_url: null,
           ausbildung_url: null, email: "a@x.de", email_source: null,
-          email_status: "found", phone: null, phone_source: null,
+          email_status: "found",
+        email_type: null,
+        department: null, phone: null, phone_source: null,
           contact_name: null, contact_source: null, last_verified_at: null,
           data_confidence: null, official_company_source: true,
         },
@@ -332,6 +613,32 @@ describe("computeResultStats", () => {
       withPublicEmail: 2,
       withApplicationUrl: 2,
       withOfficialSource: 2,
+      // No run context passed → all run counters are honestly zero.
+      sourcesSearched: 0,
+      sourcesWithResults: 0,
+      webSearchesExecuted: 0,
+      companiesEnriched: 0,
+      // No row documents a company_name → nothing to count.
+      companiesWithPublicEmail: 0,
+      // No enrichment website found; two official rows carry an apply URL.
+      officialWebsitesFound: 0,
+      officialApplicationLinks: 2,
+    });
+    // Run context overrides the derived counters.
+    expect(
+      computeResultStats(rows, {
+        sourcesSearched: 7,
+        sourcesWithResults: 3,
+        webSearchesExecuted: 9,
+        companiesEnriched: 2,
+        companiesWithPublicEmail: 1,
+      }),
+    ).toMatchObject({
+      sourcesSearched: 7,
+      sourcesWithResults: 3,
+      webSearchesExecuted: 9,
+      companiesEnriched: 2,
+      companiesWithPublicEmail: 1,
     });
   });
 });
@@ -375,6 +682,65 @@ describe("mergeOpportunities (AI Search 2.0 refinements)", () => {
     // Non-aggregator company URL becomes the website with evidence.
     expect(row.enrichment?.website_url).toBe("https://firma.example");
     expect(row.enrichment?.website_source).toBe("https://firma.example/karriere/a");
+  });
+
+  it("aggregator application URL is PRESERVED when the official link wins", () => {
+    // The BA row (leader, official) documents its OWN jobsuche link as the
+    // application URL — that is an aggregator link relative to the company.
+    const ba = mkOpp({
+      id: "arbeitsagentur:REF-A",
+      source_type: "official_source",
+      source_url: "https://www.arbeitsagentur.de/jobsuche/1",
+      application_url: "https://www.arbeitsagentur.de/jobsuche/angebot/1",
+    });
+    const web = mkOpp({
+      id: "web:WEB-1",
+      provider: "web",
+      source_type: "company_website",
+      source_url: "https://firma.example/karriere/a",
+      source_ids: ["company_career"],
+      company_url: "https://firma.example",
+      application_url: "https://firma.example/karriere/a#bewerben",
+    });
+    const { merged, duplicatesRemoved } = mergeOpportunities({
+      ba: [ba],
+      web: [web],
+      aiDuplicates: [],
+    });
+    expect(duplicatesRemoved).toBe(1);
+    const row = merged[0];
+    // Official company link wins the display field …
+    expect(row.application_url).toBe("https://firma.example/karriere/a#bewerben");
+    // … and the aggregator link is kept for provenance + fallback.
+    expect(row.aggregator_url).toBe(
+      "https://www.arbeitsagentur.de/jobsuche/angebot/1",
+    );
+    expect(row.enrichment?.official_company_source).toBe(true);
+  });
+
+  it("no aggregator_url is invented when the leader has no application link", () => {
+    const ba = mkOpp({
+      id: "arbeitsagentur:REF-A",
+      source_type: "official_source",
+      source_url: "https://www.arbeitsagentur.de/jobsuche/1",
+      application_url: null,
+    });
+    const web = mkOpp({
+      id: "web:WEB-1",
+      provider: "web",
+      source_type: "company_website",
+      source_url: "https://firma.example/karriere/a",
+      source_ids: ["company_career"],
+      company_url: "https://firma.example",
+      application_url: "https://firma.example/karriere/a#bewerben",
+    });
+    const { merged } = mergeOpportunities({
+      ba: [ba],
+      web: [web],
+      aiDuplicates: [],
+    });
+    expect(merged[0].application_url).toBe("https://firma.example/karriere/a#bewerben");
+    expect(merged[0].aggregator_url).toBeNull();
   });
 
   it("same company + title + year in DIFFERENT cities stays separate (chain)", () => {

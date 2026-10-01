@@ -39,10 +39,15 @@ export interface CompanyEnrichmentRecord {
   ausbildung_url: string | null;
   email: string | null;
   email_source: string | null;
+  /** Classification of the found address (application/career/hr/contact/
+   *  general) — deterministic, null whenever email is null. */
+  email_type: "application" | "career" | "hr" | "contact" | "general" | null;
   phone: string | null;
   phone_source: string | null;
   contact_name: string | null;
   contact_source: string | null;
+  /** Documented department (e.g. "Personalabteilung") or null. */
+  department: string | null;
   data_confidence: "high" | "medium" | "low" | null;
   last_verified_at: string | null;
 }
@@ -159,10 +164,14 @@ export const CompanyEnrichmentRecordShape = z.object({
   ausbildung_url: urlOrNull,
   email: z.string().max(254).nullable(),
   email_source: urlOrNull,
+  email_type: z
+    .enum(["application", "career", "hr", "contact", "general"])
+    .nullable(),
   phone: z.string().max(64).nullable(),
   phone_source: urlOrNull,
   contact_name: z.string().max(160).nullable(),
   contact_source: urlOrNull,
+  department: z.string().max(80).nullable(),
   data_confidence: confidence.nullable(),
   last_verified_at: z.string().nullable(),
 });

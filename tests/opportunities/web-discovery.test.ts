@@ -7,8 +7,13 @@ import {
   discoverCategory,
   fingerprintOpportunity,
   mergeOpportunities,
+  runWebDiscovery,
   type VerifiedCandidate,
 } from "@/lib/opportunities/web-discovery";
+import {
+  enabledWebSources,
+  getSource,
+} from "@/lib/opportunities/sources";
 import { targetStartYear } from "@/lib/opportunities/ai-search";
 import {
   getWebSearchClient,
@@ -76,6 +81,7 @@ function mkOpp(overrides: Partial<Opportunity> = {}): Opportunity {
     source_ids: [],
     enrichment: null,
     application_url: null,
+    aggregator_url: null,
     title: "Ausbildung Mechatroniker/in",
     goal: "ausbildung",
     stellenangebotsart: null,
@@ -654,11 +660,220 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
     // Honest result statistics on the complete event.
     const completeEvent = events.at(-1);
     expect(completeEvent).toBe("complete");
-    expect(result.stats).toEqual({
-      found: 1,
-      withPublicEmail: 1,
-      withApplicationUrl: 0,
-      withOfficialSource: 1,
+    expect(result.stats.found).toBe(1);
+    expect(result.stats.withPublicEmail).toBe(1);
+    expect(result.stats.withApplicationUrl).toBe(0);
+    expect(result.stats.withOfficialSource).toBe(1);
+    expect(result.stats.sourcesSearched).toBeGreaterThan(1);
+    expect(result.stats.webSearchesExecuted).toBeGreaterThan(0);
+    expect(result.stats.companiesEnriched).toBe(1);
+    expect(result.stats.companiesWithPublicEmail).toBe(1);
+    expect(result.stats.officialWebsitesFound).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runWebDiscovery — budget, per-source isolation, honest blocking (2.1)
+// ---------------------------------------------------------------------------
+describe("runWebDiscovery (source registry discipline)", () => {
+  const WEB_QUERY = '"Mechatroniker" Ausbildung 2027 Berlin';
+
+  /** Mock client: one relevant, SOURCE-SCOPED candidate per query so every
+   *  called source is distinguishable (portals return their own domain). */
+  function recordingClient(
+    onQuery?: (query: string) => void,
+  ): { client: Parameters<typeof runWebDiscovery>[0]["client"]; queries: string[] } {
+    const queries: string[] = [];
+    const client = {
+      name: "gemini_grounding",
+      search: vi.fn(async (query: string) => {
+        queries.push(query);
+        onQuery?.(query);
+        if (query.includes("site:linkedin.com"))
+          return [
+            {
+              title: "Ausbildung 2027 – jetzt bewerben",
+              url: "https://www.linkedin.com/company/beispiel/jobs",
+              snippet: "",
+            },
+          ];
+        const site = query.match(/site:([a-z0-9.-]+)/i)?.[1];
+        if (site)
+          return [
+            {
+              title: "Ausbildung 2027 – jetzt bewerben",
+              url: `https://${site}/azubi/ausbildung-2027`,
+              snippet: "",
+            },
+          ];
+        if (query.includes("karriere OR"))
+          return [
+            {
+              title: "Ausbildung Mechatroniker 2027 – bewerben",
+              url: "https://karriere.example/azubi/1",
+              snippet: "",
+            },
+          ];
+        return [
+          {
+            title: "Ausbildung 2027 – jetzt bewerben",
+            url: "https://example.com/plain/ausbildung-2027",
+            snippet: "",
+          },
+        ];
+      }),
+    };
+    return { client: client as never, queries };
+  }
+
+  /** Pages 404 (fast, non-retryable) so the run stays bounded. */
+  function stubFast404() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.endsWith("/robots.txt"))
+          return new Response("not found", { status: 404 });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    vi.mocked(lookup).mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+    ] as never);
+  }
+
+  it("every registered source is reported: queried (≤ budget) or skipped_budget", async () => {
+    stubFast404();
+    const { client, queries } = recordingClient();
+    const web = enabledWebSources();
+    const result = await runWebDiscovery({
+      client,
+      webQueries: [WEB_QUERY],
+      goal: "ausbildung",
+      userId: "u1",
     });
+
+    // 1 plain query + one call per source, capped at MAX_DISCOVERY_CALLS=16.
+    expect(queries).toHaveLength(16);
+    expect(result.groundingCallsOk).toBe(16);
+    expect(result.providerErrors).toBe(0);
+
+    // EVERY enabled source is accounted for — the diagnostics card must
+    // never hide a source (this is what production "web=0" hid before).
+    expect(result.sourceStatuses).toHaveLength(web.length);
+    const called = new Set(
+      result.sourceStatuses
+        .filter((s) => s.status !== "skipped_budget")
+        .map((s) => s.source),
+    );
+    const skipped = new Set(
+      result.sourceStatuses
+        .filter((s) => s.status === "skipped_budget")
+        .map((s) => s.source),
+    );
+    expect(called.size + skipped.size).toBe(web.length);
+    // Called + skipped partition the registry (no overlap, none missing).
+    for (const id of web.map((s) => s.id))
+      expect(called.has(id) || skipped.has(id)).toBe(true);
+    expect(called.size).toBeLessThanOrEqual(15); // 16 − 1 plain query
+
+    // The highest-value sources always fit the budget (worst case: 4 plain
+    // queries → only 12 source calls).
+    expect(called).toContain("company_career");
+    expect(called).toContain("bund");
+
+    // Each called source was queried with its OWN scoping (site: / terms).
+    const azubiyo = getSource("azubiyo")!;
+    const hwk = getSource("hwk")!;
+    expect(called.has(azubiyo.id)).toBe(true);
+    expect(queries).toContain(`${WEB_QUERY} site:${azubiyo.domains[0]}`);
+    expect(called.has(hwk.id)).toBe(true);
+    expect(
+      queries.some(
+        (q) =>
+          q.includes(`site:${hwk.domains[0]}`) &&
+          q.includes(`site:${hwk.domains[1]}`),
+      ),
+    ).toBe(true);
+  });
+
+  it("one source's provider failure never stops the other sources", async () => {
+    stubFast404();
+    const { client, queries } = recordingClient((query) => {
+      if (query.includes("site:stepstone.de"))
+        throw new WebSearchError("provider down", 503);
+    });
+    const result = await runWebDiscovery({
+      client,
+      webQueries: [WEB_QUERY],
+      goal: "ausbildung",
+      userId: "u1",
+    });
+
+    const stepstone = result.sourceStatuses.find(
+      (s) => s.source === "stepstone",
+    );
+    expect(stepstone?.status).toBe("failed");
+    expect(stepstone?.candidates).toBe(0);
+    expect(result.sourceCounts["stepstone"]).toBe(0);
+    expect(result.providerErrors).toBe(1);
+
+    // The remaining sources still ran AND still delivered candidates.
+    const ausbildung = result.sourceStatuses.find(
+      (s) => s.source === "ausbildung.de",
+    );
+    expect(ausbildung?.status).toBe("ok");
+    expect(ausbildung?.candidates).toBeGreaterThan(0);
+    // The full budget was still attempted (failure consumed one slot);
+    // 15 of 16 grounding calls succeeded.
+    expect(queries).toHaveLength(16);
+    expect(result.groundingCallsOk).toBe(15);
+  });
+
+  it("a blocked (403) page is counted, never bypassed, never fabricated", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.endsWith("/robots.txt"))
+          return new Response("not found", { status: 404 });
+        return new Response("access denied", { status: 403 });
+      }),
+    );
+    vi.mocked(lookup).mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+    ] as never);
+    // Every source returns the SAME gojobs URL (403 behind the mock).
+    const client = {
+      name: "gemini_grounding",
+      search: vi.fn(async () => [
+        {
+          title: "Ausbildung 2027 – jetzt bewerben",
+          url: "https://www.gojobs.de/azubi/ausbildung-2027",
+          snippet: "",
+        },
+      ]),
+    };
+    const result = await runWebDiscovery({
+      client: client as never,
+      webQueries: [WEB_QUERY],
+      goal: "ausbildung",
+      userId: "u1",
+    });
+
+    // Searches succeeded; the block happened at page level — the run must
+    // report zero opportunities (no fabrication) and a counted failure.
+    expect(result.opportunities).toHaveLength(0);
+    const totalFailures = Object.values(result.failures).reduce(
+      (a, b) => a + (b ?? 0),
+      0,
+    );
+    expect(totalFailures).toBeGreaterThanOrEqual(1);
+    expect(result.failures.http_error ?? 0).toBeGreaterThanOrEqual(1);
+    expect(result.providerErrors).toBe(0);
+    // Source statuses describe the SEARCH phase (ok) — the honesty lives in
+    // `failures` + the zero opportunity count, not a hidden retry.
+    for (const status of result.sourceStatuses)
+      expect(["ok", "skipped_budget"]).toContain(status.status);
   });
 });

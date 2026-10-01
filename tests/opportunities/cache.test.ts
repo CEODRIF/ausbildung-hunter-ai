@@ -334,6 +334,7 @@ describe("sorting + pagination semantics (search layer)", () => {
       source_ids: [],
       enrichment: null,
       application_url: null,
+      aggregator_url: null,
       title: `Title ${id}`,
       goal: "arbeit",
       stellenangebotsart: "ARBEIT",

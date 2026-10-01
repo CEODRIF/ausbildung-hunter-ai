@@ -33,12 +33,22 @@ const FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|docx?|xlsx?)$/i;
 const NON_CONTACT_LOCAL_RE =
   /^(no-?reply|donotreply|do-not-reply|abuse|legal|copyright|privacy|datenschutz|impersonum|impersonal|noreply)$/i;
 
-/** Local parts strongly associated with applications/personal contact. */
-const CONTACT_INTENT_RE =
-  /(bewerb|karriere|personal|ausbild|azubi|jobs?|stellen|contact|anfrage|kontakt)/i;
-
-/** Generic contact local parts (weaker signal than intent words). */
-const GENERIC_LOCAL_RE = /^(info|post|mail|contact)$/i;
+/**
+ * Email local-part priority tiers (deterministic classification of a
+ * FOUND address — nothing is generated):
+ *   1. application: bewerbung / ausbildung / azubi
+ *   2. career:      karriere / personal / jobs / stellen
+ *   3. hr:          hr / recruiting
+ *   4. contact:     kontakt / anfrage / mail / contact
+ *   5. general:     info / post / anything else
+ */
+const EMAIL_TIER_RE: Array<[RegExp, number]> = [
+  [/(bewerb|ausbild|azubi)/i, 6],
+  [/(karriere|personal|jobs?|stellen)/i, 5],
+  [/(^|\.)(hr|recruiting)(\.|$)/i, 4],
+  [/(kontakt|anfrage|mail|contact)/i, 3],
+  [/(^|\.)(info|post)(\.|$)/i, 1],
+];
 
 /** Personal-name-like local part — requires a dot ("anna.tenholt",
  *  "a.mueller"); a single plain word is NOT a personal name. */
@@ -68,10 +78,14 @@ export function extractEmails(
     if (seen.has(key)) continue;
     let score = 0;
     if (NON_CONTACT_LOCAL_RE.test(local)) score -= 6;
-    if (CONTACT_INTENT_RE.test(local)) score += 4;
+    else for (const [pattern, tier] of EMAIL_TIER_RE) {
+      if (pattern.test(local)) {
+        score += tier;
+        break;
+      }
+    }
     if (PERSON_LOCAL_RE.test(local)) score += 2;
     if (options.companyDomain && domain === options.companyDomain) score += 2;
-    if (GENERIC_LOCAL_RE.test(local)) score += 1;
     if (/(newsletter|marketing|press|media)$/.test(local)) score -= 2;
     seen.set(key, { value, score });
   }
@@ -121,6 +135,41 @@ function cleanPhone(raw: string): string | null {
   // A bare 5-digit "0xxxx" is a PLZ, not a phone number.
   if (digits.length === 5) return null;
   return trimmed;
+}
+
+/**
+ * Deterministic classification of a FOUND address (never a guess):
+ * application > career > hr > contact > general.
+ */
+export function classifyEmailType(email: string): "application" | "career" | "hr" | "contact" | "general" {
+  const at = email.indexOf("@");
+  const local = at >= 0 ? email.slice(0, at) : email;
+  if (/(bewerb|ausbild|azubi)/i.test(local)) return "application";
+  if (/(karriere|personal|jobs?|stellen)/i.test(local)) return "career";
+  if (/(^|\.)(hr|recruiting)(\.|$)/i.test(local)) return "hr";
+  if (/(kontakt|anfrage|mail|contact)/i.test(local)) return "contact";
+  return "general";
+}
+
+/**
+ * Documented department next to a contact context ("Personalabteilung",
+ * "Abteilung: Recruiting", "HR / Bewerbungen"). Returns null when no
+ * department is actually named.
+ */
+export function extractDepartment(text: string): string | null {
+  if (!text) return null;
+  const patterns = [
+    /\b(Personalabteilung|Personalbereich|Abteilung\s*[:\-–]\s*[A-ZÄÖÜ][\p{L}' -]{1,30}|Recruiting\s+Team|HR\s*[-–]?\s*Team|Stellenabbildung|Ausbildungsleitung|Bewerbungsabteilung)/iu,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const value = match[1].trim().replace(/\s+/g, " ");
+    if (value.length < 3 || value.length > 80) continue;
+    if (/@|http/.test(value)) continue;
+    return value;
+  }
+  return null;
 }
 
 /**

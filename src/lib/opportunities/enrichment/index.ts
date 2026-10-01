@@ -3,7 +3,7 @@ import "server-only";
 import { ConcurrencyLimiter } from "@/lib/concurrency";
 import { type RobotsPolicy } from "@/lib/web-search/fetch-page";
 import { type WebSearchClient } from "@/lib/web-search";
-import { isAggregatorHost, hostOf } from "../web-discovery";
+import { hostOf, normalizeIdentity } from "../web-discovery";
 import {
   opportunitySchema,
   type Enrichment,
@@ -20,9 +20,12 @@ import {
   discoverCompanyWebsite,
   fetchCompanyPages,
 } from "./company-site";
+import { isAllowedCompanyDomain } from "../sources";
 import {
   bestEmail,
+  classifyEmailType,
   extractContactPerson,
+  extractDepartment,
   extractPhone,
   maxConfidence,
   pageKindConfidence,
@@ -87,7 +90,7 @@ export function applyCompanyEnrichment(
   const person = contact.person ?? company.contact_name ?? null;
   const companyUrl =
     row.company_url ??
-    (company.website_url && !isAggregatorHost(company.website_url)
+    (company.website_url && isAllowedCompanyDomain(company.website_url)
       ? company.website_url
       : null);
 
@@ -120,6 +123,10 @@ export function applyCompanyEnrichment(
     email,
     email_source: emailSource,
     email_status: emailStatus,
+    email_type:
+      email === null
+        ? null
+        : existing?.email_type ?? company.email_type ?? classifyEmailType(email),
     phone,
     phone_source:
       (contact.phone ? row.source_url : null) ??
@@ -130,6 +137,7 @@ export function applyCompanyEnrichment(
       (contact.person ? row.source_url : null) ??
       company.contact_source ??
       null,
+    department: existing?.department ?? company.department ?? null,
     last_verified_at:
       existing?.last_verified_at ?? company.last_verified_at ?? null,
     data_confidence: maxConfidence(
@@ -147,13 +155,28 @@ export function applyCompanyEnrichment(
   });
 }
 
+/** Honest run telemetry for UI stats + logs. Filled in-place; absent
+ *  args.telemetry → the pipeline runs exactly as before (tests). */
+export interface EnrichmentTelemetry {
+  /** Companies actually processed (checked or cache-hit). */
+  companiesEnriched: number;
+  /** Grounding searches actually EXECUTED for website discovery. */
+  webSearchesExecuted: number;
+  /** Distinct companies with a real public email after enrichment. */
+  companiesWithEmail: number;
+  /** Guarded page fetches performed (budget visibility). */
+  pagesFetched: number;
+}
+
 /**
- * Run the enrichment stage over merged opportunities.
+ * Run the enrichment stage over the RANKED opportunities (AI Search 2.1:
+ * the budget goes to the rows the user actually sees — dedupe → rank →
+ * enrich top companies — instead of every raw row).
  *
  * - Groups rows by company key (rows without a documented company_name
  *   are skipped — identifying the company is a precondition, not a guess).
  * - Companies are processed most-vacancies-first, capped at
- *   MAX_COMPANIES_PER_RUN; the rest keep their merge-level provenance.
+ *   MAX_COMPANIES_PER_RUN (12); the rest keep their merge provenance.
  * - Cache-first (memory → DB): a cached company costs zero fetches.
  * - NEVER throws: every per-company failure is contained and counted.
  */
@@ -162,6 +185,8 @@ export async function runCompanyEnrichment(
   args: {
     client: WebSearchClient | null;
     onProgress?: (done: number, total: number) => void;
+    /** Optional telemetry sink (UI stats + [COMPANY_ENRICHMENT] log). */
+    telemetry?: EnrichmentTelemetry;
   },
 ): Promise<Opportunity[]> {
   if (opportunities.length === 0) return opportunities;
@@ -186,6 +211,8 @@ export async function runCompanyEnrichment(
   const pageLimiter = new ConcurrencyLimiter(PAGE_CONCURRENCY);
   let discoveryCallsLeft = MAX_WEBSITE_DISCOVERY_CALLS;
   let done = 0;
+  let totalWebSearches = 0;
+  let totalPagesFetched = 0;
 
   const results = new Map<string, CompanyEnrichmentRecord>();
   for (let start = 0; start < total; start += COMPANY_CONCURRENCY) {
@@ -194,10 +221,12 @@ export async function runCompanyEnrichment(
       batch.map(async ([key, rows]) => {
         try {
           const cached = await readCompanyCache(key);
-          if (cached) return { key, record: cached };
-          const record = await enrichOneCompany({
+          if (cached) return { key, record: cached, webSearches: 0, pagesFetched: 0 };
+          const outcome = await enrichOneCompany({
             key,
             companyName: rows[0].company_name as string,
+            city: rows.find((row) => row.location_detail?.city)
+              ?.location_detail?.city ?? null,
             rows,
             client: args.client,
             robotsCache,
@@ -208,8 +237,8 @@ export async function runCompanyEnrichment(
               return true;
             },
           });
-          await writeCompanyCache(record);
-          return { key, record };
+          await writeCompanyCache(outcome.record);
+          return { key, ...outcome };
         } catch (error) {
           // Contained: one company's failure must not kill the run.
           console.warn(
@@ -219,6 +248,8 @@ export async function runCompanyEnrichment(
           return {
             key,
             record: failedRecord(key, rows[0].company_name as string),
+            webSearches: 0,
+            pagesFetched: 0,
           };
         } finally {
           done += 1;
@@ -226,7 +257,31 @@ export async function runCompanyEnrichment(
         }
       }),
     );
-    for (const item of settled) results.set(item.key, item.record);
+    for (const item of settled) {
+      results.set(item.key, item.record);
+      totalWebSearches += item.webSearches;
+      totalPagesFetched += item.pagesFetched;
+    }
+  }
+
+  const companiesWithEmail = new Set(
+    opportunities
+      .filter((row) => row.contact?.email && row.company_name)
+      .map((row) => companyKeyOf(row.company_name)),
+  ).size;
+  console.info(
+    "[COMPANY_ENRICHMENT] companies=%d websites=%d publicEmails=%d webSearches=%d pagesFetched=%d",
+    total,
+    [...results.values()].filter((record) => record.website_url).length,
+    companiesWithEmail,
+    totalWebSearches,
+    totalPagesFetched,
+  );
+  if (args.telemetry) {
+    args.telemetry.companiesEnriched = total;
+    args.telemetry.webSearchesExecuted = totalWebSearches;
+    args.telemetry.companiesWithEmail = companiesWithEmail;
+    args.telemetry.pagesFetched = totalPagesFetched;
   }
 
   return opportunities.map((row) => {
@@ -251,10 +306,12 @@ function failedRecord(key: string, companyName: string): CompanyEnrichmentRecord
     ausbildung_url: null,
     email: null,
     email_source: null,
+    email_type: null,
     phone: null,
     phone_source: null,
     contact_name: null,
     contact_source: null,
+    department: null,
     data_confidence: null,
     last_verified_at: null,
   };
@@ -263,13 +320,19 @@ function failedRecord(key: string, companyName: string): CompanyEnrichmentRecord
 async function enrichOneCompany(args: {
   key: string;
   companyName: string;
+  city: string | null;
   rows: Opportunity[];
   client: WebSearchClient | null;
   robotsCache: Map<string, RobotsPolicy>;
   pageLimiter: ConcurrencyLimiter;
   consumeDiscoveryCall: () => boolean;
-}): Promise<CompanyEnrichmentRecord> {
-  const { key, companyName, rows, client, robotsCache, pageLimiter } = args;
+}): Promise<{
+  record: CompanyEnrichmentRecord;
+  webSearches: number;
+  pagesFetched: number;
+}> {
+  const { key, companyName, city, rows, client, robotsCache, pageLimiter } =
+    args;
   const base: CompanyEnrichmentRecord = {
     company_key: key,
     company_name: companyName,
@@ -280,18 +343,24 @@ async function enrichOneCompany(args: {
     ausbildung_url: null,
     email: null,
     email_source: null,
+    email_type: null,
     phone: null,
     phone_source: null,
     contact_name: null,
     contact_source: null,
+    department: null,
     data_confidence: null,
     last_verified_at: new Date().toISOString(),
   };
+  let webSearches = 0;
+  let pagesFetched = 0;
 
   // ---- COMPANY WEBSITE DISCOVERY -------------------------------------
-  // 1) A source row already documents a non-aggregator company URL.
+  // 1) A source row already documents a company URL that is allowed to be
+  //    the company's own site (blocklist: portals, reviews, directories,
+  //    public-employer portals).
   const documented = rows.find((row) =>
-    row.company_url ? !isAggregatorHost(row.company_url) : false,
+    row.company_url ? isAllowedCompanyDomain(row.company_url) : false,
   );
   let websiteUrl: string | null = null;
   if (documented?.company_url) {
@@ -299,24 +368,29 @@ async function enrichOneCompany(args: {
     base.website_url = websiteUrl;
     // Evidence = the public page that documented the URL.
     base.website_source = documented.source_url;
-  } else if (client && args.consumeDiscoveryCall()) {
-    // 2) Guarded index search + content verification (never guessed).
+  } else if (client) {
+    // 2) Guarded Google Search grounding (1-2 calls) + content
+    //    verification (never a guessed domain).
     const discovered = await discoverCompanyWebsite(
       companyName,
+      city,
       client,
       robotsCache,
       pageLimiter,
     );
+    webSearches += discovered?.searched ?? 0;
     if (discovered) {
       websiteUrl = discovered.url;
       base.website_url = discovered.url;
       base.website_source = discovered.evidenceUrl;
     }
   }
-  if (!websiteUrl) return base; // nothing to visit — honest nulls
+  if (!websiteUrl)
+    return { record: base, webSearches, pagesFetched }; // honest nulls
 
   // ---- CAREER / AUSBILDUNG PAGE + CONTACT DISCOVERY -------------------
   const { pages } = await fetchCompanyPages(websiteUrl, robotsCache, pageLimiter);
+  pagesFetched += pages.length;
   const companyDomain = hostOf(websiteUrl);
   // Email: highest page-authority wins (impressum > kontakt > karriere >
   // home); within equal authority the first page in fetch order wins.
@@ -343,9 +417,15 @@ async function enrichOneCompany(args: {
       if (rank > bestEmailRank) {
         bestEmailRank = rank;
         base.email = email;
+        base.email_type = classifyEmailType(email);
         base.email_source = page.url;
         base.data_confidence = maxConfidence(base.data_confidence, confidence);
       }
+    }
+    // Department: first page that documents one.
+    if (!base.department) {
+      const department = extractDepartment(page.text);
+      if (department) base.department = department;
     }
 
     // Phone + contact person: first page that documents one (fetch order
@@ -378,6 +458,7 @@ async function enrichOneCompany(args: {
       const postingEmail = row.contact?.email ?? null;
       if (postingEmail) {
         base.email = postingEmail;
+        base.email_type = classifyEmailType(postingEmail);
         base.email_source = row.enrichment?.email_source ?? row.source_url;
         base.data_confidence = maxConfidence(
           base.data_confidence,
@@ -387,7 +468,7 @@ async function enrichOneCompany(args: {
       }
     }
   }
-  return base;
+  return { record: base, webSearches, pagesFetched };
 }
 
 /** Page kind → extraction priority (impressum first). */
@@ -423,25 +504,68 @@ export interface AiSearchStats {
   withApplicationUrl: number;
   /** Rows where the company's own career page is one of the sources. */
   withOfficialSource: number;
+  /** Registry sources actually queried this run (discovery budget spent). */
+  sourcesSearched: number;
+  /** Of those, sources that returned at least one candidate. */
+  sourcesWithResults: number;
+  /** Grounding searches actually EXECUTED (discovery + company discovery) —
+   *  never counted per attempt, only per successful call. */
+  webSearchesExecuted: number;
+  /** Companies whose enrichment actually ran (checked or cache-hit). */
+  companiesEnriched: number;
+  /** Distinct companies with a real public email after enrichment. */
+  companiesWithPublicEmail: number;
+  /** Rows where the OFFICIAL company website was found (enrichment). */
+  officialWebsitesFound: number;
+  /** Rows where the official application URL is available. */
+  officialApplicationLinks: number;
 }
 
-export function computeResultStats(opportunities: Opportunity[]): AiSearchStats {
+export function computeResultStats(
+  opportunities: Opportunity[],
+  context: {
+    sourcesSearched?: number;
+    sourcesWithResults?: number;
+    webSearchesExecuted?: number;
+    companiesEnriched?: number;
+    companiesWithPublicEmail?: number;
+  } = {},
+): AiSearchStats {
   let withPublicEmail = 0;
   let withApplicationUrl = 0;
   let withOfficialSource = 0;
+  let officialWebsitesFound = 0;
+  let officialApplicationLinks = 0;
+  const companiesWithEmail = new Set<string>();
   for (const row of opportunities) {
     if (opportunityEmail(row) !== null) withPublicEmail += 1;
     if (row.application_url) withApplicationUrl += 1;
-    if (
+    const official =
       row.enrichment?.official_company_source === true ||
-      row.source_type === "company_website"
-    )
-      withOfficialSource += 1;
+      row.source_type === "company_website";
+    if (official) withOfficialSource += 1;
+    if (row.enrichment?.website_url) officialWebsitesFound += 1;
+    if (official && row.application_url) officialApplicationLinks += 1;
+    if (
+      row.company_name &&
+      row.contact?.email &&
+      opportunityEmail(row) !== null
+    ) {
+      companiesWithEmail.add(normalizeIdentity(row.company_name));
+    }
   }
   return {
     found: opportunities.length,
     withPublicEmail,
     withApplicationUrl,
     withOfficialSource,
+    sourcesSearched: context.sourcesSearched ?? 0,
+    sourcesWithResults: context.sourcesWithResults ?? 0,
+    webSearchesExecuted: context.webSearchesExecuted ?? 0,
+    companiesEnriched: context.companiesEnriched ?? 0,
+    companiesWithPublicEmail:
+      context.companiesWithPublicEmail ?? companiesWithEmail.size,
+    officialWebsitesFound,
+    officialApplicationLinks,
   };
 }

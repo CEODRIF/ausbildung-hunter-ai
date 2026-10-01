@@ -23,8 +23,14 @@ import { matchResultSchema } from "./matching/types";
  * `source_ids` (compact registry ids of every source a merged row was
  * found on). Both default to null/[] so pre-existing payloads still parse;
  * the bump still discards v5 payloads for a clean cutover.
+ * v7 (AI Search 2.1): enrichment gained `email_type` (application/career/
+ * hr/general/unknown — a classification of a FOUND address, never a guess)
+ * and `department`; the opportunity gained `aggregator_url` (kept when the
+ * official company application URL wins — both links stay available).
+ * Defaults keep v6 payloads parseable; the bump discards v6 caches for a
+ * clean cutover.
  */
-export const OPPORTUNITY_SCHEMA_VERSION = 6;
+export const OPPORTUNITY_SCHEMA_VERSION = 7;
 
 /**
  * The BA source only exposes its first ~10,000 listings per query (verified:
@@ -463,6 +469,16 @@ export const enrichmentSchema = z.object({
   contact_name: z.string().max(160).nullable(),
   /** The public page the contact person was read from. */
   contact_source: z.string().url().max(500).nullable(),
+  /**
+   * Classification of a FOUND email by its local part (deterministic,
+   * never guessed): application (bewerbung/ausbildung/azubi) >
+   * career (karriere/personal/jobs/stellen) > hr (hr/recruiting) >
+   * contact (kontakt/anfrage/mail/contact) > general (info/post/other).
+   * Null whenever email is null.
+   */
+  email_type: z.enum(["application", "career", "hr", "contact", "general"]).nullable(),
+  /** Documented department ("Personalabteilung", "Recruiting", …) or null. */
+  department: z.string().max(80).nullable(),
   /** When the enrichment checks for this company last ran (UTC ISO). */
   last_verified_at: z.string().nullable(),
   /** Overall confidence of the enriched contact data, see
@@ -515,8 +531,13 @@ export const opportunitySchema = z.object({
     )
     .max(10)
     .default([]),
-  /** Where to apply: the source's application URL when published, else null. */
+  /** Where to apply: the official company application URL when one exists
+   *  (it wins over portal aggregators), else the source's published URL,
+   *  else null. */
   application_url: z.string().url().max(500).nullable(),
+  /** Aggregator/portal application link, preserved when the official
+   *  company application URL takes priority. Null otherwise. */
+  aggregator_url: z.string().url().max(500).nullable().default(null),
   title: z.string().min(1).max(400),
   /** Authoritative classification from the source (BA: stellenangebotsart),
    *  never from browser input. */
