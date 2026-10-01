@@ -17,7 +17,7 @@
 --   * searches             — one row per search run (status, charged credits).
 --
 -- Rules implemented here:
---   free user       : 150 credits, reset every 5 days (120 h)
+--   free user       : 150 credits, reset every 3 days (72 h)
 --   code-activated  : 500 credits, reset every 24 h
 --   charge          : credits_to_charge = selected_count (10/25/50/100 only)
 --   atomicity       : a single conditional UPDATE ... WHERE credits >= n
@@ -135,7 +135,7 @@ create policy "Users can read their own searches"
   using (user_id = auth.uid());
 
 -- ---------------------------------------------------------------------------
--- Policy: free 150 / 5 days, code-activated 500 / 24 h (no accumulation)
+-- Policy: free 150 / 3 days, code-activated 500 / 24 h (no accumulation)
 -- ---------------------------------------------------------------------------
 
 create or replace function public.effective_search_credit_policy(target_user_id uuid)
@@ -160,7 +160,7 @@ begin
     return query select upgrade_limit, coalesce(upgrade_hours, 24);
   end if;
 
-  -- Free tier: 150 credits, reset every 5 days (120 hours).
+  -- Free tier: 150 credits, reset every 3 days (72 hours).
   return query select 150, 120;
 end;
 $$;
