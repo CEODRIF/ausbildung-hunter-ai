@@ -161,7 +161,7 @@ begin
   end if;
 
   -- Free tier: 150 credits, reset every 3 days (72 hours).
-  return query select 150, 120;
+  return query select 150, 72;
 end;
 $$;
 

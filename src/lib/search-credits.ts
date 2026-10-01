@@ -10,7 +10,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
  * can read its own row and nothing else, so DevTools cannot grant credits.
  *
  * Policy:
- *   free user      : 150 credits, reset every 5 days (no accumulation)
+ *   free user      : 150 credits, reset every 3 days (no accumulation)
  *   code-activated : 500 credits, reset every 24 h (invitation_codes row of
  *                    type `quota_upgrade` linked through user_quota_upgrades)
  *
@@ -26,7 +26,7 @@ export type SearchCount = (typeof SEARCH_COUNT_OPTIONS)[number];
 
 /** Free-tier policy, mirrored from the SQL function (single source: SQL). */
 export const FREE_CREDIT_LIMIT = 150;
-export const FREE_RESET_HOURS = 120;
+export const FREE_RESET_HOURS = 72;
 
 export type SearchCreditStatus = {
   creditLimit: number;

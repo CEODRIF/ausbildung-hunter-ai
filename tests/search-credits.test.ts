@@ -72,15 +72,15 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// 1. Policy: 150 / 5 days (free) — 500 / 24 h (code activated)
+// 1. Policy: 150 / 3 days (free) — 500 / 24 h (code activated)
 // ---------------------------------------------------------------------------
 
 describe("credit policy", () => {
-  it("free users have 150 credits with a 5-day (120 h) cycle", () => {
+  it("free users have 150 credits with a 3-day (72 h) cycle", () => {
     expect(FREE_CREDIT_LIMIT).toBe(150);
-    expect(FREE_RESET_HOURS).toBe(120);
+    expect(FREE_RESET_HOURS).toBe(72);
     // The free default lives in SQL as the fallback branch.
-    expect(MIGRATION).toContain("return query select 150, 120;");
+    expect(MIGRATION).toContain("return query select 150, 72;");
   });
 
   it("reports 150 credits for a normal user (never 500)", async () => {
@@ -89,7 +89,7 @@ describe("credit policy", () => {
         {
           credit_limit: 150,
           credits_remaining: 150,
-          reset_hours: 120,
+          reset_hours: 72,
           resets_at: "2026-10-06T00:00:00.000Z",
           premium: false,
         },
@@ -100,7 +100,7 @@ describe("credit policy", () => {
     expect(status).toEqual({
       creditLimit: 150,
       creditsRemaining: 150,
-      resetHours: 120,
+      resetHours: 72,
       resetsAt: "2026-10-06T00:00:00.000Z",
       premium: false,
     });
