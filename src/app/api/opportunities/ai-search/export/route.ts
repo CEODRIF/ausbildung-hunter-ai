@@ -13,6 +13,10 @@ import {
   type AiSearchPlan,
 } from "@/lib/opportunities/ai-search";
 import {
+  computeResultStats,
+  runCompanyEnrichment,
+} from "@/lib/opportunities/enrichment";
+import {
   BA_SOURCE_ID,
   getCandidateProfile,
   OpportunityProviderError,
@@ -68,6 +72,7 @@ const EXPORT_COLUMNS = [
   { header: "Other Useful Information", key: "other", width: 52 },
   { header: "Source Type", key: "source_type", width: 18 },
   { header: "Additional Sources", key: "additional_sources", width: 55 },
+  { header: "Sources", key: "sources", width: 40 },
 ] as const;
 
 export interface EmailExportStats {
@@ -77,6 +82,10 @@ export interface EmailExportStats {
   withEmail: number;
   /** Duplicate-email rows removed by the export filter. */
   duplicatesRemoved: number;
+  /** Results with a usable application URL. */
+  withApplicationUrl: number;
+  /** Results whose sources include the company's own career page. */
+  withOfficialSource: number;
 }
 
 async function buildWorkbook(
@@ -136,6 +145,14 @@ async function buildWorkbook(
     String(stats.withEmail),
   );
   addDetail(
+    "With an application link",
+    String(stats.withApplicationUrl),
+  );
+  addDetail(
+    "With an official company source",
+    String(stats.withOfficialSource),
+  );
+  addDetail(
     "Duplicate emails removed",
     String(stats.duplicatesRemoved),
   );
@@ -188,8 +205,27 @@ export async function POST(request: Request) {
     const collected = collection.opportunities;
     const buffer = Math.min(collected.length, targetCount + 10);
     const enriched = await enrichOpportunities(collected.slice(0, buffer));
+    // Company enrichment (AI Search 2.0): cache-first. A search run that
+    // just happened has populated the per-company cache (DB), so this is
+    // usually ZERO page fetches; otherwise only pages of documented
+    // company websites are fetched (client: null — no new search-index
+    // calls, no AI quota, deterministic).
+    let enrichedWithCompanies: Opportunity[] = enriched;
+    try {
+      enrichedWithCompanies = await runCompanyEnrichment(enriched, {
+        client: null,
+      });
+    } catch (enrichmentError) {
+      console.warn(
+        "[ai-search/export] company enrichment failed (rows kept as-is)",
+        enrichmentError instanceof Error
+          ? enrichmentError.message
+          : String(enrichmentError),
+      );
+    }
     const currentProfile = await getCandidateProfile(user.id);
-    const results = rankOpportunities(enriched, currentProfile, targetCount);
+    const results = rankOpportunities(enrichedWithCompanies, currentProfile, targetCount);
+    const stats = computeResultStats(results);
 
     // Outreach contract: the workbook contains ONLY opportunities whose
     // source actually published a valid (non-placeholder) email, with
@@ -231,6 +267,8 @@ export async function POST(request: Request) {
         totalFound: results.length,
         withEmail,
         duplicatesRemoved: withEmail - exportable.length,
+        withApplicationUrl: stats.withApplicationUrl,
+        withOfficialSource: stats.withOfficialSource,
       },
     );
     // Copy into a plain Uint8Array: Response's BodyInit rejects TS's

@@ -11,6 +11,12 @@ import {
   type SourceCategory,
 } from "@/lib/opportunities/web-discovery";
 import {
+  computeResultStats,
+  runCompanyEnrichment,
+  type AiSearchStats,
+} from "@/lib/opportunities/enrichment";
+import { sourceLabel } from "@/lib/opportunities/sources";
+import {
   BA_SOURCE_ID,
   getCandidateProfile,
   resolveOpportunityCached,
@@ -250,6 +256,8 @@ export interface AiSearchDiscovery {
   provider: WebSearchProviderName | null;
   /** Discovered candidates per category (REAL counts, 0 when unconfigured). */
   categories: Record<SourceCategory, number>;
+  /** Raw candidate hits per registry source id (AI Search 2.0). */
+  sources: Record<string, number>;
   /** Unique candidates that were page-checked (guarded fetch). */
   checked: number;
   /** Web opportunities extracted before dedupe. */
@@ -279,6 +287,11 @@ export type AiSearchProgress =
     }
   | { type: "enrich"; done: number; total: number }
   | {
+      type: "company_enrich";
+      done: number;
+      total: number;
+    }
+  | {
       type: "complete";
       results: Opportunity[];
       found: number;
@@ -289,6 +302,8 @@ export type AiSearchProgress =
       /** Per-source availability ("bundesagentur" entry) so the UI can show
        *  a small notice when the official source failed or degraded. */
       sources: SourceStatus[];
+      /** Honest result statistics (email/application/official counters). */
+      stats: AiSearchStats;
     };
 
 /** Availability of the official BA source during collection:
@@ -481,6 +496,8 @@ export interface AiSearchResult {
   discovery: AiSearchDiscovery;
   /** Per-source availability (the "bundesagentur" entry) for the UI notice. */
   sources: SourceStatus[];
+  /** Honest result statistics (email/application/official counters). */
+  stats: AiSearchStats;
   elapsedMs: number;
 }
 
@@ -493,6 +510,7 @@ const emptyDiscovery = (): AiSearchDiscovery => ({
     company_website: 0,
     social_media: 0,
   },
+  sources: {},
   checked: 0,
   webFound: 0,
   duplicatesRemoved: 0,
@@ -563,6 +581,7 @@ export async function runAISearch(args: {
         configured: true,
         provider: client!.name,
         categories: webResult.categoryCounts,
+        sources: webResult.sourceCounts,
         checked: webResult.verifiedCount,
         webFound: webResult.opportunities.length,
         duplicatesRemoved: 0,
@@ -602,7 +621,29 @@ export async function runAISearch(args: {
     removed: merge.duplicatesRemoved,
     total: merge.merged.length,
   });
-  const results = rankOpportunities(merge.merged, profile, args.targetCount);
+
+  // Company enrichment (AI Search 2.0): website + career page + contact /
+  // email discovery with provenance, per company (cache-first). Runs on
+  // the MERGED rows so every vacancy gets a chance to gain a real email /
+  // application contact — discovery quality never depends on the source
+  // that happened to publish the listing. Failures are contained: an
+  // enrichment problem degrades a row, never the whole run.
+  let enrichedMerged: Opportunity[] = merge.merged;
+  try {
+    enrichedMerged = await runCompanyEnrichment(merge.merged, {
+      client,
+      onProgress: (done, total) =>
+        emit({ type: "company_enrich", done, total }),
+    });
+  } catch (error) {
+    console.warn(
+      "[ai-search] company enrichment failed (rows kept as merged)",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  const results = rankOpportunities(enrichedMerged, profile, args.targetCount);
+  const stats = computeResultStats(results);
   const elapsedMs = Date.now() - startedAt;
   const result: AiSearchResult = {
     plan,
@@ -612,6 +653,7 @@ export async function runAISearch(args: {
     enriched: enriched.length,
     discovery,
     sources,
+    stats,
     elapsedMs,
   };
   emit({
@@ -623,6 +665,7 @@ export async function runAISearch(args: {
     elapsedMs,
     discovery,
     sources,
+    stats,
   });
   return result;
 }
@@ -651,6 +694,8 @@ export interface OpportunityExportRow {
   source_type: string;
   /** Provenance: the other public sources where the same vacancy was found. */
   additional_sources: string;
+  /** Registry sources this vacancy was found on (labels, " · " joined). */
+  sources: string;
 }
 
 export function buildExportRow(opportunity: Opportunity): OpportunityExportRow {
@@ -689,5 +734,6 @@ export function buildExportRow(opportunity: Opportunity): OpportunityExportRow {
           `${source.url} (${source.source_type}, ${source.source_name})`,
       )
       .join("\n"),
+    sources: opportunity.source_ids.map((id) => sourceLabel(id)).join(" · "),
   };
 }

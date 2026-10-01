@@ -69,6 +69,8 @@ function mkOpp(overrides: Partial<Opportunity> = {}): Opportunity {
     source_url: "https://example.test/1",
     source_type: "official_source",
     additional_sources: [],
+    source_ids: [],
+    enrichment: null,
     application_url: null,
     title: "Ausbildung Mechatroniker/in",
     goal: "ausbildung",
@@ -468,6 +470,7 @@ describe("buildExportRow", () => {
       source_url: "https://example.test/1",
       source_type: "official_source",
       additional_sources: "",
+      sources: "",
       requirements: "Mittlere Reife\nSportprüfung",
       other: expect.stringContaining("Salary: 1.440,70 € / month"),
     });

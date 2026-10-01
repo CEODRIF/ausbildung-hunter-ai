@@ -331,6 +331,8 @@ describe("sorting + pagination semantics (search layer)", () => {
       source_url: `https://example.test/${id}`,
       source_type: "official_source",
       additional_sources: [],
+      source_ids: [],
+      enrichment: null,
       application_url: null,
       title: `Title ${id}`,
       goal: "arbeit",

@@ -73,6 +73,8 @@ function mkOpp(overrides: Partial<Opportunity> = {}): Opportunity {
     source_url: "https://example.com/opportunity",
     source_type: "company_website",
     additional_sources: [],
+    source_ids: [],
+    enrichment: null,
     application_url: null,
     title: "Ausbildung Mechatroniker/in",
     goal: "ausbildung",
@@ -577,6 +579,12 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
             headers: { "content-type": "text/html; charset=utf-8" },
           }),
         );
+      // Company-site pages (home /impressum /kontakt /karriere …) fetched
+      // by the enrichment stage: return a fast 404 (http_error — not
+      // retried) so the run stays bounded; the karriere posting above is
+      // the only real page in this scenario.
+      if (url.startsWith("https://example.com"))
+        return Promise.resolve(new Response("not found", { status: 404 }));
       return Promise.reject(new Error(`unexpected fetch: ${url}`));
     });
 
@@ -600,6 +608,7 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
         "extract",
         "enrich",
         "dedupe",
+        "company_enrich",
         "complete",
       ]),
     );
@@ -627,5 +636,29 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
     expect(row.additional_sources[0].url).toBe(
       "https://example.com/karriere/ausbildung-2027",
     );
+    // AI Search 2.0: every source the vacancy was found on is recorded.
+    expect(row.source_ids[0]).toBe("arbeitsagentur");
+    expect(row.source_ids.length).toBeGreaterThanOrEqual(2);
+    // The web row is the company's own career page → official source, and
+    // the email's provenance is that public page (never a guess).
+    expect(row.enrichment?.official_company_source).toBe(true);
+    expect(row.enrichment?.email).toBe("azubi@beispiel-gmbh.de");
+    expect(row.enrichment?.email_status).toBe("found");
+    expect(row.enrichment?.email_source).toBe(
+      "https://example.com/karriere/ausbildung-2027",
+    );
+    // Website discovery verified the fetched content against the company
+    // name (the karriere page says "Beispiel GmbH").
+    expect(row.enrichment?.website_url).toBe("https://example.com");
+    expect(row.enrichment?.last_verified_at).not.toBeNull();
+    // Honest result statistics on the complete event.
+    const completeEvent = events.at(-1);
+    expect(completeEvent).toBe("complete");
+    expect(result.stats).toEqual({
+      found: 1,
+      withPublicEmail: 1,
+      withApplicationUrl: 0,
+      withOfficialSource: 1,
+    });
   });
 });

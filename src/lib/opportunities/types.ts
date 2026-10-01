@@ -17,8 +17,14 @@ import { matchResultSchema } from "./matching/types";
  * v5 (AI Search): added `application_deadline` (details-only; parsed from
  * the source's published description text with a strict pattern — never
  * guessed). The bump discards v4 cache payloads, which lack the field.
+ * v6 (AI Search 2.0): added the `enrichment` block (company website /
+ * career page / contact discovery with full provenance: which public page
+ * each fact came from, when it was checked, and the confidence level) and
+ * `source_ids` (compact registry ids of every source a merged row was
+ * found on). Both default to null/[] so pre-existing payloads still parse;
+ * the bump still discards v5 payloads for a clean cutover.
  */
-export const OPPORTUNITY_SCHEMA_VERSION = 5;
+export const OPPORTUNITY_SCHEMA_VERSION = 6;
 
 /**
  * The BA source only exposes its first ~10,000 listings per query (verified:
@@ -393,6 +399,82 @@ export const contactSchema = z.object({
 export const matchSchema = matchResultSchema;
 export type MatchResult = z.infer<typeof matchResultSchema>;
 
+/**
+ * Email lifecycle — deliberately strict about what each state means:
+ * - "verified":   confirmed by an ACTUAL SMTP transaction (RCPT accepted).
+ *                 The app does NOT run SMTP probes today, so this value is
+ *                 reserved and must never be emitted by the current code.
+ * - "found":      the address was literally present on a public page that
+ *                 was fetched (source posting, or the company's own
+ *                 impressum/kontakt/career page). `*_source` records where.
+ * - "invalid":    an email-like string was found but failed structural
+ *                 validation (RFC 5321 length / basic pattern).
+ * - "not_found":  enrichment was attempted (posting page + company site)
+ *                 and no public email exists.
+ * - "unknown":    enrichment was not possible (e.g. no documented company
+ *                 name) — nothing may be claimed either way.
+ * No email value may ever be derived/guessed from the company name.
+ */
+export const emailStatusSchema = z.enum([
+  "verified",
+  "found",
+  "not_found",
+  "invalid",
+  "unknown",
+]);
+export type EmailStatus = z.infer<typeof emailStatusSchema>;
+
+/** How trustworthy the enriched company data is, based on WHERE it was
+ *  found: the company's own impressum = high; its own kontakt/career page =
+ *  medium; any other public page (job posting, third party) = low. */
+export const dataConfidenceSchema = z.enum(["high", "medium", "low"]);
+export type DataConfidence = z.infer<typeof dataConfidenceSchema>;
+
+/**
+ * Company enrichment (AI Search 2.0) — the result of the per-company
+ * pipeline: company identification → website discovery → career/ausbildung
+ * page → contact discovery → email extraction → (future) verification.
+ *
+ * Every populated fact carries its PROVENANCE: the public URL it was read
+ * from. A fact without a source URL must stay null. `contact` remains the
+ * source-of-truth contact block (back-filled from here only when the source
+ * itself documented nothing), so existing consumers are unaffected.
+ */
+export const enrichmentSchema = z.object({
+  /** The company's official website (fetched + verified), or null. */
+  website_url: z.string().url().max(500).nullable(),
+  /** Evidence: the fetched page whose title/content proved the site belongs
+   *  to this company (usually the site's impressum). */
+  website_source: z.string().url().max(500).nullable(),
+  /** The company's career section, when a public page documents it. */
+  career_url: z.string().url().max(500).nullable(),
+  /** The company's Ausbildung section, when a public page documents it. */
+  ausbildung_url: z.string().url().max(500).nullable(),
+  /** Email found on a public page (never generated), or null. */
+  email: z.string().max(254).nullable(),
+  /** The public page the email was read from. Null whenever email is null. */
+  email_source: z.string().url().max(500).nullable(),
+  email_status: emailStatusSchema.default("unknown"),
+  /** Phone found on a public page (never generated), or null. */
+  phone: z.string().max(64).nullable(),
+  /** The public page the phone was read from. Null whenever phone is null. */
+  phone_source: z.string().url().max(500).nullable(),
+  /** Named contact person documented by the source ("Ansprechpartner …"). */
+  contact_name: z.string().max(160).nullable(),
+  /** The public page the contact person was read from. */
+  contact_source: z.string().url().max(500).nullable(),
+  /** When the enrichment checks for this company last ran (UTC ISO). */
+  last_verified_at: z.string().nullable(),
+  /** Overall confidence of the enriched contact data, see
+   *  dataConfidenceSchema. Null = no enriched data at all. */
+  data_confidence: dataConfidenceSchema.nullable(),
+  /** True when at least one source for this opportunity is the company's
+   *  own career/ausbildung page — users can then apply directly with the
+   *  company instead of through an aggregator. */
+  official_company_source: z.boolean().default(false),
+});
+export type Enrichment = z.infer<typeof enrichmentSchema>;
+
 export const opportunityLocationDetailSchema = z.object({
   city: z.string().max(160).nullable(),
   region: z.string().max(160).nullable(),
@@ -487,13 +569,21 @@ export const opportunitySchema = z.object({
    * structured skills/languages today; these stay empty until a verified
    * extraction pipeline fills them. They must never be guessed.
    */
-  required_skills: z.array(z.string().max(120)).max(50),
-  preferred_skills: z.array(z.string().max(120)).max(50),
-  required_languages: z.array(z.string().max(80)).max(20),
-  extracted_keywords: z.array(z.string().max(120)).max(50),
-  /** Per-user match, computed server-side after cache read. Never cached. */
-  match: matchSchema.nullable(),
-});
+   required_skills: z.array(z.string().max(120)).max(50),
+   preferred_skills: z.array(z.string().max(120)).max(50),
+   required_languages: z.array(z.string().max(80)).max(20),
+   extracted_keywords: z.array(z.string().max(120)).max(50),
+   /** Company enrichment with provenance (AI Search 2.0). null = the
+    *  enrichment pipeline has not run for this row yet (e.g. classic
+    *  /opportunities search, BA-only rows before enrichment). */
+   enrichment: enrichmentSchema.nullable().default(null),
+   /** Compact registry ids of EVERY source this (merged) row was found on,
+    *  primary first — e.g. ["arbeitsagentur", "ausbildung.de"]. Derived at
+    *  merge time; [] on rows that never went through the multi-source merge. */
+   source_ids: z.array(z.string().min(1).max(60)).max(10).default([]),
+   /** Per-user match, computed server-side after cache read. Never cached. */
+   match: matchSchema.nullable(),
+ });
 export type Opportunity = z.infer<typeof opportunitySchema>;
 export type OpportunitySalary = z.infer<typeof salarySchema>;
 export type OpportunityContact = z.infer<typeof contactSchema>;

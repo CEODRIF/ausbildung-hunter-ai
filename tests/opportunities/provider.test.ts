@@ -514,6 +514,8 @@ function mkOpp(overrides: Record<string, unknown>): Opportunity {
     source_url: "https://example.test/x",
     source_type: "official_source",
     additional_sources: [],
+    source_ids: [],
+    enrichment: null,
     application_url: null,
     title: "T",
     goal: "arbeit",

@@ -10,7 +10,11 @@ import type {
   Opportunity,
   SourceStatus,
 } from "@/lib/opportunities/types";
-import { resultsWithEmailCount } from "@/lib/opportunities/email-export";
+import {
+  opportunityEmail,
+  resultsWithEmailCount,
+} from "@/lib/opportunities/email-export";
+import { sourceLabel } from "@/lib/opportunities/sources";
 import { useI18n } from "@/lib/i18n";
 
 /**
@@ -54,9 +58,90 @@ interface Discovery {
   configured: boolean;
   provider: string | null;
   categories: Record<SourceCategory, number>;
+  /** Raw candidate hits per registry source (AI Search 2.0). */
+  sources?: Record<string, number>;
   checked: number;
   webFound: number;
   duplicatesRemoved: number;
+}
+interface Stats {
+  found: number;
+  withPublicEmail: number;
+  withApplicationUrl: number;
+  withOfficialSource: number;
+}
+
+/** Client-side result filters (AI Search 2.0). All values are plain
+ *  selections over the REAL result data — no server round-trip, no
+ *  invented options. Empty value = "no filter". */
+interface Filters {
+  minMatch: number; // 0 = any
+  bundesland: string; // "" = any
+  city: string; // "" = any (substring, case-insensitive)
+  source: string; // "" = any registry source id
+  startYear: string; // "" = any
+  maxDistance: string; // "" = any (km)
+  hasEmail: boolean;
+  hasApplyLink: boolean;
+  officialSource: boolean;
+}
+const EMPTY_FILTERS: Filters = {
+  minMatch: 0,
+  bundesland: "",
+  city: "",
+  source: "",
+  startYear: "",
+  maxDistance: "",
+  hasEmail: false,
+  hasApplyLink: false,
+  officialSource: false,
+};
+
+function matchesFilters(opportunity: Opportunity, filters: Filters): boolean {
+  if (filters.minMatch > 0) {
+    const score =
+      opportunity.match?.status === "complete" ? (opportunity.match.score ?? 0) : 0;
+    if (score < filters.minMatch) return false;
+  }
+  if (
+    filters.bundesland &&
+    opportunity.location_detail?.region !== filters.bundesland
+  )
+    return false;
+  if (filters.city) {
+    const city = (opportunity.location_detail?.city ?? opportunity.location ?? "")
+      .toLowerCase();
+    if (!city.includes(filters.city.toLowerCase())) return false;
+  }
+  if (filters.source && !opportunity.source_ids.includes(filters.source))
+    return false;
+  if (filters.startYear) {
+    const year =
+      opportunity.valid_from?.slice(0, 4) ??
+      opportunity.title.match(/\b(20\d{2})\b/)?.[1] ??
+      "";
+    if (year !== filters.startYear) return false;
+  }
+  if (filters.maxDistance !== "") {
+    const max = Number(filters.maxDistance);
+    if (
+      !Number.isFinite(max) ||
+      opportunity.distance_km === null ||
+      opportunity.distance_km > max
+    )
+      return false;
+  }
+  if (filters.hasEmail && opportunityEmail(opportunity) === null) return false;
+  if (filters.hasApplyLink && !opportunity.application_url) return false;
+  if (
+    filters.officialSource &&
+    !(
+      opportunity.enrichment?.official_company_source === true ||
+      opportunity.source_type === "company_website"
+    )
+  )
+    return false;
+  return true;
 }
 type AiSearchEvent =
   | { type: "profile"; summary: ProfileSummary }
@@ -74,6 +159,7 @@ type AiSearchEvent =
       target: number;
     }
   | { type: "enrich"; done: number; total: number }
+  | { type: "company_enrich"; done: number; total: number }
   | {
       type: "complete";
       results: Opportunity[];
@@ -84,6 +170,8 @@ type AiSearchEvent =
       discovery: Discovery;
       /** Per-source availability; a non-"ok" entry shows a small notice. */
       sources?: SourceStatus[];
+      /** Honest result statistics (email/application/official counters). */
+      stats?: Stats;
     }
   | { type: "error"; message: string };
 
@@ -96,6 +184,15 @@ function formatDay(iso: string | null): string {
     month: "2-digit",
     year: "numeric",
   }).format(date);
+}
+
+/** Display form of a URL (host only) for provenance lines. */
+function hostOfUrl(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
 }
 
 function queryLabel(query: PlanQuery): string {
@@ -183,8 +280,14 @@ export function AISearchClient({
     total: number;
   } | null>(null);
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
+  const [stats, setStats] = useState<Stats | null>(null);
   const [results, setResults] = useState<Opportunity[] | null>(null);
   const [found, setFound] = useState(0);
+  const [companyEnrich, setCompanyEnrich] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   /** Per-source availability from the complete event (notice only when a
    *  source failed or degraded — never shown on a clean run). */
   const [sourceStatuses, setSourceStatuses] = useState<SourceStatus[] | null>(
@@ -245,11 +348,15 @@ export function AISearchClient({
       case "enrich":
         setEnrichProgress(event);
         break;
+      case "company_enrich":
+        setCompanyEnrich(event);
+        break;
       case "complete":
         setResults(event.results);
         setFound(event.found);
         setDiscovery(event.discovery);
         setSourceStatuses(event.sources ?? null);
+        setStats(event.stats ?? null);
         setStage("done");
         break;
       case "error":
@@ -271,9 +378,12 @@ export function AISearchClient({
     setDedupe(null);
     setSearchProgress(null);
     setEnrichProgress(null);
+    setCompanyEnrich(null);
     setDiscovery(null);
+    setStats(null);
     setResults(null);
     setSourceStatuses(null);
+    setFilters(EMPTY_FILTERS);
     setExpanded(new Set());
     setExportError("");
     const controller = new AbortController();
@@ -606,6 +716,19 @@ export function AISearchClient({
         detail: dedupe ? `${dedupe.removed} duplicates removed` : undefined,
       },
       {
+        label: t("aiSearch.enrichingStep"),
+        state: companyEnrich
+          ? companyEnrich.done >= companyEnrich.total
+            ? "done"
+            : "active"
+          : dedupe
+            ? "active"
+            : "pending",
+        detail: companyEnrich
+          ? `${companyEnrich.done} of ${companyEnrich.total} companies`
+          : undefined,
+      },
+      {
         label: "Matching & preparing results",
         state: "pending",
       },
@@ -701,6 +824,41 @@ export function AISearchClient({
 
   // ------------------------------------------------------------------ done
   const withEmail = results ? resultsWithEmailCount(results) : 0;
+  const visibleResults = results
+    ? results.filter((opportunity) => matchesFilters(opportunity, filters))
+    : [];
+  const filtersActive =
+    filters.minMatch > 0 ||
+    filters.bundesland !== "" ||
+    filters.city !== "" ||
+    filters.source !== "" ||
+    filters.startYear !== "" ||
+    filters.maxDistance !== "" ||
+    filters.hasEmail ||
+    filters.hasApplyLink ||
+    filters.officialSource;
+  const bundeslandOptions = [
+    ...new Set(
+      (results ?? [])
+        .map((opportunity) => opportunity.location_detail?.region ?? "")
+        .filter(Boolean),
+    ),
+  ].sort();
+  const sourceOptions = [
+    ...new Set((results ?? []).flatMap((opportunity) => opportunity.source_ids)),
+  ].filter((id) => id !== "web");
+  const yearOptions = [
+    ...new Set(
+      (results ?? [])
+        .map(
+          (opportunity) =>
+            opportunity.valid_from?.slice(0, 4) ??
+            opportunity.title.match(/\b(20\d{2})\b/)?.[1] ??
+            "",
+        )
+        .filter(Boolean),
+    ),
+  ].sort();
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -726,6 +884,40 @@ export function AISearchClient({
           New search
         </Button>
       </div>
+      {/* Honest result statistics — an email only counts when a public
+          source actually published it (same rule as the export). */}
+      {stats && stats.found > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-xl bg-surface-2 p-3">
+            <p className="text-xl font-bold text-ink">{stats.found}</p>
+            <p className="text-xs font-semibold text-muted">
+              {t("aiSearch.statsFound")}
+            </p>
+          </div>
+          <div className="rounded-xl bg-surface-2 p-3">
+            <p className="text-xl font-bold text-ink">{stats.withPublicEmail}</p>
+            <p className="text-xs font-semibold text-muted">
+              {t("aiSearch.statsEmail", { count: stats.withPublicEmail })}
+            </p>
+          </div>
+          <div className="rounded-xl bg-surface-2 p-3">
+            <p className="text-xl font-bold text-ink">
+              {stats.withApplicationUrl}
+            </p>
+            <p className="text-xs font-semibold text-muted">
+              {t("aiSearch.statsApply", { count: stats.withApplicationUrl })}
+            </p>
+          </div>
+          <div className="rounded-xl bg-surface-2 p-3">
+            <p className="text-xl font-bold text-ink">
+              {stats.withOfficialSource}
+            </p>
+            <p className="text-xs font-semibold text-muted">
+              {t("aiSearch.statsOfficial", { count: stats.withOfficialSource })}
+            </p>
+          </div>
+        </div>
+      )}
       {(sourceStatuses ?? []).some((s) => s.status !== "ok") && (
         <div className="rounded-xl bg-warning-soft p-3 text-sm font-medium text-warning">
           {t("aiSearch.sourceNotice")}
@@ -775,39 +967,228 @@ export function AISearchClient({
         </Card>
       )}
       {results && results.length > 0 && (
-        <Card className="overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] border-collapse text-left">
-              <thead>
-                <tr className="border-b border-line bg-surface-2 text-xs font-bold uppercase tracking-[0.06em] text-muted">
-                  <th className="px-4 py-3">#</th>
-                  <th className="px-4 py-3">Company</th>
-                  <th className="px-4 py-3">Ausbildung title</th>
-                  <th className="px-4 py-3">Location</th>
-                  <th className="px-4 py-3">Bundesland</th>
-                  <th className="px-4 py-3">Start</th>
-                  <th className="px-4 py-3">Deadline</th>
-                  <th className="px-4 py-3">Contact</th>
-                  <th className="px-4 py-3">Match</th>
-                  <th className="px-4 py-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {results.map((opportunity, index) => {
-                  const isExpanded = expanded.has(opportunity.id);
-                  return (
-                    <FragmentRow
-                      key={opportunity.id}
-                      opportunity={opportunity}
-                      index={index + 1}
-                      expanded={isExpanded}
-                      onToggle={() => toggleExpanded(opportunity.id)}
-                    />
-                  );
-                })}
-              </tbody>
-            </table>
+        <Card className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-faint">
+              {t("aiSearch.filtersTitle")}
+            </p>
+            {filtersActive && (
+              <button
+                type="button"
+                onClick={() => setFilters(EMPTY_FILTERS)}
+                className="text-xs font-bold text-muted hover:text-ink-soft"
+              >
+                {t("aiSearch.filterAll")} · {visibleResults.length}/
+                {results.length}
+              </button>
+            )}
           </div>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <label className="text-xs font-semibold text-muted">
+              {t("aiSearch.filterMatch")}
+              <select
+                value={filters.minMatch}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    minMatch: Number(event.target.value),
+                  }))
+                }
+                className="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm font-medium text-ink-soft"
+              >
+                <option value={0}>{t("aiSearch.filterAll")}</option>
+                <option value={70}>≥ 70%</option>
+                <option value={80}>≥ 80%</option>
+                <option value={90}>≥ 90%</option>
+              </select>
+            </label>
+            <label className="text-xs font-semibold text-muted">
+              {t("aiSearch.filterBundesland")}
+              <select
+                value={filters.bundesland}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    bundesland: event.target.value,
+                  }))
+                }
+                className="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm font-medium text-ink-soft"
+              >
+                <option value="">{t("aiSearch.filterAll")}</option>
+                {bundeslandOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-semibold text-muted">
+              {t("aiSearch.filterCity")}
+              <input
+                type="text"
+                value={filters.city}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    city: event.target.value,
+                  }))
+                }
+                placeholder="…"
+                className="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm font-medium text-ink-soft"
+              />
+            </label>
+            <label className="text-xs font-semibold text-muted">
+              {t("aiSearch.filterSource")}
+              <select
+                value={filters.source}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    source: event.target.value,
+                  }))
+                }
+                className="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm font-medium text-ink-soft"
+              >
+                <option value="">{t("aiSearch.filterAll")}</option>
+                {sourceOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {sourceLabel(option)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-semibold text-muted">
+              {t("aiSearch.filterStartYear")}
+              <select
+                value={filters.startYear}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    startYear: event.target.value,
+                  }))
+                }
+                className="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm font-medium text-ink-soft"
+              >
+                <option value="">{t("aiSearch.filterAll")}</option>
+                {yearOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-semibold text-muted">
+              {t("aiSearch.filterDistance")}
+              <input
+                type="number"
+                min={5}
+                max={500}
+                value={filters.maxDistance}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    maxDistance: event.target.value,
+                  }))
+                }
+                placeholder="…"
+                className="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm font-medium text-ink-soft"
+              />
+            </label>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-4">
+            <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-ink-soft">
+              <input
+                type="checkbox"
+                checked={filters.hasEmail}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    hasEmail: event.target.checked,
+                  }))
+                }
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              {t("aiSearch.filterHasEmail")}
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-ink-soft">
+              <input
+                type="checkbox"
+                checked={filters.hasApplyLink}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    hasApplyLink: event.target.checked,
+                  }))
+                }
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              {t("aiSearch.filterHasApplyLink")}
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-ink-soft">
+              <input
+                type="checkbox"
+                checked={filters.officialSource}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    officialSource: event.target.checked,
+                  }))
+                }
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              {t("aiSearch.filterOfficialSource")}
+            </label>
+          </div>
+          {filtersActive && (
+            <p className="mt-3 text-xs font-semibold text-muted">
+              {t("aiSearch.shownOf", {
+                shown: visibleResults.length,
+                total: results.length,
+              })}
+            </p>
+          )}
+        </Card>
+      )}
+      {results && results.length > 0 && (
+        <Card className="overflow-hidden">
+          {visibleResults.length === 0 ? (
+            <p className="px-6 py-10 text-center text-sm text-muted">
+              {t("aiSearch.noResultsAfterFilter")}
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[980px] border-collapse text-left">
+                <thead>
+                  <tr className="border-b border-line bg-surface-2 text-xs font-bold uppercase tracking-[0.06em] text-muted">
+                    <th className="px-4 py-3">#</th>
+                    <th className="px-4 py-3">Company</th>
+                    <th className="px-4 py-3">Ausbildung title</th>
+                    <th className="px-4 py-3">Location</th>
+                    <th className="px-4 py-3">Bundesland</th>
+                    <th className="px-4 py-3">Start</th>
+                    <th className="px-4 py-3">Deadline</th>
+                    <th className="px-4 py-3">Contact</th>
+                    <th className="px-4 py-3">Match</th>
+                    <th className="px-4 py-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleResults.map((opportunity, index) => {
+                    const isExpanded = expanded.has(opportunity.id);
+                    return (
+                      <FragmentRow
+                        key={opportunity.id}
+                        opportunity={opportunity}
+                        index={index + 1}
+                        expanded={isExpanded}
+                        onToggle={() => toggleExpanded(opportunity.id)}
+                      />
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
       )}
 
@@ -868,6 +1249,7 @@ function FragmentRow({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useI18n();
   const other = [
     opportunity.salary?.label ? `Salary: ${opportunity.salary.label}` : null,
     opportunity.education_requirement
@@ -880,14 +1262,39 @@ function FragmentRow({
     opportunity.posted_at ? `Posted: ${opportunity.posted_at.slice(0, 10)}` : null,
   ].filter(Boolean) as string[];
   const isWeb = opportunity.provider === "web";
+  const enrichment = opportunity.enrichment;
+  const isOfficial =
+    enrichment?.official_company_source === true ||
+    opportunity.source_type === "company_website";
+  const sourceLabels = opportunity.source_ids
+    .map((id) => sourceLabel(id))
+    .filter((label, position, all) => label !== "web" || all.length === 1);
+  const hasEmail = opportunityEmail(opportunity) !== null;
   return (
     <>
       <tr
         className={`border-b border-line transition-colors hover:bg-surface-2 ${expanded ? "bg-surface-2" : ""}`}
       >
         <td className="px-4 py-3 text-xs font-bold text-faint">{index}</td>
-        <td className="px-4 py-3 text-sm font-semibold text-ink-soft">
-          {opportunity.company_name ?? <span className="text-faint">—</span>}
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-ink-soft">
+            <span>{opportunity.company_name ?? "—"}</span>
+            {isOfficial && (
+              <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-bold text-accent">
+                {t("aiSearch.officialBadge")}
+              </span>
+            )}
+          </div>
+          {sourceLabels.length > 0 && (
+            <p className="mt-0.5 max-w-[220px] truncate text-[11px] font-medium text-faint" title={sourceLabels.join(" · ")}>
+              {sourceLabels.join(" · ")}
+              {sourceLabels.length > 1 && (
+                <span className="ml-1 rounded bg-surface-2 px-1 text-[10px] font-bold text-muted">
+                  {sourceLabels.length}
+                </span>
+              )}
+            </p>
+          )}
         </td>
         <td className="max-w-[260px] px-4 py-3">
           {isWeb ? (
@@ -922,15 +1329,24 @@ function FragmentRow({
         <td className="whitespace-nowrap px-4 py-3 text-sm text-ink-soft">
           {formatDay(opportunity.application_deadline)}
         </td>
-        <td className="max-w-[190px] px-4 py-3 text-xs leading-5 text-ink-soft">
-          {opportunity.contact?.email ? (
-            <div className="truncate">{opportunity.contact.email}</div>
-          ) : null}
+        <td className="max-w-[210px] px-4 py-3 text-xs leading-5 text-ink-soft">
+          {hasEmail ? (
+            <div
+              className="truncate font-semibold"
+              title={opportunity.contact?.email ?? undefined}
+            >
+              {opportunity.contact?.email}
+            </div>
+          ) : (
+            <div className="truncate italic text-faint" title={t("aiSearch.emailNotFound")}>
+              {t("aiSearch.emailNotFound")}
+            </div>
+          )}
           {opportunity.contact?.phone ? (
             <div className="truncate">{opportunity.contact.phone}</div>
           ) : null}
-          {!opportunity.contact?.email && !opportunity.contact?.phone ? (
-            <span className="text-faint">—</span>
+          {opportunity.contact?.person ? (
+            <div className="truncate text-muted">{opportunity.contact.person}</div>
           ) : null}
         </td>
         <td className="whitespace-nowrap px-4 py-3">
@@ -1036,10 +1452,93 @@ function FragmentRow({
                       rel="noopener noreferrer"
                       className="rounded-xl bg-accent-soft px-3.5 py-2 text-xs font-bold text-accent transition hover:bg-accent-soft"
                     >
-                      Company website ↗
+                      {t("aiSearch.websiteLink")} ↗
+                    </a>
+                  )}
+                  {enrichment?.career_url && (
+                    <a
+                      href={enrichment.career_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-xl bg-accent-soft px-3.5 py-2 text-xs font-bold text-accent transition hover:bg-accent-soft"
+                    >
+                      {t("aiSearch.careerLink")} ↗
+                    </a>
+                  )}
+                  {enrichment?.ausbildung_url && (
+                    <a
+                      href={enrichment.ausbildung_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-xl bg-accent-soft px-3.5 py-2 text-xs font-bold text-accent transition hover:bg-accent-soft"
+                    >
+                      Ausbildung ↗
+                    </a>
+                  )}
+                  {opportunity.application_url && (
+                    <a
+                      href={opportunity.application_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-xl bg-success-soft px-3.5 py-2 text-xs font-bold text-success transition hover:bg-success-soft"
+                    >
+                      {isOfficial ? "Jetzt bewerben ↗" : "Apply ↗"}
                     </a>
                   )}
                 </div>
+                {enrichment &&
+                  (enrichment.email ||
+                    enrichment.phone ||
+                    enrichment.website_url ||
+                    enrichment.last_verified_at) && (
+                    <div className="rounded-xl bg-surface-2 p-3 text-xs leading-5 text-ink-soft">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-bold uppercase tracking-[0.1em] text-faint">
+                          {t("aiSearch.sourcesLabel")}
+                        </p>
+                        {enrichment.data_confidence && (
+                          <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-bold text-muted">
+                            {t("aiSearch.confidenceLabel")}:{" "}
+                            {enrichment.data_confidence}
+                          </span>
+                        )}
+                      </div>
+                      {hasEmail && enrichment.email_source && (
+                        <p className="mt-1.5">
+                          {t("aiSearch.emailSourceLabel")}:{" "}
+                          <a
+                            href={enrichment.email_source}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="break-all font-semibold text-accent hover:underline"
+                          >
+                            {t("aiSearch.foundAt")} {hostOfUrl(enrichment.email_source)}
+                          </a>
+                        </p>
+                      )}
+                      {enrichment.website_url && (
+                        <p className="mt-1.5">
+                          {t("aiSearch.websiteLink")}:{" "}
+                          <a
+                            href={enrichment.website_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="break-all font-semibold text-accent hover:underline"
+                          >
+                            {hostOfUrl(enrichment.website_url)}
+                          </a>
+                        </p>
+                      )}
+                      {enrichment.last_verified_at && (
+                        <p className="mt-1.5 text-faint">
+                          {t("aiSearch.verifiedAt")}{" "}
+                          {new Date(enrichment.last_verified_at).toLocaleDateString(
+                            "en-GB",
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 {!isWeb && (
                   <SaveOpportunityButton
                     opportunityKey={opportunity.id}

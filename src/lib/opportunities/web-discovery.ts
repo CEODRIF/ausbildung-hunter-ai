@@ -13,9 +13,19 @@ import {
 import { WebSearchError, type WebSearchClient } from "@/lib/web-search";
 import {
   opportunitySchema,
+  type Enrichment,
   type Opportunity,
   type OpportunitySourceType,
 } from "@/lib/opportunities/types";
+import { normalizeOpportunityEmail } from "@/lib/opportunities/email-export";
+import {
+  buildSourceQuery,
+  enabledWebSources,
+  hostToSourceId,
+  SOURCE_CATEGORIES,
+  type SourceCategory,
+  type SourceDefinition,
+} from "@/lib/opportunities/sources";
 
 /**
  * Web discovery layer for AI Ausbildung Search.
@@ -31,17 +41,10 @@ import {
  * content — blocked sources are simply skipped (and counted honestly).
  */
 
-export type SourceCategory =
-  | "search_engine"
-  | "job_portal"
-  | "company_website"
-  | "social_media";
-export const SOURCE_CATEGORIES: SourceCategory[] = [
-  "search_engine",
-  "job_portal",
-  "company_website",
-  "social_media",
-];
+// The category taxonomy now lives in the Source Registry (sources.ts);
+// re-exported so existing consumers (UI, tests) keep working unchanged.
+export type { SourceCategory } from "./sources";
+export { SOURCE_CATEGORIES } from "./sources";
 
 /** Authority used when several sources describe the same vacancy:
  *  official > company site > job portal > search snippet > social > other. */
@@ -58,7 +61,7 @@ export const SOURCE_TYPE_AUTHORITY: Record<OpportunitySourceType, number> = {
 // Classification (deterministic)
 // ---------------------------------------------------------------------------
 
-const SOCIAL_HOSTS = new Set([
+export const SOCIAL_HOSTS = new Set([
   "linkedin.com",
   "instagram.com",
   "facebook.com",
@@ -69,8 +72,9 @@ const SOCIAL_HOSTS = new Set([
   "twitter.com",
 ]);
 
-const PORTAL_HOSTS = new Set([
+export const PORTAL_HOSTS = new Set([
   "ausbildung.de",
+  "aubi-plus.de",
   "azubiyo.de",
   "indeed.de",
   "indeed.com",
@@ -83,6 +87,27 @@ const PORTAL_HOSTS = new Set([
   "jobvector.de",
   "stellenanzeigen.de",
 ]);
+
+/** True when a host belongs to a known job-portal / social aggregator —
+ *  such URLs are never treated as a company's own website. */
+export function isAggregatorHost(url: string): boolean {
+  const parsed = (() => {
+    try {
+      return new URL(url);
+    } catch {
+      return null;
+    }
+  })();
+  if (!parsed) return false;
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  const domain = hostDomain(parsed.hostname);
+  return (
+    PORTAL_HOSTS.has(host) ||
+    PORTAL_HOSTS.has(domain) ||
+    SOCIAL_HOSTS.has(host) ||
+    SOCIAL_HOSTS.has(domain)
+  );
+}
 
 const CAREER_SIGNAL_RE =
   /karriere|stellenange|stellenanzeige|stellenmarkt|jobs?|vacanc|ausbildung|azubi|praktikum|berufseinstieg|bewerb/i;
@@ -169,6 +194,10 @@ export interface DiscoveredCandidate {
   snippet: string;
   category: SourceCategory;
   query: string;
+  /** Registry id of the source that surfaced this candidate
+   *  (AI Search 2.0). Unset on candidates from the legacy
+   *  category-based discovery path. */
+  sourceId?: string;
 }
 
 function normalizeUrlForDedupe(url: string): string {
@@ -248,6 +277,66 @@ export async function discoverCategory(args: {
         snippet: result.snippet,
         category,
         query,
+      };
+      if (!isRelevant(candidate)) continue;
+      const key = normalizeUrlForDedupe(candidate.url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(candidate);
+    }
+  }
+  return { candidates, errors };
+}
+
+/** Search ONE registry source across its queries. Same legal contract as
+ *  discoverCategory (https-only, BA excluded, relevance filter, dedupe);
+ *  every candidate carries the source's registry id. */
+export async function discoverSource(args: {
+  client: WebSearchClient;
+  source: SourceDefinition;
+  webQueries: string[];
+  perQueryResults?: number;
+}): Promise<{ candidates: DiscoveredCandidate[]; errors: number }> {
+  const { client, source, webQueries } = args;
+  const perQuery = args.perQueryResults ?? 10;
+  const queries = webQueries
+    .map((query) => buildSourceQuery(source, query))
+    .filter(Boolean);
+  const candidates: DiscoveredCandidate[] = [];
+  const seen = new Set<string>();
+  let errors = 0;
+  for (const query of queries) {
+    let results;
+    try {
+      results = await client.search(query, perQuery);
+    } catch (error) {
+      // Provider-level failure for this query (key rejected, outage,
+      // rate limit). Count it and continue — other sources may still
+      // succeed. We never retry past the provider's own backoff.
+      if (!(error instanceof WebSearchError))
+        console.error("[web-search] unexpected error", error);
+      errors += 1;
+      continue;
+    }
+    for (const result of results) {
+      const parsed = (() => {
+        try {
+          return new URL(result.url);
+        } catch {
+          return null;
+        }
+      })();
+      if (!parsed || parsed.protocol !== "https:") continue;
+      const domain = hostDomain(parsed.hostname);
+      // Official BA results are covered by the authoritative BA pipeline.
+      if (domain === "arbeitsagentur.de") continue;
+      const candidate: DiscoveredCandidate = {
+        url: normalizeUrlForDedupe(result.url),
+        title: result.title,
+        snippet: result.snippet,
+        category: source.category,
+        query,
+        sourceId: source.id,
       };
       if (!isRelevant(candidate)) continue;
       const key = normalizeUrlForDedupe(candidate.url);
@@ -603,6 +692,9 @@ export function toOpportunity(
     preferred_skills: [],
     required_languages: [],
     extracted_keywords: [],
+    // AI Search 2.0: remember which registry source surfaced this page
+    // (falls back to "web" for candidates from the legacy category path).
+    source_ids: [verified.candidate.sourceId ?? "web"],
     match: null,
   });
 }
@@ -611,7 +703,7 @@ export function toOpportunity(
 // Multi-source dedupe (BA + web) with provenance
 // ---------------------------------------------------------------------------
 
-function normalizeIdentity(value: string | null): string {
+export function normalizeIdentity(value: string | null): string {
   if (!value) return "";
   return value
     .normalize("NFD")
@@ -626,6 +718,34 @@ export function fingerprintOpportunity(opportunity: Opportunity): string {
   return `${normalizeIdentity(opportunity.company_name)}|${normalizeIdentity(
     opportunity.title,
   )}`;
+}
+
+/**
+ * Concrete start year documented on the row — from `valid_from` when the
+ * source states it, else from an explicit "20xx" year in the title. Null
+ * when the source documents no year (unknown ≠ any year).
+ */
+export function startYearOf(opportunity: Opportunity): string | null {
+  const from = opportunity.valid_from?.slice(0, 4) ?? "";
+  if (/^\d{4}$/.test(from)) return from;
+  const inTitle = opportunity.title.match(/\b(20\d{2})\b/);
+  if (inTitle) return inTitle[1];
+  return null;
+}
+
+/** Normalized city documented on the row, or null (unknown). */
+export function cityOf(opportunity: Opportunity): string | null {
+  const city = opportunity.location_detail?.city;
+  if (!city) return null;
+  const normalized = normalizeIdentity(city);
+  return normalized ? normalized : null;
+}
+
+/** Registry id a row was discovered on (primary source). */
+function sourceIdOf(opportunity: Opportunity): string {
+  if (opportunity.provider === "arbeitsagentur") return "arbeitsagentur";
+  if (opportunity.source_ids.length > 0) return opportunity.source_ids[0];
+  return hostToSourceId(opportunity.source_url) ?? "web";
 }
 
 function fieldCount(opportunity: Opportunity): number {
@@ -646,12 +766,24 @@ export interface MergeSummary {
 
 /**
  * Merge BA rows + web rows into one opportunity per vacancy:
- * - groups by identity fingerprint, plus AI-identified duplicates
- *   (union-find over `duplicate_of_url` links within the web rows);
+ * - groups by identity fingerprint (company + title), refined by START
+ *   YEAR and CITY compatibility: two rows with the same company + title
+ *   merge when their documented start years agree (or at least one is
+ *   undocumented) AND their documented cities agree (or at least one is
+ *   undocumented). Same vacancy, different intake year (2027 vs 2028) or
+ *   different branch city (chain) stays separate.
+ * - plus AI-identified duplicates (union-find over `duplicate_of_url`
+ *   links within the web rows);
  * - group leader = highest source authority, then richest data, then
  *   stable id; the leader keeps the `web`/`arbeitsagentur` identity;
  * - the leader's NULL fields are back-filled from followers (real source
- *   data only); followers become `additional_sources` (provenance).
+ *   data only); followers become `additional_sources` (provenance);
+ * - `source_ids` records every registry source the vacancy was found on;
+ * - `official_company_source` (and the official application URL) is set
+ *   when one of the sources is the company's own career page;
+ * - the `enrichment` block is seeded with merge-level provenance (email
+ *   found on which public page, company website URL + evidence) — the
+ *   company-enrichment pipeline extends it later.
  */
 export function mergeOpportunities(args: {
   ba: Opportunity[];
@@ -661,8 +793,8 @@ export function mergeOpportunities(args: {
   const { ba, web, aiDuplicates } = args;
   const all = [...ba, ...web];
   // Union-find over ALL rows: same-vacancy groups are formed by
-  // (a) identical identity fingerprints and (b) AI-identified duplicate
-  // links between web URLs.
+  // (a) identity fingerprints refined by year/city compatibility and
+  // (b) AI-identified duplicate links between web URLs.
   const parent = new Map<string, string>();
   const find = (key: string): string => {
     let root = key;
@@ -678,14 +810,34 @@ export function mergeOpportunities(args: {
     if (ra !== rb) parent.set(ra, rb);
   };
   all.forEach((op, index) => parent.set(String(index), String(index)));
-  const firstByFingerprint = new Map<string, string>();
+  // (a) fingerprint + compatibility unions, scoped WITHIN each primary
+  // fingerprint group (different companies/titles never merge here).
+  const indexesByFingerprint = new Map<string, number[]>();
   all.forEach((op, index) => {
-    const key = String(index);
-    const fp = fingerprintOpportunity(op);
-    const first = firstByFingerprint.get(fp);
-    if (first) union(first, key);
-    else firstByFingerprint.set(fp, key);
+    const key = fingerprintOpportunity(op);
+    const list = indexesByFingerprint.get(key);
+    if (list) list.push(index);
+    else indexesByFingerprint.set(key, [index]);
   });
+  const yearOf = all.map((op) => startYearOf(op));
+  const cityOfRow = all.map((op) => cityOf(op));
+  for (const indexes of indexesByFingerprint.values()) {
+    for (let i = 0; i < indexes.length; i += 1) {
+      for (let j = i + 1; j < indexes.length; j += 1) {
+        const a = indexes[i];
+        const b = indexes[j];
+        const yearA = yearOf[a];
+        const yearB = yearOf[b];
+        const yearCompatible =
+          yearA === null || yearB === null || yearA === yearB;
+        const cityA = cityOfRow[a];
+        const cityB = cityOfRow[b];
+        const cityCompatible =
+          cityA === null || cityB === null || cityA === cityB;
+        if (yearCompatible && cityCompatible) union(String(a), String(b));
+      }
+    }
+  }
   const byUrl = new Map<string, string>();
   web.forEach((op, index) => byUrl.set(op.source_url, String(index)));
   for (const link of aiDuplicates) {
@@ -719,7 +871,22 @@ export function mergeOpportunities(args: {
       source_type: follower.source_type,
       source_name: follower.source_name,
     }));
+    // AI Search 2.0: every source this vacancy was found on (primary first,
+    // order of the sorted group = authority order).
+    const sourceIds: string[] = [];
+    for (const row of sorted) {
+      const id = sourceIdOf(row);
+      if (!sourceIds.includes(id)) sourceIds.push(id);
+    }
+    // The company's own career page is among the sources → the user can
+    // apply directly with the company (officialCompanySource).
+    const officialCompanySource = group.some(
+      (row) => row.source_type === "company_website",
+    );
     const backfilled = { ...leader };
+    // Set when a follower supplies the merged email (provenance = that
+    // follower's public page). The leader's own email uses leader.source_url.
+    let emailSource: string | null = null;
     const setIfNull = <K extends keyof Opportunity>(
       key: K,
       value: Opportunity[K] | null,
@@ -749,12 +916,20 @@ export function mergeOpportunities(args: {
         follower.requirements.length > 0
       )
         backfilled.requirements = follower.requirements;
-      // Contact back-fill keeps the schema shape (all three keys present).
+      // Contact back-fill keeps the schema shape (all three keys present)
+      // and records WHERE the email came from (public page provenance).
       const mergedEmail =
         backfilled.contact?.email ?? follower.contact?.email ?? null;
       const mergedPhone =
         backfilled.contact?.phone ?? follower.contact?.phone ?? null;
       const mergedPerson = backfilled.contact?.person ?? null;
+      if (
+        follower.contact?.email &&
+        !backfilled.contact?.email &&
+        mergedEmail
+      ) {
+        emailSource = follower.source_url;
+      }
       if (mergedEmail || mergedPhone || mergedPerson)
         backfilled.contact = {
           person: mergedPerson,
@@ -762,7 +937,89 @@ export function mergeOpportunities(args: {
           phone: mergedPhone,
         };
     }
+    // Official direct apply: when a company-website source publishes its
+    // own application URL (same site as the posting), it wins over an
+    // aggregator URL — the user should apply with the company, not a
+    // portal, whenever both exist.
+    if (officialCompanySource) {
+      for (const follower of followers) {
+        if (
+          follower.source_type !== "company_website" ||
+          !follower.application_url
+        )
+          continue;
+        const sameSite =
+          hostOf(follower.application_url) === hostOf(follower.source_url);
+        if (!sameSite) continue;
+        if (
+          !backfilled.application_url ||
+          hostOf(backfilled.application_url) !== hostOf(follower.application_url)
+        ) {
+          backfilled.application_url = follower.application_url;
+        }
+        break;
+      }
+    }
+    // Career / Ausbildung section URLs, documented by the company's own
+    // posting page (real public pages only — never constructed).
+    let careerUrl: string | null = null;
+    let ausbildungUrl: string | null = null;
+    for (const follower of followers) {
+      if (follower.source_type !== "company_website") continue;
+      let path = "";
+      try {
+        path = new URL(follower.source_url).pathname.toLowerCase();
+      } catch {
+        continue;
+      }
+      if (!careerUrl && /(karriere|stellenang|jobs?|bewerb)/.test(path))
+        careerUrl = follower.source_url;
+      if (!ausbildungUrl && /(ausbildung|azubi)/.test(path))
+        ausbildungUrl = follower.source_url;
+    }
+    // Merge-level enrichment seed (provenance for what the SOURCES already
+    // documented). The company-enrichment pipeline extends this block.
+    const mergeEmail = backfilled.contact?.email ?? null;
+    const mergeEmailValid = normalizeOpportunityEmail(mergeEmail);
+    let enrichment: Enrichment | null = null;
+    if (officialCompanySource || mergeEmail) {
+      enrichment = {
+        website_url: null,
+        website_source: null,
+        career_url: careerUrl,
+        ausbildung_url: ausbildungUrl,
+        email: mergeEmail,
+        email_source: mergeEmail ? (emailSource ?? leader.source_url) : null,
+        email_status: mergeEmail
+          ? mergeEmailValid
+            ? "found"
+            : "invalid"
+          : "unknown",
+        phone: backfilled.contact?.phone ?? null,
+        phone_source: null,
+        contact_name: backfilled.contact?.person ?? null,
+        contact_source: null,
+        last_verified_at: null,
+        data_confidence: null,
+        official_company_source: officialCompanySource,
+      };
+      // Company website URL: only a NON-aggregator company_url from a
+      // source row is acceptable evidence (portal "company pages" are not
+      // the company's site).
+      for (const row of sorted) {
+        if (row.company_url && !isAggregatorHost(row.company_url)) {
+          enrichment = {
+            ...enrichment,
+            website_url: row.company_url,
+            website_source: row.source_url,
+          };
+          break;
+        }
+      }
+    }
     backfilled.additional_sources = additional.slice(0, 10);
+    backfilled.source_ids = sourceIds.slice(0, 10);
+    backfilled.enrichment = enrichment;
     merged.push(opportunitySchema.parse(backfilled));
   }
   return {
@@ -771,18 +1028,49 @@ export function mergeOpportunities(args: {
   };
 }
 
-/** Full web-discovery run: search → verify → extract → normalize. */
+/** Per-source outcome of one discovery run (surfaced in stats/progress). */
+export interface SourceRunStatus {
+  source: string;
+  status: "ok" | "degraded" | "failed" | "skipped_budget";
+  candidates: number;
+}
+
+/**
+ * Grounding-call budget for ONE discovery run. The shared web-search client
+ * is quota-metered; every call costs a credit. Allocation: one call per
+ * plain web query (the general net), then ONE call per registry source in
+ * priority order until the budget is exhausted. Bounded by design —
+ * enrichment below uses its own, separate budget.
+ */
+const MAX_DISCOVERY_CALLS = 16;
+
+/**
+ * Full web-discovery run (AI Search 2.0): registry-driven search → verify
+ * → extract → normalize.
+ *
+ * Sources come from the Source Registry (sources.ts) in priority order,
+ * each scoped with `site:` operators to its own domain; the plain web
+ * queries run first as a general net. `categoryCounts` stay the UNIQUE
+ * page counts per bucket (what the user sees); `sourceCounts` report the
+ * raw per-source hits for transparency. Blocked pages are counted, never
+ * faked — a source that only yields 403s shows up as 0 candidates.
+ */
 export async function runWebDiscovery(args: {
   client: WebSearchClient | null;
   webQueries: string[];
   goal: "ausbildung" | "arbeit";
   userId: string;
   onCategoryResults?: (category: SourceCategory, results: number) => void;
+  onSourceResults?: (sourceId: string, results: number) => void;
   onCheckProgress?: (done: number, total: number) => void;
   onExtractProgress?: (done: number, total: number) => void;
 }): Promise<{
   opportunities: Opportunity[];
   categoryCounts: Record<SourceCategory, number>;
+  /** Raw candidate hits per registry source id (transparent stats). */
+  sourceCounts: Record<string, number>;
+  /** Per-source run status (ok/degraded/failed/skipped_budget). */
+  sourceStatuses: SourceRunStatus[];
   verifiedCount: number;
   aiUsed: boolean;
   providerErrors: number;
@@ -800,6 +1088,8 @@ export async function runWebDiscovery(args: {
     return {
       opportunities: [],
       categoryCounts,
+      sourceCounts: {},
+      sourceStatuses: [],
       verifiedCount: 0,
       aiUsed: false,
       providerErrors: 0,
@@ -808,16 +1098,70 @@ export async function runWebDiscovery(args: {
     };
   let providerErrors = 0;
   const collected: DiscoveredCandidate[] = [];
-  for (const category of SOURCE_CATEGORIES) {
+  const sourceCounts: Record<string, number> = {};
+  const sourceStatuses: SourceRunStatus[] = [];
+  // Unique pages per category (a URL found by 3 portals counts once for
+  // the user-facing bucket; per-source raw hits stay in sourceCounts).
+  const uniqueByCategory: Record<SourceCategory, Set<string>> = {
+    search_engine: new Set(),
+    job_portal: new Set(),
+    company_website: new Set(),
+    social_media: new Set(),
+  };
+  const plainQueries = webQueries
+    .map((query) => query.trim())
+    .filter(Boolean);
+
+  let callsRemaining = MAX_DISCOVERY_CALLS;
+  // 1) General net: the AI's plain web queries (no site: scoping).
+  const plain = plainQueries.slice(0, Math.max(0, callsRemaining));
+  callsRemaining -= plain.length;
+  if (plain.length > 0) {
     const { candidates, errors } = await discoverCategory({
       client,
-      category,
-      webQueries,
+      category: "search_engine",
+      webQueries: plain,
     });
     providerErrors += errors;
-    categoryCounts[category] = candidates.length;
     collected.push(...candidates);
-    args.onCategoryResults?.(category, candidates.length);
+    for (const candidate of candidates)
+      uniqueByCategory[candidate.category].add(candidate.url);
+  }
+
+  // 2) Registry sources in priority order — one grounding call each, on the
+  //    AI's first (highest-priority) web query.
+  const firstQuery = plain[0];
+  for (const source of enabledWebSources()) {
+    if (!firstQuery || callsRemaining <= 0) {
+      sourceStatuses.push({
+        source: source.id,
+        status: "skipped_budget",
+        candidates: 0,
+      });
+      continue;
+    }
+    callsRemaining -= 1;
+    const { candidates, errors } = await discoverSource({
+      client,
+      source,
+      webQueries: [firstQuery],
+    });
+    providerErrors += errors;
+    sourceCounts[source.id] = candidates.length;
+    sourceStatuses.push({
+      source: source.id,
+      status: errors > 0 ? (candidates.length > 0 ? "degraded" : "failed") : "ok",
+      candidates: candidates.length,
+    });
+    collected.push(...candidates);
+    for (const candidate of candidates)
+      uniqueByCategory[candidate.category].add(candidate.url);
+    args.onSourceResults?.(source.id, candidates.length);
+  }
+
+  for (const category of SOURCE_CATEGORIES) {
+    categoryCounts[category] = uniqueByCategory[category].size;
+    args.onCategoryResults?.(category, categoryCounts[category]);
   }
   const verified = await verifyCandidates(collected, args.onCheckProgress);
   const failures: Partial<Record<PageFetchFailure, number>> = {};
@@ -846,6 +1190,8 @@ export async function runWebDiscovery(args: {
   return {
     opportunities,
     categoryCounts,
+    sourceCounts,
+    sourceStatuses,
     verifiedCount: verified.length,
     aiUsed,
     providerErrors,
