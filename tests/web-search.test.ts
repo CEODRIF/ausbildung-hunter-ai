@@ -1,490 +1,356 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clearTavilyMemoryCache,
   getWebSearchClient,
-  resetGroundingDiagnostics,
-  resolveGeminiGroundingKey,
-  resolveGeminiGroundingKeySource,
+  MAX_TAVILY_REQUESTS_PER_RUN,
+  resetTavilyDiagnostics,
+  resolveTavilyKey,
+  TAVILY_SEARCH_URL,
   WebSearchError,
 } from "@/lib/web-search";
 
 /**
- * Web-search client (Gemini + Google Search Grounding).
- * Selection logic uses the real module (env manipulated per test);
- * `search()` behavior runs against a mocked global fetch — the grounding
- * metadata (NOT model text) must be the only URL source.
+ * Web-search provider (Tavily Search API).
+ *
+ * Selection logic uses the real module (env manipulated per test); the HTTP
+ * layer is mocked. Requirements covered here: Tavily is called on search,
+ * TAVILY_API_KEY is required, the key never leaks, Gemini grounding is never
+ * called, at most 3 requests per search operation, duplicates are removed,
+ * provider errors are handled and reported safely.
  */
 
-const AI_STUDIO_URL =
-  "https://generativelanguage.googleapis.com/v1beta/openai/";
+const ORIGINAL_ENV = { ...process.env };
 
-function groundingResponse(chunks: unknown, pages: unknown = []) {
+function resetEnv() {
+  process.env = { ...ORIGINAL_ENV };
+  delete process.env.TAVILY_API_KEY;
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.GEMINI_GROUNDING_API_KEY;
+  delete process.env.AI_API_KEY;
+  delete process.env.AI_API_URL;
+}
+
+function tavilyResponse(
+  results: Array<{
+    title?: unknown;
+    url?: unknown;
+    content?: unknown;
+    score?: unknown;
+  }>,
+) {
   return Response.json({
-    candidates: [
-      {
-        content: { parts: [{ text: "see search results" }] },
-        groundingMetadata: {
-          groundingChunks: chunks,
-          searchGroundingMetadata: { dynamicSearchPages: pages },
-        },
-      },
-    ],
+    query: "q",
+    results,
+    response_time: "0.42",
+    usage: { credits: 1 },
+    request_id: "req-test",
   });
 }
 
-describe("getWebSearchClient / resolveGeminiGroundingKey", () => {
-  const ORIGINAL = { ...process.env };
-  afterEach(() => {
-    process.env = { ...ORIGINAL };
-  });
-
-  function clean() {
-    delete process.env.GEMINI_GROUNDING_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.GEMINI_GROUNDING_MODEL;
-    delete process.env.AI_API_KEY;
-    delete process.env.AI_API_URL;
-  }
-
-  it("returns null without any key (graceful degradation)", () => {
-    clean();
-    expect(resolveGeminiGroundingKey()).toBeNull();
-    expect(getWebSearchClient()).toBeNull();
-  });
-
-  it("uses the explicit GEMINI_API_KEY when it is a real key", () => {
-    clean();
-    process.env.GEMINI_API_KEY = "AIzaSy-test-gemini-key-12345";
-    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-test-gemini-key-12345");
-    expect(getWebSearchClient()?.name).toBe("gemini_grounding");
-  });
-
-  it("dedicated GEMINI_GROUNDING_API_KEY wins over GEMINI_API_KEY", () => {
-    clean();
-    process.env.GEMINI_API_KEY = "AIzaSy-shared-gemini-key-11111";
-    process.env.GEMINI_GROUNDING_API_KEY = "AIzaSy-dedicated-grounding-22222";
-    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-dedicated-grounding-22222");
-    expect(resolveGeminiGroundingKeySource()).toBe("GEMINI_GROUNDING_API_KEY");
-  });
-
-  it("dedicated GEMINI_GROUNDING_API_KEY wins over the reused AI key", () => {
-    clean();
-    process.env.AI_API_KEY = "AIzaSy-existing-ai-key-12345";
-    process.env.AI_API_URL = AI_STUDIO_URL;
-    process.env.GEMINI_GROUNDING_API_KEY = "AIzaSy-dedicated-grounding-22222";
-    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-dedicated-grounding-22222");
-    expect(resolveGeminiGroundingKeySource()).toBe("GEMINI_GROUNDING_API_KEY");
-  });
-
-  it("falls back to GEMINI_API_KEY when no dedicated grounding key is set", () => {
-    clean();
-    process.env.GEMINI_API_KEY = "AIzaSy-shared-gemini-key-11111";
-    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-shared-gemini-key-11111");
-    expect(resolveGeminiGroundingKeySource()).toBe("GEMINI_API_KEY");
-  });
-
-  it("treats a placeholder dedicated key as unconfigured (falls through)", () => {
-    clean();
-    process.env.GEMINI_GROUNDING_API_KEY = "your-dedicated-grounding-key";
-    process.env.GEMINI_API_KEY = "AIzaSy-shared-gemini-key-11111";
-    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-shared-gemini-key-11111");
-    expect(resolveGeminiGroundingKeySource()).toBe("GEMINI_API_KEY");
-  });
-
-  it("reports AI_API_KEY as the source when reused on a Google endpoint", () => {
-    clean();
-    process.env.AI_API_KEY = "AIzaSy-existing-ai-key-12345";
-    process.env.AI_API_URL = AI_STUDIO_URL;
-    expect(resolveGeminiGroundingKeySource()).toBe("AI_API_KEY");
-  });
-
-  it("treats placeholder keys as unconfigured", () => {
-    clean();
-    process.env.GEMINI_API_KEY = "your-gemini-api-key";
-    expect(getWebSearchClient()).toBeNull();
-  });
-
-  it("reuses AI_API_KEY when the AI endpoint is Google AI Studio", () => {
-    clean();
-    process.env.AI_API_KEY = "AIzaSy-existing-ai-key-12345";
-    process.env.AI_API_URL = AI_STUDIO_URL;
-    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-existing-ai-key-12345");
-    expect(getWebSearchClient()?.name).toBe("gemini_grounding");
-  });
-
-  it("does NOT reuse AI_API_KEY for non-Google AI endpoints", () => {
-    clean();
-    process.env.AI_API_KEY = "sk-a-very-long-provider-key-12345";
-    process.env.AI_API_URL = "https://api.openai.com/v1";
-    expect(resolveGeminiGroundingKey()).toBeNull();
-    expect(getWebSearchClient()).toBeNull();
-  });
-
-  it("explicit GEMINI_API_KEY wins over the reused AI key", () => {
-    clean();
-    process.env.AI_API_KEY = "AIzaSy-existing-ai-key-12345";
-    process.env.AI_API_URL = AI_STUDIO_URL;
-    process.env.GEMINI_API_KEY = "AIzaSy-explicit-gemini-key-999";
-    expect(resolveGeminiGroundingKey()).toBe("AIzaSy-explicit-gemini-key-999");
-  });
-});
-
-describe("geminiGroundingSearch (mocked fetch)", () => {
-  const ORIGINAL = { ...process.env };
+describe("getWebSearchClient / resolveTavilyKey", () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
+    resetEnv();
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
+    resetTavilyDiagnostics();
+    clearTavilyMemoryCache();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
-    process.env = { ...ORIGINAL };
+    resetEnv();
   });
 
-  function clientWithKey(key = "AIzaSy-test-gemini-key-12345") {
-    delete process.env.AI_API_KEY;
-    delete process.env.AI_API_URL;
-    process.env.GEMINI_API_KEY = key;
+  it("returns no client without TAVILY_API_KEY (graceful degradation)", () => {
+    expect(resolveTavilyKey()).toBeNull();
+    expect(getWebSearchClient()).toBeNull();
+  });
+
+  it("ignores GEMINI_API_KEY — the web layer no longer uses Gemini keying", () => {
+    process.env.GEMINI_API_KEY = "AIzaSy-test-gemini-key-12345";
+    process.env.GEMINI_GROUNDING_API_KEY = "AIzaSy-dedicated-12345";
+    process.env.AI_API_KEY = "AIzaSy-existing-ai-key-12345";
+    process.env.AI_API_URL =
+      "https://generativelanguage.googleapis.com/v1beta/openai/";
+    expect(resolveTavilyKey()).toBeNull();
+    expect(getWebSearchClient()).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("treats a placeholder key as unconfigured", () => {
+    process.env.TAVILY_API_KEY = "your-tavily-api-key";
+    expect(resolveTavilyKey()).toBeNull();
+    expect(getWebSearchClient()).toBeNull();
+  });
+
+  it("returns a client named tavily when a key is configured", () => {
+    process.env.TAVILY_API_KEY = "tvly-test-key-abcdef123456";
+    const client = getWebSearchClient();
+    expect(client?.name).toBe("tavily");
+    // Discovery-only phase: no structured mode, so enrichment never spends a
+    // provider request per company.
+    expect(client?.searchStructured).toBeUndefined();
+  });
+});
+
+describe("tavily search (mocked fetch)", () => {
+  const fetchMock = vi.fn();
+  const KEY = "tvly-test-key-abcdef123456";
+
+  function clientWithKey() {
+    process.env.TAVILY_API_KEY = KEY;
     const client = getWebSearchClient();
     if (!client) throw new Error("expected a client");
     return client;
   }
 
-  it("sends the grounding request (tool, default model, key header)", async () => {
+  beforeEach(() => {
+    resetEnv();
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    resetTavilyDiagnostics();
+    clearTavilyMemoryCache();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetEnv();
+  });
+
+  it("calls the official Tavily endpoint with Bearer auth and maps results", async () => {
     fetchMock.mockResolvedValue(
-      groundingResponse([
-        { web: { uri: "https://example.test/job", title: "Ausbildung 2027" } },
+      tavilyResponse([
+        {
+          title: "Ausbildung Mechatroniker 2027",
+          url: "https://www.azubiyo.de/ausbildung/mechatroniker?utm_source=x",
+          content: "Ausbildung 2027 in Berlin – jetzt bewerben.",
+          score: 0.91,
+        },
       ]),
     );
     const client = clientWithKey();
-    await client.search("site:ausbildung.de kaufmann", 10);
+    const results = await client.search("Mechatroniker Ausbildung 2027", 10);
 
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
-    );
-    expect(init?.headers["x-goog-api-key"]).toBe(keyValue());
-    const body = JSON.parse(init?.body as string);
-    expect(body.tools).toEqual([{ google_search: {} }]);
-    expect(body.contents[0].parts[0].text).toContain(
-      "site:ausbildung.de kaufmann",
-    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(TAVILY_SEARCH_URL);
+    expect(url).toBe("https://api.tavily.com/search");
+    expect(init.method).toBe("POST");
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe(`Bearer ${KEY}`);
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.query).toBe("Mechatroniker Ausbildung 2027");
+    expect(body.search_depth).toBe("basic");
+    expect(body.max_results).toBe(10);
 
-    function keyValue() {
-      return "AIzaSy-test-gemini-key-12345";
+    // title / url / content(snippet) / score / domain mapping.
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual({
+      title: "Ausbildung Mechatroniker 2027",
+      url: "https://azubiyo.de/ausbildung/mechatroniker?utm_source=x",
+      snippet: "Ausbildung 2027 in Berlin – jetzt bewerben.",
+      score: 0.91,
+      domain: "azubiyo.de",
+    });
+  });
+
+  it("never calls a Gemini endpoint (no Google Search grounding)", async () => {
+    fetchMock.mockResolvedValue(tavilyResponse([]));
+    const client = clientWithKey();
+    await client.search("q", 5);
+    for (const call of fetchMock.mock.calls) {
+      expect(String(call[0])).not.toContain("generativelanguage.googleapis.com");
+      expect(String(call[0])).not.toContain("google_search");
+      expect(String(call[0])).toBe(TAVILY_SEARCH_URL);
     }
   });
 
-  it("IGNORES GEMINI_GROUNDING_MODEL — always sends the pinned gemini-3.5-flash-lite", async () => {
-    resetGroundingDiagnostics();
-    // A stale production value must NEVER be able to steer the request.
-    process.env.GEMINI_GROUNDING_MODEL = "gemini-2.5-flash";
-    fetchMock.mockResolvedValue(groundingResponse([]));
+  it("caps requests at MAX_TAVILY_REQUESTS_PER_RUN per search operation", async () => {
+    fetchMock.mockImplementation(async () => tavilyResponse([]));
     const client = clientWithKey();
-    await client.search("q", 5);
-    const url = String(fetchMock.mock.calls[0][0]);
-    expect(url).toContain("/models/gemini-3.5-flash-lite:generateContent");
-    expect(url).not.toContain("/models/gemini-2.5-flash:generateContent");
-    // Exactly one request — no model switching.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < MAX_TAVILY_REQUESTS_PER_RUN + 3; i += 1) {
+      await client.search(`query-${i}`, 5);
+    }
+    // Hard cap: no network call after the budget is spent, no retry loop.
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_TAVILY_REQUESTS_PER_RUN);
+    expect(MAX_TAVILY_REQUESTS_PER_RUN).toBe(3);
   });
 
-  it("maps grounding chunks to results (https only, deduped, capped)", async () => {
+  it("removes duplicate URLs and duplicate (domain, title) pairs", async () => {
     fetchMock.mockResolvedValue(
-      groundingResponse(
-        [
-          { web: { uri: "https://a.test/1", title: "One" } },
-          { web: { uri: "https://a.test/1#anchor", title: "One again" } },
-          { web: { uri: "http://insecure.test/2", title: "Insecure" } },
-          { web: { uri: "not-a-url", title: "Broken" } },
-          { web: { uri: "https://b.test/3", title: "Three" } },
-        ],
-        ["https://a.test/1", "https://c.test/4"],
-      ),
+      tavilyResponse([
+        {
+          title: "Ausbildung 2027",
+          url: "https://firma.de/karriere/a?utm_source=x",
+          content: "a",
+          score: 0.9,
+        },
+        // Same page (www + trailing slash) → one result.
+        {
+          title: "Ausbildung 2027",
+          url: "https://www.firma.de/karriere/a/",
+          content: "b",
+          score: 0.8,
+        },
+        // Same company page, different URL → deduped by (domain, title).
+        {
+          title: "ausbildung 2027",
+          url: "https://firma.de/karriere/a-2",
+          content: "c",
+          score: 0.7,
+        },
+        {
+          title: "Andere Stelle",
+          url: "https://firma.de/karriere/b",
+          content: "d",
+          score: 0.6,
+        },
+      ]),
     );
     const client = clientWithKey();
     const results = await client.search("q", 10);
-    expect(results).toEqual([
-      { title: "One", url: "https://a.test/1", snippet: "" },
-      { title: "Three", url: "https://b.test/3", snippet: "" },
-      { title: "", url: "https://c.test/4", snippet: "" },
-    ]);
-  });
-
-  it("caps results at maxResults", async () => {
-    fetchMock.mockResolvedValue(
-      groundingResponse(
-        Array.from(
-          { length: 6 },
-          (_, i) => ({
-            web: { uri: `https://m.test/${i}`, title: `T${i}` },
-          }),
-        ),
-      ),
-    );
-    const client = clientWithKey();
-    const results = await client.search("q", 3);
     expect(results.map((r) => r.url)).toEqual([
-      "https://m.test/0",
-      "https://m.test/1",
-      "https://m.test/2",
+      "https://firma.de/karriere/a?utm_source=x",
+      "https://firma.de/karriere/b",
     ]);
   });
 
-  it("returns [] when the search produced no grounding metadata", async () => {
+  it("drops malformed / non-http(s) results", async () => {
     fetchMock.mockResolvedValue(
-      Response.json({ candidates: [{ content: { parts: [{ text: "none" }] } }] }),
+      tavilyResponse([
+        { title: "ok", url: "https://firma.de/a", content: "x" },
+        { title: "bad", url: "not-a-url", content: "x" },
+        { title: "ftp", url: "ftp://firma.de/b", content: "x" },
+        { title: "no-url" },
+      ]),
     );
     const client = clientWithKey();
-    await expect(client.search("q", 10)).resolves.toEqual([]);
+    const results = await client.search("q", 10);
+    expect(results).toHaveLength(1);
+    expect(results[0].url).toBe("https://firma.de/a");
+    expect(results[0].score).toBeUndefined();
   });
 
-  it("maps provider errors to controlled WebSearchError statuses", async () => {
-    const client = clientWithKey();
-    for (const [status, messagePart] of [
-      [401, "rejected the configured key"],
-      [403, "rejected the configured key"],
-      [429, "rate limit"],
-      [500, "temporarily unavailable"],
-      [400, "rejected the request"],
-    ] as const) {
-      fetchMock.mockResolvedValueOnce(
-        new Response("err", { status, statusText: "ERR" }),
+  it("maps provider errors to controlled, key-free WebSearchError statuses", async () => {
+    const cases: Array<{
+      status: number;
+      statusWord: string;
+      detail: unknown;
+    }> = [
+      {
+        status: 401,
+        statusWord: "UNAUTHORIZED",
+        detail: { error: "Unauthorized: missing or invalid API key." },
+      },
+      {
+        status: 429,
+        statusWord: "RATE_LIMITED",
+        detail: { error: "Your request has been blocked due to excessive requests." },
+      },
+      {
+        status: 433,
+        statusWord: "USAGE_LIMIT",
+        detail: { error: "This request exceeds the pay-as-you-go limit." },
+      },
+      { status: 400, statusWord: "INVALID_REQUEST", detail: { error: "Bad request" } },
+      {
+        status: 500,
+        statusWord: "PROVIDER_ERROR",
+        detail: { error: "Internal Server Error" },
+      },
+    ];
+    for (const testCase of cases) {
+      fetchMock.mockReset();
+      clearTavilyMemoryCache();
+      fetchMock.mockResolvedValue(
+        new Response(JSON.stringify({ detail: testCase.detail }), {
+          status: testCase.status,
+          headers: { "content-type": "application/json" },
+        }),
       );
-      await expect(client.search("q", 10)).rejects.toMatchObject({
-        name: "WebSearchError",
-        status,
-        message: expect.stringContaining(messagePart),
-      });
+      const client = clientWithKey();
+      const error = (await client
+        .search(`q-${testCase.status}`, 5)
+        .catch((e: unknown) => e)) as WebSearchError;
+      expect(error).toBeInstanceOf(WebSearchError);
+      expect(error.status).toBe(testCase.status);
+      expect(error.code).toBe(testCase.status);
+      expect(error.providerStatus).toBe(testCase.statusWord);
+      // The provider's own words are kept for the diagnostics card.
+      expect(typeof error.providerMessage).toBe("string");
+      expect(error.message).toContain(`HTTP ${testCase.status}`);
+      expect(error.message).not.toContain(KEY);
     }
   });
 
-  it("keeps the key out of error messages", async () => {
-    const client = clientWithKey("AIzaSy-super-secret-key-1234567");
+  it("keeps the key out of errors and out of the logs (scrubbed)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    resetTavilyDiagnostics();
     fetchMock.mockResolvedValue(
-      new Response("err", { status: 403, statusText: "ERR" }),
-    );
-    const error = await client.search("q", 10).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(WebSearchError);
-    expect(String((error as Error).message)).not.toContain(
-      "AIzaSy-super-secret-key-1234567",
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Safe diagnostics + model fallback (production web=0 root-cause visibility)
-// ---------------------------------------------------------------------------
-describe("gemini grounding diagnostics & model fallback", () => {
-  const ORIGINAL = { ...process.env };
-  const fetchMock = vi.fn();
-  let warnSpy!: ReturnType<typeof vi.spyOn>;
-  let infoSpy!: ReturnType<typeof vi.spyOn>;
-
-  // Fresh spies per test: mockRestore() in afterEach would otherwise leave
-  // console un-patched for the remaining tests in this describe.
-  beforeEach(() => {
-    fetchMock.mockReset();
-    vi.stubGlobal("fetch", fetchMock);
-    resetGroundingDiagnostics();
-    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    process.env = { ...ORIGINAL };
-    warnSpy?.mockRestore();
-    infoSpy?.mockRestore();
-  });
-
-  function clientWithKey(key = "AIzaSy-test-gemini-key-12345") {
-    delete process.env.AI_API_KEY;
-    delete process.env.AI_API_URL;
-    process.env.GEMINI_API_KEY = key;
-    // NOTE: GEMINI_GROUNDING_MODEL is intentionally left untouched here —
-    // individual tests set it (the model is read at CALL time).
-    const client = getWebSearchClient();
-    if (!client) throw new Error("expected a client");
-    return client;
-  }
-
-  function geminiError(status: number, body: unknown) {
-    return new Response(JSON.stringify(body), {
-      status,
-      headers: { "content-type": "application/json" },
-    });
-  }
-
-  it("stale GEMINI_GROUNDING_MODEL is ignored: NO model switch, error names the model actually sent", async () => {
-    // Production scenario that caused the outage: the deployment still had
-    // GEMINI_GROUNDING_MODEL set (e.g. gemini-2.0-flash) AND the retry
-    // switched to gemini-2.5-flash, so the UI reported the retry's model.
-    resetGroundingDiagnostics();
-    process.env.GEMINI_GROUNDING_MODEL = "gemini-2.0-flash";
-    fetchMock.mockResolvedValue(
-      geminiError(404, {
-        error: {
-          code: 404,
-          status: "NOT_FOUND",
-          message:
-            "models/gemini-3.5-flash-lite is not found for API version v1beta, or is not supported for generateContent.",
-        },
-      }),
+      new Response(
+        JSON.stringify({ detail: { error: `Unauthorized: invalid key ${KEY}` } }),
+        { status: 401, headers: { "content-type": "application/json" } },
+      ),
     );
     const client = clientWithKey();
     const error = (await client
       .search("q", 5)
       .catch((e: unknown) => e)) as WebSearchError;
 
-    // Exactly ONE request — the pinned model — for the stale env value too.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const url = String(fetchMock.mock.calls[0][0]);
-    expect(url).toContain("/models/gemini-3.5-flash-lite:generateContent");
-    expect(url).not.toContain("/models/gemini-2.0-flash:generateContent");
-    expect(url).not.toContain("/models/gemini-2.5-flash:generateContent");
-    // The error carries the model that was REALLY sent.
-    expect(error.model).toBe("gemini-3.5-flash-lite");
-    expect(error.status).toBe(404);
-    expect(error.geminiStatus).toBe("NOT_FOUND");
-    // The stale env value is loudly logged (provable in production logs).
-    expect(
-      warnSpy.mock.calls.some((c) =>
-        String(c[0]).includes("model-pinned configured=gemini-2.0-flash"),
-      ),
-    ).toBe(true);
+    expect(error.message).not.toContain(KEY);
+    const logged = [...warnSpy.mock.calls, ...errorSpy.mock.calls]
+      .map((call) => String(call[0]))
+      .join("\n");
+    expect(logged).not.toContain(KEY);
+    expect(logged).toContain("[key-redacted]");
+    // The diagnostic names the request and the safe status.
+    expect(logged).toContain("[TAVILY]");
+    expect(logged).toContain("code=401/UNAUTHORIZED");
+
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
-  it("401 (bad key) → NO model fallback, structured error detail kept", async () => {
-    fetchMock.mockResolvedValue(
-      geminiError(401, {
-        error: {
-          code: 401,
-          status: "PERMISSION_DENIED",
-          message: "API key not valid. Please pass a valid API key.",
-        },
-      }),
+  it("reports an unreachable provider with a controlled message", async () => {
+    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+    const client = clientWithKey();
+    const error = (await client
+      .search("q", 5)
+      .catch((e: unknown) => e)) as WebSearchError;
+    expect(error).toBeInstanceOf(WebSearchError);
+    expect(error.status).toBeNull();
+    expect(error.message).toBe(
+      "The web search provider was unreachable (network or timeout).",
+    );
+  });
+
+  it("caches identical queries (no second request)", async () => {
+    fetchMock.mockImplementation(async () =>
+      tavilyResponse([{ title: "t", url: "https://firma.de/a", content: "c" }]),
     );
     const client = clientWithKey();
-    const error = (await client.search("q", 10).catch((e: unknown) => e)) as WebSearchError;
-    expect(error).toBeInstanceOf(WebSearchError);
-    expect(error.status).toBe(401);
-    expect(error.geminiCode).toBe(401);
-    expect(error.geminiStatus).toBe("PERMISSION_DENIED");
-    // The model the call was sent to travels with the error (UI detail).
-    expect(error.model).toBe("gemini-3.5-flash-lite");
-    // Controlled, key-free phrase — safe for UI/log surfaces.
-    expect(error.message).toContain("rejected the configured key");
-    expect(error.message).toContain("HTTP 401");
-    // One call only — a key problem is not fixed by switching models.
+    const first = await client.search("same query", 10);
+    const second = await client.search("same query", 10);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+    // Cache reset (tests / TTL eviction path) → a new request is made.
+    clearTavilyMemoryCache();
+    await client.search("same query", 10);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("diagnostic log line: model + http + gemini code/message — NEVER the key", async () => {
-    resetGroundingDiagnostics(); // fresh warn budget (earlier tests spent it)
-    const client = clientWithKey("AIzaSy-super-secret-key-1234567");
-    fetchMock.mockResolvedValue(
-      geminiError(403, {
-        error: {
-          code: 403,
-          status: "PERMISSION_DENIED",
-          // Even if Google ever echoed key material: it must be scrubbed.
-          message: "API key AIzaSy-super-secret-key-1234567 has no access",
-        },
-      }),
-    );
-    await client.search("q", 10).catch(() => {});
-
-    const line = warnSpy.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith("[GEMINI_GROUNDING]"));
-    expect(line).toBeDefined();
-    expect(line).toContain("model=gemini-3.5-flash-lite");
-    expect(line).toContain("http=403");
-    expect(line).toContain("gemini=403/PERMISSION_DENIED");
-    expect(line).not.toContain("AIzaSy-super-secret-key-1234567");
-    expect(line).toContain("[key-redacted]");
-    // Duration is captured (the user asked to keep it for triage).
-    expect(line).toMatch(/durationMs=\d+/);
-  });
-
-  it("diagnostic line names the env var that supplied the key (never its value)", async () => {
-    resetGroundingDiagnostics();
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.AI_API_KEY;
-    delete process.env.AI_API_URL;
-    process.env.GEMINI_GROUNDING_API_KEY = "AIzaSy-dedicated-grounding-33333";
-    const client = getWebSearchClient();
-    if (!client) throw new Error("expected a client from the dedicated key");
-    fetchMock.mockResolvedValue(
-      geminiError(403, {
-        error: {
-          code: 403,
-          status: "PERMISSION_DENIED",
-          message: "API key invalid.",
-        },
-      }),
-    );
-    await client.search("q", 10).catch(() => {});
-    const line = warnSpy
-      .mock.calls.map((c) => String(c[0]))
-      .find((l) => l.startsWith("[GEMINI_GROUNDING]"));
-    // Production can verify WHICH key was used from the function logs —
-    // by name only.
-    expect(line).toContain("source=GEMINI_GROUNDING_API_KEY");
-    expect(line).not.toContain("AIzaSy-dedicated-grounding-33333");
-  });
-
-  it("HTTP 200 but NO grounding metadata → [] + honest warning (tool not accepted?)", async () => {
-    resetGroundingDiagnostics();
-    fetchMock.mockResolvedValue(
-      Response.json({
-        candidates: [{ content: { parts: [{ text: "none" }] } }],
-      }),
-    );
+  it("returns [] for an empty result list and logs it honestly", async () => {
+    resetTavilyDiagnostics();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockResolvedValue(tavilyResponse([]));
     const client = clientWithKey();
     await expect(client.search("q", 10)).resolves.toEqual([]);
     const line = warnSpy.mock.calls
-      .map((c) => String(c[0]))
-      .find((l) => l.includes("groundingChunks=0"));
-    expect(line).toBeDefined();
-    expect(line).toContain("NO grounding metadata");
-    expect(line).toContain("model=gemini-3.5-flash-lite");
-  });
-
-  it("searchStructured: sends the pinned model even with a stale env value", async () => {
-    resetGroundingDiagnostics();
-    process.env.GEMINI_GROUNDING_MODEL = "gemini-2.0-flash";
-    const schema = {
-      properties: {
-        officialWebsite: { type: "STRING" as const },
-      },
-      required: ["officialWebsite"],
-    };
-    fetchMock.mockResolvedValue(
-      Response.json({
-        candidates: [
-          {
-            content: {
-              parts: [
-                { text: '{"officialWebsite":"https://www.beispiel-gmbh.de"}' },
-              ],
-            },
-            groundingMetadata: {
-              groundingChunks: [
-                { web: { uri: "https://www.beispiel-gmbh.de", title: "Beispiel" } },
-              ],
-            },
-          },
-        ],
-      }),
-    );
-    const client = clientWithKey();
-    const out = await client.searchStructured!("official website of Beispiel GmbH", schema);
-    expect(out.data.officialWebsite).toBe("https://www.beispiel-gmbh.de");
-    expect(out.results).toHaveLength(1);
-    // Exactly one call, to the pinned model — the stale env value and a
-    // retry can never change what production requests.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0][0])).toContain(
-      "/models/gemini-3.5-flash-lite:generateContent",
-    );
+      .map((call) => String(call[0]))
+      .find((l) => l.includes("no usable results"));
+    expect(line).toContain("[TAVILY]");
+    expect(line).toContain("http=200");
+    warnSpy.mockRestore();
   });
 });

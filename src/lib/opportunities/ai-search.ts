@@ -17,7 +17,7 @@ import {
   type AiSearchStats,
   type EnrichmentTelemetry,
 } from "@/lib/opportunities/enrichment";
-import { prioritizeSources, sourceLabel } from "@/lib/opportunities/sources";
+import { sourceLabel } from "@/lib/opportunities/sources";
 import {
   BA_SOURCE_ID,
   getCandidateProfile,
@@ -573,28 +573,12 @@ export async function runAISearch(args: {
   // Broad web discovery (only when a provider is configured + planned).
   const client = getWebSearchClient();
   const hasWeb = client !== null && plan.web_queries.length > 0;
-  // Per-profile source prioritization (mechanik → HWK, öffentlicher Dienst
-  // → Bund, kaufmännisch → IHK + company career pages) — registry order
-  // otherwise.
-  const profileText = [
-    (profile.target_roles ?? []).map((role) => role.role).join(" "),
-    Object.values(profile.skills ?? {})
-      .flat()
-      .join(" "),
-    (profile.keywords ?? []).join(" "),
-    plan.queries
-      .map((query) => `${query.keyword} ${query.role} ${query.location}`)
-      .join(" "),
-  ]
-    .filter(Boolean)
-    .join(" ");
   const webPromise = hasWeb
     ? runWebDiscovery({
         client: client!,
         webQueries: plan.web_queries,
         goal: args.goal,
         userId: args.userId,
-        prioritySourceIds: prioritizeSources(profileText),
         onCategoryResults: (category, results) =>
           emit({ type: "discover", category, results }),
         onCheckProgress: (done, total) => emit({ type: "check", done, total }),
@@ -690,7 +674,12 @@ export async function runAISearch(args: {
   let results: Opportunity[] = ranked;
   try {
     results = await runCompanyEnrichment(ranked, {
-      client,
+      // Discovery-only phase: company enrichment must NOT spend a web-search
+      // request per company, so the provider client is deliberately not
+      // passed here. Rows that already carry a documented company URL are
+      // still enriched (their pages are fetched directly); the rest are
+      // reported honestly as "website not found".
+      client: null,
       telemetry,
       onProgress: (done, total) =>
         emit({ type: "company_enrich", done, total }),

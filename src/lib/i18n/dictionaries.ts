@@ -922,9 +922,9 @@ const de = {
     officialApplyLinks: "Offizielle Bewerbungslinks",
     webSearchesExecuted: "Web-Suchen ausgeführt",
     providerErrors:
-      "Websuche: {n} Provider-Fehler — GEMINI_GROUNDING_API_KEY / GEMINI_API_KEY / Grounding-Modell prüfen (Details in den Function-Logs).",
+      "Websuche: {n} Provider-Fehler — TAVILY_API_KEY prüfen (Details in den Function-Logs).",
     providerErrorDetail:
-      "Modell: {model} · HTTP {http} · Code {code} · {geminiStatus}",
+      "Modell: {model} · HTTP {http} · Code {code} · {providerStatus}",
     statusOk: "erfolgreich",
     statusDegraded: "teilweise",
     statusFailed: "fehlgeschlagen",
@@ -2017,9 +2017,9 @@ const en: Dict = {
     officialApplyLinks: "Official application links",
     webSearchesExecuted: "Web searches executed",
     providerErrors:
-      "Web search: {n} provider errors — check GEMINI_GROUNDING_API_KEY / GEMINI_API_KEY / grounding model (details in the function logs).",
+      "Web search: {n} provider errors — check TAVILY_API_KEY (details in the function logs).",
     providerErrorDetail:
-      "Model: {model} · HTTP {http} · Code {code} · {geminiStatus}",
+      "Model: {model} · HTTP {http} · Code {code} · {providerStatus}",
     statusOk: "success",
     statusDegraded: "degraded",
     statusFailed: "failed",
@@ -3101,9 +3101,9 @@ const fr: Dict = {
     officialApplyLinks: "Liens de candidature officiels",
     webSearchesExecuted: "Recherches web exécutées",
     providerErrors:
-      "Recherche web : {n} erreurs fournisseur — vérifier GEMINI_GROUNDING_API_KEY / GEMINI_API_KEY / modèle grounding (détails dans les logs).",
+      "Recherche web : {n} erreurs fournisseur — vérifier TAVILY_API_KEY (détails dans les logs).",
     providerErrorDetail:
-      "Modèle : {model} · HTTP {http} · Code {code} · {geminiStatus}",
+      "Modèle : {model} · HTTP {http} · Code {code} · {providerStatus}",
     statusOk: "réussi",
     statusDegraded: "partiel",
     statusFailed: "échoué",
@@ -4175,9 +4175,9 @@ const ar: Dict = {
     officialApplyLinks: "روابط تقديم رسمية",
     webSearchesExecuted: "عمليات بحث منفذة",
     providerErrors:
-      "البحث web: {n} أخطاء مزود — تحقق من GEMINI_GROUNDING_API_KEY / GEMINI_API_KEY / نموذج grounding (التفاصيل في السجلات).",
+      "البحث web: {n} أخطاء مزود — تحقق من TAVILY_API_KEY (التفاصيل في السجلات).",
     providerErrorDetail:
-      "النموذج: {model} · HTTP {http} · الكود {code} · {geminiStatus}",
+      "النموذج: {model} · HTTP {http} · الكود {code} · {providerStatus}",
     statusOk: "ناجح",
     statusDegraded: "جزئي",
     statusFailed: "فشل",

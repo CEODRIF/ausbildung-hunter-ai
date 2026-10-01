@@ -512,7 +512,7 @@ describe("6. multi-source resilience", () => {
       generateFile: vi.fn(),
     } as never);
     vi.mocked(getWebSearchClient).mockReturnValue({
-      name: "gemini_grounding",
+      name: "tavily",
       search: async () => [],
     } as never);
     vi.mocked(runWebDiscovery).mockResolvedValue({

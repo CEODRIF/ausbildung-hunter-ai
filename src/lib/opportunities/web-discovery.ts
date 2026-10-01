@@ -10,7 +10,11 @@ import {
   type PageFetchFailure,
   type RobotsPolicy,
 } from "@/lib/web-search/fetch-page";
-import { WebSearchError, type WebSearchClient } from "@/lib/web-search";
+import {
+  WebSearchError,
+  type WebSearchClient,
+  type WebSearchResult,
+} from "@/lib/web-search";
 import {
   opportunitySchema,
   type Enrichment,
@@ -32,14 +36,14 @@ import {
  * Web discovery layer for AI Ausbildung Search.
  *
  * Broad, SURFACE-LEVEL discovery across publicly indexed pages via ONE
- * Google Gemini with Google Search Grounding (see src/lib/web-search). No
- * per-site scrapers: the grounding search returns public page titles/URLs
- * for `site:`-scoped queries (result URLs come exclusively from Google's
- * grounding metadata — never from model text); pages are then visited with
- * the guarded fetcher (robots.txt respected, anti-bot skipped). The AI is
- * used in bounded batches to classify + extract; everything else is
- * deterministic. No login, no CAPTCHA/anti-bot/robots bypass, no private
- * content — blocked sources are simply skipped (and counted honestly).
+ * provider: the official Tavily Search API (see src/lib/web-search). No
+ * per-site scrapers: a few broad queries return public page titles/URLs
+ * (URLs come exclusively from the provider response — never invented); the
+ * pages are then visited with the guarded fetcher (robots.txt respected,
+ * anti-bot skipped). The AI is used in bounded batches to classify +
+ * extract; everything else is deterministic. No login, no
+ * CAPTCHA/anti-bot/robots bypass, no private content — blocked pages are
+ * simply skipped (and counted honestly).
  */
 
 // The category taxonomy now lives in the Source Registry (sources.ts);
@@ -1062,7 +1066,13 @@ export interface SourceRunStatus {
  * priority order until the budget is exhausted. Bounded by design —
  * enrichment below uses its own, separate budget.
  */
-const MAX_DISCOVERY_CALLS = 16;
+/** Hard cap of provider (Tavily) requests for the WHOLE search operation.
+ *  The provider itself enforces the same cap; this keeps the discovery loop
+ *  from even attempting more (no open loop, no per-company requests). */
+const MAX_DISCOVERY_CALLS = 3;
+/** Results requested per broad discovery request (Tavily returns many
+ *  results per request — the pipeline filters them by relevance). */
+const DISCOVERY_RESULTS_PER_REQUEST = 20;
 
 /**
  * Safe detail of the FIRST provider error of a run (AI Search 2.2) —
@@ -1073,19 +1083,19 @@ const MAX_DISCOVERY_CALLS = 16;
  */
 export interface ProviderErrorDetail {
   provider: string;
-  /** Model the failed call was sent to. */
+  /** Model of the failed call — a search API has none, so null. */
   model: string | null;
-  /** Real HTTP status (400/401/403/404/429/5xx) or null (network). */
+  /** Real HTTP status (400/401/422/429/432/433/5xx) or null (network). */
   http: number | null;
-  /** Google's numeric error code (e.g. 404), or null. */
+  /** Provider's numeric error code, or null. */
   code: number | null;
-  /** Google's status word (NOT_FOUND / PERMISSION_DENIED / …), or null. */
-  geminiStatus: string | null;
+  /** Short provider status word (UNAUTHORIZED / RATE_LIMITED / …), or null. */
+  providerStatus: string | null;
   /** Controlled key-free message (safe to display). */
   message: string;
-  /** Google's OWN error text (truncated, key-scrubbed) — the literal root
-   *  cause ("models/… is not found for API version v1beta, …"), shown in
-   *  the UI so no dashboard access is needed to read it. */
+  /** The provider's OWN error text (truncated, key-scrubbed) — the literal
+   *  root cause ("Unauthorized: missing or invalid API key."), shown in the
+   *  UI so no dashboard access is needed to read it. */
   providerMessage: string | null;
 }
 
@@ -1093,37 +1103,37 @@ function providerErrorDetail(
   provider: string,
   error: WebSearchError,
 ): ProviderErrorDetail {
-  const raw = error.geminiMessage?.replace(/\s+/g, " ").trim() ?? "";
+  const raw = error.providerMessage?.replace(/\s+/g, " ").trim() ?? "";
   return {
     provider,
     model: error.model,
     http: error.status,
-    code: error.geminiCode,
-    geminiStatus: error.geminiStatus,
+    code: error.code,
+    providerStatus: error.providerStatus,
     message: error.message,
     providerMessage: raw ? raw.slice(0, 300) : null,
   };
 }
 
 /**
- * Full web-discovery run (AI Search 2.0): registry-driven search → verify
- * → extract → normalize.
+ * Full web-discovery run: broad search → verify → extract → normalize.
  *
- * Sources come from the Source Registry (sources.ts) in priority order,
- * each scoped with `site:` operators to its own domain; the plain web
- * queries run first as a general net. `categoryCounts` stay the UNIQUE
- * page counts per bucket (what the user sees); `sourceCounts` report the
- * raw per-source hits for transparency. Blocked pages are counted, never
- * faked — a source that only yields 403s shows up as 0 candidates.
+ * BROAD discovery (Tavily, AI Search 2.4): the plan's web queries are issued
+ * as at most MAX_DISCOVERY_CALLS provider requests for the whole operation —
+ * each request returns MANY results, which are classified by their OWN
+ * domain (Source Registry hit → that source id + category; social host →
+ * social media; other portal host → job portal; anything else → possible
+ * company career page). There are no per-source and no per-company
+ * requests. `categoryCounts` stay the UNIQUE page counts per bucket (what
+ * the user sees); `sourceCounts` report the raw per-source hits.
+ * Blocked pages are counted, never faked — a page that only yields 403s
+ * shows up in `failures` and yields no opportunity.
  */
 export async function runWebDiscovery(args: {
   client: WebSearchClient | null;
   webQueries: string[];
   goal: "ausbildung" | "arbeit";
   userId: string;
-  /** Registry source ids in preferred order (per-profile prioritization).
-   *  Unknown/absent ids keep their registry position. */
-  prioritySourceIds?: string[];
   onCategoryResults?: (category: SourceCategory, results: number) => void;
   onSourceResults?: (sourceId: string, results: number) => void;
   onCheckProgress?: (done: number, total: number) => void;
@@ -1180,84 +1190,115 @@ export async function runWebDiscovery(args: {
     company_website: new Set(),
     social_media: new Set(),
   };
-  const plainQueries = webQueries
+  const broadQueries = webQueries
     .map((query) => query.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, MAX_DISCOVERY_CALLS);
 
-  let callsRemaining = MAX_DISCOVERY_CALLS;
+  /** Classify ONE broad-search result by its OWN domain: a registry hit
+   *  keeps that source's id + category; otherwise social hosts → social
+   *  media, other portal hosts → job portal, and any remaining host is a
+   *  general-web hit (the "google / web search" bucket). */
+  const broadCandidate = (
+    result: WebSearchResult,
+    query: string,
+  ): DiscoveredCandidate | null => {
+    let parsed: URL;
+    try {
+      parsed = new URL(result.url);
+    } catch {
+      return null;
+    }
+    if (parsed.protocol !== "https:") return null;
+    const domain = hostDomain(parsed.hostname);
+    // Official BA results are covered by the authoritative BA pipeline.
+    if (domain === "arbeitsagentur.de") return null;
+    const registryId = hostToSourceId(result.url);
+    const source = registryId
+      ? enabledWebSources().find((entry) => entry.id === registryId)
+      : undefined;
+    const sourceType = classifySource(result.url, result.title);
+    const category: SourceCategory = source
+      ? source.category
+      : sourceType === "social_media"
+        ? "social_media"
+        : sourceType === "job_portal"
+          ? "job_portal"
+          : "search_engine";
+    const candidate: DiscoveredCandidate = {
+      url: normalizeUrlForDedupe(result.url),
+      title: result.title,
+      snippet: result.snippet,
+      category,
+      query,
+      ...(registryId ? { sourceId: registryId } : {}),
+    };
+    return isRelevant(candidate) ? candidate : null;
+  };
+
   let groundingCallsOk = 0;
-  // 1) General net: the AI's plain web queries (no site: scoping).
-  const plain = plainQueries.slice(0, Math.max(0, callsRemaining));
-  callsRemaining -= plain.length;
-  if (plain.length > 0) {
-    const { candidates, errors, firstError } = await discoverCategory({
-      client,
-      category: "search_engine",
-      webQueries: plain,
-    });
-    if (firstError && !firstProviderError)
-      firstProviderError = providerErrorDetail(client.name, firstError);
-    providerErrors += errors;
-    groundingCallsOk += Math.max(0, plain.length - errors);
-    console.info(
-      "[WEB_DISCOVERY] search_engine calls=%d ok=%d errors=%d candidates=%d",
-      plain.length,
-      Math.max(0, plain.length - errors),
-      errors,
-      candidates.length,
-    );
-    collected.push(...candidates);
-    for (const candidate of candidates)
-      uniqueByCategory[candidate.category].add(candidate.url);
-  }
-
-  // 2) Registry sources in priority order — one grounding call each, on the
-  //    AI's first (highest-priority) web query. Per-profile prioritization
-  //    (mechanik → HWK, öffentlicher Dienst → Bund, kaufmännisch → IHK).
-  const rank = new Map<string, number>();
-  (args.prioritySourceIds ?? []).forEach((id, index) => {
-    if (!rank.has(id)) rank.set(id, index);
-  });
-  const orderedSources = [...enabledWebSources()].sort(
-    (a, b) => (rank.get(a.id) ?? 1_000) - (rank.get(b.id) ?? 1_000),
-  );
-  const firstQuery = plain[0];
-  for (const source of orderedSources) {
-    if (!firstQuery || callsRemaining <= 0) {
-      sourceStatuses.push({
-        source: source.id,
-        status: "skipped_budget",
-        candidates: 0,
-      });
+  // Broad discovery (Tavily): at most MAX_DISCOVERY_CALLS requests for the
+  // WHOLE search operation — one request per planned web query, each
+  // returning many results. No per-source and no per-company request.
+  for (const query of broadQueries) {
+    let results: WebSearchResult[];
+    try {
+      results = await client.search(query, DISCOVERY_RESULTS_PER_REQUEST);
+      groundingCallsOk += 1;
+    } catch (error) {
+      // Provider-level failure (key rejected, quota, outage): count it and
+      // keep going — other queries may still succeed, BA is unaffected.
+      if (error instanceof WebSearchError && !firstProviderError)
+        firstProviderError = providerErrorDetail(client.name, error);
+      if (!(error instanceof WebSearchError))
+        console.error("[web-search] unexpected error", error);
+      providerErrors += 1;
+      console.warn(
+        "[WEB_DISCOVERY] broad query failed: %s",
+        error instanceof Error ? error.message : String(error),
+      );
       continue;
     }
-    callsRemaining -= 1;
-    const { candidates, errors, firstError } = await discoverSource({
-      client,
-      source,
-      webQueries: [firstQuery],
-    });
-    if (firstError && !firstProviderError)
-      firstProviderError = providerErrorDetail(client.name, firstError);
-    providerErrors += errors;
-    groundingCallsOk += Math.max(0, 1 - errors);
+    const candidates: DiscoveredCandidate[] = [];
+    const seenInQuery = new Set<string>();
+    for (const result of results) {
+      const candidate = broadCandidate(result, query);
+      if (!candidate) continue;
+      const key = normalizeUrlForDedupe(candidate.url);
+      if (seenInQuery.has(key)) continue;
+      seenInQuery.add(key);
+      candidates.push(candidate);
+    }
     console.info(
-      "[WEB_DISCOVERY] %s calls=1 ok=%d errors=%d candidates=%d",
-      source.id,
-      Math.max(0, 1 - errors),
-      errors,
+      "[WEB_DISCOVERY] broad calls=1 ok=1 results=%d candidates=%d",
+      results.length,
       candidates.length,
     );
-    sourceCounts[source.id] = candidates.length;
+    const perQueryCategories = new Map<SourceCategory, number>();
+    for (const candidate of candidates) {
+      uniqueByCategory[candidate.category].add(candidate.url);
+      if (candidate.sourceId)
+        sourceCounts[candidate.sourceId] = (sourceCounts[candidate.sourceId] ?? 0) + 1;
+      perQueryCategories.set(
+        candidate.category,
+        (perQueryCategories.get(candidate.category) ?? 0) + 1,
+      );
+    }
+    collected.push(...candidates);
+    for (const [category, count] of perQueryCategories)
+      args.onCategoryResults?.(category, count);
+  }
+
+  // Registry-source diagnostics from the broad net: a source that surfaced
+  // results reports them; a source that did not was not queried
+  // individually under the request budget (discovery-only phase).
+  for (const source of enabledWebSources()) {
+    const count = sourceCounts[source.id] ?? 0;
     sourceStatuses.push({
       source: source.id,
-      status: errors > 0 ? (candidates.length > 0 ? "degraded" : "failed") : "ok",
-      candidates: candidates.length,
+      status: count > 0 ? "ok" : "skipped_budget",
+      candidates: count,
     });
-    collected.push(...candidates);
-    for (const candidate of candidates)
-      uniqueByCategory[candidate.category].add(candidate.url);
-    args.onSourceResults?.(source.id, candidates.length);
   }
   console.info(
     "[WEB_DISCOVERY] summary groundingCallsOk=%d providerErrors=%d collected=%d",

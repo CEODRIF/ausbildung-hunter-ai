@@ -57,14 +57,14 @@ vi.mock("@/lib/web-search", () => ({
   // provider-error plumbing under test behaves like production.
   WebSearchError: class WebSearchError extends Error {
     readonly status: number | null;
-    readonly geminiCode: number | null;
-    readonly geminiStatus: string | null;
-    readonly geminiMessage: string | null;
+    readonly code: number | null;
+    readonly providerStatus: string | null;
+    readonly providerMessage: string | null;
     readonly model: string | null;
     constructor(
       message: string,
       status: number | null = null,
-      gemini: {
+      info: {
         code: number | null;
         status: string | null;
         message: string | null;
@@ -74,9 +74,9 @@ vi.mock("@/lib/web-search", () => ({
       super(message);
       this.name = "WebSearchError";
       this.status = status;
-      this.geminiCode = gemini.code;
-      this.geminiStatus = gemini.status;
-      this.geminiMessage = gemini.message;
+      this.code = info.code;
+      this.providerStatus = info.status;
+      this.providerMessage = info.message;
       this.model = model;
     }
   },
@@ -244,7 +244,7 @@ describe("buildCategoryQueries", () => {
 // ---------------------------------------------------------------------------
 describe("discoverCategory", () => {
   const makeClient = (results: WebSearchResult[]) => ({
-    name: "gemini_grounding" as const,
+    name: "tavily" as const,
     search: vi.fn(async (): Promise<WebSearchResult[]> => results),
   });
 
@@ -547,7 +547,7 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
     } as never);
 
     vi.mocked(getWebSearchClient).mockReturnValue({
-      name: "gemini_grounding",
+      name: "tavily",
       search: vi.fn(async (q: string) =>
         q.includes("site:linkedin.com")
           ? []
@@ -638,10 +638,14 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
       ]),
     );
     expect(result.discovery.configured).toBe(true);
-    expect(result.discovery.provider).toBe("gemini_grounding");
+    expect(result.discovery.provider).toBe("tavily");
+    // Broad discovery classifies by the result's OWN domain: this mock
+    // returns a single non-portal company URL, so it lands in the general
+    // web bucket (portal/social buckets are covered by the dedicated
+    // broad-discovery tests above).
     expect(result.discovery.categories.search_engine).toBe(1);
-    expect(result.discovery.categories.job_portal).toBe(1);
-    expect(result.discovery.categories.company_website).toBe(1);
+    expect(result.discovery.categories.job_portal).toBe(0);
+    expect(result.discovery.categories.company_website).toBe(0);
     expect(result.discovery.categories.social_media).toBe(0);
     expect(result.discovery.webFound).toBe(1);
     expect(result.discovery.duplicatesRemoved).toBe(1);
@@ -672,9 +676,10 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
     expect(row.enrichment?.email_source).toBe(
       "https://example.com/karriere/ausbildung-2027",
     );
-    // Website discovery verified the fetched content against the company
-    // name (the karriere page says "Beispiel GmbH").
-    expect(row.enrichment?.website_url).toBe("https://example.com");
+    // Discovery-only phase: company enrichment deliberately runs WITHOUT the
+    // provider client (no per-company request), so no website is discovered
+    // through it — the row keeps the email provenance from the verified page.
+    expect(row.enrichment?.website_url).toBeNull();
     expect(row.enrichment?.last_verified_at).not.toBeNull();
     // Honest result statistics on the complete event.
     const completeEvent = events.at(-1);
@@ -683,63 +688,63 @@ Kontakt: azubi@beispiel-gmbh.de, Telefon 030 123456. Jetzt bewerben.</p>
     expect(result.stats.withPublicEmail).toBe(1);
     expect(result.stats.withApplicationUrl).toBe(0);
     expect(result.stats.withOfficialSource).toBe(1);
-    expect(result.stats.sourcesSearched).toBeGreaterThan(1);
+    // Broad discovery: 1 (BA) + the registry sources that matched a result.
+    // This mock's single URL matches no registry domain → the honest value
+    // is 1 (with real provider results several portals match).
+    expect(result.stats.sourcesSearched).toBeGreaterThanOrEqual(1);
     expect(result.stats.webSearchesExecuted).toBeGreaterThan(0);
     expect(result.stats.companiesEnriched).toBe(1);
     expect(result.stats.companiesWithPublicEmail).toBe(1);
-    expect(result.stats.officialWebsitesFound).toBe(1);
+    // No provider-based website discovery in the discovery-only phase.
+    expect(result.stats.officialWebsitesFound).toBe(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// runWebDiscovery — budget, per-source isolation, honest blocking (2.1)
+// runWebDiscovery — broad provider discovery (Tavily): request budget,
+// domain-based classification, honest blocking
 // ---------------------------------------------------------------------------
-describe("runWebDiscovery (source registry discipline)", () => {
+describe("runWebDiscovery (broad provider discovery)", () => {
   const WEB_QUERY = '"Mechatroniker" Ausbildung 2027 Berlin';
+  const AZUBIYO = getSource("azubiyo")!;
 
-  /** Mock client: one relevant, SOURCE-SCOPED candidate per query so every
-   *  called source is distinguishable (portals return their own domain). */
+  /** Mock client: a few results spanning several domains so the domain-based
+   *  classification is observable. Records every call. */
   function recordingClient(
-    onQuery?: (query: string) => void,
-  ): { client: Parameters<typeof runWebDiscovery>[0]["client"]; queries: string[] } {
+    onQuery?: (query: string, callNo: number) => void,
+    results: Array<{ title: string; url: string; snippet: string }> = [
+      {
+        title: "Ausbildung Mechatroniker 2027 bei Beispiel GmbH",
+        url: `https://www.${AZUBIYO.domains[0]}/ausbildung/mechatroniker-2027`,
+        snippet: "Ausbildung 2027 in Berlin – jetzt bewerben",
+      },
+      {
+        title: "Ausbildung 2027 bei Beispiel GmbH – bewerben",
+        url: "https://www.beispiel-gmbh.de/karriere/ausbildung-2027",
+        snippet: "Bewerbung für 2027",
+      },
+      {
+        title: "Jobs bei Beispiel GmbH | Ausbildung 2027 bewerben",
+        url: "https://www.linkedin.com/company/beispiel/jobs",
+        snippet: "",
+      },
+      {
+        title: "Ausbildung 2027 – jetzt bewerben",
+        url: "https://www.gojobs.de/azubi/ausbildung-2027",
+        snippet: "",
+      },
+    ],
+  ): {
+    client: Parameters<typeof runWebDiscovery>[0]["client"];
+    queries: string[];
+  } {
     const queries: string[] = [];
     const client = {
-      name: "gemini_grounding",
+      name: "tavily",
       search: vi.fn(async (query: string) => {
         queries.push(query);
-        onQuery?.(query);
-        if (query.includes("site:linkedin.com"))
-          return [
-            {
-              title: "Ausbildung 2027 – jetzt bewerben",
-              url: "https://www.linkedin.com/company/beispiel/jobs",
-              snippet: "",
-            },
-          ];
-        const site = query.match(/site:([a-z0-9.-]+)/i)?.[1];
-        if (site)
-          return [
-            {
-              title: "Ausbildung 2027 – jetzt bewerben",
-              url: `https://${site}/azubi/ausbildung-2027`,
-              snippet: "",
-            },
-          ];
-        if (query.includes("karriere OR"))
-          return [
-            {
-              title: "Ausbildung Mechatroniker 2027 – bewerben",
-              url: "https://karriere.example/azubi/1",
-              snippet: "",
-            },
-          ];
-        return [
-          {
-            title: "Ausbildung 2027 – jetzt bewerben",
-            url: "https://example.com/plain/ausbildung-2027",
-            snippet: "",
-          },
-        ];
+        onQuery?.(query, queries.length);
+        return results;
       }),
     };
     return { client: client as never, queries };
@@ -761,67 +766,40 @@ describe("runWebDiscovery (source registry discipline)", () => {
     ] as never);
   }
 
-  it("every registered source is reported: queried (≤ budget) or skipped_budget", async () => {
+  it("issues at most 3 broad provider requests per run and reports EVERY registry source", async () => {
     stubFast404();
     const { client, queries } = recordingClient();
     const web = enabledWebSources();
     const result = await runWebDiscovery({
       client,
-      webQueries: [WEB_QUERY],
+      webQueries: [WEB_QUERY, `${WEB_QUERY} 2`, `${WEB_QUERY} 3`, `${WEB_QUERY} 4`, `${WEB_QUERY} 5`],
       goal: "ausbildung",
       userId: "u1",
     });
 
-    // 1 plain query + one call per source, capped at MAX_DISCOVERY_CALLS=16.
-    expect(queries).toHaveLength(16);
-    expect(result.groundingCallsOk).toBe(16);
+    // Hard cap: one request per planned query, at most 3 — the 4th/5th query
+    // is not requested at all (no open loop, no retry).
+    expect(queries).toHaveLength(3);
+    expect(result.groundingCallsOk).toBe(3);
     expect(result.providerErrors).toBe(0);
 
-    // EVERY enabled source is accounted for — the diagnostics card must
-    // never hide a source (this is what production "web=0" hid before).
+    // Every enabled source is accounted for: it either surfaced results from
+    // the broad net (ok) or was not queried individually (skipped_budget).
     expect(result.sourceStatuses).toHaveLength(web.length);
-    const called = new Set(
-      result.sourceStatuses
-        .filter((s) => s.status !== "skipped_budget")
-        .map((s) => s.source),
-    );
-    const skipped = new Set(
-      result.sourceStatuses
-        .filter((s) => s.status === "skipped_budget")
-        .map((s) => s.source),
-    );
-    expect(called.size + skipped.size).toBe(web.length);
-    // Called + skipped partition the registry (no overlap, none missing).
-    for (const id of web.map((s) => s.id))
-      expect(called.has(id) || skipped.has(id)).toBe(true);
-    expect(called.size).toBeLessThanOrEqual(15); // 16 − 1 plain query
-
-    // The highest-value sources always fit the budget (worst case: 4 plain
-    // queries → only 12 source calls).
-    expect(called).toContain("company_career");
-    expect(called).toContain("bund");
-
-    // Each called source was queried with its OWN scoping (site: / terms).
-    const azubiyo = getSource("azubiyo")!;
-    const hwk = getSource("hwk")!;
-    expect(called.has(azubiyo.id)).toBe(true);
-    expect(queries).toContain(`${WEB_QUERY} site:${azubiyo.domains[0]}`);
-    expect(called.has(hwk.id)).toBe(true);
-    expect(
-      queries.some(
-        (q) =>
-          q.includes(`site:${hwk.domains[0]}`) &&
-          q.includes(`site:${hwk.domains[1]}`),
-      ),
-    ).toBe(true);
+    for (const source of web) {
+      const status = result.sourceStatuses.find((s) => s.source === source.id);
+      expect(status).toBeDefined();
+      expect(["ok", "skipped_budget"]).toContain(status!.status);
+    }
+    // The registry portal in the mock results is reported as contributing.
+    const azubiyo = result.sourceStatuses.find((s) => s.source === AZUBIYO.id);
+    expect(azubiyo?.status).toBe("ok");
+    expect(azubiyo?.candidates).toBeGreaterThan(0);
   });
 
-  it("one source's provider failure never stops the other sources", async () => {
+  it("classifies results by their OWN domain (registry / social / portal / company page)", async () => {
     stubFast404();
-    const { client, queries } = recordingClient((query) => {
-      if (query.includes("site:stepstone.de"))
-        throw new WebSearchError("provider down", 503);
-    });
+    const { client } = recordingClient();
     const result = await runWebDiscovery({
       client,
       webQueries: [WEB_QUERY],
@@ -829,24 +807,36 @@ describe("runWebDiscovery (source registry discipline)", () => {
       userId: "u1",
     });
 
-    const stepstone = result.sourceStatuses.find(
-      (s) => s.source === "stepstone",
-    );
-    expect(stepstone?.status).toBe("failed");
-    expect(stepstone?.candidates).toBe(0);
-    expect(result.sourceCounts["stepstone"]).toBe(0);
-    expect(result.providerErrors).toBe(1);
+    // azubiyo.de + gojobs.de → job portals; linkedin → social media;
+    // beispiel-gmbh.de is not a portal → the general web bucket.
+    expect(result.categoryCounts.job_portal).toBe(2);
+    expect(result.categoryCounts.social_media).toBe(1);
+    expect(result.categoryCounts.search_engine).toBe(1);
+    expect(result.categoryCounts.company_website).toBe(0);
+    // Raw per-source hits are attributed to the registry ids that matched.
+    expect(result.sourceCounts[AZUBIYO.id]).toBe(1);
+    expect(result.sourceCounts["gojobs"]).toBe(1);
+  });
 
-    // The remaining sources still ran AND still delivered candidates.
-    const ausbildung = result.sourceStatuses.find(
-      (s) => s.source === "ausbildung.de",
-    );
-    expect(ausbildung?.status).toBe("ok");
-    expect(ausbildung?.candidates).toBeGreaterThan(0);
-    // The full budget was still attempted (failure consumed one slot);
-    // 15 of 16 grounding calls succeeded.
-    expect(queries).toHaveLength(16);
-    expect(result.groundingCallsOk).toBe(15);
+  it("a failing broad query is counted and never stops the remaining queries", async () => {
+    stubFast404();
+    const { client, queries } = recordingClient((_query, callNo) => {
+      if (callNo === 2) throw new WebSearchError("provider down", 503);
+    });
+    const result = await runWebDiscovery({
+      client,
+      webQueries: [WEB_QUERY, `${WEB_QUERY} 2`, `${WEB_QUERY} 3`],
+      goal: "ausbildung",
+      userId: "u1",
+    });
+
+    expect(queries).toHaveLength(3); // all three were attempted
+    expect(result.providerErrors).toBe(1);
+    expect(result.groundingCallsOk).toBe(2); // honest usage metric
+    // The surviving queries still produced candidates.
+    expect(result.categoryCounts.job_portal).toBeGreaterThan(0);
+    expect(result.firstProviderError?.provider).toBe("tavily");
+    expect(result.firstProviderError?.http).toBe(503);
   });
 
   it("a blocked (403) page is counted, never bypassed, never fabricated", async () => {
@@ -862,26 +852,22 @@ describe("runWebDiscovery (source registry discipline)", () => {
     vi.mocked(lookup).mockResolvedValue([
       { address: "93.184.216.34", family: 4 },
     ] as never);
-    // Every source returns the SAME gojobs URL (403 behind the mock).
-    const client = {
-      name: "gemini_grounding",
-      search: vi.fn(async () => [
-        {
-          title: "Ausbildung 2027 – jetzt bewerben",
-          url: "https://www.gojobs.de/azubi/ausbildung-2027",
-          snippet: "",
-        },
-      ]),
-    };
+    const { client } = recordingClient(undefined, [
+      {
+        title: "Ausbildung 2027 – jetzt bewerben",
+        url: "https://www.gojobs.de/azubi/ausbildung-2027",
+        snippet: "",
+      },
+    ]);
     const result = await runWebDiscovery({
-      client: client as never,
+      client,
       webQueries: [WEB_QUERY],
       goal: "ausbildung",
       userId: "u1",
     });
 
-    // Searches succeeded; the block happened at page level — the run must
-    // report zero opportunities (no fabrication) and a counted failure.
+    // The search succeeded; the block happened at page level — zero
+    // opportunities (nothing fabricated) and a counted failure.
     expect(result.opportunities).toHaveLength(0);
     const totalFailures = Object.values(result.failures).reduce(
       (a, b) => a + (b ?? 0),
@@ -890,39 +876,23 @@ describe("runWebDiscovery (source registry discipline)", () => {
     expect(totalFailures).toBeGreaterThanOrEqual(1);
     expect(result.failures.http_error ?? 0).toBeGreaterThanOrEqual(1);
     expect(result.providerErrors).toBe(0);
-    // Source statuses describe the SEARCH phase (ok) — the honesty lives in
-    // `failures` + the zero opportunity count, not a hidden retry.
-    for (const status of result.sourceStatuses)
-      expect(["ok", "skipped_budget"]).toContain(status.status);
-    // No provider errors in this scenario → no detail object (honest null).
     expect(result.firstProviderError).toBeNull();
   });
 
-  it("provider failure surfaces the FIRST error detail (safe fields, no key)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: unknown) => {
-        const url = String(input);
-        if (url.endsWith("/robots.txt"))
-          return new Response("not found", { status: 404 });
-        return new Response("not found", { status: 404 });
-      }),
-    );
-    vi.mocked(lookup).mockResolvedValue([
-      { address: "93.184.216.34", family: 4 },
-    ] as never);
+  it("provider failure surfaces the first error detail (safe fields, never a key)", async () => {
+    stubFast404();
     const boom = new WebSearchError(
-      "The web search provider rejected the configured key (HTTP 401, PERMISSION_DENIED)",
+      "The web search provider rejected the configured key (HTTP 401)",
       401,
       {
         code: 401,
-        status: "PERMISSION_DENIED",
-        message: "API key not valid. Please pass a valid API key.",
+        status: "UNAUTHORIZED",
+        message: "Unauthorized: missing or invalid API key.",
       },
-      "gemini-3.5-flash-lite",
+      null,
     );
     const client = {
-      name: "gemini_grounding",
+      name: "tavily",
       search: vi.fn(async () => {
         throw boom;
       }),
@@ -934,22 +904,19 @@ describe("runWebDiscovery (source registry discipline)", () => {
       userId: "u1",
     });
 
-    // Every call failed → the run must carry the root-cause detail the UI
-    // renders, with only safe/provider-controlled fields.
     expect(result.providerErrors).toBeGreaterThanOrEqual(1);
+    expect(result.groundingCallsOk).toBe(0);
     expect(result.firstProviderError).toEqual({
-      provider: "gemini_grounding",
-      model: "gemini-3.5-flash-lite",
+      provider: "tavily",
+      model: null,
       http: 401,
       code: 401,
-      geminiStatus: "PERMISSION_DENIED",
-      message:
-        "The web search provider rejected the configured key (HTTP 401, PERMISSION_DENIED)",
-      // Google's own words are surfaced too (readable without the logs).
-      providerMessage: "API key not valid. Please pass a valid API key.",
+      providerStatus: "UNAUTHORIZED",
+      message: "The web search provider rejected the configured key (HTTP 401)",
+      providerMessage: "Unauthorized: missing or invalid API key.",
     });
     // The detail must never contain a key-shaped token.
     const detail = JSON.stringify(result.firstProviderError);
-    expect(detail).not.toMatch(/AIza[0-9A-Za-z_\-]{10,}/);
+    expect(detail).not.toMatch(/tvly-[A-Za-z0-9_-]{6,}/);
   });
 });

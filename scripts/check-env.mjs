@@ -92,9 +92,8 @@ const CHECKS = [
   { name: "AI_MODEL", required: false, kind: "id" },
   { name: "AI_VISION_MODEL", required: false, kind: "id" },
   { name: "ARBEITSAGENTUR_API_KEY", required: false, kind: "id" },
-  { name: "GEMINI_GROUNDING_API_KEY", required: false, kind: "secret" },
+  { name: "TAVILY_API_KEY", required: false, kind: "secret" },
   { name: "GEMINI_API_KEY", required: false, kind: "secret" },
-  { name: "GEMINI_GROUNDING_MODEL", required: false, kind: "id" },
 ];
 
 /**
@@ -143,13 +142,8 @@ const SEAMS = [
   {
     name: "web-discovery",
     status: (env) =>
-      isSet(env, "GEMINI_GROUNDING_API_KEY") ||
-      isSet(env, "GEMINI_API_KEY") ||
-      (isSet(env, "AI_API_KEY") &&
-        /generativelanguage\.googleapis\.com/i.test(env.AI_API_URL ?? ""))
-        ? "configured"
-        : "pending",
-    note: "AI Ausbildung Search broad web discovery uses Google Gemini with Google Search grounding: GEMINI_GROUNDING_API_KEY (dedicated web-search key, highest priority), else GEMINI_API_KEY, else the existing AI_API_KEY when AI_API_URL is a Google AI Studio (generativelanguage.googleapis.com) endpoint. Other Gemini services keep using GEMINI_API_KEY. Without any of it the web layer is skipped and the official BA source still works.",
+      isSet(env, "TAVILY_API_KEY") ? "configured" : "pending",
+    note: "AI Ausbildung Search broad web discovery uses the official Tavily Search API (TAVILY_API_KEY, server-side only; at most 3 requests per search operation). Without it the web layer is skipped and the official BA source still works.",
   },
 ];
 

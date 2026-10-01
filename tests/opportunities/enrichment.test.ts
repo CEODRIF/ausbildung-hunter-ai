@@ -418,7 +418,7 @@ describe("runCompanyEnrichment", () => {
       throw new WebSearchError("The web search provider is unavailable.");
     });
     const failingClient = {
-      name: "gemini_grounding",
+      name: "tavily",
       search: vi.fn(async () => {
         throw new WebSearchError("The web search provider is unavailable.");
       }),
@@ -451,7 +451,7 @@ describe("discoverCompanyWebsite (structured grounding, anti-fabrication)", () =
     const run = async (answers: string[]) => {
       let call = 0;
       const client = {
-        name: "gemini_grounding",
+        name: "tavily",
         search: vi.fn(),
         searchStructured: vi.fn(async () => {
           call += 1;
@@ -515,7 +515,7 @@ describe("discoverCompanyWebsite (structured grounding, anti-fabrication)", () =
       }),
     );
     const client = {
-      name: "gemini_grounding",
+      name: "tavily",
       search: vi.fn(),
       searchStructured: vi.fn(async () => ({
         data: { officialWebsite: "https://www.muster-technik.de", confidence: "high" },
@@ -560,7 +560,7 @@ describe("discoverCompanyWebsite (structured grounding, anti-fabrication)", () =
       }),
     );
     const client = {
-      name: "gemini_grounding",
+      name: "tavily",
       search: vi.fn(),
       searchStructured: vi.fn(async () => ({
         data: { officialWebsite: "https://www.unbekannt-verlag.de", confidence: "high" },

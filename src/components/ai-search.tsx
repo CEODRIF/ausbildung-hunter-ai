@@ -65,7 +65,7 @@ interface ProviderErrorDetail {
   model: string | null;
   http: number | null;
   code: number | null;
-  geminiStatus: string | null;
+  providerStatus: string | null;
   message: string;
   /** Google's own (truncated, key-scrubbed) error text. */
   providerMessage?: string | null;
@@ -985,7 +985,7 @@ export function AISearchClient({
                       discovery.firstProviderError.code != null
                         ? String(discovery.firstProviderError.code)
                         : "—",
-                    geminiStatus: discovery.firstProviderError.geminiStatus ?? "—",
+                    providerStatus: discovery.firstProviderError.providerStatus ?? "—",
                   })}
                   {" · "}
                   {discovery.firstProviderError.message}
