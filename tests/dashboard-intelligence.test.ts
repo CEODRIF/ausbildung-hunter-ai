@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MATCHER_VERSION } from "@/lib/opportunities/matching";
+
 // ---------------------------------------------------------------------------
 // Module mocks (data assembly tests)
 // ---------------------------------------------------------------------------
@@ -802,7 +804,7 @@ describe("getDashboardData", () => {
         notes: null,
         match_score: 82,
         match_status: "complete",
-        matcher_version: 2,
+        matcher_version: MATCHER_VERSION, // current engine → fresh snapshot
         match_profile_updated_at: "2026-09-20T09:00:00.000Z",
         saved_at: "2026-09-22T09:00:00.000Z",
       },
@@ -892,7 +894,7 @@ describe("getDashboardData", () => {
         notes: null,
         match_score: 82,
         match_status: "complete",
-        matcher_version: 2,
+        matcher_version: MATCHER_VERSION, // current engine → fresh snapshot
         match_profile_updated_at: "2026-09-20T09:00:00.000Z",
         saved_at: "2026-09-22T09:00:00.000Z",
       },

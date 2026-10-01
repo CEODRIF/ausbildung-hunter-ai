@@ -44,11 +44,13 @@ function dim(
   quality: DataQuality,
   candidate: string | null,
   opportunity: string | null,
+  contribution: number | null = null,
 ): MatchDimension {
   return {
     id,
     essential,
     status,
+    contribution,
     evidence: evidence.slice(0, 12).map((line) => line.slice(0, 300)),
     missing: missing.slice(0, 12).map((line) => line.slice(0, 300)),
     quality,
@@ -100,8 +102,16 @@ export function evalGoal(
 }
 
 // ---------------------------------------------------------------------------
-// 2. Role compatibility (always essential; deterministic token matching —
-//    no semantic similarity is claimed beyond documented overlap)
+// 2. Role compatibility (always essential; deterministic, GRADDED token
+//    similarity — v3). No semantic similarity is claimed beyond documented
+//    overlap:
+//    - exact normalized equality or containment  → 1.0 (status: match)
+//    - otherwise: weighted overlap ratio of the role's content tokens:
+//      full token hit = 1.0, German compound relation (one token is a
+//      suffix of the other, both length ≥ 6 — the head noun of compounds
+//      like "Industriekaufmann") = 0.5, no relation = 0.
+//      contribution = ratio (graded, so distinct professions yield distinct
+//      scores), status = partial when ratio > 0, mismatch when ratio = 0.
 // ---------------------------------------------------------------------------
 
 const STATUS_RANK: Record<DimensionStatus, number> = {
@@ -112,11 +122,52 @@ const STATUS_RANK: Record<DimensionStatus, number> = {
   match: 4,
 };
 
-function better(
-  current: "match" | "partial" | "mismatch",
-  next: "match" | "partial" | "mismatch",
-): "match" | "partial" | "mismatch" {
-  return STATUS_RANK[next] > STATUS_RANK[current] ? next : current;
+/** German compound relation: one token is the suffix of the other and both
+ *  are long enough (≥ 6 chars) to be meaningful profession stems. */
+function compoundRelated(a: string, b: string): boolean {
+  if (a.length < 6 || b.length < 6) return false;
+  return b.endsWith(a) || a.endsWith(b);
+}
+
+/** Graded similarity of one documented role text against one documented
+ *  opportunity text: 1.0 for exact/containment, otherwise the weighted
+ *  content-token overlap ratio (0..1). Pure, deterministic. */
+function roleSimilarity(
+  roleText: string,
+  roleNorm: string,
+  roleTokens: string[],
+  oppNorm: string,
+  oppTokens: Set<string>,
+): { similarity: number; exact: boolean; shared: string[] } {
+  if (
+    oppNorm === roleNorm ||
+    oppNorm.includes(roleNorm) ||
+    roleNorm.includes(oppNorm)
+  ) {
+    return { similarity: 1, exact: true, shared: [] };
+  }
+  if (roleTokens.length === 0) return { similarity: 0, exact: false, shared: [] };
+  let credit = 0;
+  const shared: string[] = [];
+  for (const token of roleTokens) {
+    if (oppTokens.has(token)) {
+      credit += 1;
+      shared.push(token);
+      continue;
+    }
+    for (const oppToken of oppTokens) {
+      if (compoundRelated(token, oppToken)) {
+        credit += 0.5;
+        shared.push(token);
+        break;
+      }
+    }
+  }
+  return {
+    similarity: credit / roleTokens.length,
+    exact: false,
+    shared,
+  };
 }
 
 export function evalRole(
@@ -147,46 +198,54 @@ export function evalRole(
     tokens: new Set(contentTokens(raw)),
   }));
 
-  let status: "match" | "partial" | "mismatch" = "mismatch";
-  const evidence: string[] = [];
-  let matchedRoleText: string | null = null;
-  let matchedOppText: string | null = null;
+  let best: {
+    roleText: string;
+    oppRaw: string;
+    similarity: number;
+    exact: boolean;
+    shared: string[];
+  } | null = null;
   for (const role of candidate.roles) {
     const roleNorm = normalizeText(role.text);
     if (!roleNorm) continue;
     const roleTokens = contentTokens(role.text);
     for (const opp of oppNorms) {
       if (!opp.norm) continue;
-      if (opp.norm === roleNorm) {
-        status = better(status, "match");
-        evidence.push(
-          `Zielberuf „${role.text}“ entspricht dem Beruf des Angebots („${opp.raw}“).`,
-        );
-        matchedRoleText = role.text;
-        matchedOppText = opp.raw;
-        break;
-      }
-      if (opp.norm.includes(roleNorm) || roleNorm.includes(opp.norm)) {
-        status = better(status, "match");
-        evidence.push(`Zielberuf „${role.text}“ kommt in „${opp.raw}“ vor.`);
-        matchedRoleText = role.text;
-        matchedOppText = opp.raw;
-        break;
-      }
-      if (roleTokens.length > 0) {
-        const shared = roleTokens.filter((token) => opp.tokens.has(token));
-        if (shared.length >= 1 && shared.length / roleTokens.length >= 0.5) {
-          status = better(status, "partial");
-          evidence.push(
-            `Gemeinsame Begriffe mit „${opp.raw}“: ${shared.slice(0, 4).join(", ")}.`,
-          );
-          if (!matchedRoleText) {
-            matchedRoleText = role.text;
-            matchedOppText = opp.raw;
-          }
-        }
+      const { similarity, exact, shared } = roleSimilarity(
+        role.text,
+        roleNorm,
+        roleTokens,
+        opp.norm,
+        opp.tokens,
+      );
+      if (!best || similarity > best.similarity) {
+        best = { roleText: role.text, oppRaw: opp.raw, similarity, exact, shared };
       }
     }
+  }
+
+  const similarity = best?.similarity ?? 0;
+  const status: "match" | "partial" | "mismatch" =
+    (best?.exact ?? false) ? "match" : similarity > 0 ? "partial" : "mismatch";
+  const contribution = similarity;
+  const evidence: string[] = [];
+  if (best?.exact) {
+    evidence.push(
+      `Zielberuf „${best.roleText}“ entspricht dem Beruf des Angebots („${best.oppRaw}“).`,
+    );
+  } else if (similarity > 0) {
+    if (best?.shared.length) {
+      evidence.push(
+        `Gemeinsame Begriffe mit „${best.oppRaw}“: ${best.shared.slice(0, 4).join(", ")}.`,
+      );
+    }
+    evidence.push(
+      `Berufs-Übereinstimmung: ${Math.round(similarity * 100)} % (dokumentierte Begriffe).`,
+    );
+  } else {
+    evidence.push(
+      `Keine gemeinsamen dokumentierten Berufsbegriffe mit „${opportunity.title}“.`,
+    );
   }
   const quality: CandidateSideQuality = candidate.roles.some(
     (role) => role.quality === "explicit",
@@ -200,8 +259,9 @@ export function evalRole(
     evidence,
     [],
     quality,
-    matchedRoleText ?? candidate.roles[0]?.text ?? null,
-    matchedOppText ?? opportunity.title,
+    best?.roleText ?? candidate.roles[0]?.text ?? null,
+    best?.oppRaw ?? opportunity.title,
+    contribution,
   );
 }
 
@@ -332,6 +392,7 @@ export function evalSkills(
     );
   const evidence: string[] = [];
   let status: DimensionStatus;
+  let contribution: number | null = null;
   if (required.length > 0) {
     const matched = required.filter(matches);
     const missing = required.filter((term) => !matched.includes(term));
@@ -341,6 +402,8 @@ export function evalSkills(
         : matched.length > 0
           ? "partial"
           : "mismatch";
+    // v3 graded: documented required-skill coverage (0..1).
+    contribution = matched.length / required.length;
     if (matched.length > 0)
       evidence.push(`Dokumentiert: ${matched.slice(0, 6).join(", ")}.`);
     if (missing.length > 0)
@@ -372,6 +435,7 @@ export function evalSkills(
     "inferred",
     candidate.skills.slice(0, 4).join(", ") || null,
     oppQuote.slice(0, 4).join(", ") || null,
+    contribution,
   );
 }
 
@@ -467,6 +531,8 @@ export function evalExperience(
     quality,
     `${years} Jahre`,
     `${requiredYears} Jahre`,
+    // v3 graded: documented years vs. the required years (capped at 1).
+    Math.min(1, total / requiredYears),
   );
 }
 
@@ -574,8 +640,11 @@ export function evalLanguages(
 }
 
 // ---------------------------------------------------------------------------
-// 7. Location (identity only — a documented difference is evaluated by the
-//    dedicated relocation dimension, not here)
+// 7. Location (v3: a documented difference IS a scored mismatch — the
+//    candidate's documented location is not met; the dedicated relocation
+//    dimension separately documents willingness to move. v2 delegated the
+//    whole difference to relocation, which made location mismatches affect
+//    the score by at most the 2 % relocation weight.)
 // ---------------------------------------------------------------------------
 
 function sameDocumentedLocation(
@@ -635,19 +704,22 @@ export function evalLocation(
       opportunity.location,
     );
   }
-  // Documented difference — the severity is decided by the relocation
-  // dimension (willingness), not by location identity alone.
+  // Documented difference: the documented location requirement is NOT met —
+  // a real (graded) mismatch. Willingness to move is the relocation
+  // dimension's job (it can soften, but never undo, the documented fact).
   return dim(
     "location",
     false,
-    "not_applicable",
+    "mismatch",
     [
-      `Angebots-Standort (${opportunity.location}) weicht vom dokumentierten Standort ab – Bewertung über die Dimension „Umzugsbereitschaft“.`,
+      `Angebots-Standort (${opportunity.location}) weicht vom dokumentierten Standort (${candidate.locations[0]}) ab.`,
+      "Umzugsbereitschaft wird zusätzlich von der Dimension „Umzugsbereitschaft“ bewertet.",
     ],
     [],
     "explicit",
     candidate.locations[0],
     opportunity.location,
+    0,
   );
 }
 

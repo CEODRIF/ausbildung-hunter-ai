@@ -16,14 +16,19 @@ import {
  * Rules (documented, deterministic):
  * 1. Inferred cap: a dimension whose candidate-side evidence is inferred
  *    (AI-extracted, not user-confirmed) is never scored more confidently
- *    than `partial` — an inferred `match` and an inferred `mismatch` both
- *    become `partial`, with a provenance note in the evidence.
+ *    than `partial` — an inferred `match`, `partial`, or `mismatch` gets
+ *    status `partial`, and an explicit graded contribution is capped at
+ *    0.5 (a dimension without one falls back to the coarse 0.5).
  * 2. Completeness: any ESSENTIAL dimension left in state `unknown` makes
  *    the whole result `incomplete` — no numerical score is produced.
- * 3. Scoring: weighted, renormalized over the evaluated dimensions only
- *    (match = 1, partial = 0.5, mismatch = 0; unknown / not_applicable are
- *    removed from the denominator — a missing dimension neither inflates
- *    nor destroys the score).
+ * 3. Scoring: weighted, renormalized over the evaluated dimensions only.
+ *    Each dimension contributes its graded `contribution` (v3: role
+ *    similarity ratio, skill coverage, experience ratio, documented
+ *    location mismatch = 0) when present, otherwise the coarse
+ *    STATUS_CONTRIBUTION of its status (match = 1, partial = 0.5,
+ *    mismatch = 0). `unknown` / `not_applicable` are removed from the
+ *    denominator — a missing dimension neither inflates nor destroys the
+ *    score, and never counts as a match.
  * 4. Hard cap: an explicitly documented, explicitly contradictory
  *    education requirement caps the score (critical incompatibility).
  * 5. Reasons: only for complete matches, only factual evidence lines.
@@ -32,13 +37,37 @@ import {
 const INFERRED_NOTE =
   "Angabe aus dem CV extrahiert – nicht vom Nutzer bestätigt.";
 
+/** Effective score share of a dimension: the graded contribution when
+ *  documented, else the coarse status-based share (null for unknown /
+ *  not_applicable — those are excluded from the score, never a pass). */
+export function dimensionContribution(
+  dimension: MatchDimension,
+): number | null {
+  if (dimension.contribution !== null && dimension.contribution !== undefined)
+    return dimension.contribution;
+  return STATUS_CONTRIBUTION[dimension.status];
+}
+
 function applyInferredCap(dimension: MatchDimension): MatchDimension {
   if (dimension.quality !== "inferred") return dimension;
-  if (dimension.status !== "match" && dimension.status !== "mismatch")
+  if (
+    dimension.status !== "match" &&
+    dimension.status !== "partial" &&
+    dimension.status !== "mismatch"
+  )
     return dimension;
   const evidence = [...dimension.evidence];
   if (!evidence.includes(INFERRED_NOTE)) evidence.push(INFERRED_NOTE);
-  return { ...dimension, status: "partial", evidence: evidence.slice(0, 12) };
+  const explicit =
+    dimension.contribution !== null && dimension.contribution !== undefined
+      ? dimension.contribution
+      : 0.5; // no graded share → coarse partial share
+  return {
+    ...dimension,
+    status: "partial",
+    contribution: Math.min(explicit, 0.5),
+    evidence: evidence.slice(0, 12),
+  };
 }
 
 const DIMENSION_ORDER: DimensionId[] = [
@@ -71,9 +100,10 @@ export function assembleMatch(rawDimensions: MatchDimension[]): MatchResult {
   );
 
   // 3. Score over evaluated dimensions only.
-  const evaluated = dimensions.filter(
-    (dimension) => STATUS_CONTRIBUTION[dimension.status] !== null,
-  );
+  const evaluated = dimensions.filter((dimension) => {
+    const share = dimensionContribution(dimension);
+    return share !== null && share !== undefined;
+  });
   const weightSum = evaluated.reduce(
     (sum, dimension) => sum + DIMENSION_WEIGHTS[dimension.id],
     0,
@@ -81,8 +111,8 @@ export function assembleMatch(rawDimensions: MatchDimension[]): MatchResult {
   let score: number | null = null;
   if (!essentialUnknown && weightSum > 0) {
     const weighted = evaluated.reduce((sum, dimension) => {
-      const contribution = STATUS_CONTRIBUTION[dimension.status] as number;
-      return sum + DIMENSION_WEIGHTS[dimension.id] * contribution;
+      const share = dimensionContribution(dimension) as number;
+      return sum + DIMENSION_WEIGHTS[dimension.id] * share;
     }, 0);
     score = Math.min(
       100,

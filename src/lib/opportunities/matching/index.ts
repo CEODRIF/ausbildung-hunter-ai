@@ -21,7 +21,7 @@ import { MATCHER_VERSION, matchResultSchema, type MatchResult } from "./types";
 
 /**
  * Server-side matching service (Phase 5 foundation, Phase 7 production
- * dimension set — matcher v2).
+ * dimension set, v3 graded contributions).
  *
  * Usage (server-only, after the shared opportunity cache has been read):
  *
@@ -92,6 +92,7 @@ export {
   formatMatchScore,
   topMissingInformation,
 } from "./explanations";
+export { dimensionContribution } from "./scorer";
 export { MATCHER_VERSION, DIMENSION_WEIGHTS } from "./types";
 export type {
   DataQuality,

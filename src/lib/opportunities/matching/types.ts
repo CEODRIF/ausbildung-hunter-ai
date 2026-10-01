@@ -25,8 +25,13 @@ import { z } from "zod";
  *  match results are never cached, so no cache invalidation is needed).
  *  v2 (Phase 7): production dimension set (12 dimensions incl. relocation,
  *  training type, preferences), re-weighted model, and structured
- *  candidate/opportunity evidence quotes per dimension. */
-export const MATCHER_VERSION = 2;
+ *  candidate/opportunity evidence quotes per dimension.
+ *  v3: graded (continuous) per-dimension contributions — the role dimension
+ *  uses a documented token-similarity ratio instead of a coarse
+ *  match/partial/mismatch bucket, skills use required-skill coverage and
+ *  experience a years ratio; a documented location difference is a scored
+ *  mismatch (willingness stays with the relocation dimension). */
+export const MATCHER_VERSION = 3;
 
 /** Overall match status.
  * - complete: every essential dimension was evaluated → a score exists.
@@ -104,6 +109,13 @@ export const matchDimensionSchema = z.object({
     "preferences",
   ]),
   status: dimensionStatusSchema,
+  /** Graded score share, 0..1 (v3). Set for dimensions with a documented
+   *  continuous degree (role similarity, skill coverage, experience ratio,
+   *  documented location mismatch = 0). `null` → the coarse
+   *  STATUS_CONTRIBUTION of the status is used. `unknown` and
+   *  `not_applicable` are always `null` (never a share — not a pass and
+   *  not a fail). */
+  contribution: z.number().min(0).max(1).nullable(),
   /** Whether this dimension must be evaluated for a score to exist, for
    *  this specific (profile, opportunity) pair. An essential dimension in
    *  state `unknown` makes the whole result `incomplete`. */
@@ -174,7 +186,9 @@ export const DIMENSION_WEIGHTS: Record<DimensionId, number> = {
   preferences: 0.01,
 };
 
-/** Status contribution to a dimension's weight. */
+/** Coarse status contribution to a dimension's weight — v3 fallback only,
+ *  used when a dimension documents no graded `contribution` (e.g. goal,
+ *  education, languages, relocation, remote). */
 export const STATUS_CONTRIBUTION: Record<DimensionStatus, number | null> = {
   match: 1,
   partial: 0.5,

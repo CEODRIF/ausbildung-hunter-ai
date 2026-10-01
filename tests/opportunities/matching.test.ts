@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -8,6 +9,7 @@ import {
   DIMENSION_WEIGHTS,
   MATCHER_VERSION,
   computeMatch,
+  dimensionContribution,
   matchOpportunity,
   type MatchDimension,
   type MatchResult,
@@ -689,7 +691,7 @@ describe("dimension: location", () => {
     expect(dimension(result, "location").status).toBe("match");
   });
 
-  it("different location: identity is delegated to the relocation dimension", () => {
+  it("different documented location → scored mismatch (v3); willingness is the relocation dimension's job", () => {
     const result = computeMatch(
       profile({
         goal: "arbeit",
@@ -697,9 +699,11 @@ describe("dimension: location", () => {
       }),
       arbeitOpp({ location: "20095 Hamburg" }),
     );
-    // v2 split: location only scores identity; the documented difference is
-    // evaluated by the relocation dimension.
-    expect(dimension(result, "location").status).toBe("not_applicable");
+    // v3: the documented location requirement is not met → mismatch with an
+    // explicit 0 contribution (no longer invisible). Willingness to move
+    // still softens (partial) in the dedicated relocation dimension.
+    expect(dimension(result, "location").status).toBe("mismatch");
+    expect(dimension(result, "location").contribution).toBe(0);
     expect(dimension(result, "relocation").status).toBe("partial");
   });
 
@@ -967,7 +971,7 @@ describe("scoring model", () => {
     expect(result.score).toBe(47);
   });
 
-  it("partial contributes 50% (goal match + role partial → 75)", () => {
+  it("role: all documented terms present (non-exact) → graded contribution 1.0 but status stays partial (v3)", () => {
     const result = computeMatch(
       profile({
         goal: "ausbildung",
@@ -990,12 +994,39 @@ describe("scoring model", () => {
         location: null,
       }),
     );
-    // v2: goal 0.18 (match) + role 0.20×0.5 (partial) + education 0.20
-    // (match) over 0.58 → 82.76 → 83
+    const role = dimension(result, "role");
+    // "anlagenmechaniker" is the only content token (shk is 3 chars —
+    // filtered) and it is documented in the opportunity → ratio 1.0, but the
+    // phrasing is not exact/containment → partial, never a full match.
+    expect(role.status).toBe("partial");
+    expect(role.contribution).toBe(1);
+    // v3: goal 0.18 (match) + role 0.20×1.0 + education 0.20 (match) over
+    // 0.58 → 100 (all documented criteria satisfied)
     expect(result.score).toBe(
-      Math.round((100 * (0.18 + 0.1 + 0.2)) / (0.18 + 0.2 + 0.2)),
+      Math.round((100 * (0.18 + 0.2 + 0.2)) / (0.18 + 0.2 + 0.2)),
     );
-    expect(result.score).toBe(83);
+    expect(result.score).toBe(100);
+  });
+
+  it("role: German compound suffix earns graded partial credit (Industriekaufmann ≈ kaufmann, v3)", () => {
+    const result = computeMatch(
+      profile({
+        goal: "ausbildung",
+        target_roles: [explicitRole("Kaufmann im E-Commerce")],
+        preferences: { ...profile().preferences, preferred_job_titles: [] },
+      }),
+      opp({
+        title: "Ausbildung Industriekaufmann",
+        profession: "Industriekaufmann",
+        location: null,
+      }),
+    );
+    const role = dimension(result, "role");
+    // role content tokens: kaufmann, commerce. "industriekaufmann" is a
+    // compound containing "kaufmann" (suffix, both ≥ 6 chars) → 0.5 credit;
+    // "commerce" → 0. Ratio 0.5/2 = 0.25 → partial with graded share.
+    expect(role.status).toBe("partial");
+    expect(role.contribution).toBe(0.25);
   });
 
   it("score is always an integer in 0..100 when present", () => {
@@ -1352,5 +1383,299 @@ describe("v2 dimension set completeness", () => {
     );
     expect(result.status).toBe("complete");
     expect(result.score).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Match score realism (v3 — graded, per-opportunity, never a fixed number)
+// ---------------------------------------------------------------------------
+
+describe("match score realism (v3)", () => {
+  /** A fully documented candidate: Kaufmann im E-Commerce, Abitur, German
+   *  B2, Excel skill, Berlin, no relocation. */
+  function realProfile(): CandidateProfile {
+    return profile({
+      goal: "ausbildung",
+      target_roles: [explicitRole("Kaufmann im E-Commerce")],
+      education: [
+        {
+          school: null,
+          university: null,
+          degree: null,
+          field_of_study: null,
+          graduation_year: null,
+          education_level: "Abitur",
+          source: "user_provided",
+        },
+      ],
+      languages: [
+        {
+          language: "German",
+          level: "B2",
+          level_is_inferred: false,
+          source: "user_provided",
+        },
+      ],
+      skills: {
+        technical: ["Excel"],
+        software_tools: [],
+        marketing: [],
+        it: [],
+        soft: [],
+      },
+      experience: [],
+      preferences: {
+        target: "ausbildung",
+        preferred_job_titles: [],
+        preferred_industries: [],
+        preferred_locations: ["Berlin"],
+        willing_to_relocate: false,
+        remote_hybrid_preference: null,
+      },
+    });
+  }
+
+  function realOpp(overrides: Partial<Opportunity> = {}): Opportunity {
+    return opp({
+      title: "Ausbildung Kaufmann/Kauffrau im E-Commerce",
+      profession: "Kaufmann/Kauffrau im E-Commerce",
+      location: "10115 Berlin",
+      ...overrides,
+    });
+  }
+
+  it("1 — exact target profession → high score", () => {
+    const result = computeMatch(
+      realProfile(),
+      realOpp({ required_skills: ["Excel", "SAP"] }),
+    );
+    expect(result.status).toBe("complete");
+    const role = dimension(result, "role");
+    expect(role.contribution).toBe(1); // all documented role terms present
+    // goal 0.18 + role 0.20×1.0 + education 0.20 + skills 0.14×0.5
+    // (Excel yes / SAP no, inferred cap) + location 0.04 → 0.69/0.76
+    expect(result.score).toBe(
+      Math.round((100 * (0.18 + 0.2 + 0.2 + 0.07 + 0.04)) / 0.76),
+    );
+    expect(result.score).toBe(91);
+  });
+
+  it("2 — completely different profession → low score", () => {
+    const result = computeMatch(
+      realProfile(),
+      realOpp({
+        title: "Ausbildung Mechatroniker/in",
+        profession: "Mechatroniker/in",
+        location: "20095 Hamburg",
+      }),
+    );
+    const role = dimension(result, "role");
+    expect(role.status).toBe("mismatch");
+    expect(role.contribution).toBe(0);
+    // goal 0.18 + role 0 + education 0.20, location 0, relocation 0 over
+    // 0.64 → 0.38/0.64
+    expect(result.score).toBe(Math.round((100 * 0.38) / 0.64));
+    expect(result.score).toBe(59);
+    expect((result.score as number) < 60).toBe(true);
+  });
+
+  it("3 — documented skill match raises the score vs. an unmatched requirement", () => {
+    const withMatch = computeMatch(
+      realProfile(),
+      realOpp({
+        title: "Ausbildung Kaufmann für Marketingkommunikation",
+        profession: "Kaufmann für Marketingkommunikation",
+        required_skills: ["Excel"], // candidate documents Excel
+      }),
+    );
+    const withoutMatch = computeMatch(
+      realProfile(),
+      realOpp({
+        title: "Ausbildung Kaufmann für Marketingkommunikation",
+        profession: "Kaufmann für Marketingkommunikation",
+        required_skills: ["SAP"], // candidate does not document SAP
+      }),
+    );
+    // Skills provenance is always `inferred` (scanner-parsed) → the graded
+    // coverage is real (1.0 vs 0.0) but the inferred cap bounds the share at
+    // 0.5 — a full match of skills is never scored as confident as explicit.
+    expect(dimension(withMatch, "skills").contribution).toBe(0.5);
+    expect(dimension(withoutMatch, "skills").contribution).toBe(0);
+    expect(withMatch.score as number).toBeGreaterThan(
+      withoutMatch.score as number,
+    );
+  });
+
+  it("4 — language mismatch (B2 vs required C1) hurts; meeting it does not", () => {
+    const met = computeMatch(
+      realProfile(),
+      realOpp({ required_languages: ["German B1"] }),
+    );
+    const unmet = computeMatch(
+      realProfile(),
+      realOpp({ required_languages: ["German C1"] }),
+    );
+    expect(dimension(met, "languages").status).toBe("match");
+    expect(dimension(unmet, "languages").status).toBe("mismatch");
+    // Languages carries no graded share — the effective share comes from the
+    // coarse status fallback (mismatch → 0), which is what pulls the score down.
+    expect(dimensionContribution(dimension(unmet, "languages"))).toBe(0);
+    expect(unmet.score as number).toBeLessThan(met.score as number);
+  });
+
+  it("5 — location mismatch lowers the score (documented difference counted)", () => {
+    const berlin = computeMatch(realProfile(), realOpp());
+    const hamburg = computeMatch(
+      realProfile(),
+      realOpp({ location: "20095 Hamburg" }),
+    );
+    expect(dimension(berlin, "location").status).toBe("match");
+    expect(dimension(hamburg, "location").status).toBe("mismatch");
+    expect(dimension(hamburg, "location").contribution).toBe(0);
+    expect(hamburg.score as number).toBeLessThan(berlin.score as number);
+  });
+
+  it("6 — missing data is never a perfect match: unknown contributes nothing (null), essential unknown → no score", () => {
+    // (a) non-essential missing: no skills/education requirement documented
+    //     → those dimensions earn NO share (contribution null), the score is
+    //     the weighted average over the documented criteria only.
+    const result = computeMatch(
+      realProfile(),
+      realOpp({ education_requirement: null }),
+    );
+    expect(dimension(result, "skills").status).toBe("not_applicable");
+    expect(dimension(result, "skills").contribution).toBeNull();
+    expect(dimension(result, "education").status).toBe("not_applicable");
+    expect(dimension(result, "education").contribution).toBeNull();
+    expect(dimension(result, "languages").contribution).toBeNull();
+    // goal + role + location evaluated: 0.42/0.42 — nothing phantom
+    expect(result.score).toBe(
+      Math.round((100 * (0.18 + 0.2 + 0.04)) / (0.18 + 0.2 + 0.04)),
+    );
+    // (b) essential missing: no target role documented → no score at all
+    const noRole = computeMatch(
+      profile({
+        ...realProfile(),
+        target_roles: [],
+        preferences: {
+          ...realProfile().preferences,
+          preferred_job_titles: [],
+        },
+      }),
+      realOpp(),
+    );
+    expect(noRole.status).toBe("incomplete");
+    expect(noRole.score).toBeNull();
+  });
+
+  it("7 — deterministic: same profile + same opportunity → same score (5×)", () => {
+    const first = computeMatch(realProfile(), realOpp());
+    for (let i = 0; i < 5; i += 1) {
+      expect(computeMatch(realProfile(), realOpp())).toEqual(first);
+    }
+  });
+
+  it("8 — different opportunities produce different, ordered scores", () => {
+    const a = computeMatch(realProfile(), realOpp()); // exact profession
+    const b = computeMatch(
+      realProfile(),
+      realOpp({
+        title: "Ausbildung Kaufmann für Marketingkommunikation",
+        profession: "Kaufmann für Marketingkommunikation",
+        required_skills: ["Excel"],
+      }),
+    );
+    const c = computeMatch(
+      realProfile(),
+      realOpp({
+        title: "Ausbildung Industriekaufmann",
+        profession: "Industriekaufmann",
+        location: "20095 Hamburg",
+      }),
+    );
+    const d = computeMatch(
+      realProfile(),
+      realOpp({
+        title: "Ausbildung Mechatroniker/in",
+        profession: "Mechatroniker/in",
+        location: "20095 Hamburg",
+      }),
+    );
+    const scores = [
+      a.score as number,
+      b.score as number,
+      c.score as number,
+      d.score as number,
+    ];
+    // No two are identical (v2 collapsed these into one bucket → one number)
+    expect(new Set(scores).size).toBe(4);
+    expect(scores[0]).toBeGreaterThan(scores[1]);
+    expect(scores[1]).toBeGreaterThan(scores[2]);
+    expect(scores[2]).toBeGreaterThan(scores[3]);
+  });
+
+  it("9 — no hardcoded score / no random fallback in the engine source", () => {
+    const files = [
+      "types.ts",
+      "scorer.ts",
+      "dimensions.ts",
+      "text.ts",
+      "profile-normalizer.ts",
+      "explanations.ts",
+      "index.ts",
+    ];
+    for (const file of files) {
+      const source = readFileSync(
+        `src/lib/opportunities/matching/${file}`,
+        "utf8",
+      );
+      expect(source.includes("Math.random")).toBe(false);
+      expect(/=\s*74\b/.test(source)).toBe(false); // fixed 74%
+      expect(/0\.74/.test(source)).toBe(false); // 0.74 share
+      expect(/score:\s*74\b/.test(source)).toBe(false);
+    }
+    // And functionally: the same v2 trap (goal match + role partial) no
+    // longer produces one fixed number for every profession.
+    const scores = [
+      "Kaufmann für Marketingkommunikation",
+      "Kaufmann im Einzelhandel",
+      "Kaufmann im Marketing",
+    ].map((profession) =>
+      computeMatch(
+        realProfile(),
+        realOpp({ title: `Ausbildung ${profession}`, profession }),
+      ).score as number,
+    );
+    expect(scores.every((s) => s !== 74)).toBe(true);
+  });
+
+  it("10 — every score is an integer within 0..100", () => {
+    const cases: Array<[CandidateProfile, Opportunity]> = [
+      [realProfile(), realOpp()],
+      [
+        realProfile(),
+        realOpp({
+          title: "Ausbildung Industriekaufmann",
+          profession: "Industriekaufmann",
+          location: "20095 Hamburg",
+        }),
+      ],
+      [
+        realProfile(),
+        realOpp({
+          title: "Ausbildung Mechatroniker/in",
+          profession: "Mechatroniker/in",
+          location: "20095 Hamburg",
+        }),
+      ],
+    ];
+    for (const [p, o] of cases) {
+      const result = computeMatch(p, o);
+      if (result.score !== null) {
+        expect(Number.isInteger(result.score)).toBe(true);
+        expect(result.score as number).toBeGreaterThanOrEqual(0);
+        expect(result.score as number).toBeLessThanOrEqual(100);
+      }
+    }
   });
 });
