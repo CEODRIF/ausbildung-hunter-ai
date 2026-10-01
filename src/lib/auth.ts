@@ -6,6 +6,13 @@ import { createClient } from "@/lib/supabase/server";
 export type Profile = {
   id: string;
   full_name: string;
+  /** Editable name parts (20261013000000_profile_settings). null for accounts
+   *  created before they existed, undefined when the migration is not applied
+   *  yet — full_name stays the display name either way. */
+  first_name?: string | null;
+  last_name?: string | null;
+  /** Public URL of the avatar stored in the `avatars` bucket, or null. */
+  avatar_url?: string | null;
   email: string;
   account_status: "pending" | "active" | "suspended";
   selected_goal: "ausbildung" | "arbeit" | null;

@@ -255,8 +255,8 @@ describe("exportUserData", () => {
   it("lists only this user's storage files (metadata only)", async () => {
     const mock = makeAdminMock(exportHandlers());
     const result = await exportUserData(USER_ID);
-    // 2 own files × 2 buckets (OTHER_ID's file is filtered out).
-    expect(result.storage_files).toHaveLength(4);
+    // 2 own files × 3 buckets (OTHER_ID's file is filtered out).
+    expect(result.storage_files).toHaveLength(6);
     for (const file of result.storage_files as Array<Record<string, unknown>>) {
       expect(String(file["name"])).toMatch(new RegExp(`^${USER_ID}/`));
       expect(file["size"]).toBeTypeOf("number");
@@ -271,6 +271,8 @@ describe("exportUserData", () => {
       "ai-files",
       "application-attachments",
       "application-attachments",
+      "avatars",
+      "avatars",
     ]);
     expect(mock.calls.some((c) => c.table === "email_accounts")).toBe(false);
   });
@@ -325,6 +327,12 @@ describe("deleteUserAccount", () => {
       { bucket: "application-attachments", op: "list" },
       {
         bucket: "application-attachments",
+        op: "remove",
+        paths: [`${USER_ID}/a.pdf`, `${USER_ID}/sub/b.pdf`],
+      },
+      { bucket: "avatars", op: "list" },
+      {
+        bucket: "avatars",
         op: "remove",
         paths: [`${USER_ID}/a.pdf`, `${USER_ID}/sub/b.pdf`],
       },

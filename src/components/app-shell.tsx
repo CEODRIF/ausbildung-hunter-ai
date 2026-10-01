@@ -78,7 +78,10 @@ const NAV_SECTIONS: NavSection[] = [
   },
   {
     titleKey: "nav.account",
-    items: [{ labelKey: "nav.settings", href: "/settings/usage", icon: "settings" }],
+    items: [
+      { labelKey: "nav.profile", href: "/settings/profile", icon: "user" },
+      { labelKey: "nav.settings", href: "/settings/usage", icon: "settings" },
+    ],
   },
   {
     titleKey: "nav.help",
@@ -151,6 +154,10 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
   {
     match: (p) => p === "/settings/email" || p.startsWith("/settings/email/"),
     heading: { titleKey: "pages.settingsEmail.title", subtitleKey: "pages.settingsEmail.subtitle" },
+  },
+  {
+    match: (p) => p === "/settings/profile" || p.startsWith("/settings/profile/"),
+    heading: { titleKey: "pages.settingsProfile.title", subtitleKey: "pages.settingsProfile.subtitle" },
   },
   {
     match: (p) => p === "/settings/usage" || p.startsWith("/settings/usage/"),

@@ -38,7 +38,11 @@ export interface UserExport {
   notes: string[];
 }
 
-const STORAGE_BUCKETS = ["ai-files", "application-attachments"] as const;
+const STORAGE_BUCKETS = [
+  "ai-files",
+  "application-attachments",
+  "avatars",
+] as const;
 
 async function safeList(
   admin: ReturnType<typeof createAdminClient>,

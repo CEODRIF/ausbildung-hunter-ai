@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type { Profile } from "@/lib/auth";
 import { logout } from "@/app/login/actions";
@@ -29,8 +30,17 @@ export function ProfileMenu({ profile }: { profile: Profile }) {
         aria-label={t("header.profile")}
         className="flex items-center gap-2 rounded-xl p-1 pe-2 transition-colors hover:bg-surface-2"
       >
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-soft text-xs font-bold text-accent">
-          {initials}
+        <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-accent-soft text-xs font-bold text-accent">
+          {profile.avatar_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={profile.avatar_url}
+              alt=""
+              className="h-8 w-8 object-cover"
+            />
+          ) : (
+            initials
+          )}
         </span>
         <span className="hidden max-w-32 truncate text-sm font-semibold text-ink-soft sm:block">
           {displayName}
@@ -52,6 +62,14 @@ export function ProfileMenu({ profile }: { profile: Profile }) {
             <p className="truncate text-xs text-muted">{profile.email}</p>
           </div>
           <div className="pt-1">
+            <Link
+              href="/settings/profile"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-semibold text-ink-soft transition-colors hover:bg-surface-2"
+            >
+              <Icon name="user" size={16} />
+              {t("nav.profile")}
+            </Link>
             <form action={logout}>
               <button
                 type="submit"
