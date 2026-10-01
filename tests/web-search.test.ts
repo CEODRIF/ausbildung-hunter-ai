@@ -323,6 +323,8 @@ describe("gemini grounding diagnostics & model fallback", () => {
     expect(error.status).toBe(401);
     expect(error.geminiCode).toBe(401);
     expect(error.geminiStatus).toBe("PERMISSION_DENIED");
+    // The model the call was sent to travels with the error (UI detail).
+    expect(error.model).toBe("gemini-2.5-flash-lite");
     // Controlled, key-free phrase — safe for UI/log surfaces.
     expect(error.message).toContain("rejected the configured key");
     expect(error.message).toContain("HTTP 401");
@@ -352,6 +354,8 @@ describe("gemini grounding diagnostics & model fallback", () => {
     expect(line).toContain("gemini=403/PERMISSION_DENIED");
     expect(line).not.toContain("AIzaSy-super-secret-key-1234567");
     expect(line).toContain("[key-redacted]");
+    // Duration is captured (the user asked to keep it for triage).
+    expect(line).toMatch(/durationMs=\d+/);
   });
 
   it("HTTP 200 but NO grounding metadata → [] + honest warning (tool not accepted?)", async () => {

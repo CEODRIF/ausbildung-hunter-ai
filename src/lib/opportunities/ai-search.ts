@@ -8,6 +8,7 @@ import { BaFetchFailure } from "@/lib/opportunities/providers/arbeitsagentur";
 import {
   mergeOpportunities,
   runWebDiscovery,
+  type ProviderErrorDetail,
   type SourceCategory,
 } from "@/lib/opportunities/web-discovery";
 import {
@@ -271,6 +272,9 @@ export interface AiSearchDiscovery {
   webSearchesOk: number;
   /** Provider-level errors (key rejected, 429, 5xx) — surfaced in the UI. */
   providerErrors: number;
+  /** Safe detail of the first provider error (root-cause visibility in the
+   *  UI — never a key/prompt). Null when there were no provider errors. */
+  firstProviderError: ProviderErrorDetail | null;
   /** Unique candidates that were page-checked (guarded fetch). */
   checked: number;
   /** Web opportunities extracted before dedupe. */
@@ -527,6 +531,7 @@ const emptyDiscovery = (): AiSearchDiscovery => ({
   sourceStatuses: [],
   webSearchesOk: 0,
   providerErrors: 0,
+  firstProviderError: null,
   checked: 0,
   webFound: 0,
   duplicatesRemoved: 0,
@@ -617,6 +622,7 @@ export async function runAISearch(args: {
         sourceStatuses: webResult.sourceStatuses,
         webSearchesOk: webResult.groundingCallsOk,
         providerErrors: webResult.providerErrors,
+        firstProviderError: webResult.firstProviderError,
         checked: webResult.verifiedCount,
         webFound: webResult.opportunities.length,
         duplicatesRemoved: 0,

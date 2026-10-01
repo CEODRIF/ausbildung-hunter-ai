@@ -241,12 +241,17 @@ export async function discoverCategory(args: {
   category: SourceCategory;
   webQueries: string[];
   perQueryResults?: number;
-}): Promise<{ candidates: DiscoveredCandidate[]; errors: number }> {
+}): Promise<{
+  candidates: DiscoveredCandidate[];
+  errors: number;
+  firstError: WebSearchError | null;
+}> {
   const { client, category, webQueries } = args;
   const perQuery = args.perQueryResults ?? 10;
   const candidates: DiscoveredCandidate[] = [];
   const seen = new Set<string>();
   let errors = 0;
+  let firstError: WebSearchError | null = null;
   for (const query of buildCategoryQueries(webQueries, category)) {
     let results;
     try {
@@ -255,6 +260,7 @@ export async function discoverCategory(args: {
       // Provider-level failure for this query (key rejected, outage,
       // rate limit). Count it and continue — other queries/categories
       // may still succeed.
+      if (error instanceof WebSearchError && !firstError) firstError = error;
       if (!(error instanceof WebSearchError))
         console.error("[web-search] unexpected error", error);
       errors += 1;
@@ -286,7 +292,7 @@ export async function discoverCategory(args: {
       candidates.push(candidate);
     }
   }
-  return { candidates, errors };
+  return { candidates, errors, firstError };
 }
 
 /** Search ONE registry source across its queries. Same legal contract as
@@ -297,7 +303,11 @@ export async function discoverSource(args: {
   source: SourceDefinition;
   webQueries: string[];
   perQueryResults?: number;
-}): Promise<{ candidates: DiscoveredCandidate[]; errors: number }> {
+}): Promise<{
+  candidates: DiscoveredCandidate[];
+  errors: number;
+  firstError: WebSearchError | null;
+}> {
   const { client, source, webQueries } = args;
   const perQuery = args.perQueryResults ?? 10;
   const queries = webQueries
@@ -306,6 +316,7 @@ export async function discoverSource(args: {
   const candidates: DiscoveredCandidate[] = [];
   const seen = new Set<string>();
   let errors = 0;
+  let firstError: WebSearchError | null = null;
   for (const query of queries) {
     let results;
     try {
@@ -314,6 +325,7 @@ export async function discoverSource(args: {
       // Provider-level failure for this query (key rejected, outage,
       // rate limit). Count it and continue — other sources may still
       // succeed. We never retry past the provider's own backoff.
+      if (error instanceof WebSearchError && !firstError) firstError = error;
       if (!(error instanceof WebSearchError))
         console.error("[web-search] unexpected error", error);
       errors += 1;
@@ -346,7 +358,7 @@ export async function discoverSource(args: {
       candidates.push(candidate);
     }
   }
-  return { candidates, errors };
+  return { candidates, errors, firstError };
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,6 +1065,41 @@ export interface SourceRunStatus {
 const MAX_DISCOVERY_CALLS = 16;
 
 /**
+ * Safe detail of the FIRST provider error of a run (AI Search 2.2) —
+ * surfaced in the UI diagnostics card so the root cause (bad key vs
+ * quota vs unsupported tool vs …) is visible WITHOUT opening the Vercel
+ * dashboard. Every field is provider-controlled or a numeric code —
+ * never the key, never a prompt, never personal data.
+ */
+export interface ProviderErrorDetail {
+  provider: string;
+  /** Model the failed call was sent to. */
+  model: string | null;
+  /** Real HTTP status (400/401/403/404/429/5xx) or null (network). */
+  http: number | null;
+  /** Google's numeric error code (e.g. 404), or null. */
+  code: number | null;
+  /** Google's status word (NOT_FOUND / PERMISSION_DENIED / …), or null. */
+  geminiStatus: string | null;
+  /** Controlled key-free message (safe to display). */
+  message: string;
+}
+
+function providerErrorDetail(
+  provider: string,
+  error: WebSearchError,
+): ProviderErrorDetail {
+  return {
+    provider,
+    model: error.model,
+    http: error.status,
+    code: error.geminiCode,
+    geminiStatus: error.geminiStatus,
+    message: error.message,
+  };
+}
+
+/**
  * Full web-discovery run (AI Search 2.0): registry-driven search → verify
  * → extract → normalize.
  *
@@ -1086,12 +1133,14 @@ export async function runWebDiscovery(args: {
    *  the "Google / web search" number must never count attempts). */
   groundingCallsOk: number;
   verifiedCount: number;
-  aiUsed: boolean;
-  providerErrors: number;
-  failures: Partial<Record<PageFetchFailure, number>>;
-  aiDuplicates: Array<{ fromUrl: string; toUrl: string }>;
-}> {
-  const { client, webQueries, goal, userId } = args;
+   aiUsed: boolean;
+   providerErrors: number;
+   /** Detail of the first provider error (safe — no keys), or null. */
+   firstProviderError: ProviderErrorDetail | null;
+   failures: Partial<Record<PageFetchFailure, number>>;
+   aiDuplicates: Array<{ fromUrl: string; toUrl: string }>;
+ }> {
+   const { client, webQueries, goal, userId } = args;
   const categoryCounts: Record<SourceCategory, number> = {
     search_engine: 0,
     job_portal: 0,
@@ -1108,10 +1157,12 @@ export async function runWebDiscovery(args: {
       verifiedCount: 0,
       aiUsed: false,
       providerErrors: 0,
+      firstProviderError: null,
       failures: {},
       aiDuplicates: [],
     };
   let providerErrors = 0;
+  let firstProviderError: ProviderErrorDetail | null = null;
   const collected: DiscoveredCandidate[] = [];
   const sourceCounts: Record<string, number> = {};
   const sourceStatuses: SourceRunStatus[] = [];
@@ -1133,11 +1184,13 @@ export async function runWebDiscovery(args: {
   const plain = plainQueries.slice(0, Math.max(0, callsRemaining));
   callsRemaining -= plain.length;
   if (plain.length > 0) {
-    const { candidates, errors } = await discoverCategory({
+    const { candidates, errors, firstError } = await discoverCategory({
       client,
       category: "search_engine",
       webQueries: plain,
     });
+    if (firstError && !firstProviderError)
+      firstProviderError = providerErrorDetail(client.name, firstError);
     providerErrors += errors;
     groundingCallsOk += Math.max(0, plain.length - errors);
     console.info(
@@ -1173,11 +1226,13 @@ export async function runWebDiscovery(args: {
       continue;
     }
     callsRemaining -= 1;
-    const { candidates, errors } = await discoverSource({
+    const { candidates, errors, firstError } = await discoverSource({
       client,
       source,
       webQueries: [firstQuery],
     });
+    if (firstError && !firstProviderError)
+      firstProviderError = providerErrorDetail(client.name, firstError);
     providerErrors += errors;
     groundingCallsOk += Math.max(0, 1 - errors);
     console.info(
@@ -1242,6 +1297,7 @@ export async function runWebDiscovery(args: {
     verifiedCount: verified.length,
     aiUsed,
     providerErrors,
+    firstProviderError,
     failures,
     aiDuplicates,
   };

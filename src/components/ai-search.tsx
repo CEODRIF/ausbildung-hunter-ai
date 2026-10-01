@@ -59,6 +59,15 @@ interface SourceRunStatus {
   status: "ok" | "degraded" | "failed" | "skipped_budget";
   candidates: number;
 }
+/** Safe provider-error detail (never a key/prompt) — root cause in the UI. */
+interface ProviderErrorDetail {
+  provider: string;
+  model: string | null;
+  http: number | null;
+  code: number | null;
+  geminiStatus: string | null;
+  message: string;
+}
 interface Discovery {
   configured: boolean;
   provider: string | null;
@@ -71,6 +80,8 @@ interface Discovery {
   webSearchesOk?: number;
   /** Provider-level errors (key rejected, 429, 5xx) — surfaced visibly. */
   providerErrors?: number;
+  /** First provider error detail (root-cause visibility, 2.2). */
+  firstProviderError?: ProviderErrorDetail | null;
   checked: number;
   webFound: number;
   duplicatesRemoved: number;
@@ -960,6 +971,24 @@ export function AISearchClient({
           {(discovery.providerErrors ?? 0) > 0 && (
             <div className="mt-2 rounded-xl bg-warning-soft p-3 text-sm font-medium text-warning">
               {t("aiSearch.providerErrors", { n: discovery.providerErrors ?? 0 })}
+              {discovery.firstProviderError && (
+                <p className="mt-1.5 font-mono text-xs font-normal break-words">
+                  {t("aiSearch.providerErrorDetail", {
+                    model: discovery.firstProviderError.model ?? "—",
+                    http:
+                      discovery.firstProviderError.http != null
+                        ? String(discovery.firstProviderError.http)
+                        : "—",
+                    code:
+                      discovery.firstProviderError.code != null
+                        ? String(discovery.firstProviderError.code)
+                        : "—",
+                    geminiStatus: discovery.firstProviderError.geminiStatus ?? "—",
+                  })}
+                  {" · "}
+                  {discovery.firstProviderError.message}
+                </p>
+              )}
             </div>
           )}
           <div className="mt-3 flex flex-wrap gap-1.5">

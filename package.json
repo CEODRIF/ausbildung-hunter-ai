@@ -13,7 +13,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
-    "check:env": "node scripts/check-env.mjs"
+    "check:env": "node scripts/check-env.mjs",
+    "gemini:diag": "node scripts/gemini-grounding-diagnostic.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

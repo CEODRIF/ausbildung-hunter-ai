@@ -76,7 +76,6 @@ export interface WebSearchClient {
   ): Promise<WebSearchStructuredResult<Record<string, unknown>>>;
 }
 
-/** Controlled error: provider reachable but rejected/failed the query. */
 /**
  * Controlled error: provider reachable but rejected/failed the query.
  *
@@ -90,6 +89,8 @@ export class WebSearchError extends Error {
   readonly geminiCode: number | null;
   readonly geminiStatus: string | null;
   readonly geminiMessage: string | null;
+  /** Model the failed call was sent to (null for network-level failures). */
+  readonly model: string | null;
   constructor(
     message: string,
     status: number | null = null,
@@ -98,6 +99,7 @@ export class WebSearchError extends Error {
       status: null,
       message: null,
     },
+    model: string | null = null,
   ) {
     super(message);
     this.name = "WebSearchError";
@@ -105,6 +107,7 @@ export class WebSearchError extends Error {
     this.geminiCode = gemini.code;
     this.geminiStatus = gemini.status;
     this.geminiMessage = gemini.message;
+    this.model = model;
   }
 }
 
@@ -132,6 +135,8 @@ interface GroundingDiagnostic {
   geminiMessage: string | null;
   /** Number of grounding chunks found (null = error path, not applicable). */
   groundingChunks: number | null;
+  /** Wall-clock duration of the HTTP call (null = network failure). */
+  durationMs: number | null;
 }
 
 let warnDetailBudget = 3; // cap repeated identical error noise per process
@@ -153,6 +158,7 @@ function logGrounding(kind: "ok" | "warn", d: GroundingDiagnostic): void {
   const line =
     `[GEMINI_GROUNDING] ${kind} model=${d.model} key=present ` +
     `http=${d.httpStatus ?? "n/a"} gemini=${d.geminiCode ?? "n/a"}/${d.geminiStatus ?? "n/a"}` +
+    (d.durationMs !== null ? ` durationMs=${d.durationMs}` : "") +
     (d.geminiMessage
       ? ` msg="${truncateText(scrubSecrets(d.geminiMessage.replace(/\s+/g, " ")), 200)}"`
       : "") +
@@ -246,6 +252,7 @@ async function fallbackOnModelNotFound<T>(
       geminiStatus: error.geminiStatus,
       geminiMessage: `model not available — retrying once with ${FALLBACK_GROUNDING_MODEL}`,
       groundingChunks: null,
+      durationMs: null,
     });
     return retry();
   }
@@ -253,12 +260,13 @@ async function fallbackOnModelNotFound<T>(
 }
 
 /** The single generateContent call: fetch + error mapping + diagnostics.
- *  Returns parsed JSON on 200; throws WebSearchError otherwise. */
+ *  Returns parsed JSON + duration on 200; throws WebSearchError otherwise. */
 async function geminiGenerateContent(
   model: string,
   body: Record<string, unknown>,
   key: string,
-): Promise<Record<string, unknown>> {
+): Promise<GeminiCallResult> {
+  const startedAt = Date.now();
   let response: Response;
   try {
     response = await fetch(
@@ -282,9 +290,13 @@ async function geminiGenerateContent(
       geminiStatus: null,
       geminiMessage: error instanceof Error ? error.name : "network error",
       groundingChunks: null,
+      durationMs: null,
     });
     throw new WebSearchError(
       "The web search provider was unreachable (network or timeout).",
+      null,
+      { code: null, status: null, message: null },
+      model,
     );
   }
   if (!response.ok) {
@@ -296,14 +308,22 @@ async function geminiGenerateContent(
       geminiStatus: gemini.status,
       geminiMessage: gemini.message,
       groundingChunks: null,
+      durationMs: Date.now() - startedAt,
     });
     throw new WebSearchError(
       controlledMessage(response.status, gemini),
       response.status,
       gemini,
+      model,
     );
   }
-  return (await response.json()) as Record<string, unknown>;
+  const data = (await response.json()) as Record<string, unknown>;
+  return { data, durationMs: Date.now() - startedAt };
+}
+
+interface GeminiCallResult {
+  data: Record<string, unknown>;
+  durationMs: number;
 }
 
 function isPlaceholder(value: string | undefined): boolean {
@@ -375,6 +395,7 @@ function groundingChunkCount(metadata: GroundingMetadata | undefined): number {
 function logGroundingOutcome(
   model: string,
   metadata: GroundingMetadata | undefined,
+  durationMs: number,
 ): void {
   const chunkCount = groundingChunkCount(metadata);
   logGrounding(chunkCount > 0 ? "ok" : "warn", {
@@ -389,6 +410,7 @@ function logGroundingOutcome(
           "tool may not be accepted for this model/key, or Google returned " +
           "no pages for the query",
     groundingChunks: chunkCount,
+    durationMs,
   });
 }
 
@@ -405,7 +427,7 @@ async function geminiGroundingSearchCore(
     `Only list URLs that actually appeared in the Google search results. ` +
     `Never invent, guess, or modify a URL. If nothing relevant is found, ` +
     `answer "none".`;
-  const data = await geminiGenerateContent(
+  const { data, durationMs } = await geminiGenerateContent(
     model,
     {
       contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -423,7 +445,7 @@ async function geminiGroundingSearchCore(
     Math.max(maxResults, 1),
     MAX_RESULTS_HARD_CAP,
   );
-  logGroundingOutcome(model, metadata);
+  logGroundingOutcome(model, metadata, durationMs);
   const results: WebSearchResult[] = [];
   const seen = new Set<string>();
   const add = (uri: unknown, title: unknown) => {
@@ -484,7 +506,7 @@ async function geminiStructuredSearchCore(
   key: string,
   model: string,
 ): Promise<WebSearchStructuredResult<Record<string, unknown>>> {
-  const data = await geminiGenerateContent(
+  const { data, durationMs } = await geminiGenerateContent(
     model,
     {
       contents: [{ role: "user", parts: [{ text: query.slice(0, 1200) }] }],
@@ -531,7 +553,7 @@ async function geminiStructuredSearchCore(
     if (!ok) parsed[field] = expected === "BOOLEAN" ? false : "";
   }
   const metadata = candidate?.groundingMetadata;
-  logGroundingOutcome(model, metadata);
+  logGroundingOutcome(model, metadata, durationMs);
   const results: WebSearchResult[] = [];
   const seen = new Set<string>();
   const add = (uri: unknown, title: unknown) => {

@@ -53,12 +53,31 @@ vi.mock("node:dns/promises", () => ({
 }));
 vi.mock("@/lib/web-search", () => ({
   getWebSearchClient: vi.fn(),
+  // Mirrors the real WebSearchError shape (diagnostic fields included) so
+  // provider-error plumbing under test behaves like production.
   WebSearchError: class WebSearchError extends Error {
+    readonly status: number | null;
+    readonly geminiCode: number | null;
+    readonly geminiStatus: string | null;
+    readonly geminiMessage: string | null;
+    readonly model: string | null;
     constructor(
       message: string,
-      public status: number | null = null,
+      status: number | null = null,
+      gemini: {
+        code: number | null;
+        status: string | null;
+        message: string | null;
+      } = { code: null, status: null, message: null },
+      model: string | null = null,
     ) {
       super(message);
+      this.name = "WebSearchError";
+      this.status = status;
+      this.geminiCode = gemini.code;
+      this.geminiStatus = gemini.status;
+      this.geminiMessage = gemini.message;
+      this.model = model;
     }
   },
 }));
@@ -875,5 +894,60 @@ describe("runWebDiscovery (source registry discipline)", () => {
     // `failures` + the zero opportunity count, not a hidden retry.
     for (const status of result.sourceStatuses)
       expect(["ok", "skipped_budget"]).toContain(status.status);
+    // No provider errors in this scenario → no detail object (honest null).
+    expect(result.firstProviderError).toBeNull();
+  });
+
+  it("provider failure surfaces the FIRST error detail (safe fields, no key)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.endsWith("/robots.txt"))
+          return new Response("not found", { status: 404 });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    vi.mocked(lookup).mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+    ] as never);
+    const boom = new WebSearchError(
+      "The web search provider rejected the configured key (HTTP 401, PERMISSION_DENIED)",
+      401,
+      {
+        code: 401,
+        status: "PERMISSION_DENIED",
+        message: "API key not valid. Please pass a valid API key.",
+      },
+      "gemini-2.5-flash-lite",
+    );
+    const client = {
+      name: "gemini_grounding",
+      search: vi.fn(async () => {
+        throw boom;
+      }),
+    };
+    const result = await runWebDiscovery({
+      client: client as never,
+      webQueries: [WEB_QUERY],
+      goal: "ausbildung",
+      userId: "u1",
+    });
+
+    // Every call failed → the run must carry the root-cause detail the UI
+    // renders, with only safe/provider-controlled fields.
+    expect(result.providerErrors).toBeGreaterThanOrEqual(1);
+    expect(result.firstProviderError).toEqual({
+      provider: "gemini_grounding",
+      model: "gemini-2.5-flash-lite",
+      http: 401,
+      code: 401,
+      geminiStatus: "PERMISSION_DENIED",
+      message:
+        "The web search provider rejected the configured key (HTTP 401, PERMISSION_DENIED)",
+    });
+    // The detail must never contain a key-shaped token.
+    const detail = JSON.stringify(result.firstProviderError);
+    expect(detail).not.toMatch(/AIza[0-9A-Za-z_\-]{10,}/);
   });
 });
