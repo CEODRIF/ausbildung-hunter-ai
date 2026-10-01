@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getWebSearchClient,
+  resetGroundingDiagnostics,
   resolveGeminiGroundingKey,
   WebSearchError,
 } from "@/lib/web-search";
@@ -223,5 +224,193 @@ describe("geminiGroundingSearch (mocked fetch)", () => {
     expect(String((error as Error).message)).not.toContain(
       "AIzaSy-super-secret-key-1234567",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Safe diagnostics + model fallback (production web=0 root-cause visibility)
+// ---------------------------------------------------------------------------
+describe("gemini grounding diagnostics & model fallback", () => {
+  const ORIGINAL = { ...process.env };
+  const fetchMock = vi.fn();
+  let warnSpy!: ReturnType<typeof vi.spyOn>;
+  let infoSpy!: ReturnType<typeof vi.spyOn>;
+
+  // Fresh spies per test: mockRestore() in afterEach would otherwise leave
+  // console un-patched for the remaining tests in this describe.
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    resetGroundingDiagnostics();
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    process.env = { ...ORIGINAL };
+    warnSpy?.mockRestore();
+    infoSpy?.mockRestore();
+  });
+
+  function clientWithKey(key = "AIzaSy-test-gemini-key-12345") {
+    delete process.env.AI_API_KEY;
+    delete process.env.AI_API_URL;
+    process.env.GEMINI_API_KEY = key;
+    // NOTE: GEMINI_GROUNDING_MODEL is intentionally left untouched here —
+    // individual tests set it (the model is read at CALL time).
+    const client = getWebSearchClient();
+    if (!client) throw new Error("expected a client");
+    return client;
+  }
+
+  function geminiError(status: number, body: unknown) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("stale/shut-down model (404) → ONE fallback to gemini-2.5-flash, then success", async () => {
+    // Production scenario: GEMINI_GROUNDING_MODEL still points at a
+    // shut-down model (e.g. gemini-2.0-flash) → every call 404s.
+    process.env.GEMINI_GROUNDING_MODEL = "gemini-2.0-flash";
+    fetchMock
+      .mockResolvedValueOnce(
+        geminiError(404, {
+          error: {
+            code: 404,
+            status: "NOT_FOUND",
+            message: "models/gemini-2.0-flash is not found for API key.",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        groundingResponse([
+          { web: { uri: "https://example.test/job", title: "Ausbildung 2027" } },
+        ]),
+      );
+    const client = clientWithKey();
+    const results = await client.search("q", 5);
+
+    expect(results).toEqual([
+      { title: "Ausbildung 2027", url: "https://example.test/job", snippet: "" },
+    ]);
+    // Exactly two calls: the failed model + the fallback — no retry loops.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      "/models/gemini-2.0-flash:generateContent",
+    );
+    expect(String(fetchMock.mock.calls[1][0])).toContain(
+      "/models/gemini-2.5-flash:generateContent",
+    );
+    // The fallback was announced in the safe diagnostics.
+    expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("retrying once with gemini-2.5-flash"))).toBe(true);
+  });
+
+  it("401 (bad key) → NO model fallback, structured error detail kept", async () => {
+    fetchMock.mockResolvedValue(
+      geminiError(401, {
+        error: {
+          code: 401,
+          status: "PERMISSION_DENIED",
+          message: "API key not valid. Please pass a valid API key.",
+        },
+      }),
+    );
+    const client = clientWithKey();
+    const error = (await client.search("q", 10).catch((e: unknown) => e)) as WebSearchError;
+    expect(error).toBeInstanceOf(WebSearchError);
+    expect(error.status).toBe(401);
+    expect(error.geminiCode).toBe(401);
+    expect(error.geminiStatus).toBe("PERMISSION_DENIED");
+    // Controlled, key-free phrase — safe for UI/log surfaces.
+    expect(error.message).toContain("rejected the configured key");
+    expect(error.message).toContain("HTTP 401");
+    // One call only — a key problem is not fixed by switching models.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("diagnostic log line: model + http + gemini code/message — NEVER the key", async () => {
+    resetGroundingDiagnostics(); // fresh warn budget (earlier tests spent it)
+    const client = clientWithKey("AIzaSy-super-secret-key-1234567");
+    fetchMock.mockResolvedValue(
+      geminiError(403, {
+        error: {
+          code: 403,
+          status: "PERMISSION_DENIED",
+          // Even if Google ever echoed key material: it must be scrubbed.
+          message: "API key AIzaSy-super-secret-key-1234567 has no access",
+        },
+      }),
+    );
+    await client.search("q", 10).catch(() => {});
+
+    const line = warnSpy.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith("[GEMINI_GROUNDING]"));
+    expect(line).toBeDefined();
+    expect(line).toContain("model=gemini-2.5-flash-lite");
+    expect(line).toContain("http=403");
+    expect(line).toContain("gemini=403/PERMISSION_DENIED");
+    expect(line).not.toContain("AIzaSy-super-secret-key-1234567");
+    expect(line).toContain("[key-redacted]");
+  });
+
+  it("HTTP 200 but NO grounding metadata → [] + honest warning (tool not accepted?)", async () => {
+    resetGroundingDiagnostics();
+    fetchMock.mockResolvedValue(
+      Response.json({
+        candidates: [{ content: { parts: [{ text: "none" }] } }],
+      }),
+    );
+    const client = clientWithKey();
+    await expect(client.search("q", 10)).resolves.toEqual([]);
+    const line = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => l.includes("groundingChunks=0"));
+    expect(line).toBeDefined();
+    expect(line).toContain("NO grounding metadata");
+    expect(line).toContain("model=gemini-2.5-flash-lite");
+  });
+
+  it("searchStructured: same fallback + diagnostics apply", async () => {
+    process.env.GEMINI_GROUNDING_MODEL = "gemini-2.0-flash";
+    const schema = {
+      properties: {
+        officialWebsite: { type: "STRING" as const },
+      },
+      required: ["officialWebsite"],
+    };
+    fetchMock
+      .mockResolvedValueOnce(
+        geminiError(404, {
+          error: {
+            code: 404,
+            status: "NOT_FOUND",
+            message: "models/gemini-2.0-flash is not found.",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { text: '{"officialWebsite":"https://www.beispiel-gmbh.de"}' },
+                ],
+              },
+              groundingMetadata: {
+                groundingChunks: [
+                  { web: { uri: "https://www.beispiel-gmbh.de", title: "Beispiel" } },
+                ],
+              },
+            },
+          ],
+        }),
+      );
+    const client = clientWithKey();
+    const out = await client.searchStructured!("official website of Beispiel GmbH", schema);
+    expect(out.data.officialWebsite).toBe("https://www.beispiel-gmbh.de");
+    expect(out.results).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
