@@ -22,6 +22,7 @@ import {
   type Opportunity,
   type OpportunitySearchParams,
   type OpportunitySearchResponse,
+  type OpportunityWindow,
   type SourceStatus,
 } from "@/lib/opportunities/types";
 
@@ -187,6 +188,30 @@ async function fetchWindow(
   // cache self-heals quickly once the source recovers.
   await writeCachedPayload(key, payload, window.degraded ? DEGRADED_CACHE_TTL_MS : CACHE_TTL_MS);
   return payload;
+}
+
+/**
+ * The cached, user-independent window WITHOUT per-user matching and without
+ * page slicing — for programmatic consumers (Company & Email Discovery)
+ * that need the full filtered set, not one UI page.
+ *
+ * Same shared cache, same provider call, same failure semantics as
+ * `searchOpportunities`; the returned window never carries `match` data
+ * (it is null in the shared payload by design).
+ */
+export async function fetchOpportunityWindowCached(
+  params: OpportunitySearchParams,
+): Promise<OpportunityWindow> {
+  const payload = await fetchWindow(params);
+  return {
+    mode: payload.mode,
+    window: payload.window,
+    total: payload.total,
+    scan_truncated: payload.scan_truncated,
+    exhausted: payload.exhausted,
+    degraded: payload.degraded,
+    filter_counts: payload.filter_counts,
+  };
 }
 
 /** The authenticated user's latest VALIDATED candidate profile, fetched

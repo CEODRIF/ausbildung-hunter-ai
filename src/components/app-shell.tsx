@@ -52,6 +52,11 @@ const NAV_SECTIONS: NavSection[] = [
       { labelKey: "nav.aiAssistant", href: "/ai", icon: "spark" },
       { labelKey: "nav.opportunities", href: "/opportunities", icon: "target" },
       {
+        labelKey: "nav.companyDiscovery",
+        href: "/company-discovery",
+        icon: "globe",
+      },
+      {
         labelKey: "nav.bewerbungScanner",
         href: "/bewerbung-scanner",
         icon: "scan",
@@ -126,6 +131,10 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
   {
     match: (p) => p === "/opportunities",
     heading: { titleKey: "pages.opportunities.title", subtitleKey: "pages.opportunities.subtitle" },
+  },
+  {
+    match: (p) => p === "/company-discovery" || p.startsWith("/company-discovery/"),
+    heading: { titleKey: "pages.companyDiscovery.title", subtitleKey: "pages.companyDiscovery.subtitle" },
   },
   {
     match: (p) => p === "/applications/new" || p.startsWith("/applications/new/"),

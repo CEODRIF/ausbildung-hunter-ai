@@ -31,6 +31,7 @@ export type RateLimitScope =
   | "ai_search"
   | "opportunity_search"
   | "opportunity_save"
+  | "company_discovery"
   | "email_oauth"
   | "account_export"
   | "account_delete"
@@ -60,6 +61,10 @@ export const RATE_LIMITS: Record<
   ai_search: { max: 4, windowSeconds: 60 },
   opportunity_search: { max: 10, windowSeconds: 60 },
   opportunity_save: { max: 10, windowSeconds: 60 },
+  // company_discovery: a start spawns a heavy multi-source run (BA batch +
+  // per-company page fetches + bounded Tavily); 4/min stops run spam while
+  // allowing legitimate re-runs with adjusted parameters.
+  company_discovery: { max: 4, windowSeconds: 60 },
   email_oauth: { max: 5, windowSeconds: 60 },
   account_export: { max: 2, windowSeconds: 3600 },
   account_delete: { max: 5, windowSeconds: 3600 },
