@@ -32,6 +32,11 @@ export interface BrandLogoProps {
    * (the auth panel is dark in both themes). Default follows the theme.
    */
   tone?: "auto" | "light";
+  /**
+   * Extra classes for the wordmark text only (e.g. `hidden sm:inline` to
+   * collapse to the mark on narrow headers). Never affects the mark.
+   */
+  wordmarkClassName?: string;
 }
 
 function Mark({ size }: { size: number }) {
@@ -66,6 +71,7 @@ export function BrandLogo({
   href = "/",
   label = "Ausbildung Hunter AI",
   tone = "auto",
+  wordmarkClassName = "",
 }: BrandLogoProps) {
   const wordmarkClass =
     tone === "light"
@@ -76,10 +82,10 @@ export function BrandLogo({
     variant === "mark" ? (
       <Mark size={size} />
     ) : (
-      <span className="flex items-center gap-2.5">
+      <span className="flex min-w-0 items-center gap-2.5">
         <Mark size={size} />
         <span
-          className={`text-sm font-bold tracking-[-0.02em] ${wordmarkClass}`}
+          className={`min-w-0 truncate text-sm font-bold tracking-[-0.02em] ${wordmarkClass} ${wordmarkClassName}`}
           style={{ lineHeight: 1 }}
         >
           Ausbildung Hunter <span className={accentClass}>AI</span>

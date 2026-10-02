@@ -13,8 +13,6 @@
  */
 
 const de = {
-  // ---- Shell: sidebar sections + navigation ------------------------------
-  nav: {
   premium: {
     nav: {
       discover: "Entdecken",
@@ -76,6 +74,9 @@ const de = {
       offersCount: "{count} Angebote",
     },
   },
+  // ---- Shell: sidebar sections + navigation ------------------------------
+  nav: {
+
 
     profile: "Profil",
     workspace: "Arbeitsbereich",
@@ -589,6 +590,7 @@ const de = {
     clear: "Filter zurücksetzen",
     search: "Suchen",
     searching: "Suche läuft…",
+    untitled: "Kein Titel",
     results: "{count} Ergebnisse",
     resultsScanWindow: "{count} Treffer im gescannten Quellfenster",
     sourceLimit: "(Quelle listet die ersten {count})",
@@ -1477,7 +1479,6 @@ const de = {
 export type Dict = typeof de;
 
 const en: Dict = {
-  nav: {
   premium: {
     nav: {
       discover: "Discover",
@@ -1538,6 +1539,8 @@ const en: Dict = {
       offersCount: "{count} offers",
     },
   },
+  nav: {
+
 
     profile: "Profile",
     workspace: "Workspace",
@@ -2012,6 +2015,7 @@ const en: Dict = {
     clear: "Clear filters",
     search: "Search",
     searching: "Searching…",
+    untitled: "Untitled",
     results: "{count} results",
     resultsScanWindow: "{count} matches in the scanned source window",
     sourceLimit: "(source exposes the first {count})",
@@ -2883,7 +2887,6 @@ const en: Dict = {
 };
 
 const fr: Dict = {
-  nav: {
   premium: {
     nav: {
       discover: "Découvrir",
@@ -2945,6 +2948,8 @@ const fr: Dict = {
       offersCount: "{count} offres",
     },
   },
+  nav: {
+
 
     profile: "Profil",
     workspace: "Espace de travail",
@@ -3419,6 +3424,7 @@ const fr: Dict = {
     clear: "Effacer les filtres",
     search: "Rechercher",
     searching: "Recherche en cours…",
+    untitled: "Sans titre",
     results: "{count} résultats",
     resultsScanWindow: "{count} correspondances dans la fenêtre de la source",
     sourceLimit: "(la source liste les {count} premières)",
@@ -4296,7 +4302,6 @@ const fr: Dict = {
 };
 
 const ar: Dict = {
-  nav: {
   premium: {
     nav: {
       discover: "استكشف",
@@ -4356,6 +4361,8 @@ const ar: Dict = {
       offersCount: "{count} فرص",
     },
   },
+  nav: {
+
 
     profile: "الملف الشخصي",
     workspace: "مساحة العمل",
@@ -4830,6 +4837,7 @@ const ar: Dict = {
     clear: "مسح عوامل التصفية",
     search: "بحث",
     searching: "جارٍ البحث…",
+    untitled: "بدون عنوان",
     results: "{count} نتائج",
     resultsScanWindow: "{count} تطابق في نافذة المصدر الممسوحة",
     sourceLimit: "(المصدر يعرض أول {count})",

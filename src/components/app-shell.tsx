@@ -664,7 +664,12 @@ export function AppShell({
               >
                 <MoreHorizontal size={19} strokeWidth={1.8} className="rotate-90" />
               </button>
-              <BrandLogo variant={pathname === "/dashboard" ? "mark" : "full"} size={32} href="/dashboard" />
+              <BrandLogo
+                variant={pathname === "/dashboard" ? "mark" : "full"}
+                size={32}
+                href="/dashboard"
+                wordmarkClassName="hidden sm:inline"
+              />
             </div>
 
             {/* primary items (desktop) */}
@@ -744,8 +749,13 @@ export function AppShell({
         </header>
 
         {/* ------------------------------------------------ content -------- */}
+        {/* pb-28 keeps page content clear of the fixed bottom nav on phones;
+            the footer wrapper below gets its own spacer because it sits
+            after the main element and would otherwise be covered by the nav. */}
         <main className="flex-1 pb-28 lg:pb-0">{children}</main>
-        <LegalFooter variant="bar" />
+        <div className="pb-24 lg:pb-0">
+          <LegalFooter variant="bar" />
+        </div>
       </div>
 
       {/* ------------------------------------------------ mobile drawer ---- */}
@@ -756,8 +766,13 @@ export function AppShell({
           onClick={closeMobile}
         />
       )}
+      {/* Off-canvas drawer — mobile only. `hidden max-lg:flex` keeps it out
+          of the desktop flow entirely (no content leak), while on phones it
+          slides from the logical start edge (left LTR, right RTL). The fixed
+          290px width + opaque bg-surface + z-40 keeps it inside the viewport
+          above the scrim and the bottom nav. */}
       <aside
-        className={`fixed inset-y-0 start-0 z-40 flex w-[290px] flex-col border-e border-line bg-surface transition-transform duration-200 rounded-e-3xl ${
+        className={`fixed inset-y-0 start-0 z-40 hidden max-lg:flex w-[290px] max-w-[calc(100vw-1.5rem)] flex-col border-e border-line bg-surface transition-transform duration-200 rounded-e-3xl ${
           mobileOpen
             ? "max-lg:translate-x-0"
             : "ltr:max-lg:-translate-x-full rtl:max-lg:translate-x-full"

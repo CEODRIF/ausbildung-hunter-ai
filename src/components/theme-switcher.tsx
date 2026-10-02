@@ -78,6 +78,16 @@ export function ThemeSwitcher() {
     } catch {
       /* ignore persistence errors */
     }
+    // Apply the persisted choice immediately — the `dark` class on <html>
+    // is the single theme mutation (same mechanism as themePreloadScript).
+    try {
+      applyMode(
+        next,
+        window.matchMedia("(prefers-color-scheme: dark)").matches,
+      );
+    } catch {
+      /* DOM unavailable */
+    }
     const html = document.documentElement;
     html.classList.add("theme-anim");
     window.setTimeout(() => html.classList.remove("theme-anim"), 350);

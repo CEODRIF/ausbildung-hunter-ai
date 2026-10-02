@@ -67,7 +67,7 @@ export default async function Home() {
               <span className="h-1.5 w-1.5 rounded-full bg-accent" />
               {t("landing.heroBadge")}
             </div>
-            <h1 className="display-title text-neon-gradient anim-fade-up text-5xl sm:text-7xl">
+            <h1 className="display-title text-neon-gradient anim-fade-up text-4xl break-words sm:text-5xl md:text-6xl xl:text-7xl">
               {t("premium.hero.title")}
             </h1>
             <p className="anim-fade-up mt-5 max-w-xl text-base leading-7 text-muted sm:text-lg [animation-delay:80ms]">
@@ -188,7 +188,7 @@ export default async function Home() {
           <div className="hero-orb pointer-events-none absolute -end-20 -top-20 h-72 w-72 rounded-full" />
           <div className="grid-fade pointer-events-none absolute inset-x-0 bottom-0 h-40 opacity-50 [mask-image:linear-gradient(to_bottom,transparent,black)]" />
           <div className="relative max-w-xl">
-            <h2 className="display-title text-4xl text-ink sm:text-5xl">
+            <h2 className="display-title text-3xl text-ink break-words sm:text-4xl md:text-5xl">
               {t("premium.hero.title")}
             </h2>
             <p className="mt-3 text-sm leading-6 text-muted">
