@@ -28,6 +28,9 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { createDiscoveryDraftAction } from "@/app/company-discovery/actions";
+import type { DiscoveryCampaignRow } from "@/lib/company-discovery/campaigns";
+import type { RunCompanyResult } from "@/lib/company-discovery/runs";
 import { useI18n } from "@/lib/i18n";
 import type { TranslateVars } from "@/lib/i18n/core";
 import {
@@ -62,6 +65,20 @@ const POLL_INTERVAL_MS = 1500;
 /** After this long we stop polling and hand control back to the user — the
  *  run may legitimately continue server-side; we never invent a state. */
 const POLL_BUDGET_MS = 90_000;
+
+/** A failed draft creation → the message that actually applies. */
+function draftErrorKey(code: string | undefined): string {
+  if (code === "no_email_account") return "companyDiscovery.campaigns.noAccount";
+  if (code === "unauthorized") return "companyDiscovery.error.unauthorized";
+  return "companyDiscovery.campaigns.createFailed";
+}
+
+/** Locale-aware date for the campaign history (real timestamps only). */
+function formatDate(iso: string, lang: string): string {
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(lang, { dateStyle: "medium" }).format(date);
+}
 
 function beginnLabelKey(mode: BeginnMode): string {
   switch (mode) {
@@ -170,11 +187,22 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
   );
 }
 
-export function CompanyDiscovery() {
-  const { t } = useI18n();
+export function CompanyDiscovery({
+  initialRun = null,
+  initialCompanies = [],
+  campaigns = [],
+}: {
+  /** Last persisted run, rendered by the server — survives refresh/re-login. */
+  initialRun?: DiscoveryRun | null;
+  /** Companies + public addresses of that run, read from the database. */
+  initialCompanies?: RunCompanyResult[];
+  /** The user's recent campaigns (persisted rows). */
+  campaigns?: DiscoveryCampaignRow[];
+}) {
+  const { t, lang } = useI18n();
 
   // ---- form state ----------------------------------------------------------
-  const [phase, setPhase] = useState<Phase>("idle");
+  const [phase, setPhase] = useState<Phase>(initialRun ? "created" : "idle");
   const [field, setField] = useState("");
   const [role, setRole] = useState("");
   const [beginnMode, setBeginnMode] = useState<BeginnMode>("from_now");
@@ -183,7 +211,15 @@ export function CompanyDiscovery() {
   const [target, setTarget] = useState(String(DISCOVERY_TARGET_DEFAULT));
   const [onlyPublicEmail, setOnlyPublicEmail] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [run, setRun] = useState<DiscoveryRun | null>(null);
+  const [run, setRun] = useState<DiscoveryRun | null>(initialRun);
+  const [companies, setCompanies] = useState<RunCompanyResult[]>(initialCompanies);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [draftState, setDraftState] = useState<
+    | { status: "saving" }
+    | { status: "saved"; draftId: string }
+    | { status: "error"; key: string }
+    | null
+  >(null);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
   const [pollExpired, setPollExpired] = useState(false);
@@ -385,6 +421,73 @@ export function CompanyDiscovery() {
     setPollExpired(false);
   }
 
+  // ---- persisted results (companies + public emails) -----------------------
+  // Always read from the database: the outcome of a run must be identical
+  // after a refresh, a new device or a re-login — never client state only.
+  useEffect(() => {
+    if (phase !== "created" || !runId) return;
+    let active = true;
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/company-discovery/${runId}/results`,
+          { cache: "no-store" },
+        );
+        const body = (await response.json().catch(() => null)) as
+          | (DiscoveryErrorBody & { companies?: RunCompanyResult[] })
+          | null;
+        if (!active || !response.ok || !body?.companies) return;
+        setCompanies(body.companies);
+      } catch {
+        // Keep what is already rendered: an unreadable refresh must never
+        // empty a result the user can see.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [phase, runId]);
+
+  const acceptedCompanies = useMemo(
+    () => companies.filter((company) => company.status === "accepted"),
+    [companies],
+  );
+
+  function toggle(companyId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(companyId)) next.delete(companyId);
+      else next.add(companyId);
+      return next;
+    });
+  }
+
+  /** Turn the selection into a persisted composer draft (no email sent). */
+  async function onCreateCampaign() {
+    if (!runId || selected.size === 0 || draftState?.status === "saving") return;
+    const recipients = acceptedCompanies
+      .filter((company) => selected.has(company.companyId))
+      .map((company) => ({
+        email: company.emails[0]?.email ?? "",
+        companyName: company.companyName,
+      }))
+      .filter((recipient) => recipient.email.length > 0);
+    setDraftState({ status: "saving" });
+    try {
+      const result = await createDiscoveryDraftAction({ runId, recipients });
+      setDraftState(
+        result.ok && result.draftId
+          ? { status: "saved", draftId: result.draftId }
+          : { status: "error", key: draftErrorKey(result.code) },
+      );
+    } catch {
+      setDraftState({
+        status: "error",
+        key: "companyDiscovery.campaigns.createFailed",
+      });
+    }
+  }
+
   // ---- inputs (shared styling) ----------------------------------------------
   const inputClass =
     "w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent";
@@ -545,6 +648,123 @@ export function CompanyDiscovery() {
           <p className="mt-4 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-5 text-ink-soft">
             {t("companyDiscovery.runCreated.resultsNote")}
           </p>
+
+          {/* ---- Public emails (only what was actually published) ---------- */}
+          <div className="mt-5 border-t border-line pt-4">
+            <h3 className="text-sm font-bold text-ink">
+              {t("companyDiscovery.results.title")}
+            </h3>
+            {acceptedCompanies.length === 0 ? (
+              <p className="mt-2 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-5 text-ink-soft">
+                {t("companyDiscovery.results.empty")}
+              </p>
+            ) : (
+              <>
+                <p className="mt-1 text-xs leading-5 text-muted">
+                  {t("companyDiscovery.results.selectHint")}
+                </p>
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full min-w-[34rem] border-collapse text-sm">
+                    <thead>
+                      <tr className="text-xs uppercase text-muted">
+                        <th className="w-8 py-2 pe-2" />
+                        <th className="py-2 pe-3 text-start">
+                          {t("companyDiscovery.results.columns.company")}
+                        </th>
+                        <th className="py-2 pe-3 text-start">
+                          {t("companyDiscovery.results.columns.role")}
+                        </th>
+                        <th className="py-2 pe-3 text-start">
+                          {t("companyDiscovery.results.columns.city")}
+                        </th>
+                        <th className="py-2 pe-3 text-start">
+                          {t("companyDiscovery.results.columns.email")}
+                        </th>
+                        <th className="py-2 text-start">
+                          {t("companyDiscovery.results.columns.source")}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {acceptedCompanies.map((company) => {
+                        const address = company.emails[0] ?? null;
+                        return (
+                          <tr key={company.companyId} className="border-t border-line">
+                            <td className="py-2 pe-2">
+                              {address && (
+                                <input
+                                  type="checkbox"
+                                  checked={selected.has(company.companyId)}
+                                  onChange={() => toggle(company.companyId)}
+                                  aria-label={company.companyName}
+                                />
+                              )}
+                            </td>
+                            <td className="py-2 pe-3 font-semibold text-ink">
+                              {company.companyName}
+                            </td>
+                            <td className="py-2 pe-3 text-ink-soft">
+                              {company.role ?? "—"}
+                            </td>
+                            <td className="py-2 pe-3 text-ink-soft">
+                              {company.city ?? "—"}
+                            </td>
+                            <td dir="ltr" className="py-2 pe-3 font-mono text-xs">
+                              {address ? (
+                                address.email
+                              ) : (
+                                <span className="font-sans font-semibold text-muted">
+                                  {t("companyDiscovery.results.noEmail")}
+                                </span>
+                              )}
+                            </td>
+                            <td dir="ltr" className="py-2 text-xs text-muted">
+                              {address ? (address.sourceUrl ?? address.sourceType) : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <a
+                    href={`/api/company-discovery/${run.runId}/export?lang=${lang}`}
+                    className="rounded-xl bg-navy px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent"
+                  >
+                    {t("companyDiscovery.results.download")}
+                  </a>
+                  <button
+                    type="button"
+                    onClick={onCreateCampaign}
+                    disabled={selected.size === 0 || draftState?.status === "saving"}
+                    className="rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {t("companyDiscovery.campaigns.create")}
+                  </button>
+                  <span className="text-xs text-muted">
+                    {t("companyDiscovery.campaigns.selected", {
+                      count: selected.size,
+                    })}
+                  </span>
+                  {draftState?.status === "saved" && (
+                    <Link
+                      href={`/applications/new?draft=${draftState.draftId}`}
+                      className="text-xs font-semibold text-accent underline"
+                    >
+                      {t("companyDiscovery.campaigns.open")}
+                    </Link>
+                  )}
+                </div>
+                {draftState?.status === "error" && (
+                  <p className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-sm font-semibold text-danger">
+                    {t(draftState.key)}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
 
           <button
             type="button"
@@ -793,6 +1013,64 @@ export function CompanyDiscovery() {
             : t("companyDiscovery.form.search")}
         </button>
       </form>
+
+      {/* ---- Previous Campaigns (persisted rows, read on the server) ------ */}
+      <section className="mt-6 rounded-2xl border border-line bg-surface p-4 sm:p-5">
+        <h2 className="text-sm font-bold text-ink">
+          {t("companyDiscovery.campaigns.title")}
+        </h2>
+        {campaigns.length === 0 ? (
+          <p className="mt-2 text-xs leading-5 text-muted">
+            {t("companyDiscovery.campaigns.empty")}
+          </p>
+        ) : (
+          <ul className="mt-2 divide-y divide-line">
+            {campaigns.map((campaign) => (
+              <li
+                key={campaign.campaignId}
+                className="flex flex-wrap items-center justify-between gap-3 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-ink">
+                    {campaign.title || t("companyDiscovery.campaigns.run")}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    {t("companyDiscovery.campaigns.recipients", {
+                      count: campaign.totalRecipients,
+                    })}
+                    {" · "}
+                    {t("companyDiscovery.campaigns.created")}:{" "}
+                    {formatDate(campaign.createdAt, lang)}
+                    {" · "}
+                    {t("companyDiscovery.campaigns.updated")}:{" "}
+                    {formatDate(campaign.updatedAt, lang)}
+                  </p>
+                  {campaign.discoveryRunId && (
+                    <p
+                      dir="ltr"
+                      className="mt-0.5 truncate font-mono text-xs text-ink-soft"
+                    >
+                      {t("companyDiscovery.campaigns.run")}:{" "}
+                      {campaign.discoveryRunId}
+                    </p>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="rounded-lg bg-accent-soft px-2.5 py-1 text-xs font-bold text-accent">
+                    {t(`companyDiscovery.campaigns.status.${campaign.status}`)}
+                  </span>
+                  <Link
+                    href={`/applications/campaign/${campaign.campaignId}`}
+                    className="rounded-xl border border-line px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-surface-2"
+                  >
+                    {t("companyDiscovery.campaigns.open")}
+                  </Link>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

@@ -4,18 +4,22 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Phase 2 must run WITHOUT the email table.
+ * The email layer is additive, never load-bearing.
  *
- * Production fact this locks: `discovery_runs`, `discovery_candidates` and
- * `discovery_companies` exist, `discovery_company_emails` does NOT (it belongs
- * to the Email phase). A Company Discovery run therefore has to complete
- * without ever touching that table — if any accidental dependency creeps into
- * the run path, every user whose database lacks the table would see a failed
- * search while the offer engine itself works fine.
+ * Company Discovery shipped in production with `discovery_company_emails`
+ * MISSING (the migration was only partially applied) while the three core
+ * tables existed. That must stay survivable: a run has to keep counting and
+ * storing companies even when the email table is absent, and an address must
+ * only ever come from a published source — the run must never invent one to
+ * fill the gap.
  *
- * The store keeps `recordCompanyEmail` as the deliberate seam for the Email
- * phase; these tests assert that nothing outside the store uses it yet, and
- * that `onlyPublicEmail` is a recorded preference — not a Phase 2 gate.
+ * These are the contracts this file locks:
+ *   1. storing an address can never fail a run (guarded write, logged);
+ *   2. `onlyPublicEmail` gates COUNTING (that is what it means), and a company
+ *      dropped for a missing address is recorded with an audit reason;
+ *   3. the pipeline reaches for the email table only through the store;
+ *   4. the words that would indicate a fabricated address ("info@", a name as
+ *      a host) appear nowhere in the resolution path.
  */
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -32,68 +36,77 @@ function walk(dir: string, out: string[] = []): string[] {
 
 const STORE = resolve(root, "src/lib/company-discovery/runs.ts");
 const srcFiles = walk(resolve(root, "src"));
-const pipelineSrc = read("src/lib/company-discovery/search.ts");
-const startRouteSrc = read("src/app/api/company-discovery/start/route.ts");
+const pipeline = read("src/lib/company-discovery/search.ts");
+const emails = read("src/lib/company-discovery/emails.ts");
 
-describe("Phase 2 has no email dependency", () => {
-  it("no file under src/ touches the email table except the store's own seam", () => {
+describe("a run survives a database without the email table", () => {
+  it("guards the email write so a missing table cannot fail the run", () => {
+    const write = pipeline.slice(
+      pipeline.indexOf("if (emailResolution) {"),
+      pipeline.indexOf("countedKeys.add(key)"),
+    );
+    expect(write).toContain("try {");
+    expect(write).toContain("await recordCompanyEmail(");
+    expect(write).toContain("catch (error)");
+    expect(write).toContain("console.error(");
+    // The company itself is recorded BEFORE the address is stored.
+    expect(pipeline.indexOf("await recordCompany(runId, {")).toBeLessThan(
+      pipeline.indexOf("await recordCompanyEmail("),
+    );
+  });
+
+  it("touches the email table only through the store (no raw access)", () => {
     const offenders = srcFiles
-      .filter((file) => file !== STORE)
+      .filter((file) => file !== STORE && file !== resolve(root, "src/lib/company-discovery/emails.ts"))
       .filter((file) => readFileSync(file, "utf8").includes("discovery_company_emails"))
       .map((file) => file.slice(root.length + 1));
     expect(offenders).toEqual([]);
   });
+});
 
-  it("no file under src/ calls recordCompanyEmail yet (Email phase seam)", () => {
-    const offenders = srcFiles
-      .filter((file) => file !== STORE)
-      .filter((file) => readFileSync(file, "utf8").includes("recordCompanyEmail"))
-      .map((file) => file.slice(root.length + 1));
-    expect(offenders).toEqual([]);
-  });
-
-  it("the pipeline never imports the email recorder", () => {
-    expect(pipelineSrc).not.toContain("recordCompanyEmail");
-    expect(pipelineSrc).not.toContain("discovery_company_emails");
-  });
-
-  it("the run path only speaks to the three tables that exist", () => {
-    const tables = new Set(
-      [...read("src/lib/company-discovery/runs.ts").matchAll(/\.from\("([^"]+)"\)/g)].map(
-        (match) => match[1],
-      ),
+describe("onlyPublicEmail gates counting, honestly", () => {
+  it("counts a company only when the option allows it", () => {
+    const gate = pipeline.slice(
+      pipeline.indexOf("if (\n        !countsAsResult("),
+      pipeline.indexOf("const { companyId } = await recordCompany"),
     );
-    expect([...tables].sort()).toEqual([
-      "discovery_candidates",
-      "discovery_companies",
-      "discovery_company_emails", // defined, never reached by a Phase 2 run
-      "discovery_runs",
-    ]);
-    // Of those, the pipeline's own queries are the three core ones.
-    const pipelineTables = [
-      ...pipelineSrc.matchAll(/\.from\("([^"]+)"\)/g),
-    ].map((match) => match[1]);
-    expect(pipelineTables).toEqual([]);
+    expect(gate).toContain("onlyPublicEmail: params.onlyPublicEmail");
+    expect(gate).toContain("hasPublicEmail: emailResolution !== null");
+    // Dropped for a missing address → recorded with an audit reason, not counted.
+    expect(gate).toContain('rejectReason: NO_PUBLIC_EMAIL_REASON');
+    expect(gate).toContain("continue;");
+    expect(pipeline).toContain('const NO_PUBLIC_EMAIL_REASON = "no_public_email"');
+  });
+
+  it("never inflates the counters to reach the target", () => {
+    // foundCompanies only ever increments on an accepted company.
+    const increments = pipeline.match(/counters\.foundCompanies \+= 1;/g) ?? [];
+    expect(increments).toHaveLength(1);
   });
 });
 
-describe("onlyPublicEmail is recorded, not enforced, in Phase 2", () => {
-  it("is part of the validated params (audit + future Email phase)", () => {
-    expect(read("src/lib/company-discovery/types.ts")).toContain(
-      "onlyPublicEmail: z.boolean().default(true)",
+describe("no fabricated addresses anywhere in the resolution path", () => {
+  it("never builds an address from the company name or a fixed prefix", () => {
+    // Comments explain the rule; only executable lines are inspected here.
+    const code = emails
+      .split("\n")
+      .filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line))
+      .join("\n");
+    expect(code).not.toMatch(/["'`][\w.+-]+@/); // no hardcoded address literal
+    expect(code).not.toMatch(/@\$\{|\$\{[^}]*\}@/); // no interpolated address
+    expect(code).toContain("normalizeOpportunityEmail"); // only published values
+  });
+
+  it("derives a website only from published evidence", () => {
+    expect(emails).toContain("companyWebsiteFromPublishedEmail");
+    expect(emails).not.toMatch(/slugify|toLowerCase\(\)\.replace\(\/\[\^a-z\]\/g, ""\)\s*\+\s*"\.de"/);
+    expect(read("src/lib/company-discovery/search.ts")).toContain(
+      "websiteUrl: opp.enrichment?.website_url ?? null",
     );
   });
 
-  it("never gates the candidate engine", () => {
-    expect(pipelineSrc).not.toContain("onlyPublicEmail");
-    expect(startRouteSrc).not.toContain("onlyPublicEmail");
-    // The engine counts a company when it is IDENTIFIED and passes the gates
-    // (documented in search.ts) — no email resolution happens in this phase.
-    expect(pipelineSrc).toContain("no email logic in this phase");
-  });
-
-  it("counts a company without any email lookup (dedupe on the documented name)", () => {
-    expect(pipelineSrc).toContain("countedKeys.add(key)");
-    expect(pipelineSrc).toContain("counters.foundCompanies += 1");
+  it("keeps the fetch budget bounded per run", () => {
+    expect(pipeline).toContain("MAX_EMAIL_SITE_PASSES_PER_RUN");
+    expect(pipeline).toContain("fetchPages: emailSiteBudget > 0 ? fetchCompanySiteTextPages : null");
   });
 });

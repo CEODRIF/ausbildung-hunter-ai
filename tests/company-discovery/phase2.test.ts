@@ -122,7 +122,11 @@ const RUN_PARAMS: DiscoveryRunParams = {
   beginn: { mode: "year", year: 2027 },
   goal: "ausbildung",
   targetCompanies: 100,
-  onlyPublicEmail: true,
+  // The seeded offers publish no address, and these tests cover the CANDIDATE
+  // ENGINE (dedupe, gates, target stop, budgets, partial results). The
+  // onlyPublicEmail counting rule has its own coverage (email-discovery.test.ts
+  // + the reject path below), so the engine tests ask for "all companies".
+  onlyPublicEmail: false,
 };
 
 function baseRun(overrides: Partial<DiscoveryRun> = {}): DiscoveryRun {

@@ -57,6 +57,25 @@ interface DiscoveryRunRow {
   updated_at: string;
 }
 
+/** Raw `discovery_companies` row (snake_case, exactly as stored). */
+interface DiscoveryCompanyRow {
+  id: string;
+  company_key: string;
+  company_name: string;
+  website_url: string | null;
+  role: string | null;
+  field: string | null;
+  offer_type: string | null;
+  city: string | null;
+  state: string | null;
+  beginn: string | null;
+  salary_label: string | null;
+  offer_source: string | null;
+  offer_url: string | null;
+  status: string;
+  reject_reason: string | null;
+}
+
 function isSourceStatus(value: unknown): value is DiscoverySourceStatus["status"] {
   return (
     value === "ok" ||
@@ -442,6 +461,137 @@ export async function recordCompany(
     throw new Error("Failed to record the discovered company.");
   }
   return { companyId: data.id as string, created: true };
+}
+
+/**
+ * The user's most recent run, or null when they never started one. Used by the
+ * page to render the LAST persisted result instead of an empty form after a
+ * refresh or a re-login (results are never kept in client state only).
+ */
+export async function getLatestDiscoveryRun(
+  userId: string,
+): Promise<DiscoveryRun | null> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("discovery_runs")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return rowToRun(data as DiscoveryRunRow);
+}
+
+/** One stored public email with its mandatory provenance. */
+export interface RunCompanyEmail {
+  email: string;
+  sourceUrl: string | null;
+  sourceType: DiscoveryEmailSource;
+  confidence: "high" | "medium" | "low" | null;
+}
+
+/** A discovered company of a run, with the addresses published for it. */
+export interface RunCompanyResult {
+  companyId: string;
+  companyKey: string;
+  companyName: string;
+  websiteUrl: string | null;
+  role: string | null;
+  field: string | null;
+  offerType: string | null;
+  city: string | null;
+  state: string | null;
+  beginn: string | null;
+  salaryLabel: string | null;
+  offerSource: string | null;
+  offerUrl: string | null;
+  status: string;
+  rejectReason: string | null;
+  /** Empty when the company published no address — the UI says so explicitly. */
+  emails: RunCompanyEmail[];
+}
+
+/**
+ * The persisted outcome of a run: every discovered company with the public
+ * addresses stored for it. This is what makes a result survive a refresh or a
+ * re-login — the UI never reconstructs it from client state.
+ *
+ * Ownership is enforced here (user_id filter via the run), so a caller can
+ * never read another user's companies. A missing run returns an empty list;
+ * callers that need to distinguish "no run" from "no rows" use
+ * {@link getDiscoveryRunStrict} first.
+ */
+export async function listRunCompaniesWithEmails(
+  runId: string,
+  userId: string,
+): Promise<RunCompanyResult[]> {
+  const admin = createAdminClient();
+  const { data: run, error: runError } = await admin
+    .from("discovery_runs")
+    .select("run_id")
+    .eq("run_id", runId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (runError) throw runError;
+  if (!run) return [];
+
+  const { data: companies, error: companyError } = await admin
+    .from("discovery_companies")
+    .select("*")
+    .eq("run_id", runId)
+    .order("discovered_at", { ascending: true });
+  if (companyError) throw companyError;
+  const rows = (companies ?? []) as DiscoveryCompanyRow[];
+  if (rows.length === 0) return [];
+
+  const { data: emailRows, error: emailError } = await admin
+    .from("discovery_company_emails")
+    .select("company_id, email, email_source_url, email_source_type, confidence")
+    .in(
+      "company_id",
+      rows.map((row) => row.id),
+    );
+  if (emailError) throw emailError;
+
+  const byCompany = new Map<string, RunCompanyEmail[]>();
+  for (const row of emailRows ?? []) {
+    const record = row as {
+      company_id: string;
+      email: string;
+      email_source_url: string | null;
+      email_source_type: DiscoveryEmailSource;
+      confidence: "high" | "medium" | "low" | null;
+    };
+    const list = byCompany.get(record.company_id) ?? [];
+    list.push({
+      email: record.email,
+      sourceUrl: record.email_source_url,
+      sourceType: record.email_source_type,
+      confidence: record.confidence,
+    });
+    byCompany.set(record.company_id, list);
+  }
+
+  return rows.map((row) => ({
+    companyId: row.id,
+    companyKey: row.company_key,
+    companyName: row.company_name,
+    websiteUrl: row.website_url,
+    role: row.role,
+    field: row.field,
+    offerType: row.offer_type,
+    city: row.city,
+    state: row.state,
+    beginn: row.beginn,
+    salaryLabel: row.salary_label,
+    offerSource: row.offer_source,
+    offerUrl: row.offer_url,
+    status: row.status,
+    rejectReason: row.reject_reason,
+    emails: byCompany.get(row.id) ?? [],
+  }));
 }
 
 /**

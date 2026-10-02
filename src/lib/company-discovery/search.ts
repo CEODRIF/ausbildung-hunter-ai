@@ -30,9 +30,26 @@ import {
   getDiscoveryRun,
   recordCandidates,
   recordCompany,
+  recordCompanyEmail,
   setRunCounters,
   startDiscoveryRun,
 } from "./runs";
+import {
+  countsAsResult,
+  fetchCompanySiteTextPages,
+  resolveCompanyPublicEmail,
+} from "./emails";
+
+/**
+ * Page-fetch budget for the public-email pass, per run. Addresses that the
+ * source already published cost nothing; only companies whose site may hold a
+ * better (application/career) mailbox spend one pass. Bounded so the run stays
+ * inside its serverless time budget.
+ */
+const MAX_EMAIL_SITE_PASSES_PER_RUN = 8;
+
+/** Audit reason recorded when a company is dropped for lack of an address. */
+const NO_PUBLIC_EMAIL_REASON = "no_public_email";
 
 /**
  * Company Discovery — Phase 2 candidate engine (BA / Opportunities).
@@ -122,6 +139,8 @@ export async function runDiscoveryPipeline(
     { id: BA_SOURCE_ID, status: "running" },
   ];
   let delivered = 0;
+  /** Remaining official-site passes for the public-email resolution. */
+  let emailSiteBudget = MAX_EMAIL_SITE_PASSES_PER_RUN;
   let failedPasses = 0;
   let candidateBuffer: DiscoveryCandidate[] = [];
   let aborted = false;
@@ -211,14 +230,67 @@ export async function runDiscoveryPipeline(
       // Accepted — an earlier rejection of the same company is superseded
       // (a later offer of the same company can pass where the first did not).
       rejectedKeys.delete(key);
-      await recordCompany(runId, {
+      // Public email: resolved ONLY from what was actually published — the
+      // source's own offer contact block, the engine's verified enrichment, or
+      // the company's official pages. Never invented, never name-derived.
+      const emailResolution = await resolveCompanyPublicEmail({
+        companyName: opp.company_name ?? "",
+        offer: opp,
+        websiteUrl: opp.enrichment?.website_url ?? null,
+        fetchPages: emailSiteBudget > 0 ? fetchCompanySiteTextPages : null,
+      });
+      if (emailResolution?.fetchedSite) emailSiteBudget -= 1;
+
+      // onlyPublicEmail = true → a company without a published address is not
+      // a deliverable result: it is recorded for audit but never counted, so a
+      // run may end honestly PARTIAL (4 of 10) instead of inventing rows.
+      if (
+        !countsAsResult({
+          onlyPublicEmail: params.onlyPublicEmail,
+          hasPublicEmail: emailResolution !== null,
+        })
+      ) {
+        if (!rejectedKeys.has(key)) {
+          counters.companiesRejected += 1;
+          rejectedKeys.add(key);
+        }
+        await recordCompany(runId, {
+          ...companyFactsFromOpportunity(opp, params, key),
+          websiteUrl: opp.enrichment?.website_url ?? null,
+          websiteSourceUrl: null,
+          status: "rejected",
+          rejectReason: NO_PUBLIC_EMAIL_REASON,
+        });
+        continue;
+      }
+
+      const { companyId } = await recordCompany(runId, {
         ...companyFactsFromOpportunity(opp, params, key),
-        // Phase 2 records no website — the resolver/discovery layers
-        // (Phase 3/4) fill these with provenance.
-        websiteUrl: null,
-        websiteSourceUrl: null,
+        // The engine's verified website (with its own provenance) or null.
+        websiteUrl: opp.enrichment?.website_url ?? null,
+        websiteSourceUrl: opp.enrichment?.website_source ?? null,
         status: "accepted",
       });
+      if (emailResolution) {
+        try {
+          await recordCompanyEmail(
+            companyId,
+            emailResolution.email,
+            emailResolution.sourceUrl,
+            emailResolution.sourceType,
+            emailResolution.confidence,
+          );
+        } catch (error) {
+          // Storing the address is valuable but never load-bearing: a database
+          // where the email table has not been migrated yet must NOT fail the
+          // run (the company itself is already recorded). Logged loudly so the
+          // drift is visible to operators instead of hiding.
+          console.error(
+            `[company-discovery] storing a public email failed run="${runId}" company="${companyId}"`,
+            error,
+          );
+        }
+      }
       countedKeys.add(key);
       counters.uniqueCompanies += 1;
       counters.foundCompanies += 1;
