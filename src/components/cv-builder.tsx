@@ -41,6 +41,7 @@ import {
   type CvLabels,
 } from "@/components/cv-document";
 import { candidateProfileSchema } from "@/lib/bewerbung-schema";
+import { useScaledSheet } from "@/lib/use-scaled-sheet";
 import {
   cvEmpty,
   cvHasContent,
@@ -76,35 +77,6 @@ type AddContentSection =
   | "certificates"
   | "projects"
   | "interests";
-
-// ---------------------------------------------------------------------------
-// Preview scaling (ResizeObserver; no `zoom` so print/RTL stay predictable)
-// ---------------------------------------------------------------------------
-
-function useScaledSheet(
-  outerRef: RefObject<HTMLDivElement | null>,
-  sheetRef: RefObject<HTMLDivElement | null>,
-) {
-  const [scale, setScale] = useState(1);
-  const [sheetHeight, setSheetHeight] = useState(CV_SHEET_MIN_HEIGHT);
-
-  useEffect(() => {
-    const outer = outerRef.current;
-    const sheet = sheetRef.current;
-    if (!outer || !sheet) return;
-    const update = () => {
-      setScale(Math.min(1, outer.clientWidth / (CV_SHEET_WIDTH + 28)));
-      setSheetHeight(Math.max(sheet.offsetHeight, CV_SHEET_MIN_HEIGHT));
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(outer);
-    observer.observe(sheet);
-    return () => observer.disconnect();
-  }, [outerRef, sheetRef]);
-
-  return { scale, sheetHeight };
-}
 
 // ---------------------------------------------------------------------------
 // Editor building blocks
@@ -472,7 +444,11 @@ export function CvBuilder({
   const photoFileRef = useRef<HTMLInputElement | null>(null);
   const previewOuterRef = useRef<HTMLDivElement | null>(null);
   const previewSheetRef = useRef<HTMLDivElement | null>(null);
-  const preview = useScaledSheet(previewOuterRef, previewSheetRef);
+  const preview = useScaledSheet(previewOuterRef, previewSheetRef, {
+    sheetWidth: CV_SHEET_WIDTH,
+    sheetMinHeight: CV_SHEET_MIN_HEIGHT,
+    active: mobileView === "preview",
+  });
 
   // ---- Load persisted document (post-hydration; server render stays empty) --
   useEffect(() => {

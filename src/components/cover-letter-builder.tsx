@@ -19,13 +19,7 @@
  *    /api/ai/cover-letter) grounded exclusively in the user's real
  *    profile, CV and supplied target info.
  */
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
 import { useI18n } from "@/lib/i18n";
@@ -43,6 +37,7 @@ import {
   CL_SHEET_WIDTH,
 } from "@/components/cover-letter-document";
 import { candidateProfileSchema } from "@/lib/bewerbung-schema";
+import { useScaledSheet } from "@/lib/use-scaled-sheet";
 import { cvHasContent, sanitizeCvDocument } from "@/lib/templates/cv";
 import {
   clEmpty,
@@ -98,35 +93,6 @@ const SECTION_ICONS: ClSectionIcon = {
 
 const TONES: readonly ClTone[] = ["professional", "formal", "engaged"];
 const AI_LANGUAGES: readonly ClAiLanguage[] = ["de", "en"];
-
-// ---------------------------------------------------------------------------
-// Preview scaling (ResizeObserver; no `zoom` — print/RTL stay predictable)
-// ---------------------------------------------------------------------------
-
-function useScaledSheet(
-  outerRef: RefObject<HTMLDivElement | null>,
-  sheetRef: RefObject<HTMLDivElement | null>,
-) {
-  const [scale, setScale] = useState(1);
-  const [sheetHeight, setSheetHeight] = useState(CL_SHEET_MIN_HEIGHT);
-
-  useEffect(() => {
-    const outer = outerRef.current;
-    const sheet = sheetRef.current;
-    if (!outer || !sheet) return;
-    const update = () => {
-      setScale(Math.min(1, outer.clientWidth / (CL_SHEET_WIDTH + 28)));
-      setSheetHeight(Math.max(sheet.offsetHeight, CL_SHEET_MIN_HEIGHT));
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(outer);
-    observer.observe(sheet);
-    return () => observer.disconnect();
-  }, [outerRef, sheetRef]);
-
-  return { scale, sheetHeight };
-}
 
 // ---------------------------------------------------------------------------
 // Collapsible section card (reference interaction: summary → expand → done)
@@ -378,7 +344,11 @@ export function CoverLetterBuilder({ userId }: CoverLetterBuilderProps) {
   const previewOuterRef = useRef<HTMLDivElement | null>(null);
   const previewSheetRef = useRef<HTMLDivElement | null>(null);
   const signatureFileRef = useRef<HTMLInputElement | null>(null);
-  const preview = useScaledSheet(previewOuterRef, previewSheetRef);
+  const preview = useScaledSheet(previewOuterRef, previewSheetRef, {
+    sheetWidth: CL_SHEET_WIDTH,
+    sheetMinHeight: CL_SHEET_MIN_HEIGHT,
+    active: mobileView === "preview",
+  });
 
   // ---- Load persisted document (post-hydration; server render stays empty) --
   useEffect(() => {
