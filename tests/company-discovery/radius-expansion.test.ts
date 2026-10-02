@@ -95,6 +95,7 @@ import {
   type DiscoveryRun,
 } from "@/lib/company-discovery/types";
 import type { OpportunitySearchParams, OpportunityWindow } from "@/lib/opportunities/types";
+import { getWebSearchClient } from "@/lib/web-search";
 import type { WebSearchClient, WebSearchResult } from "@/lib/web-search";
 
 const RUN_ID = "77777777-7777-4777-8777-777777777777";
@@ -775,6 +776,294 @@ describe("the pipeline with the expanded radius", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// The provider availability chain — where executedQueries becomes 0 (§9).
+//
+// The exact production path: TAVILY_API_KEY → resolveTavilyKey() →
+// getWebSearchClient() → createSearchAdapter(client | null) → skipped/ok →
+// stats in the source report → the UI tiles.
+// ---------------------------------------------------------------------------
+
+describe("the provider availability chain (deterministic, no real Tavily)", () => {
+  const withEnvKey = (value: string | null, fn: () => unknown): unknown => {
+    const saved = process.env.TAVILY_API_KEY;
+    if (value === null) delete process.env.TAVILY_API_KEY;
+    else process.env.TAVILY_API_KEY = value;
+    try {
+      return fn();
+    } finally {
+      if (saved === undefined) delete process.env.TAVILY_API_KEY;
+      else process.env.TAVILY_API_KEY = saved;
+    }
+  };
+
+  it("missing key → getWebSearchClient() is null → adapter skipped → executedQueries stays 0, no error", async () => {
+    withEnvKey(null, () => {
+      expect(getWebSearchClient()).toBeNull();
+      expect(getWebSearchClient({ maxRequests: 12 })).toBeNull();
+    });
+    // The pipeline builds the adapter with that null client:
+    const adapter = createSearchAdapter(null, { beginnYear: 2027 }, {
+      maxQueries: 12,
+      maxResultsPerQuery: 10,
+      maxPagesPerQuery: 5,
+      maxPagesToFetch: 20,
+    });
+    const requested: string[] = [];
+    const result = await adapter.searchOffers(ADAPTER_CRITERIA, makeCtx(requested));
+    expect(result).toEqual({ status: "skipped", reason: "search_provider_not_configured" });
+    expect(requested).toEqual([]); // nothing was fetched, nothing was invented
+    // No `stats` on a skipped result → the UI counter reads exactly 0.
+    expect(
+      (result as { stats?: { queriesExecuted: number } }).stats?.queriesExecuted ?? 0,
+    ).toBe(0);
+  });
+
+  it("a placeholder key is treated as NOT configured", () => {
+    withEnvKey("tvly-your-api-key", () => {
+      expect(getWebSearchClient()).toBeNull();
+    });
+  });
+
+  it("a real-looking key → a client is created with the requested budget (no network at construction)", () => {
+    withEnvKey("tvly-test-key-not-real", () => {
+      const client = getWebSearchClient({ maxRequests: 12 });
+      expect(client).not.toBeNull();
+      expect(client?.name).toBe("tavily");
+    });
+  });
+
+  it("configured provider + valid criteria + positive budget → at least one search invocation", async () => {
+    const { client, calls } = fakeSearchClient([
+      [resultOf("https://doppelt.de/ausbildung/1")],
+    ]);
+    const requested: string[] = [];
+    const adapter = createSearchAdapter(client, { beginnYear: 2027 }, {
+      maxQueries: 12,
+      maxResultsPerQuery: 10,
+      maxPagesPerQuery: 5,
+      maxPagesToFetch: 20,
+    });
+    // The criteria carry a profession (and no location): the families must
+    // NOT be empty — national search works without a location.
+    const queries = generateSearchQueries(
+      ADAPTER_CRITERIA,
+      { beginnYear: 2027 },
+      12,
+    );
+    expect(queries.length).toBeGreaterThan(0);
+    expect(queries).toContain("Ausbildung Kaufmann im E-Commerce");
+    expect(queries).toContain("Kaufmann im E-Commerce Ausbildung 2027");
+
+    const result = await adapter.searchOffers(ADAPTER_CRITERIA, makeCtx(requested));
+    expect(calls.length).toBeGreaterThanOrEqual(1); // the provider WAS invoked
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.stats?.queriesExecuted).toBeGreaterThan(0);
+      expect(result.stats?.resultsInspected).toBe(1);
+    }
+    expect(requested).toContain("https://doppelt.de/ausbildung/1");
+  });
+
+  it("pipeline, production path WITHOUT a provider key → search-api row skipped with reason, no stats, run finishes without error, UI counters read 0", async () => {
+    const requested: string[] = [];
+    const mockFetch = makeFetch(
+      [[(u) => u.includes("/robots.txt"), plainRobots]],
+      requested,
+    );
+    vi.stubGlobal("fetch", mockFetch);
+    const store = await import("@/lib/company-discovery/runs");
+    vi.mocked(store.getDiscoveryRun).mockResolvedValue(baseRun());
+    vi.mocked(store.startDiscoveryRun).mockResolvedValue(baseRun());
+
+    // The key must stay absent for the WHOLE run (the pipeline reads it
+    // asynchronously) — restore only after the await.
+    const savedKey = process.env.TAVILY_API_KEY;
+    delete process.env.TAVILY_API_KEY;
+    try {
+      // Exactly the production call: no deps at all — the pipeline builds the
+      // offer client from the (absent) TAVILY_API_KEY itself.
+      await runDiscoveryPipeline(RUN_ID, USER_ID, {
+        window: emptyWindow(),
+        searchClient: null,
+        fetchContext: createFetchContext({
+          fetchImpl: mockFetch as unknown as typeof fetch,
+          isPublicHost: async () => true,
+          sleep: async () => undefined,
+        }),
+        isCancelled: async () => false,
+      });
+    } finally {
+      if (savedKey === undefined) delete process.env.TAVILY_API_KEY;
+      else process.env.TAVILY_API_KEY = savedKey;
+    }
+
+    const finish = state.finish as {
+      status: string;
+      sources: Array<{
+        id: string;
+        status: string;
+        reason?: string | null;
+        stats?: { queriesExecuted: number; resultsInspected: number };
+      }>;
+    };
+    expect(finish.status).toBe("partial"); // zero found, no failure
+    const searchSource = finish.sources.find((s) => s.id === "search-api");
+    expect(searchSource?.status).toBe("skipped");
+    expect(searchSource?.reason).toBe("search_provider_not_configured");
+    expect(searchSource?.stats).toBeUndefined();
+    // The UI tile reads `stats?.queriesExecuted ?? 0`:
+    expect(searchSource?.stats?.queriesExecuted ?? 0).toBe(0);
+    expect(searchSource?.stats?.resultsInspected ?? 0).toBe(0);
+  });
+
+  it("pipeline, provider configured → provider called → executedQueries > 0 in the run report", async () => {
+    const requested: string[] = [];
+    const mockFetch = makeFetch(
+      [
+        [(u) => u.includes("/robots.txt"), plainRobots],
+        [
+          (u) => u === "https://doppelt.de/ausbildung/1",
+          () => html(jobPosting("Doppelt GmbH", "https://doppelt.de")),
+        ],
+      ],
+      requested,
+    );
+    vi.stubGlobal("fetch", mockFetch);
+    const store = await import("@/lib/company-discovery/runs");
+    vi.mocked(store.getDiscoveryRun).mockResolvedValue(baseRun());
+    vi.mocked(store.startDiscoveryRun).mockResolvedValue(baseRun());
+
+    // A configured provider is simulated by a stub client (never Tavily).
+    const { client, calls } = fakeSearchClient([
+      [resultOf("https://doppelt.de/ausbildung/1")],
+    ]);
+    await runDiscoveryPipeline(RUN_ID, USER_ID, {
+      window: emptyWindow(),
+      searchClient: null,
+      offerSearchClient: client,
+      fetchContext: createFetchContext({
+        fetchImpl: mockFetch as unknown as typeof fetch,
+        isPublicHost: async () => true,
+        sleep: async () => undefined,
+      }),
+      isCancelled: async () => false,
+    });
+
+    expect(calls.length).toBeGreaterThan(0); // the provider was actually called
+    const finish = state.finish as {
+      foundCompanies: number;
+      companiesProcessed: number;
+      emailsFound: number;
+      noPublicEmail: number;
+      sourcesBlocked: number;
+      sources: Array<{ id: string; status: string; candidates?: number; stats?: { queriesExecuted: number; resultsInspected: number } }>;
+    };
+    const searchSource = finish.sources.find((s) => s.id === "search-api");
+    expect(searchSource?.status).toBe("ok");
+    expect(searchSource?.stats?.queriesExecuted).toBeGreaterThan(0);
+    expect(finish.foundCompanies).toBe(1);
+    expect(finish.emailsFound + finish.noPublicEmail + finish.sourcesBlocked).toBe(
+      finish.companiesProcessed,
+    );
+  });
+
+  it("scenario A — DEFAULT production path (no deps override, fake key, Tavily stubbed at HTTP): client created inside the pipeline, provider invoked, executedQueries > 0, checkpoint persisted before the email phase", async () => {
+    const requested: string[] = [];
+    const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      requested.push(url);
+      // The ONLY real Tavily endpoint — answered offline, exactly like the
+      // provider would answer: JSON with result URLs.
+      if (url === "https://api.tavily.com/search") {
+        return new Response(
+          JSON.stringify({
+            results: [
+              { title: "Ausbildung", url: "https://doppelt.de/ausbildung/1", snippet: "" },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/robots.txt")) return plainRobots();
+      if (url === "https://doppelt.de/ausbildung/1") {
+        return html(jobPosting("Doppelt GmbH", "https://doppelt.de"));
+      }
+      return html(PLAIN_PAGE);
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const store = await import("@/lib/company-discovery/runs");
+    vi.mocked(store.getDiscoveryRun).mockResolvedValue(baseRun());
+    vi.mocked(store.startDiscoveryRun).mockResolvedValue(baseRun());
+
+    // A fake, non-placeholder key: the REAL client path runs end-to-end
+    // (key resolution, per-run budget, auth header, HTTP call, response
+    // parsing) — only the network is stubbed.
+    const savedKey = process.env.TAVILY_API_KEY;
+    process.env.TAVILY_API_KEY = "tvly-test-fake-123456";
+    try {
+      await runDiscoveryPipeline(RUN_ID, USER_ID, {
+        // Only the two documented offline seams: the BA window (real API)
+        // and the SSRF DNS gate. The offer client is NOT injected — the
+        // pipeline must build it from the environment, exactly like the
+        // production route does.
+        window: emptyWindow(),
+        isPublicHost: async () => true,
+      });
+    } finally {
+      if (savedKey === undefined) delete process.env.TAVILY_API_KEY;
+      else process.env.TAVILY_API_KEY = savedKey;
+    }
+
+    // offerSearchClient !== null ⇔ the provider endpoint was actually hit.
+    const tavilyCalls = requested.filter((u) => u === "https://api.tavily.com/search");
+    expect(tavilyCalls.length).toBeGreaterThan(0);
+
+    const finish = state.finish as {
+      foundCompanies: number;
+      companiesProcessed: number;
+      emailsFound: number;
+      noPublicEmail: number;
+      sourcesBlocked: number;
+      sources: Array<{ id: string; status: string; candidates?: number; stats?: { queriesExecuted: number; resultsInspected: number } }>;
+    };
+    const searchSource = finish.sources.find((s) => s.id === "search-api");
+    expect(searchSource?.status).toBe("ok");
+    expect(searchSource?.stats?.queriesExecuted).toBeGreaterThan(0);
+    expect(searchSource?.stats?.resultsInspected).toBe(1);
+    expect(searchSource?.candidates).toBe(1);
+    expect(finish.foundCompanies).toBe(1);
+    expect(finish.emailsFound + finish.noPublicEmail + finish.sourcesBlocked).toBe(
+      finish.companiesProcessed,
+    );
+
+    // The checkpoint: a progress flush that CARRIES the search-api row with
+    // its stats happened BEFORE the email phase — a function killed during
+    // the email phase can no longer erase the search layer's execution.
+    const checkpoint = vi.mocked(store.setRunCounters).mock.calls.find((call) =>
+      (call[3] ?? []).some(
+        (entry) =>
+          entry.id === "search-api" && entry.status === "ok" && entry.stats !== undefined,
+      ),
+    );
+    expect(checkpoint).toBeDefined();
+  }, 30000); // the DEFAULT path keeps the real ≥1 s/host pacing guard
+});
+
+/** Offline fetch context helper for the provider-chain tests. */
+function makeCtx(requested: string[]) {
+  const mockFetch = makeFetch(
+    [[(u) => u.includes("/robots.txt"), plainRobots]],
+    requested,
+  );
+  vi.stubGlobal("fetch", mockFetch);
+  return createFetchContext({
+    fetchImpl: mockFetch as unknown as typeof fetch,
+    isPublicHost: async () => true,
+    sleep: async () => undefined,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // §16 — the new UI strings exist in every locale

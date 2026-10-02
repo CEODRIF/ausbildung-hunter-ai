@@ -568,12 +568,13 @@ export async function runDiscoveryPipeline(
         break;
       }
 
-      // (a) Arbeitsagentur: offers and companies only (§3.3).
+      // (a) Arbeitsagentur: offers and companies only (§3.3) — collect the
+      //     window first (a fast read; no per-company email work yet).
+      let baOffers: DiscoveryOffer[] = [];
       try {
         const { offers } = await collectOffers(passGoal);
         delivered += offers.length;
-        await processOffers(offers.map((opp) => discoveryOfferFromOpportunity(opp)), passGoal);
-        if (aborted) break;
+        baOffers = offers.map((opp) => discoveryOfferFromOpportunity(opp));
       } catch (error) {
         if (error instanceof BaFetchFailure) {
           failedPasses += 1;
@@ -587,8 +588,27 @@ export async function runDiscoveryPipeline(
         }
       }
 
-      // (b) the enabled portal adapters (including the bounded search layer).
+      // (b) the enabled portal adapters (including the bounded search layer),
+      //     collected BEFORE the expensive per-company email resolution. On a
+      //     serverless host the run shares the route's invocation budget
+      //     (Vercel `maxDuration`): the email phase paces ≥1 s per host per
+      //     company and runs for minutes, so a kill would otherwise strike
+      //     before the search layer ever starts — and its stats would never
+      //     be persisted. Collecting all offer sources first keeps the entire
+      //     offer-discovery phase inside the budget, then a checkpoint
+      //     persists the BA row, the adapter rows and the search stats.
       const adapterOffers = await collectAdapterOffers(passGoal);
+      await flushProgress();
+      if (await isCancelled(runId, userId)) {
+        aborted = true;
+        break;
+      }
+
+      // Per-company email resolution — processing order unchanged (BA offers
+      // first, then the adapter offers) through the same funnel and dedupe
+      // set; its existing per-company flushes persist the partial progress.
+      await processOffers(baOffers, passGoal);
+      if (aborted) break;
       await processOffers(adapterOffers, passGoal);
       if (aborted) break;
     }
