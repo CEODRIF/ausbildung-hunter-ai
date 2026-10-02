@@ -164,13 +164,19 @@ describe("Work place — German cities as a REAL filter", () => {
   });
 
   it("no city selected (Show all) and single city produce NO city matcher", () => {
-    expect(buildMatchers(baseParams(), { now: NOW })).toHaveLength(0);
-    expect(
-      buildMatchers(
-        normalizeSearchParams(baseParams({ cities: ["Berlin"] })),
-        { now: NOW },
-      ),
-    ).toHaveLength(0); // handled natively by the source (wo)
+    // The goal-consistency matcher is always present; the point is that no
+    // CITY matcher joins it (a single city is handled natively by `wo`).
+    const none = buildMatchers(baseParams(), { now: NOW });
+    for (const city of ["10115 Berlin", "20095 Hamburg", "30159 Hannover"]) {
+      for (const m of none) expect(m(mkOpp({ location: city }))).toBe(true);
+    }
+    const single = buildMatchers(
+      normalizeSearchParams(baseParams({ cities: ["Berlin"] })),
+      { now: NOW },
+    );
+    // No city matcher: an out-of-city item is NOT rejected here.
+    for (const m of single)
+      expect(m(mkOpp({ location: "20095 Hamburg" }))).toBe(true);
   });
 });
 

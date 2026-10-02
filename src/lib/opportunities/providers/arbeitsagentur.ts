@@ -85,7 +85,7 @@ function subObject(value: unknown): RawRecord | null {
  * Build the BA v6 search query using only parameters that the API actually
  * honors (verified against the live API):
  *   page, size, angebotsart (1=Arbeit, 4=Ausbildung), was, wo, umkreis,
- *   ver关于entlichtseit=1 (today).
+ *   veroeffentlichtseit=1 (today).
  *
  * Deliberately NOT sent (verified non-functional on the v6 REST API):
  *   - arbeitszeit (remote filter returns 0 results for every value)
@@ -986,6 +986,11 @@ export function buildMatchers(
   const now = options.now ?? new Date();
   const excluded = new Set(options.exclude ?? []);
   const matchers: Array<(item: Opportunity) => boolean> = [];
+  // Goal consistency (SEARCH filtering, not matching): the source record's own
+  // classification must equal the requested goal. A job posting never appears
+  // in an apprenticeship search (or vice versa) — the per-user profile match
+  // score is display/sort data only and must never substitute for this filter.
+  matchers.push((item) => item.goal === params.goal);
   if (params.cities.length >= 2) {
     matchers.push(cityMatcher(params.cities));
   }
@@ -1203,9 +1208,19 @@ export async function fetchOpportunityWindow(
       label: "search",
     });
     const items = Array.isArray(raw.ergebnisliste) ? raw.ergebnisliste : [];
-    const window = items
+    const normalized = items
       .map((item) => normalizeSearchItem(item, params.goal))
       .filter((item): item is Opportunity => item !== null);
+    // Goal consistency: the source honors `angebotsart` in practice, but a
+    // record whose own classification contradicts the requested goal must
+    // never be shown (it would render with the other goal's badge). Rare —
+    // logged, then excluded.
+    const window = normalized.filter((item) => item.goal === params.goal);
+    if (window.length !== normalized.length)
+      baLog("goal_mismatch_excluded", {
+        goal: params.goal,
+        excluded: normalized.length - window.length,
+      });
     return {
       mode: "upstream",
       window,

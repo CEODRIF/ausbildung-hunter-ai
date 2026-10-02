@@ -218,10 +218,26 @@ export function usesScanWindow(params: OpportunitySearchParams): boolean {
  * normalized (documented) or rejected with a clear error — never silently
  * ignored.
  */
+/** Collapse internal whitespace runs (spaces/tabs/newlines) to single spaces
+ *  and trim — consistent handling of "Klima  Technik", pasted text, etc., at
+ *  EVERY entry point (API route, shareable-URL parse, client init). Deliberately
+ *  conservative: case, umlauts and punctuation are preserved, so the text's
+ *  meaning never changes. */
+function collapseWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
 export function normalizeSearchParams(
   input: OpportunitySearchParams,
 ): OpportunitySearchParams {
   const params: OpportunitySearchParams = { ...input };
+  // Central text normalization (see collapseWhitespace) — applied after the
+  // schema's own trim so "KLIMATECHNIK", "Klimatechnik" and "Klima Technik"
+  // all reach the source in a predictable, meaning-preserving form.
+  params.keyword = collapseWhitespace(params.keyword);
+  params.role = collapseWhitespace(params.role);
+  params.company = collapseWhitespace(params.company);
+  params.location = collapseWhitespace(params.location);
   if (
     (params.sort === "distance" || params.distance_max !== undefined) &&
     !params.location

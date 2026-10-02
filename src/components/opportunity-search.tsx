@@ -321,6 +321,13 @@ export function OpportunitySearch({
   /** Filters / submit / pagination: search immediately. */
   const commitSearch = useCallback(
     (mutate: (current: SearchUrlState) => SearchUrlState, resetPage = true) => {
+      // A commit supersedes any pending debounced (text-input) search: cancel
+      // it, or its stale draft state could fire AFTER this commit and revert
+      // the results to the pre-commit query (the "filter didn't work" case).
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
       const next = mutate(stateRef.current);
       const final = resetPage ? { ...next, page: 1 } : next;
       stateRef.current = final;
@@ -366,23 +373,9 @@ export function OpportunitySearch({
   const isAusbildung = state.goal === "ausbildung";
   const legacyLocation =
     state.location.trim().length > 0 && state.cities.length === 0;
-  const hasActiveFilters =
-    state.keyword !== "" ||
-    state.role !== "" ||
-    state.company !== "" ||
-    legacyLocation ||
-    state.cities.length > 0 ||
-    state.radius !== null ||
-    state.beginn !== "any" ||
-    state.freshness !== "any" ||
-    state.sort !== "relevance" ||
-    state.employment !== "any" ||
-    state.training_type !== "any" ||
-    state.home_office !== "any" ||
-    state.salary !== "any" ||
-    state.contact_email !== "any" ||
-    state.distance_max !== null;
-
+  // Sidebar filter state only — the search terms (keyword/role/company, top
+  // form) and the sort order (results toolbar) are NOT filters: "Clear
+  // filters" must never wipe what the user typed or the order they chose.
   const activeFilterCount =
     (state.cities.length > 0 ? 1 : 0) +
     (state.freshness !== "any" ? 1 : 0) +
@@ -397,21 +390,18 @@ export function OpportunitySearch({
   const clearFilters = () =>
     commitSearch((current) => ({
       ...current,
-      keyword: "",
-      role: "",
-      company: "",
+      // Keyword / role / company / sort / goal / match are preserved.
       location: "",
       cities: [],
       radius: null,
+      distance_max: null,
       beginn: "any",
       freshness: "any",
-      sort: "relevance",
       employment: "any",
       training_type: "any",
       home_office: "any",
       salary: "any",
       contact_email: "any",
-      distance_max: null,
     }));
 
   // --- View Details: double-click guard + bounded hover prefetch ----------
@@ -549,7 +539,7 @@ export function OpportunitySearch({
         >
           <div className="flex items-center justify-between border-b border-line px-5 py-4">
             <span className="text-sm font-bold text-ink">{t("search.filters")}</span>
-            {hasActiveFilters && (
+            {activeFilterCount > 0 && (
               <button
                 type="button"
                 onClick={clearFilters}
@@ -565,9 +555,20 @@ export function OpportunitySearch({
               <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-surface-2 px-2 py-2 text-sm font-semibold text-ink-soft">
                 <input
                   type="checkbox"
-                  checked={state.cities.length === 0}
+                  checked={state.cities.length === 0 && !legacyLocation}
                   onChange={() =>
-                    commitSearch((current) => ({ ...current, cities: [] }))
+                    // "Show all" = no location restriction: clears the city
+                    // selection AND any legacy free-text location/radius from
+                    // old shareable URLs — never the other filters, and
+                    // distance_max too (it is only valid together with a
+                    // location, so it cannot outlive the location it bounds).
+                    commitSearch((current) => ({
+                      ...current,
+                      cities: [],
+                      location: "",
+                      radius: null,
+                      distance_max: null,
+                    }))
                   }
                   className="h-4 w-4 accent-accent"
                 />

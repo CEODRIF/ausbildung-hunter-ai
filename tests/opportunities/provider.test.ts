@@ -638,6 +638,13 @@ describe("sortWindow (deterministic, structured values, nulls last)", () => {
 });
 
 describe("buildMatchers (new Phase 3 filters, source-faithful)", () => {
+  // The real pipeline applies EVERY active matcher (AND), including the
+  // goal-consistency matcher — these tests assert exactly that combination.
+  const matches = (
+    params: Parameters<typeof buildMatchers>[0],
+    item: Opportunity,
+  ) => buildMatchers(params).every((m) => m(item));
+
   const opps = {
     full: mkOpp({ employment_type: "Full-time" }),
     part: mkOpp({ employment_type: "Part-time" }),
@@ -646,58 +653,56 @@ describe("buildMatchers (new Phase 3 filters, source-faithful)", () => {
   };
 
   it("employment=full_time matches full-time and mixed, not part-only/unknown", () => {
-    const [m] = buildMatchers(baseParams({ employment: "full_time" }));
-    expect(m(opps.full)).toBe(true);
-    expect(m(opps.both)).toBe(true);
-    expect(m(opps.part)).toBe(false);
-    expect(m(opps.none)).toBe(false);
+    const params = baseParams({ employment: "full_time" });
+    expect(matches(params, opps.full)).toBe(true);
+    expect(matches(params, opps.both)).toBe(true);
+    expect(matches(params, opps.part)).toBe(false);
+    expect(matches(params, opps.none)).toBe(false);
   });
 
   it("employment=part_time matches part-time and mixed, not full-only/unknown", () => {
-    const [m] = buildMatchers(baseParams({ employment: "part_time" }));
-    expect(m(opps.part)).toBe(true);
-    expect(m(opps.both)).toBe(true);
-    expect(m(opps.full)).toBe(false);
-    expect(m(opps.none)).toBe(false);
+    const params = baseParams({ employment: "part_time" });
+    expect(matches(params, opps.part)).toBe(true);
+    expect(matches(params, opps.both)).toBe(true);
+    expect(matches(params, opps.full)).toBe(false);
+    expect(matches(params, opps.none)).toBe(false);
   });
 
   it("training_type matches only documented training types", () => {
-    const [m] = buildMatchers(baseParams({ training_type: "DUALES_STUDIUM" }));
-    expect(m(mkOpp({ training_type: "DUALES_STUDIUM" }))).toBe(true);
-    expect(m(mkOpp({ training_type: "AUSBILDUNG" }))).toBe(false);
-    expect(m(mkOpp({ training_type: null }))).toBe(false);
+    const params = baseParams({ training_type: "DUALES_STUDIUM" });
+    expect(matches(params, mkOpp({ training_type: "DUALES_STUDIUM" }))).toBe(true);
+    expect(matches(params, mkOpp({ training_type: "AUSBILDUNG" }))).toBe(false);
+    expect(matches(params, mkOpp({ training_type: null }))).toBe(false);
   });
 
   it("home_office=yes matches only documented true (null excluded)", () => {
-    const [m] = buildMatchers(baseParams({ home_office: "yes" }));
-    expect(m(mkOpp({ home_office: true }))).toBe(true);
-    expect(m(mkOpp({ home_office: false }))).toBe(false);
-    expect(m(mkOpp({ home_office: null }))).toBe(false);
+    const params = baseParams({ home_office: "yes" });
+    expect(matches(params, mkOpp({ home_office: true }))).toBe(true);
+    expect(matches(params, mkOpp({ home_office: false }))).toBe(false);
+    expect(matches(params, mkOpp({ home_office: null }))).toBe(false);
   });
 
   it("salary=documented matches only items with a documented salary", () => {
-    const [m] = buildMatchers(baseParams({ salary: "documented" }));
+    const params = baseParams({ salary: "documented" });
     expect(
-      m(mkOpp({ salary: { amount: 5, unit: "hourly", label: "5" } })),
+      matches(params, mkOpp({ salary: { amount: 5, unit: "hourly", label: "5" } })),
     ).toBe(true);
-    expect(m(mkOpp({ salary: null }))).toBe(false);
+    expect(matches(params, mkOpp({ salary: null }))).toBe(false);
   });
 
   it("salary=missing matches only items WITHOUT a documented salary", () => {
-    const [m] = buildMatchers(baseParams({ salary: "missing" }));
+    const params = baseParams({ salary: "missing" });
     expect(
-      m(mkOpp({ salary: { amount: 5, unit: "hourly", label: "5" } })),
+      matches(params, mkOpp({ salary: { amount: 5, unit: "hourly", label: "5" } })),
     ).toBe(false);
-    expect(m(mkOpp({ salary: null }))).toBe(true);
+    expect(matches(params, mkOpp({ salary: null }))).toBe(true);
   });
 
   it("distance_max excludes items beyond the bound and undocumented distance", () => {
-    const [m] = buildMatchers(
-      baseParams({ distance_max: 10, location: "Berlin" }),
-    );
-    expect(m(mkOpp({ distance_km: 5 }))).toBe(true);
-    expect(m(mkOpp({ distance_km: 10 }))).toBe(true);
-    expect(m(mkOpp({ distance_km: 11 }))).toBe(false);
-    expect(m(mkOpp({ distance_km: null }))).toBe(false);
+    const params = baseParams({ distance_max: 10, location: "Berlin" });
+    expect(matches(params, mkOpp({ distance_km: 5 }))).toBe(true);
+    expect(matches(params, mkOpp({ distance_km: 10 }))).toBe(true);
+    expect(matches(params, mkOpp({ distance_km: 11 }))).toBe(false);
+    expect(matches(params, mkOpp({ distance_km: null }))).toBe(false);
   });
 });
