@@ -641,6 +641,7 @@ describe("getDashboardData", () => {
     vi.mocked(listSavedOpportunities).mockResolvedValue([]);
     vi.mocked(searchOpportunities).mockResolvedValue({
       results: [],
+      page: 1,
       total: 0,
       scan_truncated: false,
       mode: "upstream",
@@ -780,6 +781,7 @@ describe("getDashboardData", () => {
     };
     vi.mocked(searchOpportunities).mockResolvedValue({
       results: [complete, incomplete],
+      page: 1,
       total: 2,
       scan_truncated: false,
       mode: "upstream",

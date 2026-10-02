@@ -293,6 +293,19 @@ export function OpportunitySearch({
       setMode(data.mode);
       setMatchAvailable(data.match_available);
       setFilterCounts(data.filter_counts ?? null);
+      // Stale-page self-heal: the server may serve a reachable page different
+      // from the one requested (out-of-range scan page, or an upstream page
+      // beyond the source total). Sync state to the page the rows ACTUALLY
+      // belong to — silently, without triggering a new search.
+      if (typeof data.page === "number" && data.page !== next.page) {
+        const synced = { ...next, page: data.page };
+        stateRef.current = synced;
+        setState(synced);
+        const syncedQs = serializeSearchState(synced);
+        router.replace(
+          syncedQs ? `/opportunities?${syncedQs}` : "/opportunities",
+        );
+      }
       // Non-blocking notice only when a source actually degraded.
       const failed = data.sources?.find((s) => s.status !== "ok");
       if (failed) setSourceStatus(failed);
@@ -311,7 +324,7 @@ export function OpportunitySearch({
     } finally {
       if (seq === searchSeqRef.current) setLoading(false);
     }
-  }, [t]);
+  }, [t, router]);
 
   const syncUrl = (next: SearchUrlState) => {
     const qs = serializeSearchState(next);
@@ -340,10 +353,15 @@ export function OpportunitySearch({
   );
 
   /** Text inputs: instant local update + ONE debounced search after the
-   *  user pauses (400 ms) — never one API request per keystroke. */
+   *  user pauses (400 ms) — never one API request per keystroke.
+   *
+   * Editing the search terms is a NEW search: the page resets to 1 (exactly
+   * like Enter/the Search button). Without this, a user sitting on page 3
+   * who edits the keyword would get the new query's (stale) page 3 — which
+   * in scan mode can render a reachable-but-empty page. */
   const scheduleSearch = useCallback(
     (mutate: (current: SearchUrlState) => SearchUrlState) => {
-      const final = mutate(stateRef.current);
+      const final = { ...mutate(stateRef.current), page: 1 };
       stateRef.current = final;
       setState(final);
       syncUrl(final);

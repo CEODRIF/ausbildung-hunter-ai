@@ -235,6 +235,9 @@ describe("shared cache content (user-independent, no match data)", () => {
     const payload = lastCachePayload();
 
     // Page 2 must be served from the cached window — no new provider call.
+    // An out-of-range scan page is now CLAMPED to the last reachable page
+    // (page 1 here) and the response reports the page it ACTUALLY served —
+    // "N results" over an empty list can no longer happen.
     setAdminMock({
       maybeSingleData: (table) =>
         table === "opportunity_cache" ? { results: payload.results } : null,
@@ -244,7 +247,8 @@ describe("shared cache content (user-independent, no match data)", () => {
       baseParams({ role: "Servicekraft", page: 2, pageSize: 20 }),
       null,
     );
-    expect(second.results).toHaveLength(0); // window has only 1 item
+    expect(second.results).toHaveLength(1); // clamped to page 1: the 1 item
+    expect(second.page).toBe(1); // server reports the page it served
     expect(fetchMock.mock.calls.length).toBe(before); // no new provider call
   });
 

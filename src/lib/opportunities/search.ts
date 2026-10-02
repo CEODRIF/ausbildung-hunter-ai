@@ -268,7 +268,24 @@ export async function searchOpportunities(
   params: OpportunitySearchParams,
   auth: { userId: string } | null,
 ): Promise<OpportunitySearchResponse> {
-  const payload = await fetchWindow(params);
+  let payload = await fetchWindow(params);
+
+  // Stale upstream page (an old shared URL, or a page beyond the source
+  // total): the source returns an EMPTY page while total > 0 — that would
+  // render "N results" over an empty list. Self-heal by serving page 1
+  // (one extra window read, usually a cache hit; bounded, never a loop).
+  // A genuinely empty source (total = 0) needs no healing.
+  let healedToFirst = false;
+  if (
+    payload.mode === "upstream" &&
+    payload.window.length === 0 &&
+    payload.total > 0 &&
+    params.page > 1
+  ) {
+    payload = await fetchWindow({ ...params, page: 1 });
+    healedToFirst = true;
+  }
+
   const candidate =
     params.match && auth ? await getCandidateProfile(auth.userId) : null;
   const matchAvailable = candidate !== null;
@@ -281,8 +298,20 @@ export async function searchOpportunities(
       .sort(compareByMatch);
   }
 
+  // Scan mode is page-independent: the window IS the full filtered set, so an
+  // out-of-range page (e.g. a stale page after the user edited the query)
+  // would slice to an EMPTY list while total says otherwise. Clamp to the
+  // last reachable page — the response always carries real rows.
+  const effectivePage = healedToFirst
+    ? 1
+    : payload.mode === "scan"
+      ? Math.min(
+          params.page,
+          Math.max(1, Math.ceil(window.length / params.pageSize)),
+        )
+      : params.page;
   const start =
-    payload.mode === "upstream" ? 0 : (params.page - 1) * params.pageSize;
+    payload.mode === "upstream" ? 0 : (effectivePage - 1) * params.pageSize;
   const results = window.slice(start, start + params.pageSize);
   // Present only when the official source delivered partial data: the UI
   // shows a small non-blocking notice, never a full failure, for a degraded
@@ -293,6 +322,7 @@ export async function searchOpportunities(
   if (matchAvailable && params.sort !== "match") {
     return {
       results: results.map((opportunity) => applyMatch(candidate, opportunity)),
+      page: effectivePage,
       total: payload.total,
       scan_truncated: payload.scan_truncated,
       mode: payload.mode,
@@ -303,6 +333,7 @@ export async function searchOpportunities(
   }
   return {
     results,
+    page: effectivePage,
     total: payload.total,
     scan_truncated: payload.scan_truncated,
     mode: payload.mode,

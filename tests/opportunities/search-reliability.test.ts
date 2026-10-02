@@ -313,4 +313,32 @@ describe("Opportunity search client invariants", () => {
     expect(block).toContain("activeFilterCount > 0 &&");
     expect(block).toContain("onClick={clearFilters}");
   });
+
+  it("debounced text edits reset the page — a new search never runs on a stale page", () => {
+    const start = source.indexOf("const scheduleSearch = useCallback(");
+    expect(start).toBeGreaterThan(0);
+    const body = source.slice(
+      start,
+      source.indexOf("// Restore results for a shared/returned URL", start),
+    );
+    // The committed draft must force page 1 (same contract as Enter / the
+    // Search button), otherwise editing the keyword on page N would show the
+    // NEW query's page N — empty in scan mode with reachable results.
+    expect(body).toContain("page: 1");
+    expect(body).not.toContain("current.page");
+  });
+
+  it("a server-served page different from the requested one syncs the UI without a new search", () => {
+    const start = source.indexOf("const search = useCallback(");
+    expect(start).toBeGreaterThan(0);
+    const body = source.slice(
+      start,
+      source.indexOf("const syncUrl", start),
+    );
+    // The stale-page self-heal: rows and pagination label must never
+    // disagree — the state follows the page the server actually served.
+    expect(body).toContain("data.page !== next.page");
+    expect(body).toContain("stateRef.current = synced");
+    expect(body).toContain("router.replace(");
+  });
 });

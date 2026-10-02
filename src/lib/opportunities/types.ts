@@ -816,6 +816,14 @@ export interface SearchFilterCounts {
 export interface OpportunitySearchResponse {
   /** The requested page of results (after any per-user match computation). */
   results: Opportunity[];
+  /**
+   * The page the results ACTUALLY belong to. Differs from the requested page
+   * only when the server self-healed a stale/out-of-range page (clamped scan
+   * page, or an upstream page beyond the source total served as page 1) —
+   * the client syncs its state to this value so the pagination label and the
+   * rows can never disagree.
+   */
+  page: number;
   total: number;
   scan_truncated: boolean;
   mode: OpportunityWindowMode;
