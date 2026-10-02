@@ -494,13 +494,12 @@ describe("run store", () => {
 
   it("recordCompanyEmail upserts idempotently keyed by (company_id, email)", async () => {
     mockClients([{ data: null, error: null }]);
-    await recordCompanyEmail(
-      "company-uuid",
-      "ausbildung@abc.de",
-      "https://abc.de/impressum",
-      "impressum",
-      "high",
-    );
+    await recordCompanyEmail("company-uuid", {
+      email: "ausbildung@abc.de",
+      sourceUrl: "https://abc.de/impressum",
+      sourceType: "impressum",
+      confidence: "high",
+    });
     expect(chains[0].upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         company_id: "company-uuid",

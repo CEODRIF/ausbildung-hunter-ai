@@ -93,6 +93,93 @@ export function discoveryBeginnGate(
   return start.slice(0, 4) === String(beginn.year);
 }
 
+/**
+ * One offer as the orchestrator sees it, regardless of where it came from:
+ * the Arbeitsagentur window or a portal adapter. Having ONE shape is what
+ * removes Arbeitsagentur from the email path by construction — a BA record is
+ * mapped with `listingEmail: null` and can therefore never contribute an
+ * address, whether or not its description text happens to contain one (§3.3).
+ */
+export interface DiscoveryOffer {
+  candidateRef: string;
+  /** Source id that yielded the offer (registry id). */
+  sourceId: string;
+  /** Human-readable source name, stored as `offerSource`. */
+  sourceName: string;
+  title: string | null;
+  companyName: string | null;
+  /** The company's own website, when the source states one. */
+  companyWebsite: string | null;
+  /** The page proving the website belongs to the company. */
+  companyWebsiteSourceUrl: string | null;
+  city: string | null;
+  state: string | null;
+  goal: "ausbildung" | "arbeit";
+  beginn: string | null;
+  salaryLabel: string | null;
+  url: string | null;
+  /** An address printed in an ENABLED portal's listing, or null (§3.1). */
+  listingEmail: { email: string; sourceUrl: string; evidence: string } | null;
+  /** The listing's visible text (literal-presence base), or null. */
+  listingText: string | null;
+}
+
+/** The raw candidate facts stored per offer (compact, no PII). */
+export function candidateFromOffer(offer: DiscoveryOffer): {
+  candidateRef: string;
+  title: string | null;
+  companyName: string | null;
+  city: string | null;
+  goal: "ausbildung" | "arbeit";
+  beginn: string | null;
+  salaryLabel: string | null;
+  url: string | null;
+} {
+  return {
+    candidateRef: offer.candidateRef,
+    title: offer.title,
+    companyName: offer.companyName,
+    city: offer.city,
+    goal: offer.goal,
+    beginn: offer.beginn,
+    salaryLabel: offer.salaryLabel,
+    url: offer.url,
+  };
+}
+
+/** The counting facts of ONE company, from the offer that proved it. */
+export function companyFactsFromOffer(
+  offer: DiscoveryOffer,
+  params: DiscoveryRunParams,
+  companyKey: string,
+): {
+  companyKey: string;
+  companyName: string;
+  role: string | null;
+  field: string;
+  offerType: "ausbildung" | "arbeit";
+  city: string | null;
+  state: string | null;
+  beginn: string | null;
+  salaryLabel: string | null;
+  offerSource: string | null;
+  offerUrl: string | null;
+} {
+  return {
+    companyKey,
+    companyName: offer.companyName as string,
+    role: params.role,
+    field: params.field,
+    offerType: offer.goal,
+    city: offer.city,
+    state: offer.state,
+    beginn: offer.beginn,
+    salaryLabel: offer.salaryLabel,
+    offerSource: offer.sourceName,
+    offerUrl: offer.url,
+  };
+}
+
 /** The raw candidate facts stored per offer (compact, no PII). */
 export function candidateFromOpportunity(
   opp: Opportunity,

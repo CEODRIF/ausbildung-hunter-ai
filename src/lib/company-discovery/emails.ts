@@ -1,55 +1,46 @@
 import "server-only";
 
 import {
-  emailsFromPageText,
-  isFreeMailDomain,
-  roleOfLocalPart,
-} from "@/lib/opportunities/company-contact";
-import { emailDedupeKey, normalizeOpportunityEmail } from "@/lib/opportunities/email-export";
-import type { Opportunity } from "@/lib/opportunities/types";
-import type { DiscoveryEmailSource } from "./types";
+  acceptEmailsFromContent,
+  mergeAcceptedEmails,
+  type AcceptedEmail,
+  type MergedAcceptedEmail,
+} from "./accept";
+import type { BlockedReason } from "./classify";
+import { guardedFetch, type FetchContext } from "./fetch-guard";
+import { isFreeMailDomain } from "@/lib/opportunities/company-contact";
+import type { DiscoveryEmailSource, SourceAttempt } from "./types";
 
 /**
- * Public-email discovery for Company Discovery.
+ * Public-email discovery — MULTI-SOURCE, with no dependency on Arbeitsagentur.
  *
- * Hard rule: an address is only ever reported when it was ACTUALLY PUBLISHED —
- * either in the source's own offer contact block or on a page of the company's
- * official website. Nothing is derived from the company name, nothing is
- * guessed (`info@company.de` is NEVER produced), and a failed or blocked fetch
- * yields "no public email found" instead of a fabricated address.
+ * Hard rules:
+ *  - An address is reported only when it is LITERALLY published in content
+ *    fetched during this run (§4.2a). Nothing is derived from a company name,
+ *    nothing is guessed, and a blocked or unreachable source yields an
+ *    INCONCLUSIVE outcome — never a fabricated address and never a silent
+ *    "no public email".
+ *  - Arbeitsagentur is removed from the email path entirely (§3.3): the
+ *    offer contact block of a BA record is never read. Its offers still
+ *    identify companies; that is all they contribute.
  *
- * Sources, in the order they are used:
- *   1. `offer`            — the contact address the source itself published in
- *                           the offer description (`opportunity.contact.email`,
- *                           normalized by the shared rules that already reject
- *                           placeholders like "keine Angabe").
- *   2. `impressum` / `kontakt` / `karriere` / `ausbildung` / `company_website`
- *                           — addresses read verbatim from the fetched pages
- *                           of the company's own domain, attributably to that
- *                           company, and ONLY when the page domain matches the
- *                           address domain (no third-party address is presented
- *                           as the company's).
- *
- * Which website is fetched is itself evidence-based: the URL comes from the
- * engine's verified enrichment (`opportunity.enrichment.website_url`) or from
- * the domain of an address the employer published — never from a name guess.
+ * Source order (§4.1):
+ *   1. an address printed in the listing of an ENABLED portal;
+ *   2. the company's official website — Impressum, Kontakt, Karriere, Jobs,
+ *      Ausbildung, Ansprechpartner/Team, homepage;
+ *   3. public search results of a permitted provider;
+ *   4. trusted public pages (chamber / registry / association directories),
+ *      accepted only when the block attributes the address to the company.
  */
 
-/** Maximum pages fetched per company (root + contact/career pages). */
+/**
+ * Pages fetched per company. The §4.7 ceiling is 6; this budget is deliberately
+ * lower because Impressum/Kontakt almost always suffice in Germany.
+ */
 export const MAX_EMAIL_PAGES_PER_COMPANY = 3;
 
-export type PublicEmailConfidence = "high" | "medium" | "low";
-
-/** One address with the provenance the database stores. */
-export interface PublicEmailResolution {
-  email: string;
-  /** The exact public page the address was read from (null for offer rows). */
-  sourceUrl: string | null;
-  sourceType: DiscoveryEmailSource;
-  confidence: PublicEmailConfidence;
-  /** True when the official-site pass actually ran for this company. */
-  fetchedSite: boolean;
-}
+/** Per-company wall clock budget (§4.7). */
+export const MAX_COMPANY_EMAIL_MS = 25_000;
 
 /** A page of the company's site, reduced to what extraction needs. */
 export interface CompanySiteTextPage {
@@ -58,92 +49,187 @@ export interface CompanySiteTextPage {
   text: string;
 }
 
-/**
- * Fetches the public pages of a company website (guarded: robots, SSRF,
- * anti-bot, bounded). Injected so the extraction rules are testable without
- * touching the network; the default implementation is the real guarded
- * fetcher used by the enrichment layers.
- */
-export type CompanySitePagesFetcher = (
-  websiteUrl: string,
-) => Promise<CompanySiteTextPage[]>;
+export interface SitePageFetchOutcome {
+  pages: CompanySiteTextPage[];
+  attempts: SourceAttempt[];
+  /** True when a REQUIRED page could not be inspected (blocked/inconclusive). */
+  blocked: boolean;
+  blockedReason: BlockedReason | null;
+}
 
-/** Real fetcher: the SAME guarded, bounded page stack the enrichment uses. */
-export const fetchCompanySiteTextPages: CompanySitePagesFetcher = async (
-  websiteUrl,
-) => {
-  const [{ fetchCompanyPages }, { ConcurrencyLimiter }] = await Promise.all([
-    import("@/lib/opportunities/enrichment/company-site"),
-    import("@/lib/concurrency"),
-  ]);
-  const { pages } = await fetchCompanyPages(
-    websiteUrl,
-    new Map(),
-    new ConcurrencyLimiter(2),
-  );
-  return pages.map((page) => ({
-    url: page.url,
-    kind: page.kind,
-    text: page.text,
-  }));
-};
+/** The guarded site pass. Injected so the rules stay testable offline. */
+export type CompanySiteFetcher = (websiteUrl: string) => Promise<SitePageFetchOutcome>;
 
-/** Page kind → the provenance value stored with the address. */
+/** Page kinds, mapped to the provenance value stored with an address. */
 const SOURCE_BY_PAGE_KIND: Record<string, DiscoveryEmailSource> = {
-  impressum: "impressum",
-  kontakt: "kontakt",
-  karriere: "karriere",
-  ausbildung: "ausbildung",
-  bewerbungen: "bewerbungen",
+  impressum: "official_site_impressum",
+  kontakt: "official_site_contact",
+  contact: "official_site_contact",
+  karriere: "official_site_career",
+  career: "official_site_career",
+  jobs: "official_site_jobs",
+  stellenangebote: "official_site_jobs",
+  ausbildung: "official_site_ausbildung",
+  azubi: "official_site_ausbildung",
+  team: "official_site_contact_person",
+  ansprechpartner: "official_site_contact_person",
+  home: "official_site_other",
+  other: "official_site_other",
 };
 
-const CONFIDENCE_RANK: Record<PublicEmailConfidence, number> = {
-  high: 3,
-  medium: 2,
-  low: 1,
-};
+/** The pages an official-site pass visits, in the order §4.1 recommends. */
+export const SITE_PAGE_PATHS: ReadonlyArray<{ path: string; kind: string }> = [
+  { path: "/impressum", kind: "impressum" },
+  { path: "/kontakt", kind: "kontakt" },
+  { path: "/karriere", kind: "karriere" },
+  { path: "/jobs", kind: "jobs" },
+  { path: "/ausbildung", kind: "ausbildung" },
+  { path: "/team", kind: "team" },
+];
+
+/** Every address of a fetched page that passes the acceptance rules. */
+export function sitePageEmails(input: {
+  page: CompanySiteTextPage;
+  companyName: string;
+  companyDomain: string | null;
+}): AcceptedEmail[] {
+  return acceptEmailsFromContent({
+    text: input.page.text,
+    sourceUrl: input.page.url,
+    sourceType: SOURCE_BY_PAGE_KIND[input.page.kind] ?? "official_site_other",
+    companyName: input.companyName,
+    companyDomain: input.companyDomain,
+  });
+}
 
 /**
- * The address the source published in the offer itself. This is the same
- * normalization the AI-Search export uses, so "keine Angabe", "n/a" and
- * malformed values can never leak into a result.
+ * The real guarded site pass: fetch the company's public contact/career pages
+ * through the ONE guarded fetcher and report what each attempt ended with.
  */
-export function offerEmailCandidate(
-  offer: Pick<Opportunity, "contact" | "source_url">,
-): PublicEmailResolution | null {
-  const email = normalizeOpportunityEmail(offer.contact?.email ?? null);
-  if (!email) return null;
-  return {
-    email,
-    sourceUrl: null,
-    sourceType: "offer",
-    confidence: "medium",
-    fetchedSite: false,
+export function createGuardedSiteFetcher(ctx: FetchContext): CompanySiteFetcher {
+  return async (websiteUrl: string): Promise<SitePageFetchOutcome> => {
+    const pages: CompanySiteTextPage[] = [];
+    let blocked = false;
+    let blockedReason: BlockedReason | null = null;
+    /** Attempts this pass added to the shared context. */
+    const attemptsBefore = ctx.attempts.length;
+
+    let origin: string;
+    try {
+      origin = new URL(websiteUrl).origin;
+    } catch {
+      return { pages, attempts: [], blocked: false, blockedReason: null };
+    }
+
+    // Impressum and Kontakt first — they are the pages §4.4 makes REQUIRED,
+    // and the highest-yield sources of a published address in Germany.
+    const targets = SITE_PAGE_PATHS.map((entry) => ({
+      url: `${origin}${entry.path}`,
+      kind: entry.kind,
+    })).slice(0, MAX_EMAIL_PAGES_PER_COMPANY);
+
+    /** Required pages that were actually inspected (reachable, not blocked). */
+    const inspected = new Set<string>();
+    const REQUIRED_KINDS = ["impressum", "kontakt"];
+
+    for (const target of targets) {
+      const result = await guardedFetch(ctx, target.url, { textBudget: 20_000 });
+      if (result.ok) {
+        pages.push({ url: result.page.finalUrl, kind: target.kind, text: result.page.text });
+        inspected.add(target.kind);
+        continue;
+      }
+      if (result.kind === "blocked") {
+        blocked = true;
+        blockedReason = result.reason;
+        break; // the circuit breaker is open for this host; stop asking
+      }
+      // A technical failure is NOT an answer. A transient/inconclusive one
+      // (timeout, 5xx, network) leaves the required pages uninspected, which
+      // must never be reported as "no public email".
+      const inconclusive =
+        result.message === "timeout" ||
+        result.message === "fetch_failed" ||
+        /^http_5\d\d$/.test(result.message);
+      if (inconclusive && !REQUIRED_KINDS.every((kind) => inspected.has(kind))) {
+        blocked = true;
+        blockedReason = "unreachable";
+        break;
+      }
+      // A 404 on an optional page is a real answer ("that page does not
+      // exist") — keep going, and it does not block the outcome.
+    }
+
+    return {
+      pages,
+      attempts: ctx.attempts.slice(attemptsBefore),
+      blocked,
+      blockedReason,
+    };
   };
 }
 
 /**
- * An address the shared engine already read from a PUBLIC page during
- * enrichment (`opportunity.enrichment.email`, never generated). It carries the
- * page it was read from as evidence.
+ * An address printed in an ENABLED portal's listing (§4.1 step 1). The literal
+ * presence is re-checked against the listing evidence; the attribution was
+ * established by the adapter that parsed the listing.
  */
-export function enrichedEmailCandidate(
-  offer: Pick<Opportunity, "enrichment">,
-): PublicEmailResolution | null {
-  const email = normalizeOpportunityEmail(offer.enrichment?.email ?? null);
-  if (!email) return null;
-  return {
-    email,
-    sourceUrl: offer.enrichment?.website_source ?? null,
+export function listingEmailCandidate(input: {
+  email: string;
+  sourceUrl: string;
+  evidence: string;
+  companyName: string;
+}): AcceptedEmail | null {
+  const accepted = acceptEmailsFromContent({
+    text: `${input.email}\n${input.evidence}`,
+    sourceUrl: input.sourceUrl,
+    sourceType: "job_listing",
+    companyName: input.companyName,
+  })[0];
+  return accepted ?? null;
+}
+
+/**
+ * An address read from a permitted provider's search result. Tavily returns
+ * page content with the result, so the address is literally present in content
+ * of this run — that is what makes it acceptable (§4.1 step 3).
+ */
+export function searchResultEmails(input: {
+  content: string;
+  sourceUrl: string;
+  companyName: string;
+  companyDomain: string | null;
+}): AcceptedEmail[] {
+  return acceptEmailsFromContent({
+    text: input.content,
+    sourceUrl: input.sourceUrl,
     sourceType: "search_result",
-    confidence: "medium",
-    fetchedSite: false,
-  };
+    companyName: input.companyName,
+    companyDomain: input.companyDomain,
+  });
 }
 
 /**
- * A website worth checking, derived from an address the EMPLOYER published —
- * never from the company name. Free mail providers are not a company site.
+ * A trusted public page (chamber / registry / association directory). Accepted
+ * only when the block carrying the address names the company (§4.2b).
+ */
+export function trustedPageEmails(input: {
+  content: string;
+  sourceUrl: string;
+  companyName: string;
+}): AcceptedEmail[] {
+  return acceptEmailsFromContent({
+    text: input.content,
+    sourceUrl: input.sourceUrl,
+    sourceType: "trusted_public_page",
+    companyName: input.companyName,
+  });
+}
+
+/**
+ * A website the company itself published: the domain of an address from an
+ * ENABLED source. Free mail providers are never a company site, and a company
+ * NAME is never turned into a host.
  */
 export function companyWebsiteFromPublishedEmail(
   email: string | null | undefined,
@@ -155,143 +241,210 @@ export function companyWebsiteFromPublishedEmail(
   return `https://${domain}`;
 }
 
-/**
- * Addresses found on the company's OWN pages: only same-domain addresses are
- * kept (an address printed on the company's site under a different domain is
- * not this company's contact), deduped by address with the strongest
- * confidence kept.
- */
-export function websiteEmailCandidates(input: {
-  pages: CompanySiteTextPage[];
+export interface CompanyEmailInput {
   companyName: string;
-}): PublicEmailResolution[] {
-  const byEmail = new Map<string, PublicEmailResolution>();
-  for (const page of input.pages) {
-    const found = emailsFromPageText({
-      text: page.text,
-      sourceUrl: page.url,
+  /** §4.1 (1): an address printed in an enabled portal's listing, or null. */
+  listingEmail: { email: string; sourceUrl: string; evidence: string } | null;
+  /** §4.1 (2): the company's own website, when known. */
+  websiteUrl: string | null;
+  /**
+   * §4.1 (3): did the permitted public-search step run, and what did it
+   * return? `ran:false` means the step could not be performed at all, which
+   * makes a company WITHOUT a website inconclusive (§4.4).
+   */
+  search: {
+    ran: boolean;
+    results: Array<{ content: string; sourceUrl: string }>;
+  };
+  /** §4.1 (4): trusted public pages already fetched for this company. */
+  trustedPages: Array<{ content: string; sourceUrl: string }>;
+  /** The guarded site pass, or null when the run's page budget is exhausted. */
+  fetchSite: CompanySiteFetcher | null;
+}
+
+export interface CompanyEmailOutcome {
+  /** Every accepted address, deduped, priority-ordered, all URLs kept. */
+  emails: MergedAcceptedEmail[];
+  /** Real access attempts (allowed sources only). */
+  attempts: SourceAttempt[];
+  /** True when every REQUIRED source was inspected successfully. */
+  requiredInspected: boolean;
+  /** True when a required source was blocked or stayed inconclusive. */
+  blocked: boolean;
+  blockedReason: BlockedReason | null;
+  /** Machine reason for the caller's outcome resolution (§4.4). */
+  reasonCode: "email_found" | "no_public_email" | "source_blocked" | "no_website_found";
+  /** The primary address (highest priority), or null. */
+  primary: MergedAcceptedEmail | null;
+}
+
+/**
+ * Resolve the public addresses of ONE company across all allowed sources.
+ *
+ * Never throws: an unexpected failure inside a step is recorded as an attempt
+ * and treated as inconclusive, so one company can never end a run.
+ */
+export async function resolveCompanyEmails(
+  input: CompanyEmailInput,
+): Promise<CompanyEmailOutcome> {
+  const collected: AcceptedEmail[] = [];
+  const attempts: SourceAttempt[] = [];
+
+  // ---- 1. the listing (enabled portals only) ------------------------------
+  if (input.listingEmail) {
+    const candidate = listingEmailCandidate({
+      email: input.listingEmail.email,
+      sourceUrl: input.listingEmail.sourceUrl,
+      evidence: input.listingEmail.evidence,
       companyName: input.companyName,
     });
-    for (const entry of found) {
-      if (!entry.sameDomain) continue;
-      const key = emailDedupeKey(entry.email);
-      const sourceType = SOURCE_BY_PAGE_KIND[page.kind] ?? "company_website";
-      // A role mailbox on the company's own contact/career page is the
-      // strongest signal there is; anything else on the site is medium.
-      const confidence: PublicEmailConfidence =
-        roleOfLocalPart(entry.email.split("@")[0] ?? "") === "application" &&
-        sourceType !== "company_website"
-          ? "high"
-          : "medium";
-      const candidate: PublicEmailResolution = {
-        email: entry.email,
-        sourceUrl: entry.sourceUrl,
-        sourceType,
-        confidence,
-        fetchedSite: true,
-      };
-      const existing = byEmail.get(key);
-      if (!existing || CONFIDENCE_RANK[confidence] > CONFIDENCE_RANK[existing.confidence])
-        byEmail.set(key, candidate);
+    if (candidate) collected.push(candidate);
+  }
+
+  // The website the COMPANY published (or the run/engine found). A company name
+  // is never turned into a host.
+  const website =
+    input.websiteUrl ?? companyWebsiteFromPublishedEmail(input.listingEmail?.email);
+  const companyDomain = website ? safeHost(website) : null;
+
+  // ---- 3. permitted public search results --------------------------------
+  for (const result of input.search.results) {
+    collected.push(
+      ...searchResultEmails({
+        content: result.content,
+        sourceUrl: result.sourceUrl,
+        companyName: input.companyName,
+        companyDomain,
+      }),
+    );
+  }
+
+  // ---- 4. trusted public pages -------------------------------------------
+  for (const page of input.trustedPages) {
+    collected.push(
+      ...trustedPageEmails({
+        content: page.content,
+        sourceUrl: page.sourceUrl,
+        companyName: input.companyName,
+      }),
+    );
+  }
+
+  // ---- 2. the official website -------------------------------------------
+  let blocked = false;
+  let blockedReason: BlockedReason | null = null;
+  let requiredInspected = false;
+
+  if (website) {
+    if (!input.fetchSite) {
+      // The page budget is exhausted: the required source was NOT inspected,
+      // so the outcome is inconclusive rather than "no public email".
+      blocked = true;
+      blockedReason = "unreachable";
+    } else {
+      const outcome = await input.fetchSite(website);
+      attempts.push(...outcome.attempts);
+      for (const page of outcome.pages) {
+        collected.push(
+          ...sitePageEmails({
+            page,
+            companyName: input.companyName,
+            companyDomain,
+          }),
+        );
+      }
+      if (outcome.blocked) {
+        blocked = true;
+        blockedReason = outcome.blockedReason;
+      }
+      requiredInspected = !outcome.blocked;
+    }
+  } else {
+    // No website could be identified → the public-search step IS the required
+    // source (§4.4). If it never ran, the outcome is inconclusive.
+    if (input.search.ran) {
+      requiredInspected = true;
+    } else {
+      blocked = true;
+      blockedReason = "unreachable";
     }
   }
-  return [...byEmail.values()];
+
+  const emails = mergeAcceptedEmails(collected);
+  const primary = emails[0] ?? null;
+
+  if (primary) {
+    // A found address wins: a block elsewhere never downgrades it (§4.4).
+    return {
+      emails,
+      attempts,
+      requiredInspected,
+      blocked: false,
+      blockedReason: null,
+      reasonCode: "email_found",
+      primary,
+    };
+  }
+
+  if (!website && !input.search.ran) {
+    return {
+      emails,
+      attempts,
+      requiredInspected: false,
+      blocked: true,
+      blockedReason: "unreachable",
+      reasonCode: "no_website_found",
+      primary: null,
+    };
+  }
+
+  if (blocked) {
+    return {
+      emails,
+      attempts,
+      requiredInspected: false,
+      blocked: true,
+      blockedReason,
+      reasonCode: "source_blocked",
+      primary: null,
+    };
+  }
+
+  return {
+    emails,
+    attempts,
+    requiredInspected,
+    blocked: false,
+    blockedReason: null,
+    reasonCode: "no_public_email",
+    primary: null,
+  };
+}
+
+function safeHost(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Deterministic priority pick (mirrors the shared email rules):
- *   1. application/career mailbox (bewerbung@, karriere@, ausbildung@, jobs@)
- *   2. general company mailbox (info@, kontakt@, mail@ …)
- *   3. any other address on the company's own domain
- * Ties break on confidence, then in favour of the company's own page over the
- * offer text.
- */
-export function pickPublicEmail(
-  candidates: PublicEmailResolution[],
-): PublicEmailResolution | null {
-  let best: PublicEmailResolution | null = null;
-  let bestScore = -1;
-  for (const candidate of candidates) {
-    const role = roleOfLocalPart(candidate.email.split("@")[0] ?? "");
-    let score = role === "application" ? 60 : role === "general" ? 40 : 20;
-    score += CONFIDENCE_RANK[candidate.confidence];
-    if (candidate.sourceType === "offer") score -= 1;
-    if (score > bestScore) {
-      bestScore = score;
-      best = candidate;
-    }
-  }
-  return best;
-}
-
-/**
- * The counting rule behind `onlyPublicEmail`:
- *   true  → only companies with a PUBLISHED address are results, so a run may
- *           honestly end PARTIAL (4 of 10) instead of padding the list;
- *   false → companies without an address are results too, and the UI states
- *           "No public email found" for them.
+ * The counting rule behind `onlyPublicEmail` (§4.6):
+ *   true  → only companies with a VERIFIED published address are results, so a
+ *           run may honestly end PARTIAL instead of padding the list;
+ *   false → every company is a result, and the UI states the honest status
+ *           (`no_public_email` / `source_blocked`) for the others.
  * A missing address never silently removes a company when the user asked for
- * all of them.
+ * all of them, and nothing is ever invented in either mode.
  */
 export function countsAsResult(input: {
   onlyPublicEmail: boolean;
   hasPublicEmail: boolean;
+  /** The three-outcome literal resolved for the company (§4.4). */
+  outcome?: "email_found" | "no_public_email" | "source_blocked";
 }): boolean {
   if (!input.onlyPublicEmail) return true;
+  if (input.outcome === "source_blocked") return false;
   return input.hasPublicEmail;
-}
-
-/**
- * Resolve ONE public email for a company.
- *
- * Returns null when nothing was published — the caller renders
- * "No public email found" and never invents an address.
- *
- * The official-site pass only runs when it can change the outcome (no usable
- * offer address) and only while the run still has fetch budget
- * (`fetchPages === null` means exhausted), so a run stays inside its
- * serverless time budget.
- */
-export async function resolveCompanyPublicEmail(input: {
-  companyName: string;
-  offer: Pick<Opportunity, "contact" | "source_url" | "enrichment">;
-  /** Verified website of the company (engine enrichment), or null. */
-  websiteUrl: string | null;
-  /** null = the run's page-fetch budget is exhausted (no site pass). */
-  fetchPages: CompanySitePagesFetcher | null;
-  maxPages?: number;
-}): Promise<PublicEmailResolution | null> {
-  const published = [
-    offerEmailCandidate(input.offer),
-    enrichedEmailCandidate(input.offer),
-  ].filter((candidate): candidate is PublicEmailResolution => candidate !== null);
-  // Where to look without guessing: the website the engine verified, or the
-  // domain of an address the EMPLOYER published. A company name is never
-  // turned into a host.
-  const website =
-    input.websiteUrl ??
-    published
-      .map((candidate) => companyWebsiteFromPublishedEmail(candidate.email))
-      .find((url) => url !== null) ??
-    null;
-
-  let siteCandidates: PublicEmailResolution[] = [];
-  if (website && input.fetchPages) {
-    try {
-      const pages = await input.fetchPages(website);
-      siteCandidates = websiteEmailCandidates({
-        pages: pages.slice(0, input.maxPages ?? MAX_EMAIL_PAGES_PER_COMPANY),
-        companyName: input.companyName,
-      });
-    } catch {
-      // A blocked/failed fetch is not an address — report nothing, invent
-      // nothing, and let the caller keep the company as "no public email".
-      siteCandidates = [];
-    }
-  }
-
-  // The company's own page beats a text-only source on a tie (published, live,
-  // attributable); a text source remains the answer when the site yielded
-  // none. No candidate at all → null → "No public email found".
-  return pickPublicEmail([...siteCandidates, ...published]);
 }

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isUnknownColumnError, isUnknownTableError } from "./errors";
 import {
   type DiscoveryCandidate,
   type DiscoveryEmailSource,
@@ -48,6 +49,12 @@ interface DiscoveryRunRow {
   unique_companies: number;
   duplicates_removed: number;
   companies_rejected: number;
+  /** Added by the multi-source migration; absent on a database that has not
+   *  received it yet, which is why every read falls back to 0. */
+  emails_found?: number;
+  no_public_email?: number;
+  sources_blocked?: number;
+  companies_processed?: number;
   sources: unknown;
   credits_charged: number;
   error: string | null;
@@ -74,6 +81,8 @@ interface DiscoveryCompanyRow {
   offer_url: string | null;
   status: string;
   reject_reason: string | null;
+  /** The three-outcome literal; added by the multi-source migration. */
+  email_status?: string | null;
 }
 
 function isSourceStatus(value: unknown): value is DiscoverySourceStatus["status"] {
@@ -81,8 +90,43 @@ function isSourceStatus(value: unknown): value is DiscoverySourceStatus["status"
     value === "ok" ||
     value === "running" ||
     value === "unavailable" ||
-    value === "skipped"
+    value === "skipped" ||
+    value === "blocked" ||
+    value === "skipped_by_policy" ||
+    value === "error"
   );
+}
+
+/**
+ * Columns that only exist once `…_discovery_multi_source.sql` has been applied.
+ * A write that mentions one of them on a database without it is retried
+ * WITHOUT them and logged: losing an audit detail must never lose the user's
+ * result, and must never fail the run (the same posture the campaign bridge
+ * already takes for schema drift).
+ */
+const MIGRATION_DEPENDENT_KEYS = [
+  "emails_found",
+  "no_public_email",
+  "sources_blocked",
+  "companies_processed",
+  "email_status",
+  "verification_status",
+  "verification_method",
+  "domain_match",
+  "evidence_snippet",
+  "discovered_at",
+] as const;
+
+/** The patch without the migration-dependent keys. */
+function withoutMigrationKeys(
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const reduced: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if ((MIGRATION_DEPENDENT_KEYS as readonly string[]).includes(key)) continue;
+    reduced[key] = value;
+  }
+  return reduced;
 }
 
 /** Parse a stored sources jsonb into the typed list (defensive). */
@@ -97,6 +141,13 @@ function parseSources(raw: unknown): DiscoverySourceStatus[] {
     out.push({
       id: item.id,
       status,
+      ...(typeof item.displayName === "string"
+        ? { displayName: item.displayName }
+        : {}),
+      ...(typeof item.reason === "string" ? { reason: item.reason } : {}),
+      ...(typeof item.policy === "string"
+        ? { policy: item.policy as DiscoverySourceStatus["policy"] }
+        : {}),
       ...(typeof item.candidates === "number" ? { candidates: item.candidates } : {}),
     });
   }
@@ -114,6 +165,9 @@ function rowToRun(row: DiscoveryRunRow): DiscoveryRun {
     uniqueCompanies: row.unique_companies,
     duplicatesRemoved: row.duplicates_removed,
     companiesRejected: row.companies_rejected,
+    emailsFound: row.emails_found ?? 0,
+    noPublicEmail: row.no_public_email ?? 0,
+    sourcesBlocked: row.sources_blocked ?? 0,
     sources: parseSources(row.sources),
   };
   return {
@@ -250,6 +304,11 @@ export interface FinishRunOutcome {
   uniqueCompanies: number;
   duplicatesRemoved: number;
   companiesRejected: number;
+  /** The three-outcome counters (§4.8). */
+  emailsFound?: number;
+  noPublicEmail?: number;
+  sourcesBlocked?: number;
+  companiesProcessed?: number;
   sources: DiscoverySourceStatus[];
   error?: string | null;
 }
@@ -261,24 +320,44 @@ export async function finishDiscoveryRun(
   outcome: FinishRunOutcome,
 ): Promise<DiscoveryRun> {
   const admin = createAdminClient();
-  const { data, error } = await admin
+  const patch: Record<string, unknown> = {
+    status: outcome.status,
+    found_companies: outcome.foundCompanies,
+    offers_analyzed: outcome.offersAnalyzed,
+    unique_companies: outcome.uniqueCompanies,
+    duplicates_removed: outcome.duplicatesRemoved,
+    companies_rejected: outcome.companiesRejected,
+    emails_found: outcome.emailsFound ?? 0,
+    no_public_email: outcome.noPublicEmail ?? 0,
+    sources_blocked: outcome.sourcesBlocked ?? 0,
+    companies_processed: outcome.companiesProcessed ?? 0,
+    sources: outcome.sources,
+    error: outcome.error ?? null,
+    finished_at: new Date().toISOString(),
+  };
+  let { data, error } = await admin
     .from("discovery_runs")
-    .update({
-      status: outcome.status,
-      found_companies: outcome.foundCompanies,
-      offers_analyzed: outcome.offersAnalyzed,
-      unique_companies: outcome.uniqueCompanies,
-      duplicates_removed: outcome.duplicatesRemoved,
-      companies_rejected: outcome.companiesRejected,
-      sources: outcome.sources,
-      error: outcome.error ?? null,
-      finished_at: new Date().toISOString(),
-    })
+    .update(patch)
     .eq("run_id", runId)
     .eq("user_id", userId)
     .in("status", ["pending", "running"])
     .select("*")
     .maybeSingle();
+  if (error && isUnknownColumnError(error)) {
+    // The counter columns are not deployed yet: finish the run anyway, keep
+    // the counters the schema does have, and make the drift loud.
+    console.error(
+      "[company-discovery] discovery_runs counter columns are missing — finishing the run without (emails_found/no_public_email/sources_blocked/companies_processed). Apply supabase/migrations/20261019000000_discovery_multi_source.sql.",
+    );
+    ({ data, error } = await admin
+      .from("discovery_runs")
+      .update(withoutMigrationKeys(patch))
+      .eq("run_id", runId)
+      .eq("user_id", userId)
+      .in("status", ["pending", "running"])
+      .select("*")
+      .maybeSingle());
+  }
   if (error) throw new Error("Failed to finish the discovery run.");
   if (!data) {
     const final = await getDiscoveryRun(runId, userId);
@@ -303,6 +382,9 @@ export async function setRunCounters(
       | "uniqueCompanies"
       | "duplicatesRemoved"
       | "companiesRejected"
+      | "emailsFound"
+      | "noPublicEmail"
+      | "sourcesBlocked"
     >
   >,
   sources?: DiscoverySourceStatus[],
@@ -319,14 +401,28 @@ export async function setRunCounters(
     patch.duplicates_removed = counters.duplicatesRemoved;
   if (counters.companiesRejected !== undefined)
     patch.companies_rejected = counters.companiesRejected;
+  if (counters.emailsFound !== undefined) patch.emails_found = counters.emailsFound;
+  if (counters.noPublicEmail !== undefined)
+    patch.no_public_email = counters.noPublicEmail;
+  if (counters.sourcesBlocked !== undefined)
+    patch.sources_blocked = counters.sourcesBlocked;
   if (sources !== undefined) patch.sources = sources;
   if (Object.keys(patch).length === 0) return;
-  const { error } = await admin
+  let { error } = await admin
     .from("discovery_runs")
     .update(patch)
     .eq("run_id", runId)
     .eq("user_id", userId)
     .eq("status", "running");
+  if (error && isUnknownColumnError(error)) {
+    // Progress must keep flowing on a database without the new counters.
+    ({ error } = await admin
+      .from("discovery_runs")
+      .update(withoutMigrationKeys(patch))
+      .eq("run_id", runId)
+      .eq("user_id", userId)
+      .eq("status", "running"));
+  }
   if (error) throw new Error("Failed to update the discovery run counters.");
 }
 
@@ -378,6 +474,11 @@ export interface CompanyRecord {
   offerUrl: string | null;
   status: "accepted" | "rejected";
   rejectReason?: string | null;
+  /**
+   * The company-level outcome (§4.4). Stored separately from `rejectReason`
+   * so `source_blocked` can never be misread as `no_public_email`.
+   */
+  emailStatus?: "email_found" | "no_public_email" | "source_blocked" | null;
 }
 
 /**
@@ -435,28 +536,41 @@ export async function recordCompany(
   if (existing.data) {
     return { companyId: existing.data.id as string, created: false };
   }
-  const { data, error } = await admin
+  const patch: Record<string, unknown> = {
+    run_id: runId,
+    company_key: company.companyKey,
+    company_name: company.companyName,
+    website_url: company.websiteUrl,
+    website_source_url: company.websiteSourceUrl,
+    role: company.role,
+    field: company.field,
+    offer_type: company.offerType,
+    city: company.city,
+    state: company.state,
+    beginn: company.beginn,
+    salary_label: company.salaryLabel,
+    offer_source: company.offerSource,
+    offer_url: company.offerUrl,
+    status: company.status,
+    reject_reason: company.rejectReason ?? null,
+    email_status: company.emailStatus ?? null,
+  };
+  let { data, error } = await admin
     .from("discovery_companies")
-    .insert({
-      run_id: runId,
-      company_key: company.companyKey,
-      company_name: company.companyName,
-      website_url: company.websiteUrl,
-      website_source_url: company.websiteSourceUrl,
-      role: company.role,
-      field: company.field,
-      offer_type: company.offerType,
-      city: company.city,
-      state: company.state,
-      beginn: company.beginn,
-      salary_label: company.salaryLabel,
-      offer_source: company.offerSource,
-      offer_url: company.offerUrl,
-      status: company.status,
-      reject_reason: company.rejectReason ?? null,
-    })
+    .insert(patch)
     .select("id")
     .single();
+  if (error && isUnknownColumnError(error)) {
+    // The outcome column is not deployed yet: keep the row, lose the label.
+    console.error(
+      "[company-discovery] discovery_companies.email_status is missing — storing the company without its outcome label. Apply supabase/migrations/20261019000000_discovery_multi_source.sql.",
+    );
+    ({ data, error } = await admin
+      .from("discovery_companies")
+      .insert(withoutMigrationKeys(patch))
+      .select("id")
+      .single());
+  }
   if (error || !data) {
     throw new Error("Failed to record the discovered company.");
   }
@@ -484,12 +598,20 @@ export async function getLatestDiscoveryRun(
   return rowToRun(data as DiscoveryRunRow);
 }
 
-/** One stored public email with its mandatory provenance. */
+/** One stored public email with its mandatory provenance (§4.5). */
 export interface RunCompanyEmail {
   email: string;
+  /** The primary page (highest-priority source), or null for legacy rows. */
   sourceUrl: string | null;
   sourceType: DiscoveryEmailSource;
   confidence: "high" | "medium" | "low" | null;
+  /** Every page the address was literally found on, primary first. */
+  sourceUrls: string[];
+  verificationStatus: string | null;
+  verificationMethod: string | null;
+  domainMatch: boolean | null;
+  evidenceSnippet: string | null;
+  discoveredAt: string | null;
 }
 
 /** A discovered company of a run, with the addresses published for it. */
@@ -509,6 +631,8 @@ export interface RunCompanyResult {
   offerUrl: string | null;
   status: string;
   rejectReason: string | null;
+  /** The company-level outcome (§4.4), or null on a non-migrated database. */
+  emailStatus: string | null;
   /** Empty when the company published no address — the UI says so explicitly. */
   emails: RunCompanyEmail[];
 }
@@ -546,32 +670,90 @@ export async function listRunCompaniesWithEmails(
   const rows = (companies ?? []) as DiscoveryCompanyRow[];
   if (rows.length === 0) return [];
 
-  const { data: emailRows, error: emailError } = await admin
+  const companyIds = rows.map((row) => row.id);
+  let emailRows: unknown[] | null;
+  const primaryEmailQuery = await admin
     .from("discovery_company_emails")
-    .select("company_id, email, email_source_url, email_source_type, confidence")
-    .in(
-      "company_id",
-      rows.map((row) => row.id),
+    .select(
+      "id, company_id, email, email_source_url, email_source_type, confidence, verification_status, verification_method, domain_match, evidence_snippet, discovered_at",
+    )
+    .in("company_id", companyIds);
+  if (primaryEmailQuery.error && isUnknownColumnError(primaryEmailQuery.error)) {
+    // The verification columns are not deployed yet: read the base columns.
+    console.error(
+      "[company-discovery] discovery_company_emails verification columns are missing — reading the base columns only. Apply supabase/migrations/20261019000000_discovery_multi_source.sql.",
     );
-  if (emailError) throw emailError;
+    const fallbackQuery = await admin
+      .from("discovery_company_emails")
+      .select("id, company_id, email, email_source_url, email_source_type, confidence")
+      .in("company_id", companyIds);
+    if (fallbackQuery.error) throw fallbackQuery.error;
+    emailRows = fallbackQuery.data;
+  } else {
+    if (primaryEmailQuery.error) throw primaryEmailQuery.error;
+    emailRows = primaryEmailQuery.data;
+  }
 
   const byCompany = new Map<string, RunCompanyEmail[]>();
+  const emailIds: string[] = [];
+  const byEmailId = new Map<string, RunCompanyEmail>();
   for (const row of emailRows ?? []) {
     const record = row as {
+      id: string;
       company_id: string;
       email: string;
       email_source_url: string | null;
       email_source_type: DiscoveryEmailSource;
       confidence: "high" | "medium" | "low" | null;
+      verification_status?: string | null;
+      verification_method?: string | null;
+      domain_match?: boolean | null;
+      evidence_snippet?: string | null;
+      discovered_at?: string | null;
     };
-    const list = byCompany.get(record.company_id) ?? [];
-    list.push({
+    const entry: RunCompanyEmail = {
       email: record.email,
       sourceUrl: record.email_source_url,
       sourceType: record.email_source_type,
       confidence: record.confidence,
-    });
+      sourceUrls: record.email_source_url ? [record.email_source_url] : [],
+      verificationStatus: record.verification_status ?? null,
+      verificationMethod: record.verification_method ?? null,
+      domainMatch: record.domain_match ?? null,
+      evidenceSnippet: record.evidence_snippet ?? null,
+      discoveredAt: record.discovered_at ?? null,
+    };
+    const list = byCompany.get(record.company_id) ?? [];
+    list.push(entry);
     byCompany.set(record.company_id, list);
+    if (record.id) {
+      emailIds.push(record.id);
+      byEmailId.set(record.id, entry);
+    }
+  }
+
+  // Every page an address was found on (the additive provenance table). Its
+  // absence is tolerated: the primary URL recorded above is always there.
+  if (emailIds.length > 0) {
+    const { data: sourceRows, error: sourceError } = await admin
+      .from("discovery_company_email_sources")
+      .select("email_id, source_url")
+      .in("email_id", emailIds);
+    if (sourceError) {
+      if (!isUnknownTableError(sourceError)) throw sourceError;
+      console.error(
+        "[company-discovery] discovery_company_email_sources is missing — only the primary source URL is available. Apply supabase/migrations/20261019000000_discovery_multi_source.sql.",
+      );
+    } else {
+      for (const row of sourceRows ?? []) {
+        const record = row as { email_id: string; source_url: string };
+        const entry = byEmailId.get(record.email_id);
+        if (!entry) continue;
+        if (!entry.sourceUrls.includes(record.source_url)) {
+          entry.sourceUrls.push(record.source_url);
+        }
+      }
+    }
   }
 
   return rows.map((row) => ({
@@ -590,33 +772,106 @@ export async function listRunCompaniesWithEmails(
     offerUrl: row.offer_url,
     status: row.status,
     rejectReason: row.reject_reason,
+    emailStatus: row.email_status ?? null,
     emails: byCompany.get(row.id) ?? [],
   }));
 }
 
 /**
- * Store a public email for a company (idempotent per (company_id, email)).
- * The address is stored exactly as published — never derived from a name.
+ * Store an ACCEPTED public email for a company, with its full provenance.
+ *
+ * The address is written exactly as it was literally read — never derived from
+ * a name, never re-composed. Idempotent per `(company_id, email)`, and every
+ * page the address was found on is preserved in the additive provenance table
+ * (§4.5), the primary source staying in `email_source_url`.
+ *
+ * Returns the stored row id so the caller can attach the extra source URLs.
  */
 export async function recordCompanyEmail(
   companyId: string,
-  email: string,
-  sourceUrl: string | null,
-  sourceType: DiscoveryEmailSource,
-  confidence: "high" | "medium" | "low" | null = null,
-): Promise<void> {
+  accepted: {
+    email: string;
+    sourceUrl: string;
+    sourceType: DiscoveryEmailSource;
+    sourceUrls?: string[];
+    verificationStatus?: string;
+    verificationMethod?: string;
+    domainMatch?: boolean;
+    evidenceSnippet?: string;
+    confidence?: "high" | "medium" | "low" | null;
+  },
+): Promise<string | null> {
   const admin = createAdminClient();
-  const { error } = await admin
+  const sourceUrls = [
+    ...new Set([accepted.sourceUrl, ...(accepted.sourceUrls ?? [])]),
+  ].filter((url) => url.length > 0);
+
+  const patch: Record<string, unknown> = {
+    company_id: companyId,
+    email: accepted.email,
+    email_source_url: accepted.sourceUrl,
+    email_source_type: accepted.sourceType,
+    confidence: accepted.confidence ?? null,
+    verification_status: accepted.verificationStatus ?? "verified",
+    verification_method: accepted.verificationMethod ?? null,
+    domain_match: accepted.domainMatch ?? null,
+    evidence_snippet: accepted.evidenceSnippet ?? null,
+  };
+
+  let { data, error } = await admin
     .from("discovery_company_emails")
-    .upsert(
-      {
-        company_id: companyId,
-        email,
-        email_source_url: sourceUrl,
-        email_source_type: sourceType,
-        confidence,
-      },
-      { onConflict: "company_id,email", ignoreDuplicates: true },
+    .upsert(patch, { onConflict: "company_id,email", ignoreDuplicates: true })
+    .select("id")
+    .maybeSingle();
+  if (error && isUnknownColumnError(error)) {
+    // Provenance detail is not deployed yet: store the address and its primary
+    // page, which is the part a campaign needs, and report the drift.
+    console.error(
+      "[company-discovery] discovery_company_emails verification columns are missing — storing the address without them. Apply supabase/migrations/20261019000000_discovery_multi_source.sql.",
     );
+    ({ data, error } = await admin
+      .from("discovery_company_emails")
+      .upsert(
+        withoutMigrationKeys(patch),
+        { onConflict: "company_id,email", ignoreDuplicates: true },
+      )
+      .select("id")
+      .maybeSingle());
+  }
   if (error) throw new Error("Failed to record the company email.");
+
+  let emailId = (data?.id as string | undefined) ?? null;
+  if (!emailId) {
+    // `ignoreDuplicates` returns no row when the address was already stored.
+    const existing = await admin
+      .from("discovery_company_emails")
+      .select("id")
+      .eq("company_id", companyId)
+      .eq("email", accepted.email)
+      .maybeSingle();
+    emailId = (existing.data?.id as string | undefined) ?? null;
+  }
+
+  if (emailId && sourceUrls.length > 0) {
+    const { error: sourceError } = await admin
+      .from("discovery_company_email_sources")
+      .upsert(
+        sourceUrls.map((sourceUrl) => ({
+          email_id: emailId,
+          source_url: sourceUrl,
+          source_type: accepted.sourceType,
+        })),
+        { onConflict: "email_id,source_url", ignoreDuplicates: true },
+      );
+    if (sourceError) {
+      if (!isUnknownTableError(sourceError)) {
+        console.error(
+          "[company-discovery] storing the extra email sources failed",
+          sourceError,
+        );
+      }
+    }
+  }
+
+  return emailId;
 }

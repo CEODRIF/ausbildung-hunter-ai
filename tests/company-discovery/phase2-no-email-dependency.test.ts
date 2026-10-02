@@ -42,7 +42,7 @@ const emails = read("src/lib/company-discovery/emails.ts");
 describe("a run survives a database without the email table", () => {
   it("guards the email write so a missing table cannot fail the run", () => {
     const write = pipeline.slice(
-      pipeline.indexOf("if (emailResolution) {"),
+      pipeline.indexOf("if (resolution.primary) {"),
       pipeline.indexOf("countedKeys.add(key)"),
     );
     expect(write).toContain("try {");
@@ -71,11 +71,11 @@ describe("onlyPublicEmail gates counting, honestly", () => {
       pipeline.indexOf("const { companyId } = await recordCompany"),
     );
     expect(gate).toContain("onlyPublicEmail: params.onlyPublicEmail");
-    expect(gate).toContain("hasPublicEmail: emailResolution !== null");
+    expect(gate).toContain("hasPublicEmail: resolution.primary !== null");
     // Dropped for a missing address → recorded with an audit reason, not counted.
-    expect(gate).toContain('rejectReason: NO_PUBLIC_EMAIL_REASON');
+    expect(gate).toContain("rejectReason: label");
     expect(gate).toContain("continue;");
-    expect(pipeline).toContain('const NO_PUBLIC_EMAIL_REASON = "no_public_email"');
+    expect(pipeline).toContain('const REJECT_NO_PUBLIC_EMAIL = "no_public_email"');
   });
 
   it("never inflates the counters to reach the target", () => {
@@ -88,25 +88,35 @@ describe("onlyPublicEmail gates counting, honestly", () => {
 describe("no fabricated addresses anywhere in the resolution path", () => {
   it("never builds an address from the company name or a fixed prefix", () => {
     // Comments explain the rule; only executable lines are inspected here.
-    const code = emails
+    const source = read("src/lib/company-discovery/accept.ts");
+    // Comments explain the rule; only executable lines are inspected here.
+    const code = source
       .split("\n")
       .filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line))
       .join("\n");
     expect(code).not.toMatch(/["'`][\w.+-]+@/); // no hardcoded address literal
     expect(code).not.toMatch(/@\$\{|\$\{[^}]*\}@/); // no interpolated address
-    expect(code).toContain("normalizeOpportunityEmail"); // only published values
+    // Every accepted value is a literal from the fetched content.
+    expect(code).toContain("extractEmails");
+    expect(code).toContain("findLiteralEvidence");
   });
 
   it("derives a website only from published evidence", () => {
     expect(emails).toContain("companyWebsiteFromPublishedEmail");
     expect(emails).not.toMatch(/slugify|toLowerCase\(\)\.replace\(\/\[\^a-z\]\/g, ""\)\s*\+\s*"\.de"/);
-    expect(read("src/lib/company-discovery/search.ts")).toContain(
-      "websiteUrl: opp.enrichment?.website_url ?? null",
-    );
+    // The BA record maps to an offer with NO email and the engine's own
+    // (verified) website only — never a name-derived host.
+    const pipelineSource = read("src/lib/company-discovery/search.ts");
+    expect(pipelineSource).toContain("companyWebsite: opp.enrichment?.website_url ?? null");
+    expect(pipelineSource).toContain("listingEmail: null");
   });
 
   it("keeps the fetch budget bounded per run", () => {
-    expect(pipeline).toContain("MAX_EMAIL_SITE_PASSES_PER_RUN");
-    expect(pipeline).toContain("fetchPages: emailSiteBudget > 0 ? fetchCompanySiteTextPages : null");
+    // The per-run page budget is env-tunable and bounded by default.
+    expect(pipeline).toContain("discoveryEmailSitePasses()");
+    expect(pipeline).toContain("fetchSite: siteBudgetAvailable ? siteFetcher : null");
+    expect(read("src/lib/company-discovery/types.ts")).toContain(
+      'envInt("DISCOVERY_MAX_EMAIL_SITE_PASSES", 8)',
+    );
   });
 });

@@ -165,11 +165,26 @@ export const TERMINAL_RUN_STATUSES: readonly DiscoveryRunStatus[] = [
  * yielded in this run (0/undefined before the source ran).
  */
 export interface DiscoverySourceStatus {
-  /** Stable source id, e.g. "arbeitsagentur", "tavily". */
+  /** Stable source id, e.g. "arbeitsagentur", "ausbildung-de". */
   id: string;
-  /** ok: delivered candidates. running: in progress. unavailable: failed or
-   *  blocked (the run continues without it). skipped: not part of the plan. */
-  status: "ok" | "running" | "unavailable" | "skipped";
+  /** Human-readable name for the source report (registry displayName). */
+  displayName?: string;
+  /** The access-policy classification the registry assigned (§3.4). */
+  policy?: SourceReportEntry["policy"];
+  /** ok: delivered candidates. running: in progress. unavailable: failed.
+   *  blocked: an access control answered (reason says which). error: technical
+   *  failure after bounded retries. skipped_by_policy: registered but never
+   *  requested. `skipped`: not part of the plan. */
+  status:
+    | "ok"
+    | "running"
+    | "unavailable"
+    | "skipped"
+    | "blocked"
+    | "skipped_by_policy"
+    | "error";
+  /** Reason code for blocked/error (machine-readable, §4.4). */
+  reason?: string;
   /** Real candidate count from this source (when the source ran). */
   candidates?: number;
 }
@@ -191,8 +206,16 @@ export interface DiscoveryProgress {
   uniqueCompanies: number;
   /** Offers dropped because their company was already counted. */
   duplicatesRemoved: number;
-  /** Companies rejected by the quality gate (incl. no public email). */
+  /** Companies rejected by the quality gate (beginn, offer type, …). */
   companiesRejected: number;
+  /** Companies whose outcome is `email_found` (§4.8). */
+  emailsFound: number;
+  /** Companies whose outcome is `no_public_email` — every required source was
+   *  inspected successfully and published no address (§4.4). NEVER a block. */
+  noPublicEmail: number;
+  /** Companies whose outcome is `source_blocked` (§4.4) — a required source
+   *  refused, so the outcome is INCONCLUSIVE, not "no public email". */
+  sourcesBlocked: number;
   /** Live per-source status. */
   sources: DiscoverySourceStatus[];
 }
@@ -206,14 +229,64 @@ export interface DiscoveryProgress {
  * the company name and never verified by sending anything.
  */
 export type DiscoveryEmailSource =
-  | "offer"
+  // The vocabulary of the target model (§4.5).
+  | "job_listing"
+  | "official_site_impressum"
+  | "official_site_contact"
+  | "official_site_career"
+  | "official_site_jobs"
+  | "official_site_ausbildung"
+  | "official_site_contact_person"
+  | "official_site_other"
   | "search_result"
+  | "trusted_public_page"
+  // Values shipped by the first release. Still accepted so already-stored rows
+  // stay readable, and still written for pages that map onto them 1:1.
+  | "offer"
   | "company_website"
   | "impressum"
   | "kontakt"
   | "karriere"
   | "ausbildung"
   | "bewerbungen";
+
+/** The three company-level outcomes (§4.4) — never merged with each other. */
+export type DiscoveryEmailOutcome =
+  | "email_found"
+  | "no_public_email"
+  | "source_blocked";
+
+export const DISCOVERY_EMAIL_OUTCOMES: readonly DiscoveryEmailOutcome[] = [
+  "email_found",
+  "no_public_email",
+  "source_blocked",
+] as const;
+
+/**
+ * One access attempt against a source/host, kept for explainability: which
+ * host, which URL, why it ended, and with which HTTP status (§4.4).
+ */
+export interface SourceAttempt {
+  /** Registrable host (per-host circuit breaker granularity). */
+  host: string;
+  url: string | null;
+  /** `ok`, a blocked reason, or a technical failure (`error`). */
+  outcome: string;
+  status: number | null;
+  at: string;
+}
+
+/** Per-portal outcome of ONE run — the source report (§4.8). */
+export interface SourceReportEntry {
+  id: string;
+  displayName: string;
+  policy: "enabled_public" | "enabled_official_api" | "restricted" | "unverified";
+  status: "ok" | "blocked" | "skipped_by_policy" | "error";
+  /** Machine reason for `blocked` / `error`. */
+  reason?: string;
+  /** Real number of offers this source yielded in the run. */
+  offers: number;
+}
 
 export interface DiscoveredCompany {
   /** Stable identity key (normalized company name) — unique per run. */
@@ -326,6 +399,16 @@ function envInt(name: string, fallback: number): number {
  * Server-side ONLY — reads process.env. Do not call from client components.
  * (The rest of this module is pure and client-safe.)
  */
+/**
+ * Server-side ONLY — the per-run page budget for the public-email pass.
+ * Companies beyond it are NOT inspected; their outcome is reported as
+ * `source_blocked` (inconclusive) rather than as "no public email", because an
+ * uninspected source must never be presented as a checked one (§4.4).
+ */
+export function discoveryEmailSitePasses(): number {
+  return envInt("DISCOVERY_MAX_EMAIL_SITE_PASSES", 8);
+}
+
 export function discoveryLimits(): DiscoveryLimits {
   return {
     maxCandidates: envInt("DISCOVERY_MAX_CANDIDATES", 1000),

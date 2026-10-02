@@ -1,207 +1,475 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import {
+  acceptEmailsFromContent,
+  deobfuscateEmailNotation,
+  findLiteralEvidence,
+  isEligiblePublicEmail,
+  isPlaceholderAddress,
+  isSystemAddress,
+  textNamesCompany,
+} from "@/lib/company-discovery/accept";
 import {
   MAX_EMAIL_PAGES_PER_COMPANY,
-  companyWebsiteFromPublishedEmail,
   countsAsResult,
-  offerEmailCandidate,
-  pickPublicEmail,
-  resolveCompanyPublicEmail,
-  websiteEmailCandidates,
+  listingEmailCandidate,
+  resolveCompanyEmails,
+  type CompanySiteTextPage,
 } from "@/lib/company-discovery/emails";
-import type { Opportunity } from "@/lib/opportunities/types";
 
 /**
  * Public-email discovery — the rules that decide what a user is told.
  *
  * The one invariant everything else serves: an address is reported ONLY when
- * it was actually published (in the source's offer contact block or on a page
- * of the company's own website). No name-derived addresses, no invented
- * "info@…", and "No public email found" when there is nothing.
+ * it was literally published in content fetched in this run, and the outcome
+ * distinguishes "nothing was published" from "a source refused to talk to us".
+ * No name-derived addresses, no invented "info@…", and no block reported as
+ * "no public email".
  */
 
-type OfferInput = Pick<Opportunity, "contact" | "source_url" | "enrichment">;
+type SourcePage = { url: string; kind: string; text: string };
 
-function offer(input: {
-  contactEmail?: string | null;
-  enrichmentEmail?: string | null;
-  website?: string | null;
-} = {}): OfferInput {
-  const contact =
-    input.contactEmail === undefined
-      ? { email: "bewerbung@mustermann-gmbh.de", name: null, phone: null }
-      : input.contactEmail === null
-        ? null
-        : { email: input.contactEmail, name: null, phone: null };
-  const enrichment =
-    input.enrichmentEmail === undefined && input.website === undefined
-      ? null
-      : {
-          website_url: input.website ?? null,
-          website_source: input.website ? `${input.website}/impressum` : null,
-          email: input.enrichmentEmail ?? null,
-        };
-  return {
-    contact,
-    source_url: "https://www.arbeitsagentur.de/jobsuche/jobdetail/10001-1-S",
-    enrichment,
-  } as unknown as OfferInput;
+const EMPTY_SEARCH = { ran: true, results: [] as Array<{ content: string; sourceUrl: string }> };
+
+function site(overrides: {
+  pages?: SourcePage[];
+  blocked?: boolean;
+  blockedReason?: "captcha" | "bot_challenge" | "login_required" | null;
+  throws?: boolean;
+}) {
+  return async (): Promise<{
+    pages: CompanySiteTextPage[];
+    attempts: [];
+    blocked: boolean;
+    blockedReason: never | null;
+  }> => {
+    if (overrides.throws) throw new Error("unexpected failure");
+    return {
+      pages: (overrides.pages ?? []) as CompanySiteTextPage[],
+      attempts: [],
+      blocked: overrides.blocked ?? false,
+      blockedReason: (overrides.blockedReason ?? null) as never,
+    };
+  };
 }
 
-const page = (url: string, kind: string, text: string) => ({ url, kind, text });
+function base(overrides: Partial<Parameters<typeof resolveCompanyEmails>[0]> = {}) {
+  return {
+    companyName: "Mustermann GmbH",
+    listingEmail: null,
+    websiteUrl: "https://mustermann-gmbh.de" as string | null,
+    search: EMPTY_SEARCH,
+    trustedPages: [] as Array<{ content: string; sourceUrl: string }>,
+    fetchSite: site({}),
+    ...overrides,
+  };
+}
 
-describe("email discovery — only what was actually published", () => {
-  it("keeps the address the source published, with its provenance", () => {
-    const candidate = offerEmailCandidate(offer());
-    expect(candidate).toMatchObject({
+// ---------------------------------------------------------------------------
+// §4.2 — acceptance rules
+// ---------------------------------------------------------------------------
+
+describe("§4.2 — nothing is accepted that was not literally published", () => {
+  it("1. an Impressum address is found with its full provenance", async () => {
+    const page = {
+      url: "https://mustermann-gmbh.de/impressum",
+      kind: "impressum",
+      text: "Impressum — Mustermann GmbH, Köln. Kontakt: bewerbung@mustermann-gmbh.de",
+    };
+    const outcome = await resolveCompanyEmails(base({ fetchSite: site({ pages: [page] }) }));
+    expect(outcome.reasonCode).toBe("email_found");
+    expect(outcome.primary).toMatchObject({
       email: "bewerbung@mustermann-gmbh.de",
-      sourceType: "offer",
-      confidence: "medium",
-      fetchedSite: false,
+      sourceUrl: page.url,
+      sourceType: "official_site_impressum",
+      verificationStatus: "verified",
+      verificationMethod: "literal_on_official_site",
+      domainMatch: true,
     });
+    expect(outcome.primary?.evidenceSnippet).toContain("bewerbung@mustermann-gmbh.de");
   });
 
-  it("treats a source placeholder as 'no email' (never an address)", () => {
-    for (const placeholder of ["keine Angabe", "n/a", "-", ""]) {
-      expect(offerEmailCandidate(offer({ contactEmail: placeholder }))).toBeNull();
-    }
-    expect(offerEmailCandidate(offer({ contactEmail: null }))).toBeNull();
-  });
-
-  it("accepts an address the engine verified on a public page", async () => {
-    const resolved = await resolveCompanyPublicEmail({
-      companyName: "Example GmbH",
-      offer: offer({ contactEmail: null, enrichmentEmail: "kontakt@mustermann-gmbh.de" }),
-      websiteUrl: null,
-      fetchPages: null,
-    });
-    expect(resolved?.email).toBe("kontakt@mustermann-gmbh.de");
-    expect(resolved?.sourceType).toBe("search_result");
-  });
-
-  it("reads an address from the company's own Impressum with page provenance", async () => {
-    const resolved = await resolveCompanyPublicEmail({
-      companyName: "Example GmbH",
-      offer: offer({ contactEmail: null }),
-      websiteUrl: "https://mustermann-gmbh.de",
-      fetchPages: async () => [
-        page(
-          "https://mustermann-gmbh.de/impressum",
-          "impressum",
-          "Impressum — Example GmbH, Köln. Kontakt: bewerbung@mustermann-gmbh.de",
-        ),
-      ],
-    });
-    expect(resolved).toMatchObject({
-      email: "bewerbung@mustermann-gmbh.de",
-      sourceUrl: "https://mustermann-gmbh.de/impressum",
-      sourceType: "impressum",
-      confidence: "high",
-      fetchedSite: true,
-    });
-  });
-
-  it("never attributes an address of another domain to the company", () => {
-    const candidates = websiteEmailCandidates({
-      companyName: "Example GmbH",
-      pages: [
-        page(
-          "https://mustermann-gmbh.de/kontakt",
-          "kontakt",
-          "Example GmbH — Vermittlung: bewerbung@personalvermittlung-koeln.de",
-        ),
-      ],
-    });
-    expect(candidates).toEqual([]);
-  });
-
-  it("prefers an application mailbox over a general one", () => {
-    const candidates = websiteEmailCandidates({
-      companyName: "Example GmbH",
-      pages: [
-        page(
-          "https://mustermann-gmbh.de/kontakt",
-          "kontakt",
-          "Example GmbH: info@mustermann-gmbh.de und bewerbung@mustermann-gmbh.de",
-        ),
-      ],
-    });
-    expect(pickPublicEmail(candidates)?.email).toBe("bewerbung@mustermann-gmbh.de");
-  });
-
-  it("a blocked or empty page yields no address instead of a guess", async () => {
-    const blocked = await resolveCompanyPublicEmail({
-      companyName: "Example GmbH",
-      offer: offer({ contactEmail: null }),
-      websiteUrl: "https://mustermann-gmbh.de",
-      fetchPages: async () => {
-        throw new Error("robots.txt disallows");
-      },
-    });
-    expect(blocked).toBeNull();
-
-    const empty = await resolveCompanyPublicEmail({
-      companyName: "Example GmbH",
-      offer: offer({ contactEmail: null }),
-      websiteUrl: "https://mustermann-gmbh.de",
-      fetchPages: async () => [page("https://mustermann-gmbh.de", "home", "Willkommen")],
-    });
-    expect(empty).toBeNull();
-  });
-
-  it("never turns a company NAME into a host, and never fetches without evidence", async () => {
-    const fetchPages = vi.fn(async () => [
-      page("https://mustermann-gmbh.de/impressum", "impressum", "bewerbung@mustermann-gmbh.de"),
-    ]);
-    const resolved = await resolveCompanyPublicEmail({
-      companyName: "Example GmbH",
-      offer: offer({ contactEmail: null }),
-      websiteUrl: null,
-      fetchPages,
-    });
-    expect(resolved).toBeNull();
-    expect(fetchPages).not.toHaveBeenCalled();
-  });
-
-  it("derives a website only from a published, non-free-mail address", () => {
-    expect(companyWebsiteFromPublishedEmail("bewerbung@mustermann-gmbh.de")).toBe(
-      "https://mustermann-gmbh.de",
+  it("2. an alternative source is used when the Impressum has none", async () => {
+    const outcome = await resolveCompanyEmails(
+      base({
+        fetchSite: site({
+          pages: [
+            { url: "https://mustermann-gmbh.de/impressum", kind: "impressum", text: "Impressum — Mustermann GmbH" },
+            {
+              url: "https://mustermann-gmbh.de/karriere",
+              kind: "karriere",
+              text: "Karriere bei der Mustermann GmbH — Bewerbung an karriere@mustermann-gmbh.de",
+            },
+          ],
+        }),
+      }),
     );
-    expect(companyWebsiteFromPublishedEmail("bewerbung@gmail.com")).toBeNull();
-    expect(companyWebsiteFromPublishedEmail(null)).toBeNull();
+    expect(outcome.primary).toMatchObject({
+      email: "karriere@mustermann-gmbh.de",
+      sourceUrl: "https://mustermann-gmbh.de/karriere",
+      sourceType: "official_site_career",
+    });
   });
 
-  it("stays inside the page budget", async () => {
-    const pages = [
-      page("https://mustermann-gmbh.de", "home", "Example GmbH"),
-      page("https://mustermann-gmbh.de/kontakt", "kontakt", "Example GmbH"),
-      page("https://mustermann-gmbh.de/karriere", "karriere", "Example GmbH"),
-      page("https://mustermann-gmbh.de/impressum", "impressum", "Example GmbH bewerbung@mustermann-gmbh.de"),
-    ];
-    const resolved = await resolveCompanyPublicEmail({
-      companyName: "Example GmbH",
-      offer: offer({ contactEmail: null }),
-      websiteUrl: "https://mustermann-gmbh.de",
-      fetchPages: async () => pages,
-      maxPages: 3,
+  it("5. rejects placeholders, system mailboxes and vendor addresses", async () => {
+    for (const address of [
+      "mustermann@mustermann-gmbh.de",
+      "beispiel@mustermann-gmbh.de",
+      "name@mustermann-gmbh.de",
+      "user@mustermann-gmbh.de",
+      "test@mustermann-gmbh.de",
+      "logo@2x.png",
+      "noreply@mustermann-gmbh.de",
+      "postmaster@mustermann-gmbh.de",
+      "webmaster@mustermann-gmbh.de",
+    ]) {
+      expect(isPlaceholderAddress(address) || isSystemAddress(address)).toBe(true);
+    }
+    // A genuine role mailbox is neither.
+    expect(isPlaceholderAddress("bewerbung@mustermann-gmbh.de")).toBe(false);
+    expect(isSystemAddress("bewerbung@mustermann-gmbh.de")).toBe(false);
+    // Vendor / platform hosts are never the company's contact.
+    expect(isSystemAddress("support@hubspot.com")).toBe(true);
+    // Example/invalid domains are rejected one layer earlier, by the shared
+    // extraction rules — asserted through the acceptor, not the predicates.
+    for (const bogus of ["info@example.de", "kontakt@firma.invalid", "a@b.test"]) {
+      expect(
+        acceptEmailsFromContent({
+          text: `Impressum Mustermann GmbH — ${bogus}`,
+          sourceUrl: "https://mustermann-gmbh.de/impressum",
+          sourceType: "official_site_impressum",
+          companyName: "Mustermann GmbH",
+          companyDomain: "mustermann-gmbh.de",
+        }),
+      ).toEqual([]);
+    }
+  });
+
+  it("5b. an address absent from the fetched text is rejected (LLM safety)", () => {
+    const text = "Impressum — Mustermann GmbH, Köln. Kontakt: info@mustermann-gmbh.de";
+    expect(findLiteralEvidence(text, "info@mustermann-gmbh.de")).not.toBeNull();
+    expect(findLiteralEvidence(text, "bewerbung@mustermann-gmbh.de")).toBeNull();
+  });
+
+  it("5c. reads the obfuscation a human reader can decode (and only that)", () => {
+    expect(deobfuscateEmailNotation("kontakt (at) mustermann-gmbh (dot) de")).toBe(
+      "kontakt@mustermann-gmbh.de",
+    );
+    const accepted = acceptEmailsFromContent({
+      text: "Impressum Mustermann GmbH — kontakt (at) mustermann-gmbh (dot) de",
+      sourceUrl: "https://mustermann-gmbh.de/impressum",
+      sourceType: "official_site_impressum",
+      companyName: "Mustermann GmbH",
+      companyDomain: "mustermann-gmbh.de",
     });
-    // The address only exists on page 4 — outside the budget → no result.
-    expect(resolved).toBeNull();
-    expect(MAX_EMAIL_PAGES_PER_COMPANY).toBe(3);
+    expect(accepted[0]?.email).toBe("kontakt@mustermann-gmbh.de");
+  });
+
+  it("never attributes an off-site address that the block does not bind", () => {
+    const accepted = acceptEmailsFromContent({
+      text: "Vermittlung: bewerbung@personalvermittlung-koeln.de",
+      sourceUrl: "https://personalvermittlung-koeln.de/team",
+      sourceType: "trusted_public_page",
+      companyName: "Mustermann GmbH",
+    });
+    expect(accepted).toEqual([]);
+  });
+
+  it("accepts an attributed third-party address when the block names the company", () => {
+    const accepted = acceptEmailsFromContent({
+      text: "Mustermann GmbH — zugelassener Ausbildungsbetrieb, Kontakt: bewerbung@mustermann-gmbh.de",
+      sourceUrl: "https://www.ihk-koeln.de/ausbildungsbetriebe",
+      sourceType: "trusted_public_page",
+      companyName: "Mustermann GmbH",
+    });
+    expect(accepted[0]).toMatchObject({
+      email: "bewerbung@mustermann-gmbh.de",
+      verificationMethod: "literal_on_attributed_third_party_page",
+    });
+  });
+
+  it("accepts free-mail when it is genuinely published on the company's own site", () => {
+    const accepted = acceptEmailsFromContent({
+      text: "Impressum — Müller Elektro GmbH. E-Mail: mueller.elektro@gmail.com",
+      sourceUrl: "https://mueller-elektro.de/impressum",
+      sourceType: "official_site_impressum",
+      companyName: "Müller Elektro GmbH",
+      companyDomain: "mueller-elektro.de",
+    });
+    expect(accepted[0]).toMatchObject({ email: "mueller.elektro@gmail.com", domainMatch: false });
+  });
+
+  it("binds a company only when the name really appears in the text", () => {
+    expect(textNamesCompany("Ausbildungsbetrieb: Mustermann GmbH", "Mustermann GmbH")).toBe(true);
+    expect(textNamesCompany("Ausbildungsbetrieb: Andere Firma AG", "Mustermann GmbH")).toBe(false);
   });
 });
 
+// ---------------------------------------------------------------------------
+// §4.4 — the three outcomes
+// ---------------------------------------------------------------------------
+
+describe("§4.4 — email_found / no_public_email / source_blocked stay distinct", () => {
+  it("4. every required page was reachable and published nothing", async () => {
+    const outcome = await resolveCompanyEmails(
+      base({
+        fetchSite: site({
+          pages: [
+            { url: "https://mustermann-gmbh.de/impressum", kind: "impressum", text: "Impressum — Mustermann GmbH, Köln. Tel. 0221 123456." },
+            { url: "https://mustermann-gmbh.de/kontakt", kind: "kontakt", text: "Kontakt — Mustermann GmbH. Nutzen Sie bitte unser Formular." },
+          ],
+        }),
+      }),
+    );
+    expect(outcome.reasonCode).toBe("no_public_email");
+    expect(outcome.blocked).toBe(false);
+    expect(outcome.requiredInspected).toBe(true);
+    expect(outcome.emails).toEqual([]);
+  });
+
+  it("3. a CAPTCHA on a required page is source_blocked — never 'no public email'", async () => {
+    const outcome = await resolveCompanyEmails(
+      base({
+        fetchSite: site({ pages: [], blocked: true, blockedReason: "captcha" }),
+      }),
+    );
+    expect(outcome.reasonCode).toBe("source_blocked");
+    expect(outcome.blocked).toBe(true);
+    expect(outcome.blockedReason).toBe("captcha");
+    // The counting rule refuses it in BOTH modes as an email, and never merges
+    // it into the "no public email" bucket.
+    expect(
+      countsAsResult({ onlyPublicEmail: true, hasPublicEmail: false, outcome: "source_blocked" }),
+    ).toBe(false);
+  });
+
+  it("a block elsewhere never downgrades a found address", async () => {
+    const outcome = await resolveCompanyEmails(
+      base({
+        fetchSite: site({
+          pages: [
+            { url: "https://mustermann-gmbh.de/kontakt", kind: "kontakt", text: "Kontakt Mustermann GmbH: info@mustermann-gmbh.de" },
+          ],
+          blocked: true,
+          blockedReason: "bot_challenge",
+        }),
+      }),
+    );
+    expect(outcome.reasonCode).toBe("email_found");
+    expect(outcome.blocked).toBe(false);
+    expect(outcome.primary?.email).toBe("info@mustermann-gmbh.de");
+  });
+
+  it("no website + the search step could not run ⇒ no_website_found, not no_public_email", async () => {
+    const outcome = await resolveCompanyEmails(
+      base({
+        websiteUrl: null,
+        search: { ran: false, results: [] },
+      }),
+    );
+    expect(outcome.reasonCode).toBe("no_website_found");
+    expect(outcome.blocked).toBe(true);
+  });
+
+  it("no website + the permitted search step found the published address", async () => {
+    const outcome = await resolveCompanyEmails(
+      base({
+        websiteUrl: null,
+        search: {
+          ran: true,
+          results: [
+            {
+              content:
+                "Mustermann GmbH — offizielle Seite. Ausbildungsleitung: ausbildung@mustermann-gmbh.de",
+              sourceUrl: "https://www.mustermann-gmbh.de/karriere",
+            },
+          ],
+        },
+      }),
+    );
+    expect(outcome.reasonCode).toBe("email_found");
+    expect(outcome.primary).toMatchObject({
+      email: "ausbildung@mustermann-gmbh.de",
+      sourceType: "search_result",
+      verificationMethod: "literal_on_attributed_third_party_page",
+    });
+  });
+
+  it("an exhausted page budget is inconclusive, never 'no public email'", async () => {
+    const outcome = await resolveCompanyEmails(base({ fetchSite: null }));
+    expect(outcome.reasonCode).toBe("source_blocked");
+    expect(outcome.blocked).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §4.5 — dedupe and full provenance
+// ---------------------------------------------------------------------------
+
+describe("§4.5 — one record per address, every source URL kept", () => {
+  it("6+7. the same address on three pages is stored once, all URLs preserved", async () => {
+    const outcome = await resolveCompanyEmails(
+      base({
+        fetchSite: site({
+          pages: [
+            { url: "https://mustermann-gmbh.de", kind: "home", text: "Mustermann GmbH — info@mustermann-gmbh.de" },
+            { url: "https://mustermann-gmbh.de/impressum", kind: "impressum", text: "Impressum Mustermann GmbH — info@mustermann-gmbh.de" },
+            { url: "https://mustermann-gmbh.de/kontakt", kind: "kontakt", text: "Kontakt Mustermann GmbH — info@mustermann-gmbh.de" },
+          ],
+        }),
+      }),
+    );
+    expect(outcome.emails).toHaveLength(1);
+    expect(outcome.emails[0].sourceUrls).toHaveLength(3);
+    // The highest-priority source is primary (the Impressum).
+    expect(outcome.emails[0].sourceType).toBe("official_site_impressum");
+    expect(outcome.emails[0].sourceUrl).toBe("https://mustermann-gmbh.de/impressum");
+  });
+
+  it("prefers an application mailbox over a general one", async () => {
+    const outcome = await resolveCompanyEmails(
+      base({
+        fetchSite: site({
+          pages: [
+            {
+              url: "https://mustermann-gmbh.de/kontakt",
+              kind: "kontakt",
+              text: "Mustermann GmbH: info@mustermann-gmbh.de und bewerbung@mustermann-gmbh.de",
+            },
+          ],
+        }),
+      }),
+    );
+    expect(outcome.primary?.email).toBe("bewerbung@mustermann-gmbh.de");
+    expect(outcome.emails).toHaveLength(2);
+  });
+
+  it("stays inside the page budget", () => {
+    expect(MAX_EMAIL_PAGES_PER_COMPANY).toBeLessThanOrEqual(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §4.1 — the listing is only read for enabled portals
+// ---------------------------------------------------------------------------
+
+describe("§4.1 — a listing address is used, a BA address is not", () => {
+  it("accepts an address the ENABLED portal printed in the listing", () => {
+    const accepted = listingEmailCandidate({
+      email: "ausbildung@mustermann-gmbh.de",
+      sourceUrl: "https://www.ausbildung.de/stellen/123",
+      evidence:
+        "Ausbildung bei der Mustermann GmbH — Bewerbung an ausbildung@mustermann-gmbh.de",
+      companyName: "Mustermann GmbH",
+    });
+    expect(accepted).toMatchObject({
+      email: "ausbildung@mustermann-gmbh.de",
+      sourceType: "job_listing",
+      verificationMethod: "literal_in_listing",
+    });
+  });
+
+  it("never maps an Arbeitsagentur record to an email (source contract)", () => {
+    const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+    const pipeline = readFileSync(
+      resolve(root, "src/lib/company-discovery/search.ts"),
+      "utf8",
+    );
+    expect(pipeline).toContain("listingEmail: null");
+    expect(pipeline).toContain("§3.3");
+    // No reader of the BA contact block may remain in the discovery feature.
+    expect(pipeline).not.toContain("opp.contact");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §4.6 — onlyPublicEmail
+// ---------------------------------------------------------------------------
+
 describe("onlyPublicEmail decides what becomes a result", () => {
-  it("true → only companies with a published address count", () => {
+  it("true → only companies with a verified published address count", () => {
     expect(countsAsResult({ onlyPublicEmail: true, hasPublicEmail: true })).toBe(true);
     expect(countsAsResult({ onlyPublicEmail: true, hasPublicEmail: false })).toBe(false);
+    expect(
+      countsAsResult({
+        onlyPublicEmail: true,
+        hasPublicEmail: false,
+        outcome: "no_public_email",
+      }),
+    ).toBe(false);
+  });
+
+  it("true → a blocked company is not eligible, and never becomes 'no public email'", () => {
+    expect(
+      countsAsResult({ onlyPublicEmail: true, hasPublicEmail: false, outcome: "source_blocked" }),
+    ).toBe(false);
   });
 
   it("false → every company counts, the UI labels the ones without an address", () => {
     expect(countsAsResult({ onlyPublicEmail: false, hasPublicEmail: false })).toBe(true);
     expect(countsAsResult({ onlyPublicEmail: false, hasPublicEmail: true })).toBe(true);
+    expect(
+      countsAsResult({ onlyPublicEmail: false, hasPublicEmail: false, outcome: "source_blocked" }),
+    ).toBe(true);
+  });
+});
+
+describe("§4.5/§4.6 — legacy rows are never eligible", () => {
+  it("rejects a BA-derived ('offer') address and a provenance-less one", () => {
+    // §3.3: an address that came from an Arbeitsagentur record is legacy.
+    expect(
+      isEligiblePublicEmail({
+        sourceUrl: "https://www.arbeitsagentur.de/jobsuche/jobdetail/1",
+        sourceType: "offer",
+        verificationStatus: null,
+      }),
+    ).toBe(false);
+    // No source page at all → unverifiable.
+    expect(
+      isEligiblePublicEmail({ sourceUrl: null, sourceType: "official_site_impressum" }),
+    ).toBe(false);
+    // A stored non-verified status is excluded too.
+    expect(
+      isEligiblePublicEmail({
+        sourceUrl: "https://mustermann-gmbh.de/impressum",
+        sourceType: "official_site_impressum",
+        verificationStatus: "unverified",
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts a verified address with a real source page", () => {
+    expect(
+      isEligiblePublicEmail({
+        sourceUrl: "https://mustermann-gmbh.de/impressum",
+        sourceType: "official_site_impressum",
+        verificationStatus: "verified",
+      }),
+    ).toBe(true);
+    // Rows that predate the verification columns are still usable when they
+    // carry real provenance (they are not "without provenance").
+    expect(
+      isEligiblePublicEmail({
+        sourceUrl: "https://mustermann-gmbh.de/impressum",
+        sourceType: "impressum",
+        verificationStatus: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("the UI and the export share the same rule", () => {
+    const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+    const component = readFileSync(resolve(root, "src/components/company-discovery.tsx"), "utf8");
+    const exportRoute = readFileSync(
+      resolve(root, "src/app/api/company-discovery/[runId]/export/route.ts"),
+      "utf8",
+    );
+    expect(component).toContain("isEligiblePublicEmail");
+    expect(component).toContain("unverified_legacy");
+    expect(exportRoute).toContain("isEligiblePublicEmail");
+    expect(exportRoute).toContain("unverified_legacy");
   });
 });
 

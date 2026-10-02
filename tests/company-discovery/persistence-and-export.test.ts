@@ -230,13 +230,12 @@ beforeEach(() => {
 
 describe("persisting public emails with provenance", () => {
   it("stores the address exactly as published, with its page and type", async () => {
-    await recordCompanyEmail(
-      COMPANY_ID,
-      "bewerbung@mustermann-gmbh.de",
-      "https://mustermann-gmbh.de/impressum",
-      "impressum",
-      "high",
-    );
+    await recordCompanyEmail(COMPANY_ID, {
+      email: "bewerbung@mustermann-gmbh.de",
+      sourceUrl: "https://mustermann-gmbh.de/impressum",
+      sourceType: "impressum",
+      confidence: "high",
+    });
     const row = state.db.discovery_company_emails[0];
     expect(row).toMatchObject({
       company_id: COMPANY_ID,
@@ -245,9 +244,17 @@ describe("persisting public emails with provenance", () => {
       email_source_type: "impressum",
       confidence: "high",
     });
+    // The address row is keyed idempotently, and the page it was literally
+    // found on is stored as a source row (§4.5).
+    expect(row.verification_status).toBe("verified");
+    expect(state.db.discovery_company_email_sources).toHaveLength(1);
+    expect(state.db.discovery_company_email_sources[0]).toMatchObject({
+      source_url: "https://mustermann-gmbh.de/impressum",
+      source_type: "impressum",
+    });
     expect(state.lastUpsert).toEqual({
-      table: "discovery_company_emails",
-      options: { onConflict: "company_id,email", ignoreDuplicates: true },
+      table: "discovery_company_email_sources",
+      options: { onConflict: "email_id,source_url", ignoreDuplicates: true },
     });
   });
 
@@ -267,14 +274,14 @@ describe("persisting public emails with provenance", () => {
     ];
     const results = await listRunCompaniesWithEmails(RUN_ID, USER_ID);
     expect(results).toHaveLength(2);
-    expect(results[0].emails).toEqual([
-      {
-        email: "bewerbung@mustermann-gmbh.de",
-        sourceUrl: "https://mustermann-gmbh.de/impressum",
-        sourceType: "impressum",
-        confidence: "high",
-      },
-    ]);
+    expect(results[0].emails).toHaveLength(1);
+    expect(results[0].emails[0]).toMatchObject({
+      email: "bewerbung@mustermann-gmbh.de",
+      sourceUrl: "https://mustermann-gmbh.de/impressum",
+      sourceType: "impressum",
+      confidence: "high",
+      sourceUrls: ["https://mustermann-gmbh.de/impressum"],
+    });
     // A company without a published address carries an EMPTY list — the UI
     // renders "No public email found" instead of an invented address.
     expect(results[1].emails).toEqual([]);
@@ -445,11 +452,14 @@ describe("Excel export", () => {
     const sheet = workbook.getWorksheet("Companies");
     expect(sheet).toBeDefined();
     const headers = (sheet!.getRow(1).values as unknown[]).slice(1);
+    // §4.10: the owner's column list and order, plus `Email Status` because
+    // this workbook contains a company without an address.
     expect(headers).toEqual([
       "Company Name",
       "Website",
       "Public Email",
       "Email Source",
+      "Email Source URL",
       "Role",
       "Field",
       "City",
@@ -460,16 +470,45 @@ describe("Excel export", () => {
       "Offer Source",
       "Offer URL",
       "Discovery Run ID",
+      "Email Status",
     ]);
     const first = sheet!.getRow(2).values as unknown[];
     expect(first[1]).toBe("Mustermann GmbH");
     expect(first[3]).toBe("bewerbung@mustermann-gmbh.de");
-    expect(first[4]).toBe("https://mustermann-gmbh.de/impressum");
-    expect(first[14]).toBe(RUN_ID);
-    // The company without a published address is labelled, never addressed.
-    expect((sheet!.getRow(3).values as unknown[])[3]).toBe(
-      "لم يتم العثور على بريد منشور",
+    // Email Source is a human label, Email Source URL is the page itself (§4.10).
+    expect(first[4]).toBe("بيانات الناشر");
+    expect(first[5]).toBe("https://mustermann-gmbh.de/impressum");
+    expect(first[15]).toBe(RUN_ID);
+    // The company without a published address gets a BLANK email and an
+    // explicit status — never an invented address, never a label in the data.
+    const second = sheet!.getRow(3).values as unknown[];
+    expect(second[3]).toBeFalsy();
+    expect(second[16]).toBe("no_public_email");
+  });
+
+  it("neutralizes formula injection in every scraped cell (§4.10)", async () => {
+    state.db.discovery_companies = [
+      companyRow({
+        company_name: "=cmd|' /C calc'!A0",
+        city: "@SUM(1+1)",
+        salary_label: "-2+3",
+      }),
+    ];
+    state.db.discovery_company_emails = [];
+    const response = await exportRoute(
+      new Request(`http://localhost/api/company-discovery/${RUN_ID}/export`),
+      { params: Promise.resolve({ runId: RUN_ID }) },
     );
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await response.arrayBuffer());
+    const row = workbook.getWorksheet("Companies")!.getRow(2).values as unknown[];
+    for (const cell of [row[1], row[8], row[12]]) {
+      if (typeof cell === "string" && /^[=+\-@\t\r]/.test(cell)) {
+        throw new Error(`un-neutralized formula cell: ${cell}`);
+      }
+    }
+    expect(row[1]).toBe("'=cmd|' /C calc'!A0");
+    expect(row[8]).toBe("'@SUM(1+1)");
   });
 
   it("does not export companies that were rejected for lack of an address", async () => {

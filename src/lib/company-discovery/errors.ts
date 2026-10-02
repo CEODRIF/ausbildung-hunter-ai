@@ -143,6 +143,19 @@ export function isUnknownColumnError(error: unknown): boolean {
   return UNKNOWN_COLUMN_RE.test(describeError(error));
 }
 
+/** PostgREST signature of a table the LIVE schema does not have (drift). */
+const UNKNOWN_TABLE_RE =
+  /PGRST205|could not find the table|relation [\w."]+ does not exist/i;
+
+/**
+ * True when PostgREST rejected a statement because a TABLE does not exist in
+ * the deployed schema. Used for the additive provenance table, whose absence
+ * must degrade the write (log + keep going) instead of failing a run.
+ */
+export function isUnknownTableError(error: unknown): boolean {
+  return UNKNOWN_TABLE_RE.test(describeError(error));
+}
+
 /** Whether a persisted run status is terminal (no further work happens). */
 export function isTerminalRunStatus(status: string): boolean {
   return (

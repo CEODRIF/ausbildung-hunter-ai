@@ -142,6 +142,9 @@ function baseRun(overrides: Partial<DiscoveryRun> = {}): DiscoveryRun {
       uniqueCompanies: 0,
       duplicatesRemoved: 0,
       companiesRejected: 0,
+      emailsFound: 0,
+      noPublicEmail: 0,
+      sourcesBlocked: 0,
       sources: [],
     },
     creditsCharged: 0,
@@ -383,7 +386,16 @@ describe("runDiscoveryPipeline", () => {
   const runPipeline = (
     window: (p: OpportunitySearchParams) => Promise<OpportunityWindow>,
     deps: Record<string, unknown> = {},
-  ) => runDiscoveryPipeline(RUN_ID, USER_ID, { window, ...deps });
+  ) =>
+    runDiscoveryPipeline(RUN_ID, USER_ID, {
+      window,
+      // Offline and deterministic: no portal adapter and no search provider is
+      // requested — the network is never touched by these tests.
+      adapters: [],
+      searchClient: null,
+      isPublicHost: async () => true,
+      ...deps,
+    });
 
   it("3 offers / same company (4 name variants) → 1 company, 2 duplicates", async () => {
     const seeds = [

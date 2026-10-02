@@ -20,7 +20,7 @@ import { lookup } from "node:dns/promises";
 const PAGE_TIMEOUT_MS = 8_000;
 const ROBOTS_TIMEOUT_MS = 6_000;
 const MAX_BODY_BYTES = 750_000;
-const AGENT = "AusbildungHunterDiscovery/1.0";
+export const AGENT = "AusbildungHunterDiscovery/1.0";
 
 export type PageFetchFailure =
   | "http_error"
@@ -117,7 +117,7 @@ function isPrivateIPv6(ip: string): boolean {
 }
 
 /** Resolve + reject non-public targets BEFORE any HTTP request. */
-async function assertPublicTarget(hostname: string): Promise<boolean> {
+export async function assertPublicTarget(hostname: string): Promise<boolean> {
   let addresses: string[];
   try {
     addresses = (await lookup(hostname, { all: true })).map((a) => a.address);
@@ -136,9 +136,11 @@ async function assertPublicTarget(hostname: string): Promise<boolean> {
 
 export interface RobotsPolicy {
   disallowed: string[];
+  /** `Crawl-delay` announced for our agent (or `*`), in seconds. */
+  crawlDelaySeconds?: number;
 }
 
-async function fetchRobots(
+export async function fetchRobots(
   origin: string,
   cache: Map<string, RobotsPolicy>,
 ): Promise<RobotsPolicy> {
@@ -191,13 +193,24 @@ async function fetchRobots(
       currentAgents = [];
       collectForWildcard = false;
       collectForAgent = false;
+    } else if (
+      field === "crawl-delay" &&
+      (collectForWildcard || collectForAgent)
+    ) {
+      const seconds = Number(value);
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        policy.crawlDelaySeconds = seconds;
+      }
+      currentAgents = [];
+      collectForWildcard = false;
+      collectForAgent = false;
     }
   }
   cache.set(origin, policy);
   return policy;
 }
 
-function pathDisallowed(pathname: string, policy: RobotsPolicy): boolean {
+export function pathDisallowed(pathname: string, policy: RobotsPolicy): boolean {
   for (const rule of policy.disallowed) {
     if (rule === "") return true; // deny-all marker
     const pattern = rule.replace(/\/\*.*$/, ""); // /path/* → /path
@@ -260,7 +273,7 @@ function extractTitle(html: string): string | null {
   return metaContent(html, "og:title");
 }
 
-function htmlToText(html: string): string {
+export function htmlToText(html: string): string {
   return decodeEntities(
     html
       .replace(/<script[\s\S]*?<\/script>/gi, " ")

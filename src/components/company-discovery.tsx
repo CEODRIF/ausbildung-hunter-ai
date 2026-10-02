@@ -31,6 +31,7 @@ import {
 } from "react";
 import { createDiscoveryDraftAction } from "@/app/company-discovery/actions";
 import type { DiscoveryCampaignRow } from "@/lib/company-discovery/campaigns";
+import { isEligiblePublicEmail } from "@/lib/company-discovery/accept";
 import type { RunCompanyResult } from "@/lib/company-discovery/runs";
 import { useI18n } from "@/lib/i18n";
 import type { TranslateVars } from "@/lib/i18n/core";
@@ -178,6 +179,26 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
           {t("companyDiscovery.runCreated.rejected")}
         </dt>
       </div>
+      {/* The three outcome counters of §4.8. `sourcesBlocked` is deliberately a
+          separate tile: a blocked source is NOT "no public email". */}
+      <div className="rounded-xl bg-surface-2 p-3">
+        <dd className="text-xl font-bold text-ink">{run.progress.emailsFound}</dd>
+        <dt className="mt-0.5 text-xs font-semibold text-muted">
+          {t("companyDiscovery.runCreated.emailsFound")}
+        </dt>
+      </div>
+      <div className="rounded-xl bg-surface-2 p-3">
+        <dd className="text-xl font-bold text-ink">{run.progress.noPublicEmail}</dd>
+        <dt className="mt-0.5 text-xs font-semibold text-muted">
+          {t("companyDiscovery.runCreated.noPublicEmail")}
+        </dt>
+      </div>
+      <div className="rounded-xl bg-surface-2 p-3">
+        <dd className="text-xl font-bold text-ink">{run.progress.sourcesBlocked}</dd>
+        <dt className="mt-0.5 text-xs font-semibold text-muted">
+          {t("companyDiscovery.runCreated.sourcesBlocked")}
+        </dt>
+      </div>
       <div className="rounded-xl bg-surface-2 p-3">
         <dd className="text-sm font-bold text-ink sm:mt-1">{sourceLabel}</dd>
         <dt className="mt-0.5 text-xs font-semibold text-muted">
@@ -186,6 +207,73 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
       </div>
     </dl>
   );
+}
+
+/** The three company outcomes (§4.4), plus the READ-TIME legacy state. */
+type EmailStatusValue =
+  | "email_found"
+  | "no_public_email"
+  | "source_blocked"
+  /**
+   * Derived at read time, never stored: the company has an address row whose
+   * provenance does not hold up (a BA-derived `offer`, or no source page at
+   * all). It is deliberately NOT part of `discovery_companies.email_status`,
+   * whose CHECK allows only the three real company outcomes — this state
+   * describes the stored ADDRESS, not the company's discovery outcome.
+   */
+  | "unverified_legacy";
+
+/**
+ * The stored address a campaign may use: the first one that actually carries
+ * provenance. A legacy row (BA-derived `offer`, or no source page at all) is
+ * excluded — §4.6 forbids consuming it, and it is shown as legacy instead.
+ */
+function pickEligibleEmail(
+  company: RunCompanyResult,
+): RunCompanyResult["emails"][number] | null {
+  return company.emails.find((email) => isEligiblePublicEmail(email)) ?? null;
+}
+
+/** Badge tones per outcome — a block is a warning, not a failure. */
+const EMAIL_STATUS_TONE: Record<EmailStatusValue, string> = {
+  email_found: "bg-accent-soft text-accent",
+  no_public_email: "bg-surface-2 text-muted",
+  source_blocked: "bg-surface-2 text-warning",
+  unverified_legacy: "bg-surface-2 text-muted",
+};
+
+/**
+ * The outcome of a stored company. The persisted `emailStatus` is
+ * authoritative; for rows written before that column existed the outcome is
+ * derived from the audit pair (`status` + `rejectReason`) — never guessed from
+ * the mere absence of an address, because a blocked source is NOT "no public
+ * email".
+ */
+function emailStatusOf(
+  company: RunCompanyResult,
+  address: RunCompanyResult["emails"][number] | null,
+): EmailStatusValue {
+  // An address row exists but NONE of them is usable (no provenance, or a
+  // BA-derived legacy row): the truthful label is the derived legacy state,
+  // not the stored outcome — showing "email found" beside an empty email cell
+  // would contradict itself. Same condition and same token as the Excel
+  // export, so the two surfaces can never drift apart (§4.5/§4.6).
+  if (address === null && company.emails.length > 0) return "unverified_legacy";
+  if (
+    company.emailStatus === "email_found" ||
+    company.emailStatus === "no_public_email" ||
+    company.emailStatus === "source_blocked"
+  ) {
+    return company.emailStatus;
+  }
+  if (address) return "email_found";
+  if (
+    company.rejectReason === "source_blocked" ||
+    company.rejectReason === "no_website_found"
+  ) {
+    return "source_blocked";
+  }
+  return "no_public_email";
 }
 
 /**
@@ -549,7 +637,9 @@ export function CompanyDiscovery({
     const recipients = acceptedCompanies
       .filter((company) => selected.has(company.companyId))
       .map((company) => ({
-        email: company.emails[0]?.email ?? "",
+        // §4.6: a campaign may only consume an address that HAS provenance —
+        // a legacy (BA-derived or provenance-less) row is never sent to.
+        email: pickEligibleEmail(company)?.email ?? "",
         companyName: company.companyName,
       }))
       .filter((recipient) => recipient.email.length > 0);
@@ -753,7 +843,7 @@ export function CompanyDiscovery({
                   {t("companyDiscovery.results.selectHint")}
                 </p>
                 <div className="mt-3 overflow-x-auto">
-                  <table className="w-full min-w-[34rem] border-collapse text-sm">
+                  <table className="w-full min-w-[52rem] border-collapse text-sm">
                     <thead>
                       <tr className="text-xs uppercase text-muted">
                         <th className="w-8 py-2 pe-2" />
@@ -769,14 +859,20 @@ export function CompanyDiscovery({
                         <th className="py-2 pe-3 text-start">
                           {t("companyDiscovery.results.columns.email")}
                         </th>
-                        <th className="py-2 text-start">
+                        <th className="py-2 pe-3 text-start">
                           {t("companyDiscovery.results.columns.source")}
+                        </th>
+                        <th className="py-2 pe-3 text-start">
+                          {t("companyDiscovery.results.columns.sourceUrl")}
+                        </th>
+                        <th className="py-2 text-start">
+                          {t("companyDiscovery.results.columns.status")}
                         </th>
                       </tr>
                     </thead>
                     <tbody>
                       {acceptedCompanies.map((company) => {
-                        const address = company.emails[0] ?? null;
+                        const address = pickEligibleEmail(company);
                         return (
                           <tr key={company.companyId} className="border-t border-line">
                             <td className="py-2 pe-2">
@@ -807,8 +903,49 @@ export function CompanyDiscovery({
                                 </span>
                               )}
                             </td>
-                            <td dir="ltr" className="py-2 text-xs text-muted">
-                              {address ? (address.sourceUrl ?? address.sourceType) : "—"}
+                            <td className="py-2 pe-3 text-xs text-ink-soft">
+                              {address
+                                ? t(
+                                    `companyDiscovery.results.emailSource.${address.sourceType}`,
+                                  )
+                                : "—"}
+                            </td>
+                            <td className="max-w-[16rem] py-2 pe-3 text-xs">
+                              {address?.sourceUrl ? (
+                                <a
+                                  href={address.sourceUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer nofollow"
+                                  title={address.sourceUrl}
+                                  dir="ltr"
+                                  className="block truncate text-accent underline"
+                                >
+                                  {address.sourceUrl}
+                                </a>
+                              ) : (
+                                "—"
+                              )}
+                            </td>
+                            <td className="py-2 text-xs">
+                               {(() => {
+                                 // ONE derived token for the whole row: a
+                                 // legacy address reports `unverified_legacy`
+                                 // right in the badge, exactly like the Excel
+                                 // export — no second, divergent label.
+                                 const status = emailStatusOf(company, address);
+                                 return (
+                                   <span
+                                     className={`inline-flex w-fit rounded-lg px-2 py-0.5 font-bold ${EMAIL_STATUS_TONE[status]}`}
+                                     title={
+                                       company.rejectReason ??
+                                       address?.verificationMethod ??
+                                       undefined
+                                     }
+                                   >
+                                     {t(`companyDiscovery.results.emailStatus.${status}`)}
+                                   </span>
+                                 );
+                               })()}
                             </td>
                           </tr>
                         );
