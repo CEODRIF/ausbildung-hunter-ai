@@ -336,7 +336,10 @@ textarea:focus-visible,
     margin: 0 !important;
     border-radius: 0 !important;
     box-shadow: none !important;
-    padding: 14mm 15mm !important;
+    /* Configurable page margins: the sheet sets --cv-pad-block /
+       --cv-pad-inline inline (cv-document.tsx); the fallbacks are the
+       original defaults so a missing var never changes the output. */
+    padding: var(--cv-pad-block, 14mm) var(--cv-pad-inline, 15mm) !important;
   }
   /* Multi-page documents: never strand a section title at the bottom of a
      page, and never split an individual entry across pages. */

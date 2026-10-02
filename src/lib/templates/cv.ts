@@ -16,6 +16,11 @@
  */
 
 import type { CandidateProfile } from "@/lib/bewerbung-schema";
+import {
+  defaultCvCustomization,
+  sanitizeCvCustomization,
+  type CvCustomizationSettings,
+} from "./cv-customization";
 
 export interface CvPersonal {
   fullName: string;
@@ -88,6 +93,14 @@ export interface CvDocument {
   certificates: CvCertificate[];
   projects: CvProject[];
   interests: string[];
+  /**
+   * Optional appearance/style settings (font, sizes, spacing, colors, photo,
+   * header, sections, footer). Persisted in the SAME per-user key as the
+   * content; `sanitizeCvDocument` always fills it with valid defaults. When
+   * absent (older storage) the renderer falls back to the defaults, so the
+   * document looks identical to the current template.
+   */
+  customization?: CvCustomizationSettings;
 }
 
 export type CvListSection =
@@ -181,6 +194,7 @@ export function cvEmpty(): CvDocument {
     certificates: [],
     projects: [],
     interests: [],
+    customization: defaultCvCustomization(),
   };
 }
 
@@ -372,6 +386,7 @@ export function sanitizeCvDocument(raw: unknown): CvDocument | null {
     certificates,
     projects,
     interests: strList(data.interests),
+    customization: sanitizeCvCustomization(data.customization),
   };
 }
 

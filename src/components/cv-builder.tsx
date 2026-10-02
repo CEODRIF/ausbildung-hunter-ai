@@ -15,6 +15,7 @@
  *    candidate profile — mapping only what exists, inventing nothing.
  */
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -40,6 +41,11 @@ import {
   CV_SHEET_WIDTH,
   type CvLabels,
 } from "@/components/cv-document";
+import { CvCustomizationPanel } from "@/components/cv-customization";
+import {
+  defaultCvCustomization,
+  type CvCustomizationSettings,
+} from "@/lib/templates/cv-customization";
 import { candidateProfileSchema } from "@/lib/bewerbung-schema";
 import { useScaledSheet } from "@/lib/use-scaled-sheet";
 import {
@@ -415,6 +421,7 @@ export function CvBuilder({
   const [started, setStarted] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [mobileView, setMobileView] = useState<"edit" | "preview">("edit");
+  const [view, setView] = useState<"content" | "customize">("content");
   const [addOpen, setAddOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importNotice, setImportNotice] = useState<"" | "notfound" | "error">("");
@@ -569,6 +576,12 @@ export function CvBuilder({
     [],
   );
 
+  // Appearance settings live on the document itself (cv.customization), so
+  // they persist with the exact same autosave/localStorage path as the content.
+  const updateCustomization = useCallback((next: CvCustomizationSettings) => {
+    setCv((c) => ({ ...c, customization: next }));
+  }, []);
+
   // ---- Import existing scanner profile ---------------------------------------
   const applyImport = useCallback((doc: CvDocument) => {
     setCv(doc);
@@ -711,6 +724,36 @@ export function CvBuilder({
             </span>
           )}
           {started && (
+          <div className="flex rounded-xl border border-line-strong bg-surface p-1">
+            <button
+              type="button"
+              aria-pressed={view === "content"}
+              onClick={() => setView("content")}
+              className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                view === "content"
+                  ? "bg-accent text-white"
+                  : "text-muted hover:text-ink"
+              }`}
+            >
+              <Icon name="edit" size={13} strokeWidth={2.2} />
+              {t("templates.tabContent")}
+            </button>
+            <button
+              type="button"
+              aria-pressed={view === "customize"}
+              onClick={() => setView("customize")}
+              className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                view === "customize"
+                  ? "bg-accent text-white"
+                  : "text-muted hover:text-ink"
+              }`}
+            >
+              <Icon name="spark" size={13} strokeWidth={2.2} />
+              {t("templates.tabCustomize")}
+            </button>
+          </div>
+          )}
+          {started && (
           <div className="flex rounded-xl border border-line-strong bg-surface p-1 lg:hidden">
             <button
               type="button"
@@ -786,6 +829,8 @@ export function CvBuilder({
         <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
           {/* ------------------------------ Editor ----------------------------- */}
           <div className={`min-w-0 ${mobileView === "edit" ? "" : "hidden lg:block"}`}>
+            {view === "content" ? (
+            <Fragment>
             <Button
               variant="secondary"
               className="mb-4 w-full"
@@ -1442,6 +1487,14 @@ export function CvBuilder({
                 />
               </SectionCard>
             </div>
+            </Fragment>
+            ) : (
+            <CvCustomizationPanel
+              settings={cv.customization ?? defaultCvCustomization()}
+              onChange={updateCustomization}
+              hasPhoto={Boolean(personal.photo)}
+            />
+            )}
           </div>
 
           {/* ----------------------------- Preview -----------------------------
