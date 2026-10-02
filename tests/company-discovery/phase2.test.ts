@@ -145,6 +145,7 @@ function baseRun(overrides: Partial<DiscoveryRun> = {}): DiscoveryRun {
       emailsFound: 0,
       noPublicEmail: 0,
       sourcesBlocked: 0,
+      companiesProcessed: 0,
       sources: [],
     },
     creditsCharged: 0,

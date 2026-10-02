@@ -97,6 +97,23 @@ function isSourceStatus(value: unknown): value is DiscoverySourceStatus["status"
   );
 }
 
+/** The known source families (§3.2 + the internet-discovery expansion). */
+const SOURCE_CATEGORIES: readonly string[] = [
+  "ausbildung",
+  "chamber",
+  "jobs",
+  "local-jobs",
+  "government",
+  "search",
+  "company-site",
+  "directory",
+  "platform",
+];
+
+function isSourceCategory(value: unknown): boolean {
+  return typeof value === "string" && SOURCE_CATEGORIES.includes(value);
+}
+
 /**
  * Columns that only exist once `…_discovery_multi_source.sql` has been applied.
  * A write that mentions one of them on a database without it is retried
@@ -148,7 +165,24 @@ function parseSources(raw: unknown): DiscoverySourceStatus[] {
       ...(typeof item.policy === "string"
         ? { policy: item.policy as DiscoverySourceStatus["policy"] }
         : {}),
+      ...(isSourceCategory(item.category)
+        ? { category: item.category as DiscoverySourceStatus["category"] }
+        : {}),
       ...(typeof item.candidates === "number" ? { candidates: item.candidates } : {}),
+      ...(
+        item.stats &&
+        typeof item.stats === "object" &&
+        typeof (item.stats as Record<string, unknown>).queriesExecuted === "number" &&
+        typeof (item.stats as Record<string, unknown>).resultsInspected === "number"
+          ? {
+              stats: {
+                queriesExecuted: (item.stats as Record<string, unknown>).queriesExecuted as number,
+                resultsInspected: (item.stats as Record<string, unknown>)
+                  .resultsInspected as number,
+              },
+            }
+          : {}
+      ),
     });
   }
   return out;
@@ -168,6 +202,8 @@ function rowToRun(row: DiscoveryRunRow): DiscoveryRun {
     emailsFound: row.emails_found ?? 0,
     noPublicEmail: row.no_public_email ?? 0,
     sourcesBlocked: row.sources_blocked ?? 0,
+    // Migration-dependent column — older rows simply have no processed count.
+    companiesProcessed: row.companies_processed ?? 0,
     sources: parseSources(row.sources),
   };
   return {

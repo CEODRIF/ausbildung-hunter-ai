@@ -40,9 +40,22 @@ export interface NormalizedOffer {
 }
 
 export type AdapterResult =
-  | { status: "ok"; offers: NormalizedOffer[] }
+  | {
+      status: "ok";
+      offers: NormalizedOffer[];
+      /** Layer-specific execution stats (the search layer only) — honest
+       *  numbers for the run report, never an estimate. */
+      stats?: { queriesExecuted: number; resultsInspected: number };
+    }
   | { status: "blocked"; reason: string }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string }
+  /**
+   * Registered + enabled, but not runnable in this run for a KNOWN, honest
+   * reason (e.g. the search provider has no configured key). This is distinct
+   * from `error` (a failure) and from `skipped_by_policy` (a policy gate): the
+   * source is permitted, it just has nothing to execute against right now.
+   */
+  | { status: "skipped"; reason: string };
 
 export interface AdapterFetchContext {
   /** Requests already issued in this run (budget accounting). */

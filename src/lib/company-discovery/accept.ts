@@ -318,7 +318,17 @@ export function acceptEmailsFromContent(input: {
     // (b) Off the company's own site, attribution must hold in the SAME block
     // that carries the address — a company named somewhere else on the page
     // does not attribute this mailbox.
-    if (!onCompanySite && !textNamesCompany(evidence.snippet, input.companyName)) {
+    //
+    // Granularity depends on the source: on a third-party page the block is the
+    // text around the match, while on a LISTING the block IS the offer itself
+    // (one listing = one offer record, whose employer field and description
+    // together are that single block).
+    const requiresSnippetAttribution = input.sourceType !== "job_listing";
+    if (
+      !onCompanySite &&
+      requiresSnippetAttribution &&
+      !textNamesCompany(evidence.snippet, input.companyName)
+    ) {
       continue;
     }
     found.push({

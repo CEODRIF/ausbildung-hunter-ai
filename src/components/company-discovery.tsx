@@ -133,7 +133,8 @@ function RunStatusBadge({
  * the run continues honestly without inventing rows) or `ok`.
  */
 function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
-  const source = run.progress.sources[0];
+  const sources = run.progress.sources;
+  const source = sources[0];
   const sourceLabel = !source
     ? "—"
     : source.status === "running"
@@ -141,8 +142,71 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
       : source.status === "unavailable"
         ? t("companyDiscovery.runCreated.sourceUnavailable")
         : t("companyDiscovery.runCreated.sourceOk");
+  // ---- the "Internet Discovery" scope (§22) — all derived, no new counters ----
+  const scanned = sources.length;
+  const activeSources = sources.filter((s) => s.status === "ok").length;
+  const blockedSources = sources.filter((s) => s.status === "blocked").length;
+  const familyCount = (cats: string[]): number =>
+    sources.filter((s) => s.category && cats.includes(s.category)).length;
+  const families: Array<{ key: string; cats: string[] }> = [
+    { key: "portals", cats: ["ausbildung", "jobs", "local-jobs", "government"] },
+    { key: "search", cats: ["search"] },
+    { key: "company-site", cats: ["company-site"] },
+    { key: "directory", cats: ["chamber", "directory"] },
+    { key: "platform", cats: ["platform"] },
+  ];
+  // The search layer's honest execution stats (persisted in the source
+  // report) — 0 before the layer ran or on runs from before it existed.
+  const searchStats = sources.find((s) => s.id === "search-api")?.stats;
+  const discoveryTiles: Array<{ key: string; value: number }> = [
+    { key: "scanned", value: scanned },
+    { key: "active", value: activeSources },
+    { key: "offers", value: run.progress.offersAnalyzed },
+    { key: "companies", value: run.progress.uniqueCompanies },
+    { key: "duplicates", value: run.progress.duplicatesRemoved },
+    { key: "blocked", value: blockedSources },
+    { key: "queries", value: searchStats?.queriesExecuted ?? 0 },
+    { key: "results", value: searchStats?.resultsInspected ?? 0 },
+    { key: "processed", value: run.progress.companiesProcessed },
+  ];
+
   return (
-    <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+    <>
+      {/* The engine now spans a network of source families (§22). Shown only
+          once the run has produced a source report; every number is derived
+          from the REAL per-source status — nothing is interpolated. */}
+      {sources.length > 0 && (
+        <div className="mt-4 rounded-xl border border-line bg-surface-2/40 p-3">
+          <h3 className="text-xs font-bold text-ink">
+            {t("companyDiscovery.discovery.title")}
+          </h3>
+          <p className="mt-1 text-xs leading-5 text-muted">
+            {t("companyDiscovery.discovery.subtitle")}
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {discoveryTiles.map((tile) => (
+              <div key={tile.key} className="rounded-lg bg-surface px-2.5 py-2">
+                <div className="text-lg font-bold text-ink">{tile.value}</div>
+                <div className="text-[11px] font-semibold text-muted">
+                  {t(`companyDiscovery.discovery.${tile.key}`)}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {families.map((family) => (
+              <span
+                key={family.key}
+                className="rounded-full border border-line bg-surface px-2 py-0.5 text-[11px] font-semibold text-ink-soft"
+              >
+                {t(`companyDiscovery.discovery.family.${family.key}`)}
+                <span className="ms-1 text-muted">{familyCount(family.cats)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
       <div className="rounded-xl bg-surface-2 p-3">
         <dd className="text-xl font-bold text-ink">
           {run.progress.foundCompanies}
@@ -205,7 +269,79 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
           {t("companyDiscovery.runCreated.source")}
         </dt>
       </div>
+
+      {/* ---- The source report: every registered source, honestly ---------- */}
+      {sources.length > 0 && (
+        <div className="col-span-2 sm:col-span-3">
+          <h3 className="text-xs font-bold text-ink">
+            {t("companyDiscovery.sources.title")}
+          </h3>
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full min-w-[44rem] border-collapse text-xs">
+              <thead>
+                <tr className="text-muted">
+                  <th className="py-1.5 pe-3 text-start">
+                    {t("companyDiscovery.sources.columns.source")}
+                  </th>
+                  <th className="py-1.5 pe-3 text-start">
+                    {t("companyDiscovery.sources.columns.category")}
+                  </th>
+                  <th className="py-1.5 pe-3 text-start">
+                    {t("companyDiscovery.sources.columns.policy")}
+                  </th>
+                  <th className="py-1.5 pe-3 text-start">
+                    {t("companyDiscovery.sources.columns.status")}
+                  </th>
+                  <th className="py-1.5 pe-3 text-start">
+                    {t("companyDiscovery.sources.columns.offers")}
+                  </th>
+                  <th className="py-1.5 text-start">
+                    {t("companyDiscovery.sources.columns.reason")}
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {sources.map((entry) => (
+                  <tr key={entry.id}>
+                    <td className="py-1.5 pe-3 font-semibold text-ink">
+                      {entry.displayName ?? entry.id}
+                    </td>
+                    <td className="py-1.5 pe-3 text-ink-soft">
+                      {entry.category
+                        ? t(`companyDiscovery.sources.category.${entry.category}`)
+                        : "—"}
+                    </td>
+                    <td className="py-1.5 pe-3 text-ink-soft">
+                      {entry.policy
+                        ? t(`companyDiscovery.sources.policy.${entry.policy}`)
+                        : "—"}
+                    </td>
+                    <td className="py-1.5 pe-3">
+                      <span
+                        className={`rounded-md px-1.5 py-0.5 font-bold ${
+                          entry.status === "ok"
+                            ? "bg-accent-soft text-accent"
+                            : entry.status === "blocked" ||
+                                entry.status === "error" ||
+                                entry.status === "unavailable"
+                              ? "bg-surface-2 text-warning"
+                              : "bg-surface-2 text-muted"
+                        }`}
+                      >
+                        {t(`companyDiscovery.sources.status.${entry.status}`)}
+                      </span>
+                    </td>
+                    <td className="py-1.5 pe-3 text-ink-soft">{entry.candidates ?? 0}</td>
+                    <td className="py-1.5 text-muted">{entry.reason ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </dl>
+    </>
   );
 }
 

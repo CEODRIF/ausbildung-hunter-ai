@@ -43,14 +43,47 @@ export function stableRef(value: string): string {
   return hash.toString(16).padStart(8, "0");
 }
 
+/**
+ * Decode the HTML entities a template may have applied to an ATTRIBUTE VALUE
+ * (`type="application&#x2F;ld&#x2B;json"` is a plain `application/ld+json` to
+ * every browser). This is ordinary HTML parsing — the JSON body itself is
+ * never transformed, and nothing here decodes a protection scheme.
+ */
+const ATTRIBUTE_ENTITY_RE = /&#(?:x([0-9a-f]+)|(\d+));/gi;
+const ATTRIBUTE_NAMED_ENTITIES: Record<string, string> = {
+  "&quot;": '"',
+  "&#39;": "'",
+  "&apos;": "'",
+  "&amp;": "&",
+};
+
+export function decodeHtmlAttribute(value: string): string {
+  return value
+    .replace(ATTRIBUTE_ENTITY_RE, (whole, hex: string, dec: string) => {
+      const code = hex ? parseInt(hex, 16) : Number(dec);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : whole;
+    })
+    .replace(/&(quot|#39|apos|amp);/g, (whole) => ATTRIBUTE_NAMED_ENTITIES[whole] ?? whole);
+}
+
 /** Every `application/ld+json` block of a page, parsed defensively. */
 export function jsonLdBlocks(html: string): unknown[] {
   const blocks: unknown[] = [];
-  const re =
-    /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  // The `type` attribute is read separately so an entity-encoded value
+  // (`application&#x2F;ld&#x2B;json`) is recognised as the same script type.
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
   let match: RegExpExecArray | null;
   while ((match = re.exec(html)) !== null) {
-    const raw = match[1].trim();
+    const attributes = match[1];
+    const typeMatch = /type\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attributes);
+    if (!typeMatch) continue;
+    const declared = decodeHtmlAttribute(
+      (typeMatch[2] ?? typeMatch[3] ?? typeMatch[4] ?? "").trim(),
+    ).toLowerCase();
+    if (declared !== "application/ld+json") continue;
+    const raw = match[2].trim();
     if (!raw) continue;
     try {
       blocks.push(JSON.parse(raw));
@@ -59,6 +92,57 @@ export function jsonLdBlocks(html: string): unknown[] {
     }
   }
   return blocks;
+}
+
+/**
+ * Public detail-URL discovery on a LISTING page: same-origin links whose path
+ * matches the source's declared pattern. The pattern is configuration for the
+ * source (a documented URL shape), never a guess about page content, and the
+ * fields themselves always come from the detail page's own structured data.
+ */
+export function detailLinks(input: {
+  html: string;
+  pageUrl: string;
+  pattern: RegExp;
+  limit: number;
+}): string[] {
+  let base: URL;
+  try {
+    base = new URL(input.pageUrl);
+  } catch {
+    return [];
+  }
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const re = /<a\b[^>]*\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(input.html)) !== null) {
+    const raw = decodeHtmlAttribute(
+      (match[2] ?? match[3] ?? match[4] ?? "").trim(),
+    );
+    if (!raw || raw.startsWith("#")) continue;
+    let resolved: URL;
+    try {
+      resolved = new URL(raw, base);
+    } catch {
+      continue;
+    }
+    if (resolved.protocol !== "https:" && resolved.protocol !== "http:") continue;
+    if (resolved.hostname.toLowerCase().replace(/^www\./, "") !==
+        base.hostname.toLowerCase().replace(/^www\./, "")) {
+      continue;
+    }
+    resolved.hash = "";
+    resolved.search = "";
+    const value = resolved.toString();
+    // The declared shape decides — a link that does not match is not an offer.
+    if (!input.pattern.test(resolved.pathname)) continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    found.push(value);
+    if (found.length >= input.limit) break;
+  }
+  return found;
 }
 
 type JsonRecord = Record<string, unknown>;

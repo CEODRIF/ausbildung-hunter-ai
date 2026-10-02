@@ -170,6 +170,11 @@ describe("discoveryLimits", () => {
     "DISCOVERY_MAX_CONCURRENT",
     "DISCOVERY_MAX_TAVILY_QUERIES",
     "DISCOVERY_MAX_RUNTIME_MS",
+    "DISCOVERY_MAX_SEARCH_QUERIES",
+    "DISCOVERY_MAX_SEARCH_RESULTS_PER_QUERY",
+    "DISCOVERY_MAX_SEARCH_PAGES_TO_FETCH",
+    "DISCOVERY_MAX_COMPANY_SITE_COMPANIES",
+    "DISCOVERY_MAX_COMPANY_SITE_PAGES",
   ];
   const saved: Record<string, string | undefined> = {};
 
@@ -194,6 +199,13 @@ describe("discoveryLimits", () => {
       maxTavilyQueries: 30,
       maxPagesPerCompany: 4,
       maxRuntimeMs: 10 * 60 * 1000,
+      // The internet-discovery fan-out (§17): a wider radius, still bounded.
+      maxSearchQueries: 12,
+      maxSearchResultsPerQuery: 10,
+      maxSearchPagesPerQuery: 5,
+      maxSearchPagesToFetch: 20,
+      maxCompanySiteOfferCompanies: 12,
+      maxCompanySiteOfferPages: 6,
     });
   });
 

@@ -10,7 +10,11 @@ import type {
   OpportunitySearchParams,
   OpportunityWindow,
 } from "@/lib/opportunities/types";
-import { getWebSearchClient, MAX_TAVILY_REQUESTS_PER_RUN } from "@/lib/web-search";
+import {
+  getWebSearchClient,
+  MAX_TAVILY_REQUESTS_PER_RUN,
+  type WebSearchClient,
+} from "@/lib/web-search";
 import { enabledAdapters } from "./adapters";
 import type { NormalizedOffer } from "./adapter";
 import {
@@ -28,7 +32,9 @@ import {
   countsAsResult,
   resolveCompanyEmails,
 } from "./emails";
+import { discoverCompanySiteOffers } from "./company-site";
 import {
+  COMPANY_WEBSITES_LAYER,
   PORTAL_SOURCES,
   policySkippedSources,
   sourceById,
@@ -103,8 +109,14 @@ export interface DiscoveryPipelineDeps {
   adapters?: ReturnType<typeof enabledAdapters>;
   /** Guarded-fetch context. Default: a fresh one (per run, never shared). */
   fetchContext?: FetchContext;
-  /** The permitted public-search client, or null when unavailable. */
+  /** The permitted public-search client used for the EMAIL-lookup step. */
   searchClient?: ReturnType<typeof getWebSearchClient>;
+  /**
+   * The permitted public-search client used for the OFFER-discovery layer
+   * (its own bounded per-run budget, independent of the email lookup).
+   * Default: a fresh provider client, or null when none is configured.
+   */
+  offerSearchClient?: WebSearchClient | null;
   /** Test seam: does this fresh context's SSRF guard consider a host public? */
   isPublicHost?: (hostname: string) => Promise<boolean>;
 }
@@ -165,16 +177,19 @@ export async function runDiscoveryPipeline(
     };
     if (patch.displayName !== undefined) next.displayName = patch.displayName;
     if (patch.policy !== undefined) next.policy = patch.policy;
+    if (patch.category !== undefined) next.category = patch.category;
     if (patch.status !== undefined) next.status = patch.status;
     if (patch.reason !== undefined) next.reason = patch.reason;
     if (patch.candidates !== undefined) next.candidates = patch.candidates;
+    if (patch.stats !== undefined) next.stats = patch.stats;
     sourceStatus.set(id, next);
   };
-  upsertSource(BA_SOURCE_ID, { status: "running" });
+  upsertSource(BA_SOURCE_ID, { status: "running", category: "government" });
   for (const source of policySkippedSources()) {
     upsertSource(source.id, {
       displayName: source.displayName,
       policy: source.policy,
+      category: source.category,
       status: "skipped_by_policy",
       reason: source.policy,
       candidates: 0,
@@ -195,13 +210,47 @@ export async function runDiscoveryPipeline(
       deps.isPublicHost ? { isPublicHost: deps.isPublicHost } : {},
     );
   const siteFetcher = createGuardedSiteFetcher(fetchContext);
-  const adapters = deps.adapters ?? enabledAdapters();
+  // The search layer's query generator needs the run's concrete beginn context
+  // (the BA-shaped criteria alone only carries "any" for date/year modes).
+  const beginnYear = params.beginn.mode === "year" ? params.beginn.year : undefined;
+  const beginnMonth =
+    params.beginn.mode === "month" ? params.beginn.month : undefined;
+  // A SEPARATE provider client for the offer-discovery layer: its own bounded
+  // per-run budget (as wide as the query family budget, validated at the
+  // client), independent of the email-lookup client which KEEPS the
+  // historical conservative budget.
+  const offerSearchClient =
+    deps.offerSearchClient === undefined
+      ? getWebSearchClient({ maxRequests: limits.maxSearchQueries })
+      : deps.offerSearchClient;
+  const adapters =
+    deps.adapters ??
+    enabledAdapters({
+      searchClient: offerSearchClient,
+      searchBudget: {
+        maxQueries: limits.maxSearchQueries,
+        maxResultsPerQuery: limits.maxSearchResultsPerQuery,
+        maxPagesPerQuery: limits.maxSearchPagesPerQuery,
+        maxPagesToFetch: limits.maxSearchPagesToFetch,
+      },
+      searchMeta: { beginnYear, beginnMonth },
+    });
   const searchClient =
     deps.searchClient === undefined ? getWebSearchClient() : deps.searchClient;
   /** Permitted public-search attempts issued in this run (client cap aware). */
   let searchAttempts = 0;
 
   let delivered = 0;
+  /**
+   * Accepted companies that carry a verified official website — the input of
+   * the §11 company-website offer-discovery pass (frozen before it runs so a
+   * company found DURING that pass is never re-inspected).
+   */
+  const acceptedSites: Array<{
+    websiteUrl: string;
+    goal: "ausbildung" | "arbeit";
+    field: string;
+  }> = [];
   /** Remaining official-site passes for the public-email resolution. */
   let emailSiteBudget = discoveryEmailSitePasses();
   let failedPasses = 0;
@@ -266,8 +315,10 @@ export async function runDiscoveryPipeline(
           upsertSource(adapter.id, {
             displayName: adapter.displayName,
             policy: source.policy,
+            category: source.category,
             status: "ok",
             candidates: total,
+            ...(result.stats !== undefined ? { stats: result.stats } : {}),
           });
           if (result.offers.length === 0) {
             // An enabled source that simply has nothing for these criteria is
@@ -278,17 +329,30 @@ export async function runDiscoveryPipeline(
           upsertSource(adapter.id, {
             displayName: adapter.displayName,
             policy: source.policy,
+            category: source.category,
             status: "blocked",
             reason: result.reason,
             candidates: sourceOffers.get(adapter.id) ?? 0,
           });
-        } else {
+        } else if (result.status === "error") {
           upsertSource(adapter.id, {
             displayName: adapter.displayName,
             policy: source.policy,
+            category: source.category,
             status: "error",
             reason: result.message,
             candidates: sourceOffers.get(adapter.id) ?? 0,
+          });
+        } else {
+          // `skipped`: enabled but not runnable in this run (e.g. the search
+          // provider has no configured key) — honest, not an error.
+          upsertSource(adapter.id, {
+            displayName: adapter.displayName,
+            policy: source.policy,
+            category: source.category,
+            status: "skipped",
+            reason: result.reason,
+            candidates: 0,
           });
         }
       } catch (error) {
@@ -296,6 +360,7 @@ export async function runDiscoveryPipeline(
         upsertSource(adapter.id, {
           displayName: adapter.displayName,
           policy: source.policy,
+          category: source.category,
           status: "error",
           reason: error instanceof Error ? error.name : "adapter_failed",
           candidates: sourceOffers.get(adapter.id) ?? 0,
@@ -481,6 +546,13 @@ export async function runDiscoveryPipeline(
       countedKeys.add(key);
       counters.uniqueCompanies += 1;
       counters.foundCompanies += 1;
+      if (offer.companyWebsite) {
+        acceptedSites.push({
+          websiteUrl: offer.companyWebsite,
+          goal: offer.goal,
+          field: params.field,
+        });
+      }
       sinceProgress = 0;
       await flushProgress();
     }
@@ -515,10 +587,59 @@ export async function runDiscoveryPipeline(
         }
       }
 
-      // (b) the enabled portal adapters.
+      // (b) the enabled portal adapters (including the bounded search layer).
       const adapterOffers = await collectAdapterOffers(passGoal);
       await processOffers(adapterOffers, passGoal);
       if (aborted) break;
+    }
+
+    // (c) company-website offer discovery (§11): a bounded pass over the
+    //     already-accepted companies that carry a verified official domain.
+    //     Its offers flow through the SAME funnel (normalization → dedupe →
+    //     gates → email resolution), so an already-counted company is only a
+    //     duplicate, and the §4.8 outcome invariant is preserved.
+    if (!aborted && acceptedSites.length > 0 && counters.foundCompanies < target) {
+      const sites = acceptedSites.slice(0, limits.maxCompanySiteOfferCompanies);
+      upsertSource(COMPANY_WEBSITES_LAYER.id, {
+        displayName: COMPANY_WEBSITES_LAYER.displayName,
+        policy: COMPANY_WEBSITES_LAYER.policy,
+        category: COMPANY_WEBSITES_LAYER.category,
+        status: "running",
+        candidates: 0,
+      });
+      let siteOffersTotal = 0;
+      const siteOffersByGoal: Record<"ausbildung" | "arbeit", DiscoveryOffer[]> = {
+        ausbildung: [],
+        arbeit: [],
+      };
+      for (const site of sites) {
+        if (counters.foundCompanies >= target || countedKeys.size >= maxCompanies) break;
+        if (await isCancelled(runId, userId)) {
+          aborted = true;
+          break;
+        }
+        const result = await discoverCompanySiteOffers(fetchContext, {
+          websiteUrl: site.websiteUrl,
+          field: site.field,
+          goal: site.goal,
+          maxPages: limits.maxCompanySiteOfferPages,
+        });
+        siteOffersTotal += result.offers.length;
+        for (const offer of result.offers) {
+          const offerGoal = offer.offerType ?? site.goal;
+          siteOffersByGoal[offerGoal].push(
+            discoveryOfferFromListing(offer, COMPANY_WEBSITES_LAYER.id),
+          );
+        }
+      }
+      if (!aborted) {
+        await processOffers(siteOffersByGoal.ausbildung, "ausbildung");
+        await processOffers(siteOffersByGoal.arbeit, "arbeit");
+        upsertSource(COMPANY_WEBSITES_LAYER.id, {
+          status: "ok",
+          candidates: siteOffersTotal,
+        });
+      }
     }
 
     await flushCandidates();
@@ -648,6 +769,7 @@ export function sourceReport(
     id: source.id,
     displayName: source.displayName ?? source.id,
     policy: source.policy ?? "unverified",
+    category: source.category,
     status:
       source.status === "running" || source.status === "unavailable"
         ? "error"

@@ -449,11 +449,29 @@ function cacheSet(key: string, results: WebSearchResult[]): void {
  * returns a client when TAVILY_API_KEY is usable, otherwise null — the
  * discovery layer then degrades gracefully to the official BA source only.
  *
- * The returned client owns the per-search-operation request budget.
+ * The returned client owns the per-search-operation request budget. The
+ * budget is PER CLIENT INSTANCE (the provider abstraction is deliberately
+ * small: `WebSearchClient.search` — any other LEGITIMATE search API can be
+ * added later behind the same interface without touching the discovery
+ * layers that consume it).
+ *
+ * `options.maxRequests` lets one layer (the bounded offer-discovery fan-out)
+ * run its own, independently validated budget; the DEFAULT stays the
+ * historical 3, so the email-lookup client and every other caller keep their
+ * existing safety limit unchanged.
  */
-export function getWebSearchClient(): WebSearchClient | null {
+export function getWebSearchClient(
+  options: { maxRequests?: number } = {},
+): WebSearchClient | null {
   const key = resolveTavilyKey();
   if (!key) return null;
+  const requested = options.maxRequests;
+  const maxRequests =
+    typeof requested === "number" &&
+    Number.isInteger(requested) &&
+    requested > 0
+      ? Math.min(requested, MAX_RESULTS_HARD_CAP)
+      : MAX_TAVILY_REQUESTS_PER_RUN;
   let requestsUsed = 0;
   return {
     name: "tavily",
@@ -461,7 +479,7 @@ export function getWebSearchClient(): WebSearchClient | null {
       const cacheKey = `${query.trim()}|${maxResults}`;
       const cached = cacheGet(cacheKey);
       if (cached) return cached;
-      if (requestsUsed >= MAX_TAVILY_REQUESTS_PER_RUN) {
+      if (requestsUsed >= maxRequests) {
         // Hard cap: no network call, no retry loop.
         logTavily("warn", {
           requestNo: requestsUsed,
@@ -471,7 +489,7 @@ export function getWebSearchClient(): WebSearchClient | null {
           providerMessage: null,
           durationMs: null,
           results: 0,
-          note: `request budget exhausted (${MAX_TAVILY_REQUESTS_PER_RUN} max) — skipped`,
+          note: `request budget exhausted (${maxRequests} max) — skipped`,
         });
         return [];
       }

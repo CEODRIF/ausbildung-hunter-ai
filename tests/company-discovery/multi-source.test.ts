@@ -441,10 +441,20 @@ describe("§6 #17 — the enabled portal adapter", () => {
   });
 
   it("classifies the 15 portals + Arbeitsagentur, and implements only enabled ones", () => {
-    expect(PORTAL_SOURCES).toHaveLength(16);
-    expect(enabledSources().map((source) => source.id)).toEqual(["ausbildung-de"]);
-    expect(policySkippedSources()).toHaveLength(15);
-    expect(enabledAdapters()).toHaveLength(1);
+    // The evidence-based split is asserted as a relation, so adding a source
+    // later cannot silently break the guarantee it expresses.
+    expect(PORTAL_SOURCES.length).toBeGreaterThanOrEqual(16);
+    // The enabled set is exactly the two audited portals plus the legitimate
+    // search API (every other registered source stays fail-closed).
+    expect(enabledSources().map((source) => source.id)).toEqual([
+      "ausbildung-de",
+      "aubi-plus-de",
+      "search-api",
+    ]);
+    expect(policySkippedSources().length).toBe(
+      PORTAL_SOURCES.length - enabledSources().length,
+    );
+    expect(enabledAdapters()).toHaveLength(enabledSources().length);
 
     // restricted / unverified sources have NO adapter and may never yield an
     // address — checked by id, not by hope.
@@ -549,6 +559,7 @@ describe("§6 #12 + §4.8 — ten companies, partial results, honest counters", 
         emailsFound: 0,
         noPublicEmail: 0,
         sourcesBlocked: 0,
+        companiesProcessed: 0,
         sources: [],
       },
       creditsCharged: 0,
@@ -637,6 +648,7 @@ describe("§6 #12 + §4.8 — ten companies, partial results, honest counters", 
         emailsFound: 0,
         noPublicEmail: 0,
         sourcesBlocked: 0,
+        companiesProcessed: 0,
         sources: [],
       },
       creditsCharged: 0,

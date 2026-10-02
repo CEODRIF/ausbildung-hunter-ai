@@ -189,16 +189,31 @@ export async function GET(
       ["Unique companies", String(run.progress.uniqueCompanies)],
       ["Duplicates removed", String(run.progress.duplicatesRemoved)],
       ["Companies rejected", String(run.progress.companiesRejected)],
+      ["Companies processed", String(run.progress.companiesProcessed)],
       ["Created", run.createdAt],
       ["Finished", run.finishedAt ?? ""],
     ] as Array<[string, string]>) {
       meta.addRow({ field: safeCell(field), value: safeCell(value) });
     }
+    // The search layer's execution stats — real numbers, never estimates.
+    const searchStats = run.progress.sources.find(
+      (source) => source.id === "search-api",
+    )?.stats;
+    if (searchStats) {
+      meta.addRow({
+        field: safeCell("Search layer: queries executed"),
+        value: safeCell(String(searchStats.queriesExecuted)),
+      });
+      meta.addRow({
+        field: safeCell("Search layer: result pages inspected"),
+        value: safeCell(String(searchStats.resultsInspected)),
+      });
+    }
     for (const source of run.progress.sources) {
       meta.addRow({
         field: `Source: ${safeCell(source.displayName ?? source.id)}`,
         value: safeCell(
-          `${source.status}${source.reason ? ` (${source.reason})` : ""} — offers: ${source.candidates ?? 0}`,
+          `${source.status}${source.reason ? ` (${source.reason})` : ""} — category: ${source.category ?? "—"} — offers: ${source.candidates ?? 0}`,
         ),
       });
     }

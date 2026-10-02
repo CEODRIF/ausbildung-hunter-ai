@@ -23,6 +23,7 @@
  */
 
 import { z } from "zod";
+import { enabledSources, type SourceCategory } from "./sources";
 
 // ---------------------------------------------------------------------------
 // Target (unique companies with a public email — NEVER a number of offers)
@@ -171,6 +172,8 @@ export interface DiscoverySourceStatus {
   displayName?: string;
   /** The access-policy classification the registry assigned (§3.4). */
   policy?: SourceReportEntry["policy"];
+  /** The source family for the report / UI (registry `category`). */
+  category?: SourceCategory;
   /** ok: delivered candidates. running: in progress. unavailable: failed.
    *  blocked: an access control answered (reason says which). error: technical
    *  failure after bounded retries. skipped_by_policy: registered but never
@@ -187,6 +190,13 @@ export interface DiscoverySourceStatus {
   reason?: string;
   /** Real candidate count from this source (when the source ran). */
   candidates?: number;
+  /**
+   * Layer-specific execution stats (the search layer only). Persisted inside
+   * the sources jsonb — no migration. `queriesExecuted` is the number of
+   * provider queries actually issued; `resultsInspected` the number of result
+   * pages fetched AND parsed (blocked pages are NOT inspected).
+   */
+  stats?: { queriesExecuted: number; resultsInspected: number };
 }
 
 /**
@@ -218,6 +228,9 @@ export interface DiscoveryProgress {
   sourcesBlocked: number;
   /** Live per-source status. */
   sources: DiscoverySourceStatus[];
+  /** Companies whose email outcome was resolved in the run (§4.8). Exposed
+   *  read-only (the column is migration-dependent → 0 on older rows). */
+  companiesProcessed: number;
 }
 
 /**
@@ -281,7 +294,9 @@ export interface SourceReportEntry {
   id: string;
   displayName: string;
   policy: "enabled_public" | "enabled_official_api" | "restricted" | "unverified";
-  status: "ok" | "blocked" | "skipped_by_policy" | "error";
+  /** The source family (registry `category`); optional for legacy rows. */
+  category?: SourceCategory;
+  status: "ok" | "blocked" | "skipped_by_policy" | "skipped" | "error";
   /** Machine reason for `blocked` / `error`. */
   reason?: string;
   /** Real number of offers this source yielded in the run. */
@@ -383,6 +398,48 @@ export interface DiscoveryLimits {
   maxPagesPerCompany: number;
   /** Hard wall-clock budget for the run. */
   maxRuntimeMs: number;
+  // ---- Internet discovery fan-out (§17) — the search radius, NOT volume ----
+  /** Structured search-engine QUERIES (families) for the OFFER-discovery
+   *  layer. Default 12 (target 10–15), hard cap 20. */
+  maxSearchQueries: number;
+  /** Result URLs considered per search query (the provider hard-caps 20).
+   *  Default 10, hard cap 20. */
+  maxSearchResultsPerQuery: number;
+  /** Offer pages fetched for ONE search query. Default 5, hard cap 10. */
+  maxSearchPagesPerQuery: number;
+  /** Total offer pages fetched across ALL search queries (global safety).
+   *  Default 20, hard cap 60. */
+  maxSearchPagesToFetch: number;
+  /** Company-site offer discovery: how many accepted companies are inspected.
+   *  Default 12 (target 10–15), hard cap 20. */
+  maxCompanySiteOfferCompanies: number;
+  /** Company-site offer discovery: pages fetched per company INCLUDING the
+   *  homepage (homepage + offer links / known paths). Default 6, hard cap 8. */
+  maxCompanySiteOfferPages: number;
+}
+
+/**
+ * The hard ceilings of the internet-discovery fan-out. Environment values are
+ * CLAMPED into these (§14: "prevent unreasonable values") — a misconfigured
+ * host can enlarge the radius within reason, never remove the bound.
+ */
+export const DISCOVERY_FANOUT_CAPS = {
+  maxSearchQueries: 20,
+  maxSearchResultsPerQuery: 20,
+  maxSearchPagesPerQuery: 10,
+  maxSearchPagesToFetch: 60,
+  maxCompanySiteOfferCompanies: 20,
+  maxCompanySiteOfferPages: 8,
+} as const;
+
+/** Positive integer from an env var, clamped into `[1, cap]`, else fallback. */
+function envIntClamped(name: string, fallback: number, cap: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1)
+    return fallback;
+  return Math.min(value, cap);
 }
 
 /** Positive integer from an env var, or the fallback. */
@@ -417,6 +474,94 @@ export function discoveryLimits(): DiscoveryLimits {
     maxTavilyQueries: envInt("DISCOVERY_MAX_TAVILY_QUERIES", 30),
     maxPagesPerCompany: 4,
     maxRuntimeMs: envInt("DISCOVERY_MAX_RUNTIME_MS", 10 * 60 * 1000),
+    // The internet-discovery radius: enlarged, but every value is clamped into
+    // its hard cap (DISCOVERY_FANOUT_CAPS) — a bad env value can never remove
+    // the bound.
+    maxSearchQueries: envIntClamped(
+      "DISCOVERY_MAX_SEARCH_QUERIES",
+      12,
+      DISCOVERY_FANOUT_CAPS.maxSearchQueries,
+    ),
+    maxSearchResultsPerQuery: envIntClamped(
+      "DISCOVERY_MAX_SEARCH_RESULTS_PER_QUERY",
+      10,
+      DISCOVERY_FANOUT_CAPS.maxSearchResultsPerQuery,
+    ),
+    maxSearchPagesPerQuery: envIntClamped(
+      "DISCOVERY_MAX_SEARCH_PAGES_PER_QUERY",
+      5,
+      DISCOVERY_FANOUT_CAPS.maxSearchPagesPerQuery,
+    ),
+    maxSearchPagesToFetch: envIntClamped(
+      "DISCOVERY_MAX_SEARCH_PAGES_TO_FETCH",
+      20,
+      DISCOVERY_FANOUT_CAPS.maxSearchPagesToFetch,
+    ),
+    maxCompanySiteOfferCompanies: envIntClamped(
+      "DISCOVERY_MAX_COMPANY_SITE_COMPANIES",
+      12,
+      DISCOVERY_FANOUT_CAPS.maxCompanySiteOfferCompanies,
+    ),
+    maxCompanySiteOfferPages: envIntClamped(
+      "DISCOVERY_MAX_COMPANY_SITE_PAGES",
+      6,
+      DISCOVERY_FANOUT_CAPS.maxCompanySiteOfferPages,
+    ),
+  };
+}
+
+/**
+ * The exported fan-out configuration (§17). A single, named view of how wide a
+ * run may reach — the search RADIUS, not the volume. Every value is either a
+ * real registry count or an env-tunable limit, so the numbers are honest and
+ * auditable; `maxRequestsPerHost` mirrors the fetcher's one-request-per-host
+ * concurrency that keeps a host never hit in parallel.
+ */
+export interface DiscoveryFanout {
+  /** How many enabled sources may execute in one run (registry-derived). */
+  maxEnabledSourcesPerRun: number;
+  /** Structured search queries (families) issued for the offer layer. */
+  maxSearchQueriesPerRun: number;
+  maxResultsPerQuery: number;
+  /** Offer pages fetched for one search query. */
+  maxSearchPagesPerQuery: number;
+  /** Offer pages fetched across all queries (global safety bound). */
+  maxSearchPagesPerRun: number;
+  /** Accepted companies inspected by the company-site offer pass. */
+  maxCompanySiteCompaniesPerRun: number;
+  /** Pages fetched per company by the company-site offer pass (incl. homepage). */
+  maxCompanySitePagesPerCompany: number;
+  maxCompaniesPerRun: number;
+  /** Pages fetched per company by the PUBLIC-EMAIL pass (kept conservative). */
+  maxPagesPerCompany: number;
+  maxConcurrentCompanies: number;
+  /** One in-flight request per host (the fetcher's `MAX_HOST_CONCURRENCY`). */
+  maxRequestsPerHost: number;
+  /** Minimum spacing between two requests to the same host, in ms. */
+  minHostDelayMs: number;
+  /** Per-request timeout of the discovery fetcher, in ms. */
+  requestTimeoutMs: number;
+}
+
+export function discoveryFanout(): DiscoveryFanout {
+  const limits = discoveryLimits();
+  return {
+    maxEnabledSourcesPerRun: enabledSources().length,
+    maxSearchQueriesPerRun: limits.maxSearchQueries,
+    maxResultsPerQuery: limits.maxSearchResultsPerQuery,
+    maxSearchPagesPerQuery: limits.maxSearchPagesPerQuery,
+    maxSearchPagesPerRun: limits.maxSearchPagesToFetch,
+    maxCompanySiteCompaniesPerRun: limits.maxCompanySiteOfferCompanies,
+    maxCompanySitePagesPerCompany: limits.maxCompanySiteOfferPages,
+    maxCompaniesPerRun: limits.maxCompaniesToResolve,
+    maxPagesPerCompany: limits.maxPagesPerCompany,
+    maxConcurrentCompanies: limits.maxConcurrent,
+    maxRequestsPerHost: 1,
+    // Mirror the fetcher's named constants (fetch-guard is server-only and
+    // must not be imported here — this module stays client-safe):
+    // MIN_HOST_INTERVAL_MS / REQUEST_TIMEOUT_MS.
+    minHostDelayMs: 1_000,
+    requestTimeoutMs: 10_000,
   };
 }
 
