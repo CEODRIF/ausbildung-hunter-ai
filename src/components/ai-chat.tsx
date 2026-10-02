@@ -309,7 +309,7 @@ const MessageBubble = memo(function MessageBubble({
             ))}
           </div>
         )}
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-sm leading-6 text-white shadow-[0_4px_12px_rgba(var(--glow-accent-rgb),0.18)]">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[var(--gradient-neon)] px-4 py-2.5 text-sm leading-6 text-white shadow-[0_8px_20px_-6px_rgba(var(--glow-accent-rgb),0.45)]">
           {message.content}
         </div>
         <span className="mt-1 pr-1 text-[10px] text-faint">
@@ -320,7 +320,7 @@ const MessageBubble = memo(function MessageBubble({
   }
   return (
     <div className="flex gap-2.5">
-      <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+      <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-[var(--gradient-neon)] text-white shadow-[0_4px_12px_-2px_rgba(var(--glow-accent-rgb),0.4)]">
         <Icon name="spark" size={14} />
       </span>
       <div className="min-w-0 max-w-[88%] flex-1">
@@ -766,7 +766,7 @@ export function AIChat({
       </div>
       <button
         onClick={() => void createNew()}
-        className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-accent text-xs font-bold text-white shadow-[0_6px_14px_rgba(var(--glow-accent-rgb),0.25)] transition hover:bg-accent-deep"
+        className="btn-neon mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-2xl text-xs font-bold text-white"
       >
         <Icon name="plus" size={15} />
         Neue Unterhaltung
@@ -878,43 +878,49 @@ export function AIChat({
           className="flex-1 overflow-y-auto overscroll-contain"
         >
           <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6">
-            {messages.length === 0 && !pendingAssistant ? (
-              <div className="flex min-h-[calc(100dvh-240px)] flex-col items-center justify-center pb-10 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-soft shadow-[0_10px_30px_rgba(var(--glow-accent-rgb),0.16)]">
-                  <Icon name="spark" size={30} className="text-accent" />
-                </div>
-                <h2 className="mt-6 text-2xl font-bold tracking-[-0.03em] text-ink">
-                  Dein persönlicher KI-Assistent
-                </h2>
-                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted">
-                  Für Ausbildung, Bewerbungen und Karriere – inklusive deines
-                  Lebenslaufs und deiner Bewerbungs-Dokumente.
-                </p>
-                <div className="mt-8 flex max-w-xl flex-wrap justify-center gap-2">
-                  {QUICK_ACTIONS.map((action) => (
-                    <button
-                      key={action}
-                      onClick={() => {
-                        setInput(action);
-                        taRef.current?.focus();
-                      }}
-                      className="rounded-full border border-line-strong bg-surface px-4 py-2 text-xs font-semibold text-muted shadow-sm transition hover:border-line-strong hover:bg-surface-2 hover:text-accent"
-                    >
-                      {action}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
+             {messages.length === 0 && !pendingAssistant ? (
+               <div className="flex min-h-[calc(100dvh-240px)] flex-col items-center justify-center pb-10 text-center">
+                 <div className="relative">
+                   <span
+                     aria-hidden="true"
+                     className="orb-ring absolute inset-0 rounded-full border-2 border-accent/25"
+                   />
+                   <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-[var(--gradient-neon)] shadow-[0_18px_40px_-10px_rgba(var(--glow-accent-rgb),0.55)]">
+                     <Icon name="spark" size={34} className="text-white" />
+                   </div>
+                 </div>
+                 <h2 className="display-title mt-7 text-3xl text-ink">
+                   Dein persönlicher KI-Assistent
+                 </h2>
+                 <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted">
+                   Für Ausbildung, Bewerbungen und Karriere – inklusive deines
+                   Lebenslaufs und deiner Bewerbungs-Dokumente.
+                 </p>
+                 <div className="mt-9 flex max-w-xl flex-wrap justify-center gap-2.5">
+                   {QUICK_ACTIONS.map((action) => (
+                     <button
+                       key={action}
+                       onClick={() => {
+                         setInput(action);
+                         taRef.current?.focus();
+                       }}
+                       className="group rounded-full border border-line-strong bg-surface px-4.5 py-2.5 text-xs font-bold text-ink-soft shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-transparent hover:bg-accent hover:text-white hover:shadow-[0_8px_18px_-6px_rgba(var(--glow-accent-rgb),0.5)]"
+                     >
+                       {action}
+                     </button>
+                   ))}
+                 </div>
+               </div>
+             ) : (
               <div className="space-y-6 pb-2">
                 {messages.map((message) => (
                   <MessageBubble key={message.id} message={message} />
                 ))}
-                {pendingAssistant && (
-                  <div className="flex gap-2.5">
-                    <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-                      <Icon name="spark" size={14} />
-                    </span>
+                 {pendingAssistant && (
+                   <div className="flex gap-2.5">
+                     <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-[var(--gradient-neon)] text-white shadow-[0_4px_12px_-2px_rgba(var(--glow-accent-rgb),0.4)]">
+                       <Icon name="spark" size={14} />
+                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="mb-1 text-[11px] font-bold text-ink-soft">
                         Ausbildung Hunter AI
@@ -1036,7 +1042,7 @@ export function AIChat({
                 setDragOver(false);
                 addFiles(Array.from(event.dataTransfer.files ?? []));
               }}
-              className={`flex items-end gap-1.5 rounded-2xl border bg-surface p-2 shadow-sm transition ${dragOver ? "border-accent ring-4 ring-accent/10" : "border-line-strong focus-within:border-accent focus-within:ring-4 focus-within:ring-accent/10"}`}
+               className={`flex items-end gap-1.5 rounded-3xl border bg-surface p-2 shadow-sm transition ${dragOver ? "border-accent ring-4 ring-accent/10" : "border-line-strong focus-within:border-accent focus-within:ring-4 focus-within:ring-accent/10"}`}
             >
               <input
                 ref={fileRef}
@@ -1086,7 +1092,7 @@ export function AIChat({
                   aria-label="Generierung stoppen"
                   title="Stoppen"
                   onClick={() => abortRef.current?.abort()}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-navy-soft text-white transition hover:bg-navy"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-navy-soft text-white shadow-sm transition hover:bg-navy"
                 >
                   <Icon name="stop" size={16} />
                 </button>
@@ -1104,9 +1110,9 @@ export function AIChat({
                       streaming,
                     )
                   }
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow-[0_4px_12px_rgba(var(--glow-accent-rgb),0.3)] transition hover:bg-accent-deep disabled:cursor-not-allowed disabled:bg-accent-soft disabled:shadow-none"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--gradient-neon)] text-white shadow-[0_8px_18px_-4px_rgba(var(--glow-accent-rgb),0.5)] transition hover:brightness-105 active:scale-95 disabled:cursor-not-allowed disabled:from-surface-2 disabled:to-surface-2 disabled:text-faint disabled:shadow-none"
                 >
-                  <Icon name="arrowUp" size={17} />
+                  <Icon name="arrowUp" size={18} />
                 </button>
               )}
             </div>

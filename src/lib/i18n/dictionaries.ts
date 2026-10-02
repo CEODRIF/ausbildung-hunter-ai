@@ -15,6 +15,68 @@
 const de = {
   // ---- Shell: sidebar sections + navigation ------------------------------
   nav: {
+  premium: {
+    nav: {
+      discover: "Entdecken",
+      more: "Mehr",
+    },
+    filterAll: "Alle",
+    hero: {
+      title: "Finden Sie Ihre nächste Ausbildung.",
+      subtitle:
+        "Entdecken Sie Möglichkeiten in ganz Deutschland – aus Jobportalen, Firmenwebsites und dem offenen Web.",
+      ctaStart: "Discovery starten",
+      ctaPrevious: "Frühere Durchläufe",
+      searchTitle: "Wonach suchen Sie?",
+      searchPlaceholder: "z. B. Kaufmann im E-Commerce",
+    },
+    orb: {
+      searching: "Durchsucht das Web…",
+      finding: "Suche nach Ausbildungsangeboten",
+      scanning: "Prüft öffentliche Quellen",
+      companies: "Entdeckt Firmenwebsites",
+      contacts: "Prüft veröffentlichte Kontaktdaten",
+      dedupe: "Entfernt Duplikate",
+      starting: "Startet die Suche…",
+    },
+    dashboard: {
+      stats: "Discovery-Statistiken",
+      statsHint: "Live-Zahlen aus Ihren Durchläufen",
+      recentRuns: "Letzte Durchläufe",
+      recentRunsHint: "Ihre letzten Discovery-Durchläufe",
+      recentRunsEmpty: "Noch keine Durchläufe",
+      recentRunsEmptyHint:
+        "Starten Sie Ihre erste Discovery, um Durchläufe zu sehen.",
+      sources: "Quellen",
+      sourcesHint: "Öffentliche Quellen der Discovery",
+      activity: "Aktivität",
+      quickActions: "Schnellaktionen",
+      qaDiscovery: "Unternehmens-Suche",
+      qaOpportunities: "Stellen durchsuchen",
+      qaAi: "KI-Assistent fragen",
+      qaApplications: "Meine Bewerbungen",
+      qaEmails: "E-Mail-Einstellungen",
+      qaScanner: "Bewerbung scannen",
+    },
+    empty: {
+      discoveriesTitle: "Noch keine Entdeckungen",
+      discoveriesBody:
+        "Starten Sie Ihre erste Suche, um Ausbildungs-Chancen zu entdecken.",
+      cta: "Discovery starten",
+    },
+    error: {
+      discoveryTitle: "Die Discovery konnte nicht abgeschlossen werden.",
+      retry: "Erneut versuchen",
+      viewRun: "Durchlauf anzeigen",
+    },
+    results: {
+      viewOffer: "Anzeige ansehen",
+      companyDetails: "Firmendetails",
+      publishedEmail: "Veröffentlichte E-Mail",
+      offersCount: "{count} Angebote",
+    },
+  },
+
     profile: "Profil",
     workspace: "Arbeitsbereich",
     tools: "Werkzeuge",
@@ -1416,6 +1478,67 @@ export type Dict = typeof de;
 
 const en: Dict = {
   nav: {
+  premium: {
+    nav: {
+      discover: "Discover",
+      more: "More",
+    },
+    filterAll: "All",
+    hero: {
+      title: "Find your next Ausbildung.",
+      subtitle:
+        "Discover opportunities across Germany from job portals, company websites and the open web.",
+      ctaStart: "Start Discovery",
+      ctaPrevious: "View previous runs",
+      searchTitle: "What Ausbildung are you looking for?",
+      searchPlaceholder: "e.g. Kaufmann im E-Commerce",
+    },
+    orb: {
+      searching: "Searching the web…",
+      finding: "Finding Ausbildung opportunities",
+      scanning: "Scanning public sources",
+      companies: "Discovering company websites",
+      contacts: "Checking published contact information",
+      dedupe: "Removing duplicates",
+      starting: "Starting discovery…",
+    },
+    dashboard: {
+      stats: "Discovery statistics",
+      statsHint: "Live numbers from your latest runs",
+      recentRuns: "Recent runs",
+      recentRunsHint: "Your latest discovery runs",
+      recentRunsEmpty: "No runs yet",
+      recentRunsEmptyHint: "Start your first discovery to see runs here.",
+      sources: "Sources",
+      sourcesHint: "Public sources used by discovery",
+      activity: "Activity",
+      quickActions: "Quick actions",
+      qaDiscovery: "Company discovery",
+      qaOpportunities: "Browse opportunities",
+      qaAi: "Ask the AI assistant",
+      qaApplications: "My applications",
+      qaEmails: "Email settings",
+      qaScanner: "Scan my application",
+    },
+    empty: {
+      discoveriesTitle: "No discoveries yet",
+      discoveriesBody:
+        "Start your first search to discover Ausbildung opportunities.",
+      cta: "Start Discovery",
+    },
+    error: {
+      discoveryTitle: "Discovery could not complete.",
+      retry: "Retry",
+      viewRun: "View run details",
+    },
+    results: {
+      viewOffer: "View offer",
+      companyDetails: "Company details",
+      publishedEmail: "Published email",
+      offersCount: "{count} offers",
+    },
+  },
+
     profile: "Profile",
     workspace: "Workspace",
     tools: "Tools",
@@ -2761,6 +2884,68 @@ const en: Dict = {
 
 const fr: Dict = {
   nav: {
+  premium: {
+    nav: {
+      discover: "Découvrir",
+      more: "Plus",
+    },
+    filterAll: "Toutes",
+    hero: {
+      title: "Trouvez votre prochaine formation.",
+      subtitle:
+        "Découvrez des opportunités dans toute l'Allemagne : portails d'emploi, sites d'entreprises et web ouvert.",
+      ctaStart: "Lancer la découverte",
+      ctaPrevious: "Voir les recherches précédentes",
+      searchTitle: "Quelle formation recherchez-vous ?",
+      searchPlaceholder: "ex. Kaufmann im E-Commerce",
+    },
+    orb: {
+      searching: "Recherche sur le web…",
+      finding: "Recherche de formations",
+      scanning: "Analyse des sources publiques",
+      companies: "Découverte des sites d'entreprises",
+      contacts: "Vérification des contacts publiés",
+      dedupe: "Suppression des doublons",
+      starting: "Démarrage…",
+    },
+    dashboard: {
+      stats: "Statistiques de découverte",
+      statsHint: "Chiffres en direct de vos dernières recherches",
+      recentRuns: "Dernières recherches",
+      recentRunsHint: "Vos derniers parcours de découverte",
+      recentRunsEmpty: "Aucune recherche pour l'instant",
+      recentRunsEmptyHint:
+        "Lancez votre première découverte pour voir vos recherches ici.",
+      sources: "Sources",
+      sourcesHint: "Sources publiques utilisées par la découverte",
+      activity: "Activité",
+      quickActions: "Actions rapides",
+      qaDiscovery: "Recherche d'entreprises",
+      qaOpportunities: "Parcourir les offres",
+      qaAi: "Demander à l'assistant IA",
+      qaApplications: "Mes candidatures",
+      qaEmails: "Paramètres e-mail",
+      qaScanner: "Scanner ma candidature",
+    },
+    empty: {
+      discoveriesTitle: "Aucune découverte pour l'instant",
+      discoveriesBody:
+        "Lancez votre première recherche pour découvrir des formations.",
+      cta: "Lancer la découverte",
+    },
+    error: {
+      discoveryTitle: "La découverte n'a pas pu se terminer.",
+      retry: "Réessayer",
+      viewRun: "Voir les détails",
+    },
+    results: {
+      viewOffer: "Voir l'offre",
+      companyDetails: "Détails de l'entreprise",
+      publishedEmail: "E-mail publié",
+      offersCount: "{count} offres",
+    },
+  },
+
     profile: "Profil",
     workspace: "Espace de travail",
     tools: "Outils",
@@ -4112,6 +4297,66 @@ const fr: Dict = {
 
 const ar: Dict = {
   nav: {
+  premium: {
+    nav: {
+      discover: "استكشف",
+      more: "المزيد",
+    },
+    filterAll: "الكل",
+    hero: {
+      title: "اعثر على تدريبك القادم.",
+      subtitle:
+        "اكتشف الفرص في جميع أنحاء ألمانيا من مواقع الوظائف ومواقع الشركات والويب المفتوح.",
+      ctaStart: "ابدأ الاستكشاف",
+      ctaPrevious: "عرض العمليات السابقة",
+      searchTitle: "ما التدريب الذي تبحث عنه؟",
+      searchPlaceholder: "مثال: Kaufmann im E-Commerce",
+    },
+    orb: {
+      searching: "جارٍ البحث في الويب…",
+      finding: "البحث عن فرص التدريب",
+      scanning: "فحص المصادر العامة",
+      companies: "اكتشاف مواقع الشركات",
+      contacts: "التحقق من معلومات التواصل المنشورة",
+      dedupe: "إزالة التكرارات",
+      starting: "جارٍ بدء الاستكشاف…",
+    },
+    dashboard: {
+      stats: "إحصاءات الاستكشاف",
+      statsHint: "أرقام حية من أحدث عمليات البحث",
+      recentRuns: "أحدث العمليات",
+      recentRunsHint: "عمليات الاستكشاف الأخيرة",
+      recentRunsEmpty: "لا توجد عمليات بعد",
+      recentRunsEmptyHint: "ابدأ أول عملية استكشاف لرؤية عملياتك هنا.",
+      sources: "المصادر",
+      sourcesHint: "المصادر العامة المستخدمة في الاستكشاف",
+      activity: "النشاط",
+      quickActions: "إجراءات سريعة",
+      qaDiscovery: "اكتشاف الشركات",
+      qaOpportunities: "تصفح الفرص",
+      qaAi: "اسأل المساعد الذكي",
+      qaApplications: "طلباتي",
+      qaEmails: "إعدادات البريد",
+      qaScanner: "مسح طلب التوظيف",
+    },
+    empty: {
+      discoveriesTitle: "لا استكشافات بعد",
+      discoveriesBody: "ابدأ أول بحث لك لاكتشاف فرص التدريب.",
+      cta: "ابدأ الاستكشاف",
+    },
+    error: {
+      discoveryTitle: "تعذر إكمال الاستكشاف.",
+      retry: "إعادة المحاولة",
+      viewRun: "عرض تفاصيل العملية",
+    },
+    results: {
+      viewOffer: "عرض الفرصة",
+      companyDetails: "تفاصيل الشركة",
+      publishedEmail: "بريد إلكتروني منشور",
+      offersCount: "{count} فرص",
+    },
+  },
+
     profile: "الملف الشخصي",
     workspace: "مساحة العمل",
     tools: "الأدوات",

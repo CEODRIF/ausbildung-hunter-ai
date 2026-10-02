@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { ArrowUpDown, Search } from "lucide-react";
 import {
   deleteCampaignAction,
   deleteCampaignsAction,
@@ -55,6 +56,43 @@ const STATUS_TONES: Record<string, string> = {
   failed: "bg-warning-soft text-warning",
   cancelled: "bg-surface-2 text-muted",
 };
+
+const STATUS_DOTS: Record<string, string> = {
+  draft: "bg-faint",
+  queued: "bg-ink-soft",
+  sending: "bg-accent",
+  completed: "bg-success",
+  partially_failed: "bg-warning",
+  failed: "bg-warning",
+  cancelled: "bg-faint",
+};
+
+function SearchIcon({ className = "" }: { className?: string }) {
+  return <Search size={16} strokeWidth={1.8} className={className} aria-hidden="true" />;
+}
+
+function ArrowUpDownIcon() {
+  return <ArrowUpDown size={15} strokeWidth={1.8} aria-hidden="true" />;
+}
+
+/** Subtle stage pill — the color always follows the REAL engine status. */
+function StatusPill({ status }: { status: string }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap ${
+        STATUS_TONES[status] ?? "bg-surface-2 text-ink-soft"
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`h-1.5 w-1.5 rounded-full ${
+          STATUS_DOTS[status] ?? "bg-faint"
+        } ${status === "sending" ? "animate-pulse" : ""}`}
+      />
+      {STATUS_LABELS[status] ?? status}
+    </span>
+  );
+}
 
 function formatDate(value: string, locale: string) {
   try {
@@ -264,17 +302,20 @@ export function ApplicationsTable({
   return (
     <div>
       {/* Toolbar */}
-      <div className="flex flex-col gap-3 border-b border-line px-4 py-3 sm:flex-row sm:items-center">
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search campaigns"
-          className="h-10 flex-1 rounded-xl border border-line-strong bg-surface px-3.5 text-sm outline-none focus:border-accent"
-        />
+      <div className="flex flex-col gap-3 border-b border-line px-4 py-3.5 sm:flex-row sm:items-center sm:px-5">
+        <div className="relative flex-1">
+          <SearchIcon className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 text-faint" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search campaigns"
+            className="h-11 w-full rounded-2xl border border-line bg-surface ps-10 pe-3.5 text-sm text-ink shadow-sm outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/10"
+          />
+        </div>
         <select
           value={status}
           onChange={(event) => setStatus(event.target.value)}
-          className="h-10 rounded-xl border border-line-strong bg-surface px-3 text-sm outline-none focus:border-accent"
+          className="h-11 rounded-2xl border border-line bg-surface px-3 text-sm font-semibold text-ink-soft shadow-sm outline-none focus:border-accent"
         >
           <option value="all">All statuses</option>
           {statusesPresent.map((value) => (
@@ -286,8 +327,9 @@ export function ApplicationsTable({
         <button
           type="button"
           onClick={() => setNewestFirst((current) => !current)}
-          className="h-10 rounded-xl border border-line-strong px-3 text-sm font-semibold text-muted"
+          className="inline-flex h-11 items-center gap-2 rounded-2xl border border-line bg-surface px-4 text-sm font-bold text-muted shadow-sm transition hover:bg-surface-2 hover:text-ink"
         >
+          <ArrowUpDownIcon />
           {newestFirst ? "Newest first" : "Oldest first"}
         </button>
       </div>
@@ -342,9 +384,9 @@ export function ApplicationsTable({
         <>
           {/* Desktop */}
           <div className="hidden overflow-x-auto lg:block">
-            <table className="w-full text-left text-sm">
-              <thead className="text-[11px] uppercase tracking-wide text-muted">
-                <tr className="border-b border-line">
+              <table className="w-full text-left text-sm">
+                <thead className="text-[11px] uppercase tracking-wide text-faint">
+                  <tr className="border-b border-line">
                   <th className="w-10 px-4 py-3">
                     {viewCampaignIds.length > 0 && (
                       <input
@@ -376,65 +418,59 @@ export function ApplicationsTable({
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <tr
-                    key={row.id}
-                    className="border-b border-line last:border-0"
-                  >
-                    <td className="w-10 px-4 py-3">
-                      {row.kind === "campaign" ? (
-                        <input
-                          type="checkbox"
-                          aria-label={`Select ${row.title}`}
-                          checked={effectiveSelected.has(row.id)}
-                          onChange={() =>
-                            setSelected(toggleSelection(selected, row.id))
-                          }
-                          className="h-4 w-4 cursor-pointer accent-accent-deep"
-                        />
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3">
-                      <p className="font-semibold text-ink-soft">{row.title}</p>
-                      {row.company && (
-                        <p className="text-xs text-muted">{row.company}</p>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-muted">
-                      {typeLabel(row.goal)}
-                    </td>
-                    <td className="px-4 py-3 text-muted">
-                      {row.sender_email ?? "—"}
-                    </td>
-                    <td className="px-4 py-3 text-muted">
-                      {row.total_recipients ?? "—"}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`rounded-lg px-2 py-1 text-xs font-semibold ${
-                          STATUS_TONES[row.status] ?? "bg-surface-2 text-ink-soft"
-                        }`}
-                      >
-                        {STATUS_LABELS[row.status] ?? row.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-muted">
-                      {row.sent_count ?? "—"}
-                    </td>
-                    <td className="px-4 py-3 text-muted">
-                      {row.failed_count ?? "—"}
-                    </td>
-                    <td className="px-4 py-3 text-muted">
-                      {formatDate(row.created_at, locale)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
+                    <tr
+                      key={row.id}
+                      className="border-b border-line transition-colors last:border-0 hover:bg-surface-2/40"
+                    >
+                      <td className="w-10 px-4 py-3.5">
+                        {row.kind === "campaign" ? (
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${row.title}`}
+                            checked={effectiveSelected.has(row.id)}
+                            onChange={() =>
+                              setSelected(toggleSelection(selected, row.id))
+                            }
+                            className="h-4 w-4 cursor-pointer accent-accent-deep"
+                          />
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <p className="font-bold text-ink">{row.title}</p>
+                        {row.company && (
+                          <p className="text-xs text-muted">{row.company}</p>
+                        )}
+                      </td>
+                      <td className="px-4 py-3.5 text-muted">
+                        {typeLabel(row.goal)}
+                      </td>
+                      <td className="px-4 py-3.5 text-muted">
+                        {row.sender_email ?? "—"}
+                      </td>
+                      <td className="num px-4 py-3.5 text-muted">
+                        {row.total_recipients ?? "—"}
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <StatusPill status={row.status} />
+                      </td>
+                      <td className="num px-4 py-3.5 text-muted">
+                        {row.sent_count ?? "—"}
+                      </td>
+                      <td className="num px-4 py-3.5 text-muted">
+                        {row.failed_count ?? "—"}
+                      </td>
+                      <td className="px-4 py-3.5 text-muted">
+                        {formatDate(row.created_at, locale)}
+                      </td>
+                    <td className="px-4 py-3.5">
+                      <div className="flex items-center gap-4">
                         <Link
                           href={
                             row.campaign_id
                               ? `/applications/campaign/${row.campaign_id}`
                               : `/applications/new?draft=${row.id}`
                           }
-                          className="font-semibold text-accent-deep hover:underline"
+                          className="font-bold text-accent transition hover:text-accent-deep hover:underline"
                         >
                           Open
                         </Link>
@@ -458,7 +494,7 @@ export function ApplicationsTable({
                               });
                             }
                           }}
-                          className="font-semibold text-warning hover:underline"
+                          className="font-bold text-danger/70 transition hover:text-danger hover:underline"
                         >
                           Delete
                         </button>
@@ -475,7 +511,7 @@ export function ApplicationsTable({
             {rows.map((row) => (
               <div key={row.id} className="px-4 py-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
                     {row.kind === "campaign" && (
                       <input
                         type="checkbox"
@@ -487,17 +523,18 @@ export function ApplicationsTable({
                         className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-accent-deep"
                       />
                     )}
-                    <p className="font-semibold text-ink-soft">{row.title}</p>
+                    <div className="min-w-0">
+                      <p className="truncate font-bold text-ink">{row.title}</p>
+                      {row.company && (
+                        <p className="text-xs text-muted">{row.company}</p>
+                      )}
+                    </div>
                   </div>
-                  <span
-                    className={`shrink-0 rounded-lg px-2 py-1 text-xs font-semibold ${
-                      STATUS_TONES[row.status] ?? "bg-surface-2 text-ink-soft"
-                    }`}
-                  >
-                    {STATUS_LABELS[row.status] ?? row.status}
+                  <span className="shrink-0">
+                    <StatusPill status={row.status} />
                   </span>
                 </div>
-                <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted">
+                <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-muted">
                   <div>Type: {typeLabel(row.goal)}</div>
                   <div>Sender: {row.sender_email ?? "—"}</div>
                   <div>Recipients: {row.total_recipients ?? "—"}</div>
@@ -505,14 +542,14 @@ export function ApplicationsTable({
                   <div>Failed: {row.failed_count ?? "—"}</div>
                   <div>Created: {formatDate(row.created_at, locale)}</div>
                 </dl>
-                <div className="mt-2 flex items-center gap-4">
+                <div className="mt-3 flex items-center gap-5">
                   <Link
                     href={
                       row.campaign_id
                         ? `/applications/campaign/${row.campaign_id}`
                         : `/applications/new?draft=${row.id}`
                     }
-                    className="text-sm font-semibold text-accent-deep hover:underline"
+                    className="text-sm font-bold text-accent hover:underline"
                   >
                     Open
                   </Link>
@@ -550,7 +587,7 @@ export function ApplicationsTable({
       {/* Bulk confirmation — a bulk deletion is never one click */}
       {pendingBulk && effectiveSelected.size > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">
-          <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-5">
+          <div className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 shadow-[var(--shadow-float)]">
             <h2 className="text-base font-bold text-ink">
               Delete selected campaigns?
             </h2>
@@ -615,7 +652,7 @@ export function ApplicationsTable({
       {/* Confirmation — a single deletion is never one click */}
       {pendingDelete?.kind === "campaign" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">
-          <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-5">
+          <div className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 shadow-[var(--shadow-float)]">
             <h2 className="text-base font-bold text-ink">Delete campaign?</h2>
             <p className="mt-2 text-sm text-muted">
               Are you sure you want to delete this campaign?
@@ -661,7 +698,7 @@ export function ApplicationsTable({
 
       {pendingDelete?.kind === "draft" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">
-          <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-5">
+          <div className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 shadow-[var(--shadow-float)]">
             <h2 className="text-base font-bold text-ink">Delete draft?</h2>
             <p className="mt-2 text-sm text-muted">
               Are you sure you want to delete this draft?

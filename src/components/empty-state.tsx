@@ -30,10 +30,10 @@ export function EmptyState({
 }: EmptyStateProps) {
   return (
     <div
-      className={`flex flex-col items-center justify-center gap-3 px-6 py-10 text-center ${className}`}
+      className={`flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-line-strong bg-surface/50 px-6 py-10 text-center ${className}`}
     >
-      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
-        <Icon name={icon} size={22} />
+      <span className="flex h-14 w-14 items-center justify-center rounded-[22px] bg-accent-soft text-accent shadow-[0_10px_24px_-10px_rgba(var(--glow-accent-rgb),0.45)]">
+        <Icon name={icon} size={24} strokeWidth={1.6} />
       </span>
       <h3 className="text-sm font-bold text-ink">{title}</h3>
       {body && (

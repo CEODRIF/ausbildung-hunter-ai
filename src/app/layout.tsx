@@ -1,8 +1,19 @@
 import type { Metadata, Viewport } from "next";
+import { Rubik } from "next/font/google";
 import "./globals.css";
 import { I18nProvider } from "@/lib/i18n";
 import { langPreloadScript } from "@/lib/i18n/core";
 import { themePreloadScript } from "@/lib/theme";
+
+/** Single self-hosted family for every supported language: Rubik covers
+ *  Latin (DE/EN/FR) and Arabic with one coherent geometric identity —
+ *  downloaded and served locally at build time (no runtime network). */
+const rubik = Rubik({
+  subsets: ["latin", "latin-ext", "arabic"],
+  weight: "variable",
+  variable: "--font-ui",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: {
@@ -27,7 +38,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="de">
+    <html lang="de" className={rubik.variable}>
       <head>
         {/* Apply the persisted theme (or OS preference) and language/RTL
             direction BEFORE first paint — prevents flash of wrong theme

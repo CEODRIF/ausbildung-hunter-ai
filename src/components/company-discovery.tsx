@@ -28,8 +28,26 @@ import {
   useMemo,
   useState,
   type FormEvent,
+  type ReactNode,
 } from "react";
+import {
+  Activity,
+  Ban,
+  Building2,
+  CopyX,
+  Download,
+  FileText,
+  Mail,
+  RefreshCw,
+  Search,
+  Square,
+  Target,
+  XCircle,
+} from "lucide-react";
 import { createDiscoveryDraftAction } from "@/app/company-discovery/actions";
+import { Chip, StatusPill, type StatusTone } from "@/components/ui/feedback";
+import { GlassCard } from "@/components/ui/surfaces";
+import { SearchOrb } from "@/components/ui/search-orb";
 import type { DiscoveryCampaignRow } from "@/lib/company-discovery/campaigns";
 import { isEligiblePublicEmail } from "@/lib/company-discovery/accept";
 import type { RunCompanyResult } from "@/lib/company-discovery/runs";
@@ -114,24 +132,90 @@ function RunStatusBadge({
   status: DiscoveryRunStatus;
   t: TranslateFn;
 }) {
-  const tone =
-    status === "completed"
-      ? "bg-success-soft text-success"
-      : status === "failed"
-        ? "bg-danger-soft text-danger"
-        : "bg-accent-soft text-accent";
   return (
-    <span className={`rounded-lg px-2.5 py-1 text-xs font-bold uppercase ${tone}`}>
-      {t(`companyDiscovery.status.${status}`)}
-    </span>
+    <StatusPill
+      tone={
+        status === "completed"
+          ? "success"
+          : status === "failed"
+            ? "blocked"
+            : status === "running" || status === "pending"
+              ? "running"
+              : "neutral"
+      }
+      label={t(`companyDiscovery.status.${status}`)}
+    />
   );
 }
 
-/**
- * The six REAL counters, shared by the running panel and the finished card.
- * A source can be `running` (queried right now), `unavailable` (it failed —
- * the run continues honestly without inventing rows) or `ok`.
- */
+/** One premium counter tile: big real number, small label, subtle icon. */
+function CounterTile({
+  icon,
+  value,
+  label,
+  sub,
+  tone = "default",
+}: {
+  icon: ReactNode;
+  value: ReactNode;
+  label: string;
+  sub?: string;
+  tone?: "default" | "accent" | "success" | "warning" | "danger";
+}) {
+  const toneIcon = {
+    default: "bg-surface-2 text-muted",
+    accent: "bg-accent-soft text-accent",
+    success: "bg-success-soft text-success",
+    warning: "bg-warning-soft text-warning",
+    danger: "bg-danger-soft text-danger",
+  }[tone];
+  return (
+    <div className="surface-elevated relative flex flex-col gap-3 rounded-2xl p-4 transition-shadow duration-300 hover:shadow-[var(--shadow-float)]">
+      <div className="flex items-center justify-between gap-2">
+        <p className="min-w-0 truncate text-[11px] font-semibold tracking-wide text-muted uppercase">
+          {label}
+        </p>
+        <span
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${toneIcon}`}
+        >
+          {icon}
+        </span>
+      </div>
+      <div>
+        <p className="num text-2xl leading-8 font-extrabold text-ink sm:text-3xl">
+          {value}
+        </p>
+        {sub && (
+          <p className="mt-0.5 truncate text-[11px] font-medium text-faint">
+            {sub}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Pill tone for a stored source status — colors follow the real state. */
+function sourceStatusTone(status: string): StatusTone {
+  switch (status) {
+    case "ok":
+      return "success";
+    case "running":
+      return "running";
+    case "blocked":
+    case "error":
+      return "blocked";
+    case "unavailable":
+      return "unverified";
+    case "skipped":
+      return "skipped";
+    case "skipped_by_policy":
+      return "restricted";
+    default:
+      return "neutral";
+  }
+}
+
 function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
   const sources = run.progress.sources;
   const source = sources[0];
@@ -155,6 +239,15 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
     { key: "directory", cats: ["chamber", "directory"] },
     { key: "platform", cats: ["platform"] },
   ];
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const filteredSources =
+    sourceFilter === "all"
+      ? sources
+      : sources.filter(
+          (s) =>
+            s.category &&
+            families.find((f) => f.key === sourceFilter)?.cats.includes(s.category) === true,
+        );
   // The search layer's honest execution stats (persisted in the source
   // report) — 0 before the layer ran or on runs from before it existed.
   const searchStats = sources.find((s) => s.id === "search-api")?.stats;
@@ -176,163 +269,185 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
           once the run has produced a source report; every number is derived
           from the REAL per-source status — nothing is interpolated. */}
       {sources.length > 0 && (
-        <div className="mt-4 rounded-xl border border-line bg-surface-2/40 p-3">
-          <h3 className="text-xs font-bold text-ink">
-            {t("companyDiscovery.discovery.title")}
-          </h3>
-          <p className="mt-1 text-xs leading-5 text-muted">
-            {t("companyDiscovery.discovery.subtitle")}
-          </p>
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {discoveryTiles.map((tile) => (
-              <div key={tile.key} className="rounded-lg bg-surface px-2.5 py-2">
-                <div className="text-lg font-bold text-ink">{tile.value}</div>
-                <div className="text-[11px] font-semibold text-muted">
-                  {t(`companyDiscovery.discovery.${tile.key}`)}
-                </div>
-              </div>
-            ))}
+        <div className="surface-elevated mt-5 rounded-3xl p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold tracking-tight text-ink">
+                {t("companyDiscovery.discovery.title")}
+              </h3>
+              <p className="mt-1 max-w-xl text-xs leading-5 text-muted">
+                {t("companyDiscovery.discovery.subtitle")}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {families.map((family) => (
+                <span
+                  key={family.key}
+                  className="inline-flex items-center rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-semibold text-ink-soft"
+                >
+                  {t(`companyDiscovery.discovery.family.${family.key}`)}
+                  <span className="num ms-1.5 text-faint">{familyCount(family.cats)}</span>
+                </span>
+              ))}
+            </div>
           </div>
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {families.map((family) => (
-              <span
-                key={family.key}
-                className="rounded-full border border-line bg-surface px-2 py-0.5 text-[11px] font-semibold text-ink-soft"
+          <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-2.5">
+            {discoveryTiles.map((tile) => (
+              <div
+                key={tile.key}
+                className="rounded-2xl border border-line bg-surface px-3 py-2.5"
               >
-                {t(`companyDiscovery.discovery.family.${family.key}`)}
-                <span className="ms-1 text-muted">{familyCount(family.cats)}</span>
-              </span>
+                <p className="num text-xl font-extrabold text-ink">{tile.value}</p>
+                <p className="mt-0.5 truncate text-[11px] font-semibold text-muted">
+                  {t(`companyDiscovery.discovery.${tile.key}`)}
+                </p>
+              </div>
             ))}
           </div>
         </div>
       )}
-      <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-      <div className="rounded-xl bg-surface-2 p-3">
-        <dd className="text-xl font-bold text-ink">
-          {run.progress.foundCompanies}
-          <span className="text-sm font-semibold text-muted">
-            {" "}
-            / {run.progress.targetCompanies}
-          </span>
-        </dd>
-        <dt className="mt-0.5 text-xs font-semibold text-muted">
-          {t("companyDiscovery.runCreated.found")}
-        </dt>
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <CounterTile
+          icon={<Target size={16} strokeWidth={1.8} />}
+          value={
+            <>
+              {run.progress.foundCompanies}
+              <span className="text-sm font-semibold text-muted">
+                {" "}
+                / {run.progress.targetCompanies}
+              </span>
+            </>
+          }
+          label={t("companyDiscovery.runCreated.found")}
+          tone="accent"
+        />
+        <CounterTile
+          icon={<FileText size={16} strokeWidth={1.8} />}
+          value={run.progress.offersAnalyzed}
+          label={t("companyDiscovery.runCreated.offers")}
+        />
+        <CounterTile
+          icon={<Building2 size={16} strokeWidth={1.8} />}
+          value={run.progress.uniqueCompanies}
+          label={t("companyDiscovery.runCreated.unique")}
+          tone="success"
+        />
+        <CounterTile
+          icon={<CopyX size={16} strokeWidth={1.8} />}
+          value={run.progress.duplicatesRemoved}
+          label={t("companyDiscovery.runCreated.duplicates")}
+        />
+        <CounterTile
+          icon={<XCircle size={16} strokeWidth={1.8} />}
+          value={run.progress.companiesRejected}
+          label={t("companyDiscovery.runCreated.rejected")}
+        />
+        <CounterTile
+          icon={<Mail size={16} strokeWidth={1.8} />}
+          value={run.progress.emailsFound}
+          label={t("companyDiscovery.runCreated.emailsFound")}
+          tone="accent"
+        />
+        <CounterTile
+          icon={<Mail size={16} strokeWidth={1.8} />}
+          value={run.progress.noPublicEmail}
+          label={t("companyDiscovery.runCreated.noPublicEmail")}
+        />
+        <CounterTile
+          icon={<Ban size={16} strokeWidth={1.8} />}
+          value={run.progress.sourcesBlocked}
+          label={t("companyDiscovery.runCreated.sourcesBlocked")}
+          tone={run.progress.sourcesBlocked > 0 ? "warning" : "default"}
+        />
       </div>
-      <div className="rounded-xl bg-surface-2 p-3">
-        <dd className="text-xl font-bold text-ink">{run.progress.offersAnalyzed}</dd>
-        <dt className="mt-0.5 text-xs font-semibold text-muted">
-          {t("companyDiscovery.runCreated.offers")}
-        </dt>
-      </div>
-      <div className="rounded-xl bg-surface-2 p-3">
-        <dd className="text-xl font-bold text-ink">{run.progress.uniqueCompanies}</dd>
-        <dt className="mt-0.5 text-xs font-semibold text-muted">
-          {t("companyDiscovery.runCreated.unique")}
-        </dt>
-      </div>
-      <div className="rounded-xl bg-surface-2 p-3">
-        <dd className="text-xl font-bold text-ink">{run.progress.duplicatesRemoved}</dd>
-        <dt className="mt-0.5 text-xs font-semibold text-muted">
-          {t("companyDiscovery.runCreated.duplicates")}
-        </dt>
-      </div>
-      <div className="rounded-xl bg-surface-2 p-3">
-        <dd className="text-xl font-bold text-ink">{run.progress.companiesRejected}</dd>
-        <dt className="mt-0.5 text-xs font-semibold text-muted">
-          {t("companyDiscovery.runCreated.rejected")}
-        </dt>
-      </div>
-      {/* The three outcome counters of §4.8. `sourcesBlocked` is deliberately a
-          separate tile: a blocked source is NOT "no public email". */}
-      <div className="rounded-xl bg-surface-2 p-3">
-        <dd className="text-xl font-bold text-ink">{run.progress.emailsFound}</dd>
-        <dt className="mt-0.5 text-xs font-semibold text-muted">
-          {t("companyDiscovery.runCreated.emailsFound")}
-        </dt>
-      </div>
-      <div className="rounded-xl bg-surface-2 p-3">
-        <dd className="text-xl font-bold text-ink">{run.progress.noPublicEmail}</dd>
-        <dt className="mt-0.5 text-xs font-semibold text-muted">
-          {t("companyDiscovery.runCreated.noPublicEmail")}
-        </dt>
-      </div>
-      <div className="rounded-xl bg-surface-2 p-3">
-        <dd className="text-xl font-bold text-ink">{run.progress.sourcesBlocked}</dd>
-        <dt className="mt-0.5 text-xs font-semibold text-muted">
-          {t("companyDiscovery.runCreated.sourcesBlocked")}
-        </dt>
-      </div>
-      <div className="rounded-xl bg-surface-2 p-3">
-        <dd className="text-sm font-bold text-ink sm:mt-1">{sourceLabel}</dd>
-        <dt className="mt-0.5 text-xs font-semibold text-muted">
-          {t("companyDiscovery.runCreated.source")}
-        </dt>
+      {/* The current source status line (the first source in the report). */}
+      <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-line bg-surface px-4 py-3">
+        <Activity size={15} strokeWidth={1.8} className="shrink-0 text-muted" />
+        <span className="text-xs font-semibold text-muted">
+          {t("companyDiscovery.runCreated.source")}:
+        </span>
+        <span className="text-sm font-bold text-ink">{sourceLabel}</span>
       </div>
 
       {/* ---- The source report: every registered source, honestly ---------- */}
       {sources.length > 0 && (
-        <div className="col-span-2 sm:col-span-3">
-          <h3 className="text-xs font-bold text-ink">
-            {t("companyDiscovery.sources.title")}
-          </h3>
-          <div className="mt-2 overflow-x-auto">
-            <table className="w-full min-w-[44rem] border-collapse text-xs">
+        <div className="surface-elevated mt-4 overflow-hidden rounded-3xl">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
+            <h3 className="text-sm font-bold tracking-tight text-ink">
+              {t("companyDiscovery.sources.title")}
+            </h3>
+            <div className="flex flex-wrap gap-1.5">
+              <Chip
+                label={t("premium.filterAll")}
+                active={sourceFilter === "all"}
+                onClick={() => setSourceFilter("all")}
+                count={sources.length}
+              />
+              {families.map((family) => (
+                <Chip
+                  key={family.key}
+                  label={t(`companyDiscovery.discovery.family.${family.key}`)}
+                  active={sourceFilter === family.key}
+                  onClick={() => setSourceFilter(family.key)}
+                  count={familyCount(family.cats)}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[46rem] border-collapse text-xs">
               <thead>
-                <tr className="text-muted">
-                  <th className="py-1.5 pe-3 text-start">
+                <tr className="bg-surface-2/60 text-muted">
+                  <th className="px-4 py-2.5 pe-3 text-start font-bold">
                     {t("companyDiscovery.sources.columns.source")}
                   </th>
-                  <th className="py-1.5 pe-3 text-start">
+                  <th className="px-4 py-2.5 pe-3 text-start font-bold">
                     {t("companyDiscovery.sources.columns.category")}
                   </th>
-                  <th className="py-1.5 pe-3 text-start">
+                  <th className="px-4 py-2.5 pe-3 text-start font-bold">
                     {t("companyDiscovery.sources.columns.policy")}
                   </th>
-                  <th className="py-1.5 pe-3 text-start">
+                  <th className="px-4 py-2.5 pe-3 text-start font-bold">
                     {t("companyDiscovery.sources.columns.status")}
                   </th>
-                  <th className="py-1.5 pe-3 text-start">
+                  <th className="px-4 py-2.5 pe-3 text-start font-bold">
                     {t("companyDiscovery.sources.columns.offers")}
                   </th>
-                  <th className="py-1.5 text-start">
+                  <th className="px-4 py-2.5 text-start font-bold">
                     {t("companyDiscovery.sources.columns.reason")}
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
-                {sources.map((entry) => (
-                  <tr key={entry.id}>
-                    <td className="py-1.5 pe-3 font-semibold text-ink">
+                {filteredSources.map((entry) => (
+                  <tr key={entry.id} className="transition-colors hover:bg-surface-2/40">
+                    <td className="px-4 py-2.5 pe-3 font-semibold text-ink">
                       {entry.displayName ?? entry.id}
                     </td>
-                    <td className="py-1.5 pe-3 text-ink-soft">
+                    <td className="px-4 py-2.5 pe-3 text-ink-soft">
                       {entry.category
                         ? t(`companyDiscovery.sources.category.${entry.category}`)
                         : "—"}
                     </td>
-                    <td className="py-1.5 pe-3 text-ink-soft">
+                    <td className="px-4 py-2.5 pe-3 text-ink-soft">
                       {entry.policy
                         ? t(`companyDiscovery.sources.policy.${entry.policy}`)
                         : "—"}
                     </td>
-                    <td className="py-1.5 pe-3">
-                      <span
-                        className={`rounded-md px-1.5 py-0.5 font-bold ${
-                          entry.status === "ok"
-                            ? "bg-accent-soft text-accent"
-                            : entry.status === "blocked" ||
-                                entry.status === "error" ||
-                                entry.status === "unavailable"
-                              ? "bg-surface-2 text-warning"
-                              : "bg-surface-2 text-muted"
-                        }`}
-                      >
-                        {t(`companyDiscovery.sources.status.${entry.status}`)}
+                    <td className="px-4 py-2.5 pe-3">
+                      <StatusPill
+                        tone={sourceStatusTone(entry.status)}
+                        label={t(`companyDiscovery.sources.status.${entry.status}`)}
+                      />
+                    </td>
+                    <td className="num px-4 py-2.5 pe-3 font-semibold text-ink-soft">
+                      {entry.candidates ?? 0}
+                    </td>
+                    <td className="max-w-[14rem] px-4 py-2.5 text-muted">
+                      <span className="block truncate" title={entry.reason ?? undefined}>
+                        {entry.reason ?? "—"}
                       </span>
                     </td>
-                    <td className="py-1.5 pe-3 text-ink-soft">{entry.candidates ?? 0}</td>
-                    <td className="py-1.5 text-muted">{entry.reason ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -340,7 +455,6 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
           </div>
         </div>
       )}
-    </dl>
     </>
   );
 }
@@ -370,12 +484,12 @@ function pickEligibleEmail(
   return company.emails.find((email) => isEligiblePublicEmail(email)) ?? null;
 }
 
-/** Badge tones per outcome — a block is a warning, not a failure. */
-const EMAIL_STATUS_TONE: Record<EmailStatusValue, string> = {
-  email_found: "bg-accent-soft text-accent",
-  no_public_email: "bg-surface-2 text-muted",
-  source_blocked: "bg-surface-2 text-warning",
-  unverified_legacy: "bg-surface-2 text-muted",
+/** Pill tone per outcome — a block is a warning, not a failure. */
+const EMAIL_STATUS_TONE: Record<EmailStatusValue, StatusTone> = {
+  email_found: "success",
+  no_public_email: "neutral",
+  source_blocked: "blocked",
+  unverified_legacy: "unverified",
 };
 
 /**
@@ -428,8 +542,8 @@ function CampaignsPanel({
   lang: string;
 }) {
   return (
-    <section className="mt-6 rounded-2xl border border-line bg-surface p-4 sm:p-5">
-      <h2 className="text-sm font-bold text-ink">
+    <GlassCard className="mt-6 p-5 sm:p-6" as="section">
+      <h2 className="text-base font-bold tracking-tight text-ink">
         {t("companyDiscovery.campaigns.title")}
       </h2>
       {campaigns.length === 0 ? (
@@ -437,14 +551,14 @@ function CampaignsPanel({
           {t("companyDiscovery.campaigns.empty")}
         </p>
       ) : (
-        <ul className="mt-2 divide-y divide-line">
+        <ul className="mt-3 divide-y divide-line">
           {campaigns.map((campaign) => (
             <li
               key={campaign.campaignId || campaign.draftId}
-              className="flex flex-wrap items-center justify-between gap-3 py-3"
+              className="flex flex-wrap items-center justify-between gap-3 py-3.5"
             >
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-ink">
+                <p className="truncate text-sm font-bold text-ink">
                   {campaign.title || t("companyDiscovery.campaigns.run")}
                 </p>
                 <p className="mt-0.5 text-xs text-muted">
@@ -461,7 +575,7 @@ function CampaignsPanel({
                 {campaign.discoveryRunId && (
                   <p
                     dir="ltr"
-                    className="mt-0.5 truncate font-mono text-xs text-ink-soft"
+                    className="mt-1 truncate font-mono text-[11px] text-faint"
                   >
                     {t("companyDiscovery.campaigns.run")}:{" "}
                     {campaign.discoveryRunId}
@@ -469,7 +583,7 @@ function CampaignsPanel({
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <span className="rounded-lg bg-accent-soft px-2.5 py-1 text-xs font-bold text-accent">
+                <span className="rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-bold text-accent">
                   {t(`companyDiscovery.campaigns.status.${campaign.status}`)}
                 </span>
                 <Link
@@ -478,7 +592,7 @@ function CampaignsPanel({
                       ? `/applications/campaign/${campaign.campaignId}`
                       : `/applications/new?draft=${campaign.draftId}&from=company-discovery`
                   }
-                  className="rounded-xl border border-line px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-surface-2"
+                  className="rounded-xl border border-line px-3.5 py-1.5 text-xs font-semibold text-ink transition hover:bg-surface-2"
                 >
                   {t("companyDiscovery.campaigns.open")}
                 </Link>
@@ -487,7 +601,7 @@ function CampaignsPanel({
           ))}
         </ul>
       )}
-    </section>
+    </GlassCard>
   );
 }
 
@@ -805,13 +919,13 @@ export function CompanyDiscovery({
 
   // ---- inputs (shared styling) ----------------------------------------------
   const inputClass =
-    "w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent";
-  const labelClass = "mb-1.5 block text-xs font-semibold text-muted";
+    "w-full rounded-2xl border border-line bg-surface px-4 py-3 text-sm text-ink shadow-sm outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/10";
+  const labelClass = "mb-2 block text-xs font-bold tracking-wide text-muted";
   /** Back to the dashboard — present in EVERY state of this page. */
   const backLink = (
     <Link
       href="/dashboard"
-      className="inline-flex items-center text-xs font-semibold text-muted transition hover:text-ink"
+      className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-surface-2 hover:text-ink"
     >
       <span aria-hidden="true" className="me-1.5 inline-block rtl:rotate-180">
         ←
@@ -824,68 +938,112 @@ export function CompanyDiscovery({
   // Running — the honest live state (polled, server-measured)
   // ===========================================================================
   if (phase === "running" && run) {
+    // The status line is DERIVED from the real run state only — every branch
+    // reads a server-measured counter, so the orb never claims a phase the
+    // engine has not actually reached.
+    const progress = run.progress;
+    const orbLine =
+      run.status === "pending"
+        ? t("companyDiscovery.progress.pending")
+        : progress.emailsFound > 0
+          ? t("premium.orb.contacts")
+          : progress.duplicatesRemoved > 0
+            ? t("premium.orb.dedupe")
+            : progress.sources.some((s) => s.category === "company-site")
+              ? t("premium.orb.companies")
+              : progress.sources.length > 0
+                ? t("premium.orb.scanning")
+                : progress.offersAnalyzed > 0
+                  ? t("premium.orb.finding")
+                  : t("premium.orb.starting");
     return (
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-5xl">
         {backLink}
-        <div className="mt-4 rounded-2xl border border-line bg-surface p-5 sm:p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-bold text-ink">
-              {t("companyDiscovery.progress.title")}
-            </h2>
-            <RunStatusBadge status={run.status} t={t} />
-          </div>
-          {run.status === "pending" && (
-            <p className="mt-2 text-xs leading-5 text-muted">
-              {t("companyDiscovery.progress.pending")}
-            </p>
-          )}
-
-          <RunCounters run={run} t={t} />
-
-          <p className="mt-3 truncate font-mono text-xs text-ink-soft">
-            {t("companyDiscovery.runCreated.runId")}: {run.runId}
-          </p>
-          <p className="mt-4 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-5 text-ink-soft">
-            {t("companyDiscovery.progress.note")}
-          </p>
-
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={onStop}
-              disabled={stopping}
-              className="rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink transition hover:bg-surface-2 disabled:cursor-wait disabled:opacity-60"
-            >
-              {stopping
-                ? t("companyDiscovery.form.stopping")
-                : t("companyDiscovery.form.stop")}
-            </button>
-            <p className="text-xs leading-5 text-muted">
-              {t("companyDiscovery.progress.stopNote")}
-            </p>
-          </div>
-
-          {stopError && (
-            <p className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-sm font-semibold text-danger">
-              {stopError}
-            </p>
-          )}
-
-          {pollExpired && (
-            <div className="mt-4 rounded-xl bg-surface-2 px-3 py-2.5">
-              <p className="text-xs leading-5 text-ink-soft">
-                {t("companyDiscovery.progress.keepOpen")}
+        <GlassCard
+          variant="surface-elevated"
+          className="relative mt-4 overflow-hidden p-5 anim-fade-up sm:p-8"
+        >
+          <div className="hero-orb pointer-events-none absolute -end-24 -top-24 h-80 w-80 rounded-full" />
+          <div className="relative grid items-center gap-6 sm:grid-cols-[auto_1fr]">
+            <div className="mx-auto sm:mx-0">
+              <SearchOrb active={run.status === "running"} size={128} />
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-xl font-bold tracking-tight text-ink sm:text-2xl">
+                  {t("companyDiscovery.progress.title")}
+                </h2>
+                <RunStatusBadge status={run.status} t={t} />
+              </div>
+              <ul role="status" aria-live="polite" className="mt-3 space-y-1.5">
+                <li className="flex items-center gap-2.5 text-sm font-semibold text-ink">
+                  <span
+                    aria-hidden="true"
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      run.status === "running"
+                        ? "animate-pulse bg-accent"
+                        : "bg-faint"
+                    }`}
+                  />
+                  {orbLine}
+                </li>
+              </ul>
+              <p className="mt-3 text-xs text-faint">
+                {t("companyDiscovery.runCreated.runId")}:{' '}
+                <span dir="ltr" className="font-mono">
+                  {run.runId}
+                </span>
               </p>
+            </div>
+          </div>
+
+          <div className="relative mt-6">
+            <RunCounters run={run} t={t} />
+
+            <p className="mt-4 rounded-2xl bg-accent-soft/60 px-4 py-3 text-xs leading-5 text-ink-soft">
+              {t("companyDiscovery.progress.note")}
+            </p>
+
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <button
                 type="button"
-                onClick={refresh}
-                className="mt-2 rounded-xl border border-line px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-surface"
+                onClick={onStop}
+                disabled={stopping}
+                className="inline-flex h-10 items-center gap-2 rounded-2xl border border-line bg-surface px-4 text-sm font-semibold text-ink transition hover:bg-surface-2 disabled:cursor-wait disabled:opacity-60"
               >
-                {t("companyDiscovery.progress.refresh")}
+                <Square size={15} strokeWidth={1.8} />
+                {stopping
+                  ? t("companyDiscovery.form.stopping")
+                  : t("companyDiscovery.form.stop")}
               </button>
+              <p className="text-xs leading-5 text-muted">
+                {t("companyDiscovery.progress.stopNote")}
+              </p>
             </div>
-          )}
-        </div>
+
+            {stopError && (
+              <p className="mt-3 rounded-2xl bg-danger-soft px-4 py-2.5 text-sm font-semibold text-danger">
+                {stopError}
+              </p>
+            )}
+
+            {pollExpired && (
+              <div className="mt-4 rounded-2xl bg-surface-2 px-4 py-3">
+                <p className="text-xs leading-5 text-ink-soft">
+                  {t("companyDiscovery.progress.keepOpen")}
+                </p>
+                <button
+                  type="button"
+                  onClick={refresh}
+                  className="mt-2 inline-flex h-9 items-center gap-2 rounded-xl border border-line bg-surface px-3 text-xs font-semibold text-ink transition hover:bg-surface"
+                >
+                  <RefreshCw size={14} strokeWidth={1.8} />
+                  {t("companyDiscovery.progress.refresh")}
+                </button>
+              </div>
+            )}
+          </div>
+        </GlassCard>
       </div>
     );
   }
@@ -895,142 +1053,155 @@ export function CompanyDiscovery({
   // ===========================================================================
   if (phase === "created" && run) {
     return (
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-5xl">
         {backLink}
-        <div className="mt-4 rounded-2xl border border-line bg-surface p-5 sm:p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-bold text-ink">
-              {t("companyDiscovery.runCreated.title")}
-            </h2>
-            <RunStatusBadge status={run.status} t={t} />
+        <GlassCard
+          variant="surface-elevated"
+          className="relative mt-4 overflow-hidden p-5 anim-fade-up sm:p-8"
+        >
+          <div className="hero-orb pointer-events-none absolute -end-24 -top-24 h-72 w-72 rounded-full" />
+          <div className="relative">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-xl font-bold tracking-tight text-ink sm:text-2xl">
+                {t("companyDiscovery.runCreated.title")}
+              </h2>
+              <RunStatusBadge status={run.status} t={t} />
+            </div>
+
+            {/* Real run counters — measured by the engine, never simulated. */}
+            <RunCounters run={run} t={t} />
+
+            <dl className="mt-5 grid grid-cols-1 gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
+              <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2">
+                <dt className="text-xs font-semibold text-muted">
+                  {t("companyDiscovery.runCreated.field")}
+                </dt>
+                <dd className="truncate font-semibold text-ink">
+                  {run.params.field}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2">
+                <dt className="text-xs font-semibold text-muted">
+                  {t("companyDiscovery.runCreated.role")}
+                </dt>
+                <dd className="truncate font-semibold text-ink">
+                  {run.params.role}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2">
+                <dt className="text-xs font-semibold text-muted">
+                  {t("companyDiscovery.runCreated.beginn")}
+                </dt>
+                <dd className="font-semibold text-ink">
+                  {t(beginnLabelKey(run.params.beginn.mode))}
+                  {run.params.beginn.mode !== "from_now"
+                    ? ` (${beginnLabelOf(run.params.beginn)})`
+                    : ""}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2">
+                <dt className="text-xs font-semibold text-muted">
+                  {t("companyDiscovery.runCreated.type")}
+                </dt>
+                <dd className="font-semibold text-ink">
+                  {t(goalLabelKey(run.params.goal))}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2 sm:col-span-2">
+                <dt className="text-xs font-semibold text-muted">
+                  {t("companyDiscovery.runCreated.runId")}
+                </dt>
+                <dd dir="ltr" className="truncate font-mono text-xs text-ink-soft">
+                  {run.runId}
+                </dd>
+              </div>
+            </dl>
+
+            {run.status === "cancelled" && (
+              <p className="mt-4 rounded-2xl bg-accent-soft px-4 py-2.5 text-xs leading-5 text-accent">
+                {t("companyDiscovery.progress.stopNote")}
+              </p>
+            )}
+
+            <p className="mt-4 rounded-2xl bg-surface-2 px-4 py-3 text-xs leading-5 text-ink-soft">
+              {t("companyDiscovery.runCreated.resultsNote")}
+            </p>
           </div>
 
-          {/* Real run counters — measured by the engine, never simulated. */}
-          <RunCounters run={run} t={t} />
-
-          <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
-            <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2">
-              <dt className="text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.field")}
-              </dt>
-              <dd className="truncate font-semibold text-ink">
-                {run.params.field}
-              </dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2">
-              <dt className="text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.role")}
-              </dt>
-              <dd className="truncate font-semibold text-ink">
-                {run.params.role}
-              </dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2">
-              <dt className="text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.beginn")}
-              </dt>
-              <dd className="font-semibold text-ink">
-                {t(beginnLabelKey(run.params.beginn.mode))}
-                {run.params.beginn.mode !== "from_now"
-                  ? ` (${beginnLabelOf(run.params.beginn)})`
-                  : ""}
-              </dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2">
-              <dt className="text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.type")}
-              </dt>
-              <dd className="font-semibold text-ink">
-                {t(goalLabelKey(run.params.goal))}
-              </dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2 sm:col-span-2">
-              <dt className="text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.runId")}
-              </dt>
-              <dd dir="ltr" className="truncate font-mono text-xs text-ink-soft">
-                {run.runId}
-              </dd>
-            </div>
-          </dl>
-
-          {run.status === "cancelled" && (
-            <p className="mt-4 rounded-xl bg-accent-soft px-3 py-2.5 text-xs leading-5 text-accent">
-              {t("companyDiscovery.progress.stopNote")}
-            </p>
-          )}
-
-          <p className="mt-4 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-5 text-ink-soft">
-            {t("companyDiscovery.runCreated.resultsNote")}
-          </p>
-
           {/* ---- Public emails (only what was actually published) ---------- */}
-          <div className="mt-5 border-t border-line pt-4">
-            <h3 className="text-sm font-bold text-ink">
-              {t("companyDiscovery.results.title")}
-            </h3>
+          <div className="relative mt-6 border-t border-line pt-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-lg font-bold tracking-tight text-ink">
+                {t("companyDiscovery.results.title")}
+              </h3>
+              {acceptedCompanies.length > 0 && (
+                <span className="rounded-full bg-accent-soft px-3 py-1 text-xs font-bold text-accent">
+                  <span className="num">{acceptedCompanies.length}</span>
+                </span>
+              )}
+            </div>
             {acceptedCompanies.length === 0 ? (
-              <p className="mt-2 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-5 text-ink-soft">
+              <p className="mt-3 rounded-2xl bg-surface-2 px-4 py-3 text-xs leading-5 text-ink-soft">
                 {t("companyDiscovery.results.empty")}
               </p>
             ) : (
               <>
-                <p className="mt-1 text-xs leading-5 text-muted">
+                <p className="mt-1.5 text-xs leading-5 text-muted">
                   {t("companyDiscovery.results.selectHint")}
                 </p>
-                <div className="mt-3 overflow-x-auto">
-                  <table className="w-full min-w-[52rem] border-collapse text-sm">
-                    <thead>
-                      <tr className="text-xs uppercase text-muted">
-                        <th className="w-8 py-2 pe-2" />
-                        <th className="py-2 pe-3 text-start">
-                          {t("companyDiscovery.results.columns.company")}
-                        </th>
-                        <th className="py-2 pe-3 text-start">
-                          {t("companyDiscovery.results.columns.role")}
-                        </th>
-                        <th className="py-2 pe-3 text-start">
-                          {t("companyDiscovery.results.columns.city")}
-                        </th>
-                        <th className="py-2 pe-3 text-start">
-                          {t("companyDiscovery.results.columns.email")}
-                        </th>
-                        <th className="py-2 pe-3 text-start">
-                          {t("companyDiscovery.results.columns.source")}
-                        </th>
-                        <th className="py-2 pe-3 text-start">
-                          {t("companyDiscovery.results.columns.sourceUrl")}
-                        </th>
-                        <th className="py-2 text-start">
-                          {t("companyDiscovery.results.columns.status")}
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {acceptedCompanies.map((company) => {
-                        const address = pickEligibleEmail(company);
-                        return (
-                          <tr key={company.companyId} className="border-t border-line">
-                            <td className="py-2 pe-2">
-                              {address && (
-                                <input
-                                  type="checkbox"
-                                  checked={selected.has(company.companyId)}
-                                  onChange={() => toggle(company.companyId)}
-                                  aria-label={company.companyName}
-                                />
-                              )}
-                            </td>
-                            <td className="py-2 pe-3 font-semibold text-ink">
-                              {company.companyName}
-                            </td>
-                            <td className="py-2 pe-3 text-ink-soft">
-                              {company.role ?? "—"}
-                            </td>
-                            <td className="py-2 pe-3 text-ink-soft">
-                              {company.city ?? "—"}
-                            </td>
-                            <td dir="ltr" className="py-2 pe-3 font-mono text-xs">
+                <div className="mt-4 grid gap-3">
+                  {acceptedCompanies.map((company) => {
+                    const address = pickEligibleEmail(company);
+                    // ONE derived token for the whole card: a legacy address
+                    // reports `unverified_legacy` right in the badge, exactly
+                    // like the Excel export — no second, divergent label.
+                    const status = emailStatusOf(company, address);
+                    return (
+                      <article
+                        key={company.companyId}
+                        className="surface-elevated rounded-3xl p-4 transition-shadow duration-300 hover:shadow-[var(--shadow-float)] sm:p-5"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="flex min-w-0 flex-1 items-start gap-3">
+                            {address && (
+                              <input
+                                type="checkbox"
+                                checked={selected.has(company.companyId)}
+                                onChange={() => toggle(company.companyId)}
+                                aria-label={company.companyName}
+                                className="mt-1 h-4 w-4 shrink-0 rounded accent-[var(--blue)]"
+                              />
+                            )}
+                            <div className="min-w-0">
+                              <h4 className="truncate text-sm font-bold text-ink">
+                                {company.companyName}
+                              </h4>
+                              <p className="mt-0.5 truncate text-xs text-muted">
+                                {company.role ?? "—"}
+                                {" · "}
+                                {company.city ?? "—"}
+                              </p>
+                            </div>
+                          </div>
+                          <span
+                            title={
+                              company.rejectReason ??
+                              address?.verificationMethod ??
+                              undefined
+                            }
+                          >
+                            <StatusPill
+                              tone={EMAIL_STATUS_TONE[status]}
+                              label={t(`companyDiscovery.results.emailStatus.${status}`)}
+                            />
+                          </span>
+                        </div>
+                        <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2.5 text-xs sm:grid-cols-3">
+                          <div className="min-w-0">
+                            <dt className="text-[10px] font-bold tracking-wide text-faint uppercase">
+                              {t("companyDiscovery.results.columns.email")}
+                            </dt>
+                            <dd dir="ltr" className="mt-1 truncate font-mono text-xs text-ink">
                               {address ? (
                                 address.email
                               ) : (
@@ -1038,74 +1209,63 @@ export function CompanyDiscovery({
                                   {t("companyDiscovery.results.noEmail")}
                                 </span>
                               )}
-                            </td>
-                            <td className="py-2 pe-3 text-xs text-ink-soft">
+                            </dd>
+                          </div>
+                          <div className="min-w-0">
+                            <dt className="text-[10px] font-bold tracking-wide text-faint uppercase">
+                              {t("companyDiscovery.results.columns.source")}
+                            </dt>
+                            <dd className="mt-1 text-ink-soft">
                               {address
                                 ? t(
                                     `companyDiscovery.results.emailSource.${address.sourceType}`,
                                   )
                                 : "—"}
-                            </td>
-                            <td className="max-w-[16rem] py-2 pe-3 text-xs">
+                            </dd>
+                          </div>
+                          <div className="min-w-0">
+                            <dt className="text-[10px] font-bold tracking-wide text-faint uppercase">
+                              {t("companyDiscovery.results.columns.sourceUrl")}
+                            </dt>
+                            <dd dir="ltr" className="mt-1 truncate text-ink-soft">
                               {address?.sourceUrl ? (
                                 <a
                                   href={address.sourceUrl}
                                   target="_blank"
                                   rel="noopener noreferrer nofollow"
                                   title={address.sourceUrl}
-                                  dir="ltr"
-                                  className="block truncate text-accent underline"
+                                  className="block truncate font-mono text-xs text-accent underline"
                                 >
                                   {address.sourceUrl}
                                 </a>
                               ) : (
                                 "—"
                               )}
-                            </td>
-                            <td className="py-2 text-xs">
-                               {(() => {
-                                 // ONE derived token for the whole row: a
-                                 // legacy address reports `unverified_legacy`
-                                 // right in the badge, exactly like the Excel
-                                 // export — no second, divergent label.
-                                 const status = emailStatusOf(company, address);
-                                 return (
-                                   <span
-                                     className={`inline-flex w-fit rounded-lg px-2 py-0.5 font-bold ${EMAIL_STATUS_TONE[status]}`}
-                                     title={
-                                       company.rejectReason ??
-                                       address?.verificationMethod ??
-                                       undefined
-                                     }
-                                   >
-                                     {t(`companyDiscovery.results.emailStatus.${status}`)}
-                                   </span>
-                                 );
-                               })()}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                            </dd>
+                          </div>
+                        </dl>
+                      </article>
+                    );
+                  })}
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center gap-3">
+                <div className="mt-5 flex flex-wrap items-center gap-3">
                   <a
                     href={`/api/company-discovery/${run.runId}/export?lang=${lang}`}
-                    className="rounded-xl bg-navy px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent"
+                    className="btn-neon inline-flex h-10 items-center gap-2 rounded-2xl px-5 text-sm font-semibold text-white"
                   >
+                    <Download size={15} strokeWidth={1.8} />
                     {t("companyDiscovery.results.download")}
                   </a>
                   <button
                     type="button"
                     onClick={onCreateCampaign}
                     disabled={selected.size === 0 || draftState?.status === "saving"}
-                    className="rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex h-10 items-center gap-2 rounded-2xl border border-line bg-surface px-4 text-sm font-semibold text-ink transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {t("companyDiscovery.campaigns.create")}
                   </button>
-                  <span className="text-xs text-muted">
+                  <span className="text-xs font-medium text-muted">
                     {t("companyDiscovery.campaigns.selected", {
                       count: selected.size,
                     })}
@@ -1120,12 +1280,12 @@ export function CompanyDiscovery({
                   )}
                 </div>
                 {draftState?.status === "error" && (
-                  <p className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-sm font-semibold text-danger">
+                  <p className="mt-3 rounded-2xl bg-danger-soft px-4 py-2.5 text-sm font-semibold text-danger">
                     {t(draftState.key)}
                   </p>
                 )}
                 {draftState?.status === "saved" && !draftState.linked && (
-                  <p className="mt-3 rounded-xl bg-surface-2 px-3 py-2 text-xs leading-5 text-warning">
+                  <p className="mt-3 rounded-2xl bg-warning-soft px-4 py-2.5 text-xs leading-5 text-warning">
                     {t("companyDiscovery.campaigns.linkPending")}
                   </p>
                 )}
@@ -1136,11 +1296,11 @@ export function CompanyDiscovery({
           <button
             type="button"
             onClick={reset}
-            className="mt-4 rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink transition hover:bg-surface-2"
+            className="mt-6 inline-flex h-10 items-center rounded-2xl border border-line bg-surface px-4 text-sm font-semibold text-ink transition hover:bg-surface-2"
           >
             {t("companyDiscovery.runCreated.newSearch")}
           </button>
-        </div>
+        </GlassCard>
 
         {/* The history lives below the result: creating a campaign from this
             very result must show up here immediately (server round trip). */}
@@ -1153,24 +1313,31 @@ export function CompanyDiscovery({
   // Idle / submitting — the search form
   // ===========================================================================
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-5xl">
       {backLink}
-      <h1 className="mt-3 text-xl font-bold text-ink sm:text-2xl">
-        {t("companyDiscovery.title")}
-      </h1>
-      <p className="mt-2 text-sm leading-6 text-muted">
-        {t("companyDiscovery.subtitle")}
-      </p>
-      <p className="mt-2 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-5 text-ink-soft">
+      <div className="mt-3 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="display-title text-3xl text-ink sm:text-4xl">
+            {t("companyDiscovery.title")}
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
+            {t("companyDiscovery.subtitle")}
+          </p>
+        </div>
+        <div className="hidden shrink-0 sm:block">
+          <SearchOrb active={false} size={110} />
+        </div>
+      </div>
+      <p className="mt-3 rounded-2xl bg-surface-2/70 px-4 py-3 text-xs leading-5 text-ink-soft">
         {t("companyDiscovery.intro")}
       </p>
 
       <form
         onSubmit={onSubmit}
         noValidate
-        className="mt-5 rounded-2xl border border-line bg-surface p-4 sm:p-5"
+        className="surface-elevated mt-5 rounded-3xl p-4 anim-fade-up sm:p-7"
       >
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
           {/* Field */}
           <div>
             <label htmlFor="cd-field" className={labelClass}>
@@ -1191,7 +1358,7 @@ export function CompanyDiscovery({
               ))}
             </datalist>
             {errors.field && (
-              <p className="mt-1 text-xs font-semibold text-danger">{errors.field}</p>
+              <p className="mt-1.5 text-xs font-semibold text-danger">{errors.field}</p>
             )}
           </div>
 
@@ -1209,7 +1376,7 @@ export function CompanyDiscovery({
               maxLength={160}
             />
             {errors.role && (
-              <p className="mt-1 text-xs font-semibold text-danger">{errors.role}</p>
+              <p className="mt-1.5 text-xs font-semibold text-danger">{errors.role}</p>
             )}
           </div>
 
@@ -1249,7 +1416,7 @@ export function CompanyDiscovery({
                 className={inputClass}
               />
               {errors.beginn && (
-                <p className="mt-1 text-xs font-semibold text-danger">{errors.beginn}</p>
+                <p className="mt-1.5 text-xs font-semibold text-danger">{errors.beginn}</p>
               )}
             </div>
           )}
@@ -1266,7 +1433,7 @@ export function CompanyDiscovery({
                 className={inputClass}
               />
               {errors.beginn && (
-                <p className="mt-1 text-xs font-semibold text-danger">{errors.beginn}</p>
+                <p className="mt-1.5 text-xs font-semibold text-danger">{errors.beginn}</p>
               )}
             </div>
           )}
@@ -1287,7 +1454,7 @@ export function CompanyDiscovery({
                 className={inputClass}
               />
               {errors.beginn && (
-                <p className="mt-1 text-xs font-semibold text-danger">{errors.beginn}</p>
+                <p className="mt-1.5 text-xs font-semibold text-danger">{errors.beginn}</p>
               )}
             </div>
           )}
@@ -1308,25 +1475,25 @@ export function CompanyDiscovery({
               onChange={(e) => setTarget(e.target.value)}
               className={inputClass}
             />
-            <p className="mt-1 text-xs leading-5 text-muted">
+            <p className="mt-1.5 text-xs leading-5 text-muted">
               {t("companyDiscovery.form.targetHint")}
             </p>
             {errors.target && (
-              <p className="mt-1 text-xs font-semibold text-danger">{errors.target}</p>
+              <p className="mt-1.5 text-xs font-semibold text-danger">{errors.target}</p>
             )}
           </div>
 
           {/* Only public email */}
-          <div className="sm:pt-6">
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl bg-surface-2 px-3 py-2.5">
+          <div className="sm:pt-7">
+            <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-line bg-surface px-4 py-3 shadow-sm transition hover:border-line-strong">
               <input
                 type="checkbox"
                 checked={onlyPublicEmail}
                 onChange={(e) => setOnlyPublicEmail(e.target.checked)}
-                className="mt-0.5 h-4 w-4"
+                className="mt-0.5 h-4 w-4 shrink-0 rounded accent-[var(--blue)]"
               />
               <span>
-                <span className="block text-sm font-semibold text-ink">
+                <span className="block text-sm font-bold text-ink">
                   {t("companyDiscovery.form.onlyEmail")}
                 </span>
                 <span className="mt-0.5 block text-xs leading-5 text-muted">
@@ -1343,10 +1510,10 @@ export function CompanyDiscovery({
               {GOALS.map((g) => (
                 <label
                   key={g}
-                  className={`cursor-pointer rounded-xl border px-3.5 py-2 text-sm font-semibold transition ${
+                  className={`cursor-pointer rounded-full border px-4.5 py-2 text-sm font-semibold transition ${
                     goal === g
-                      ? "border-accent bg-accent-soft text-accent"
-                      : "border-line bg-surface text-ink-soft hover:bg-surface-2"
+                      ? "border-transparent bg-accent text-white shadow-[0_6px_16px_-6px_rgba(var(--glow-accent-rgb),0.5)]"
+                      : "border-line-strong bg-surface text-ink-soft hover:border-faint hover:text-ink"
                   }`}
                 >
                   <input
@@ -1365,7 +1532,7 @@ export function CompanyDiscovery({
         </div>
 
         {errors.submit && (
-          <p className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-sm font-semibold text-danger">
+          <p className="mt-4 rounded-2xl bg-danger-soft px-4 py-2.5 text-sm font-semibold text-danger">
             {errors.submit}
           </p>
         )}
@@ -1373,12 +1540,11 @@ export function CompanyDiscovery({
         <button
           type="submit"
           disabled={phase === "submitting"}
-          className={`mt-5 w-full rounded-xl px-5 py-3 text-sm font-semibold text-white transition sm:w-auto ${
-            phase === "submitting"
-              ? "cursor-wait bg-accent"
-              : "bg-navy hover:bg-accent disabled:opacity-60"
+          className={`btn-neon mt-6 inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl px-6 text-sm font-bold text-white sm:w-auto ${
+            phase === "submitting" ? "cursor-wait opacity-80" : ""
           }`}
         >
+          <Search size={16} strokeWidth={2} />
           {phase === "submitting"
             ? t("companyDiscovery.form.searching")
             : t("companyDiscovery.form.search")}

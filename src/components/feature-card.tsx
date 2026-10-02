@@ -3,8 +3,8 @@ import { Icon, type IconName } from "@/components/icon";
 
 /**
  * Dashboard feature card: icon, title, one-line explanation, action link.
- * Subtle hover lift + border highlight (150 ms, reduced-motion aware via
- * the global prefers-reduced-motion guard in globals.css).
+ * Premium floating surface with a soft hover lift (150–300 ms,
+ * reduced-motion aware via the global prefers-reduced-motion guard).
  */
 export interface FeatureCardProps {
   icon: IconName;
@@ -19,14 +19,15 @@ export function FeatureCard({ icon, title, text, action, className = "" }: Featu
   return (
     <Link
       href={action.href}
-      className={`group flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5 transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-line-strong hover:card-shadow ${className}`}
+      className={`group surface-elevated relative flex flex-col gap-3 overflow-hidden rounded-3xl p-5 transition-[transform,box-shadow] duration-300 hover:-translate-y-1 hover:shadow-[var(--shadow-float)] ${className}`}
     >
-      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-accent transition-colors group-hover:bg-accent group-hover:text-white">
+      <span className="pointer-events-none absolute -top-10 -end-10 h-28 w-28 rounded-full bg-accent/10 blur-2xl transition-opacity duration-300 group-hover:opacity-100 sm:opacity-60" />
+      <span className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-accent-soft text-accent transition-colors duration-300 group-hover:bg-accent group-hover:text-white">
         <Icon name={icon} size={20} />
       </span>
-      <span className="font-bold text-ink">{title}</span>
-      <span className="text-xs leading-5 text-muted">{text}</span>
-      <span className="mt-auto inline-flex items-center gap-1.5 pt-1 text-xs font-bold text-accent">
+      <span className="relative font-bold tracking-tight text-ink">{title}</span>
+      <span className="relative text-xs leading-5 text-muted">{text}</span>
+      <span className="relative mt-auto inline-flex items-center gap-1.5 pt-1 text-xs font-bold text-accent">
         {action.label}
         <Icon
           name="arrowRight"

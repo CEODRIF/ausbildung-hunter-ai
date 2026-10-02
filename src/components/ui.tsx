@@ -46,7 +46,7 @@ export function Button({
   };
   return (
     <button
-      className={`inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${sizes[size]} ${buttonStyles[variant]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 rounded-2xl font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${sizes[size]} ${buttonStyles[variant]} ${className}`}
       {...props}
     >
       {children}
@@ -93,7 +93,7 @@ export function Input({
         )}
         <input
           id={id}
-          className={`h-12 w-full rounded-xl border bg-surface px-3.5 text-sm text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 ${leading ? "ps-10" : ""} ${error ? "border-danger" : "border-line-strong"} ${className}`}
+          className={`h-12 w-full rounded-2xl border bg-surface px-3.5 text-sm text-ink shadow-[var(--shadow-card)] outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 ${leading ? "ps-10" : ""} ${error ? "border-danger" : "border-line-strong"} ${className}`}
           {...props}
         />
       </span>
@@ -132,7 +132,7 @@ export function Textarea({
       )}
       <textarea
         id={id}
-        className={`min-h-28 w-full resize-y rounded-xl border bg-surface px-3.5 py-3 text-sm leading-6 text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 ${error ? "border-danger" : "border-line-strong"} ${className}`}
+          className={`min-h-28 w-full resize-y rounded-2xl border bg-surface px-3.5 py-3 text-sm leading-6 text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 ${error ? "border-danger" : "border-line-strong"} ${className}`}
         {...props}
       />
       {error ? (
@@ -156,7 +156,7 @@ export function Card({ children, className = "", as = "div" }: CardProps) {
   const Component = as;
   return (
     <Component
-      className={`rounded-2xl border border-line bg-surface ${className}`}
+      className={`rounded-3xl border border-line bg-surface shadow-[var(--shadow-card)] ${className}`}
     >
       {children}
     </Component>

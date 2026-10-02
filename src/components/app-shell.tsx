@@ -1,26 +1,76 @@
 "use client";
 
 /**
- * Global authenticated shell: sidebar (WORKSPACE / TOOLS / ACCOUNT) +
- * consistent header (page title, language switcher, theme switcher,
- * notifications, profile).
+ * Global authenticated shell — Premium 2026 layout:
  *
- *  - Desktop: collapsible sidebar (state persisted to localStorage),
- *    tooltips when collapsed.
- *  - Mobile: off-canvas drawer with overlay (slides from the inline-start
- *    side, RTL-aware).
- *  - All colors come from design tokens; layout uses logical properties
- *    (start/end, ps/pe, ms/me) so Arabic (dir=rtl) mirrors automatically.
+ *  - Desktop: floating glass top navigation (brand, primary items, a
+ *    "More" menu for the secondary sections, language/theme/notifications/
+ *    profile) inside a sticky header bar.
+ *  - Mobile: compact floating bottom navigation (Dashboard, Discover,
+ *    Applications, AI, More) + the full off-canvas drawer for everything.
+ *
+ *  All colors come from the design tokens; layout uses logical properties
+ *  (start/end, ps/pe, ms/me) so Arabic (dir=rtl) mirrors automatically.
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  BarChart3,
+  Bell,
+  Bookmark,
+  Briefcase,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  CircleHelp,
+  Clock,
+  type LucideIcon,
+  Download,
+  ExternalLink,
+  FileText,
+  Folder,
+  Globe,
+  Image as ImageIcon,
+  LayoutGrid,
+  Lock,
+  LogOut,
+  Mail,
+  Menu,
+  Monitor,
+  Moon,
+  MoreHorizontal,
+  Paperclip,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PenLine,
+  Plus,
+  ScanLine,
+  Search,
+  Send,
+  Settings,
+  Sparkles,
+  Square,
+  Sun,
+  Target,
+  Trash2,
+  Upload,
+  User,
+  X,
+} from "lucide-react";
 import type { Profile } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { relativeTime } from "@/lib/relative-time";
 import { useDismiss } from "@/lib/use-dismiss";
 import { Icon, type IconName } from "@/components/icon";
 import { BrandLogo } from "@/components/brand-logo";
+import { GradientMesh } from "@/components/ui/surfaces";
 import { LegalFooter } from "@/components/legal-footer";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { ThemeSwitcher } from "@/components/theme-switcher";
@@ -88,6 +138,79 @@ const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.help",
     items: [{ labelKey: "nav.faq", href: "/dashboard/faq", icon: "help" }],
   },
+];
+
+/** Canonical icon set for the shell (lucide, 1.8 stroke to match Icon). */
+const LUCIDE: Record<IconName, LucideIcon> = {
+  grid: LayoutGrid,
+  search: Search,
+  bookmark: Bookmark,
+  file: FileText,
+  folder: Folder,
+  settings: Settings,
+  help: CircleHelp,
+  menu: Menu,
+  bell: Bell,
+  mail: Mail,
+  spark: Sparkles,
+  user: User,
+  scan: ScanLine,
+  edit: PenLine,
+  send: Send,
+  activity: Activity,
+  target: Target,
+  briefcase: Briefcase,
+  plus: Plus,
+  paperclip: Paperclip,
+  arrowUp: ArrowUp,
+  stop: Square,
+  x: X,
+  image: ImageIcon,
+  alert: AlertTriangle,
+  arrowLeft: ArrowLeft,
+  arrowRight: ArrowRight,
+  arrow: ArrowRight,
+  chevron: ChevronDown,
+  chevronLeft: ChevronLeft,
+  chevronRight: ChevronRight,
+  check: Check,
+  sun: Sun,
+  moon: Moon,
+  monitor: Monitor,
+  globe: Globe,
+  external: ExternalLink,
+  trash: Trash2,
+  download: Download,
+  upload: Upload,
+  lock: Lock,
+  clock: Clock,
+  logout: LogOut,
+  chart: BarChart3,
+};
+
+/** Primary items in the floating top bar (Desktop). */
+const PRIMARY_NAV: NavItem[] = [
+  { labelKey: "nav.dashboard", href: "/dashboard", icon: "grid" },
+  {
+    labelKey: "nav.companyDiscovery",
+    href: "/company-discovery",
+    icon: "globe",
+  },
+  { labelKey: "nav.aiAssistant", href: "/ai", icon: "spark" },
+  { labelKey: "nav.bewerbungen", href: "/applications", icon: "briefcase" },
+  { labelKey: "nav.emailAssistant", href: "/settings/email", icon: "mail" },
+];
+
+/** Mobile floating bottom bar: the four most-used destinations + More. */
+const MOBILE_NAV: NavItem[] = [
+  { labelKey: "nav.dashboard", href: "/dashboard", icon: "grid" },
+  {
+    labelKey: "nav.companyDiscovery",
+    href: "/company-discovery",
+    icon: "globe",
+  },
+  { labelKey: "nav.bewerbungen", href: "/applications", icon: "briefcase" },
+  { labelKey: "nav.aiAssistant", href: "/ai", icon: "spark" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -184,62 +307,46 @@ function isActive(pathname: string, href: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Sidebar
+// Secondary navigation list (drawer + "More" menu)
 // ---------------------------------------------------------------------------
 
-const SIDEBAR_STORAGE_KEY = "aha:sidebar";
+const NAV_COLLAPSED_KEY = "aha:navCollapsed";
 
 function NavSectionList({
   sections,
   pathname,
-  collapsed,
   onNavigate,
 }: {
   sections: NavSection[];
   pathname: string;
-  collapsed: boolean;
   onNavigate: () => void;
 }) {
   const { t } = useI18n();
   return (
-    <div className={`flex-1 space-y-6 overflow-y-auto py-2 ${collapsed ? "px-3" : "px-2"}`}>
+    <div className="flex-1 space-y-6 overflow-y-auto px-3 py-4">
       {sections.map((section, index) => (
         <div key={section.titleKey}>
-          {index > 0 && (
-            <div className={`mb-4 border-t border-line ${collapsed ? "mx-1" : "ms-1.5 me-4"}`} />
-          )}
-          {!collapsed && (
-            <p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-faint">
-              {t(section.titleKey)}
-            </p>
-          )}
-          <nav
-            aria-label={t(section.titleKey)}
-            className="space-y-0.5"
-          >
+          {index > 0 && <div className="mb-4 ms-1.5 me-4 border-t border-line" />}
+          <p className="mb-2 px-3 text-[10px] font-bold tracking-[0.16em] text-faint uppercase">
+            {t(section.titleKey)}
+          </p>
+          <nav aria-label={t(section.titleKey)} className="space-y-0.5">
             {section.items.map((item) => {
               const label = t(item.labelKey);
               const active = !item.soon && isActive(pathname, item.href);
+              const IconCmp = LUCIDE[item.icon];
               if (item.soon) {
                 return (
                   <div
                     key={item.labelKey}
-                    title={collapsed ? label : undefined}
                     aria-disabled="true"
-                    className={`group relative flex items-center gap-3 rounded-xl text-sm font-semibold text-faint ${
-                      collapsed ? "justify-center px-0 py-2.5" : "px-3 py-2.5"
-                    }`}
+                    className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-faint"
                   >
-                    <Icon name={item.icon} className="shrink-0" />
-                    {!collapsed && <span className="flex-1">{label}</span>}
-                    {!collapsed && (
-                      <span className="text-[9px] font-bold uppercase tracking-[0.08em]">
-                        {t("nav.soon")}
-                      </span>
-                    )}
-                    {collapsed && (
-                      <Tooltip label={label} />
-                    )}
+                    <IconCmp size={18} strokeWidth={1.8} className="shrink-0" />
+                    <span className="flex-1">{label}</span>
+                    <span className="text-[9px] font-bold tracking-[0.08em] uppercase">
+                      {t("nav.soon")}
+                    </span>
                   </div>
                 );
               }
@@ -249,18 +356,14 @@ function NavSectionList({
                   href={item.href}
                   onClick={onNavigate}
                   aria-current={active ? "page" : undefined}
-                  title={collapsed ? label : undefined}
-                  className={`group relative flex items-center gap-3 rounded-xl text-sm font-semibold transition-colors ${
-                    collapsed ? "justify-center px-0 py-2.5" : "px-3 py-2.5"
-                  } ${
+                  className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
                     active
                       ? "bg-accent-soft text-accent"
                       : "text-muted hover:bg-surface-2 hover:text-ink"
                   }`}
                 >
-                  <Icon name={item.icon} className="shrink-0" />
-                  {!collapsed && <span className="truncate flex-1">{label}</span>}
-                  {collapsed && <Tooltip label={label} />}
+                  <IconCmp size={18} strokeWidth={1.8} className="shrink-0" />
+                  <span className="truncate flex-1">{label}</span>
                 </Link>
               );
             })}
@@ -268,16 +371,6 @@ function NavSectionList({
         </div>
       ))}
     </div>
-  );
-}
-
-function Tooltip({ label }: { label: string }) {
-  return (
-    <span
-      className="pointer-events-none absolute start-full top-1/2 z-50 ms-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-navy px-2.5 py-1.5 text-xs font-semibold text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 rtl:-scale-x-100 dark:bg-surface-2 dark:text-ink"
-    >
-      {label}
-    </span>
   );
 }
 
@@ -410,11 +503,11 @@ function NotificationsBell() {
         aria-label={t("header.notifications")}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="relative flex h-9 w-9 items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-2 hover:text-ink"
+        className="relative flex h-10 w-10 items-center justify-center rounded-2xl text-muted transition-colors hover:bg-surface-2 hover:text-ink"
       >
-        <Icon name="bell" size={18} />
+        <Bell size={18} strokeWidth={1.8} />
         {unread > 0 && (
-          <span className="absolute -end-0.5 -top-0.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
+          <span className="absolute top-0.5 end-0.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
             {unread > 9 ? "9+" : unread}
           </span>
         )}
@@ -423,15 +516,15 @@ function NotificationsBell() {
         <div
           role="menu"
           aria-label={t("header.notifications")}
-          className="absolute end-0 top-11 z-50 w-80 overflow-hidden rounded-xl border border-line bg-surface card-shadow"
+          className="glass absolute top-12 end-0 z-50 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-3xl"
         >
           <div className="border-b border-line px-4 py-3 text-sm font-bold text-ink">
             {t("header.notifications")}
           </div>
           {items === null || items.length === 0 ? (
             <div className="flex flex-col items-center gap-2.5 px-5 py-7 text-center">
-              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-surface-2 text-faint">
-                <Icon name="bell" size={18} />
+              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+                <Bell size={18} strokeWidth={1.8} />
               </span>
               <p className="text-sm font-bold text-ink">{t("header.noNotifications")}</p>
               <p className="text-xs leading-5 text-muted">
@@ -461,14 +554,14 @@ function NotificationsBell() {
                           <span className="truncate text-sm font-semibold text-ink">
                             {item.title}
                           </span>
-                          <span className="shrink-0 rounded bg-surface-2 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-faint">
+                          <span className="shrink-0 rounded bg-surface-2 px-1 py-px text-[9px] font-bold tracking-wide text-faint uppercase">
                             {t(NOTIF_TYPE_KEYS[item.type])}
                           </span>
                         </span>
                         <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-muted">
                           {item.content}
                         </span>
-                        <span className="mt-1 block text-[10px] font-semibold uppercase tracking-wide text-faint">
+                        <span className="mt-1 block text-[10px] font-semibold tracking-wide text-faint uppercase">
                           {relativeTime(item.created_at, t, locale)}
                         </span>
                       </span>
@@ -497,7 +590,7 @@ export function AppShell({
   profile?: Profile | null;
   /** Server-computed (layout) by comparing the AUTHENTICATED session UID
    *  against the platform-owner constant — never client-supplied. Controls
-   *  ONLY the sidebar entry; /admin and every admin API re-verify
+   *  ONLY the secondary entry; /admin and every admin API re-verify
    *  server-side (requireAdmin + requirePlatformOwner). */
   isPlatformOwner?: boolean;
 }) {
@@ -517,17 +610,18 @@ export function AppShell({
         },
       ]
     : NAV_SECTIONS;
-  const [collapsed, setCollapsed] = useState(false);
   const closeMobile = useCallback(() => setMobileOpen(false), []);
 
-  // Restore the persisted collapse state after hydration (no mismatch:
-  // server + first client render both use the expanded layout).
+  // Top-nav compact mode: icon-only links (labels hidden, tooltips on).
+  // Persisted like the old sidebar state; server render starts expanded so
+  // server + first client render agree.
+  const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
     try {
-      // Intentional post-hydration restore of the persisted sidebar state
+      // Intentional post-hydration restore of the persisted nav state
       // (localStorage); the server render uses the expanded layout on purpose.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCollapsed(window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "collapsed");
+      setCollapsed(window.localStorage.getItem(NAV_COLLAPSED_KEY) === "collapsed");
     } catch {
       /* ignore */
     }
@@ -537,7 +631,7 @@ export function AppShell({
     setCollapsed((value) => {
       const next = !value;
       try {
-        window.localStorage.setItem(SIDEBAR_STORAGE_KEY, next ? "collapsed" : "expanded");
+        window.localStorage.setItem(NAV_COLLAPSED_KEY, next ? "collapsed" : "expanded");
       } catch {
         /* ignore */
       }
@@ -553,27 +647,124 @@ export function AppShell({
   }, [pathname]);
 
   const heading = PAGE_HEADINGS.find((entry) => entry.match(pathname))?.heading;
-  const displayName = profile?.full_name || "";
-  const initials = displayName
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
 
   return (
     <div className="app-shell-root min-h-screen bg-background">
+      <GradientMesh />
+      <div className="relative z-10 flex min-h-screen flex-col">
+        {/* ------------------------------------------------ top bar -------- */}
+        <header className="sticky top-0 z-20 flex h-16 items-center px-3 sm:px-6">
+          <div className="glass mx-auto flex h-14 w-full max-w-7xl items-center justify-between gap-2 rounded-3xl ps-3 pe-2">
+            {/* brand + mobile drawer trigger */}
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                className="flex h-10 w-10 items-center justify-center rounded-2xl text-muted transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
+                onClick={() => setMobileOpen(true)}
+                aria-label={t("nav.expand")}
+              >
+                <MoreHorizontal size={19} strokeWidth={1.8} className="rotate-90" />
+              </button>
+              <BrandLogo variant={pathname === "/dashboard" ? "mark" : "full"} size={32} href="/dashboard" />
+            </div>
+
+            {/* primary items (desktop) */}
+            <nav
+              aria-label={t("nav.workspace")}
+              className="hidden items-center gap-1 lg:flex"
+            >
+              {PRIMARY_NAV.map((item) => {
+                const label = t(item.labelKey);
+                const active = isActive(pathname, item.href);
+                const IconCmp = LUCIDE[item.icon];
+                return (
+                  <Link
+                    key={`${item.href}-top`}
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    title={collapsed ? label : undefined}
+                    className={`flex h-10 items-center gap-2 rounded-2xl px-3.5 text-sm font-semibold transition-all ${
+                      active
+                        ? "bg-accent-soft text-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]"
+                        : "text-muted hover:bg-surface-2 hover:text-ink"
+                    } ${collapsed ? "justify-center px-3" : ""}`}
+                  >
+                    <IconCmp size={17} strokeWidth={1.8} />
+                    <span className={collapsed ? "hidden" : "hidden xl:inline"}>
+                      {label}
+                    </span>
+                  </Link>
+                );
+              })}
+            </nav>
+
+            {/* right cluster */}
+            <div className="flex shrink-0 items-center gap-0.5 sm:gap-1.5">
+              {heading && (
+                <div className="me-1 hidden min-w-0 md:block">
+                  <h1 className="max-w-44 truncate text-sm font-bold text-ink">
+                    {t(heading.titleKey)}
+                  </h1>
+                  <p className="max-w-44 truncate text-[11px] text-muted">
+                    {t(heading.subtitleKey)}
+                  </p>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={toggleCollapsed}
+                aria-label={collapsed ? t("nav.expand") : t("nav.collapse")}
+                className="hidden h-10 w-10 items-center justify-center rounded-2xl text-muted transition-colors hover:bg-surface-2 hover:text-ink lg:flex"
+              >
+                {collapsed ? (
+                  <PanelLeftOpen size={18} strokeWidth={1.8} />
+                ) : (
+                  <PanelLeftClose size={18} strokeWidth={1.8} />
+                )}
+              </button>
+              <SecondaryMenu sections={sections} pathname={pathname} />
+              <span className="ms-1 hidden h-7 w-px bg-line sm:block" />
+              <span className="hidden sm:block">
+                <LanguageSwitcher />
+              </span>
+              <span className="hidden sm:block">
+                <ThemeSwitcher />
+              </span>
+              <NotificationsBell />
+              {profile ? (
+                <span className="ms-0.5">
+                  <ProfileMenu profile={profile} />
+                </span>
+              ) : (
+                <span className="text-xs text-faint">
+                  {t("account.accountFallback")}
+                </span>
+              )}
+            </div>
+          </div>
+        </header>
+
+        {/* ------------------------------------------------ content -------- */}
+        <main className="flex-1 pb-28 lg:pb-0">{children}</main>
+        <LegalFooter variant="bar" />
+      </div>
+
+      {/* ------------------------------------------------ mobile drawer ---- */}
+      {mobileOpen && (
+        <button
+          className="fixed inset-0 z-30 bg-navy/45 lg:hidden dark:bg-black/60"
+          aria-label={t("common.close")}
+          onClick={closeMobile}
+        />
+      )}
       <aside
-        className={`fixed inset-y-0 start-0 z-40 flex w-[280px] flex-col border-e border-line bg-surface transition-[width,transform] duration-200 lg:w-[264px] ${
-          collapsed ? "lg:w-[76px]" : ""
-        } ${
+        className={`fixed inset-y-0 start-0 z-40 flex w-[290px] flex-col border-e border-line bg-surface transition-transform duration-200 rounded-e-3xl ${
           mobileOpen
             ? "max-lg:translate-x-0"
             : "ltr:max-lg:-translate-x-full rtl:max-lg:translate-x-full"
-        } lg:translate-x-0`}
+        } max-lg:shadow-2xl`}
       >
-        <div className={`flex items-center justify-between px-4 py-4 ${collapsed ? "lg:justify-center lg:px-2" : ""}`}>
-          <BrandLogo variant={collapsed ? "mark" : "full"} size={34} />
+        <div className="flex items-center justify-between px-4 py-4">
+          <BrandLogo variant="full" size={30} />
           <button
             className="rounded-lg p-1.5 text-faint hover:bg-surface-2 hover:text-ink lg:hidden"
             onClick={closeMobile}
@@ -582,89 +773,162 @@ export function AppShell({
             <Icon name="x" />
           </button>
         </div>
-
         <NavSectionList
           sections={sections}
           pathname={pathname}
-          collapsed={collapsed}
           onNavigate={closeMobile}
         />
-
-        <div className={`border-t border-line pt-3 ${collapsed ? "px-3" : "px-2"}`}>
-          {profile && !collapsed && (
-            <div className="mb-2 flex items-center gap-2.5 rounded-xl bg-surface-2 px-3 py-2.5">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[11px] font-bold text-accent">
-                {initials}
-              </span>
-              <div className="min-w-0">
-                <p className="truncate text-xs font-bold text-ink">{displayName}</p>
-                <p className="truncate text-[11px] text-muted">{profile.email}</p>
-              </div>
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            aria-label={collapsed ? t("nav.expand") : t("nav.collapse")}
-            className={`hidden w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-muted transition-colors hover:bg-surface-2 hover:text-ink lg:flex ${
-              collapsed ? "justify-center" : ""
-            }`}
-          >
-            <Icon
-              name={collapsed ? "chevronRight" : "chevronLeft"}
-              className="rtl:-scale-x-100"
-            />
-            {!collapsed && <span>{t("nav.collapse")}</span>}
-          </button>
+        <div className="border-t border-line p-3">
+          <div className="flex items-center gap-1">
+            <span className="flex-1">
+              <LanguageSwitcher />
+            </span>
+            <span>
+              <ThemeSwitcher />
+            </span>
+          </div>
         </div>
       </aside>
 
-      {mobileOpen && (
-        <button
-          className="fixed inset-0 z-30 bg-navy/45 lg:hidden dark:bg-black/60"
-          aria-label={t("common.close")}
-          onClick={closeMobile}
-        />
-      )}
-
-      <div className={`flex min-h-screen flex-col transition-[padding] duration-200 ${collapsed ? "lg:ps-[76px]" : "lg:ps-[264px]"}`}>
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-line bg-surface/90 px-4 backdrop-blur-md sm:px-6">
-          <div className="flex min-w-0 items-center gap-3">
-            <button
-              className="rounded-xl border border-line-strong p-2 text-muted transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
-              onClick={() => setMobileOpen(true)}
-              aria-label={t("nav.expand")}
+      {/* ------------------------------------------------ bottom nav ------- */}
+      <nav
+        aria-label={t("nav.workspace")}
+        className="glass fixed inset-x-3 bottom-3 z-30 flex items-center justify-around rounded-3xl px-2 py-2 lg:hidden"
+        style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+      >
+        {MOBILE_NAV.map((item) => {
+          const label = t(item.labelKey);
+          const active = isActive(pathname, item.href);
+          const IconCmp = LUCIDE[item.icon];
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={active ? "page" : undefined}
+              className={`flex w-14 flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${
+                active ? "bg-accent-soft text-accent" : "text-muted"
+              }`}
             >
-              <Icon name="menu" />
-            </button>
-            {heading && (
-              <div className="min-w-0">
-                <h1 className="truncate text-base font-bold text-ink">
-                  {t(heading.titleKey)}
-                </h1>
-                <p className="hidden truncate text-xs text-muted sm:block">
-                  {t(heading.subtitleKey)}
-                </p>
-              </div>
-            )}
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-            <LanguageSwitcher />
-            <ThemeSwitcher />
-            <NotificationsBell />
-            <div className="mx-1 hidden h-6 w-px bg-line sm:block" />
-            {profile ? (
-              <ProfileMenu profile={profile} />
-            ) : (
-              <span className="text-xs text-faint">
-                {t("account.accountFallback")}
+              <IconCmp size={20} strokeWidth={active ? 2.1 : 1.8} />
+              <span className="max-w-full truncate text-[10px] font-semibold">
+                {label}
               </span>
-            )}
-          </div>
-        </header>
-        <main className="flex-1">{children}</main>
-        <LegalFooter variant="bar" />
-      </div>
+            </Link>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          className="flex w-14 flex-col items-center gap-1 rounded-2xl px-1 py-1.5 text-muted transition-colors"
+        >
+          <MoreHorizontal size={20} strokeWidth={1.8} />
+          <span className="text-[10px] font-semibold">{t("premium.nav.more")}</span>
+        </button>
+      </nav>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "More" menu (desktop) — the secondary sections in one floating panel
+// ---------------------------------------------------------------------------
+
+function SecondaryMenu({
+  sections,
+  pathname,
+}: {
+  sections: NavSection[];
+  pathname: string;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const rootRef = useDismiss<HTMLDivElement>(open, useCallback(() => setOpen(false), []));
+  // Secondary = everything that is not in the primary top bar.
+  const primaryHrefs = new Set(PRIMARY_NAV.map((item) => item.href));
+  return (
+    <div ref={rootRef} className="relative hidden lg:block">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-label={t("premium.nav.more")}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="flex h-10 items-center gap-1.5 rounded-2xl px-3 text-sm font-semibold text-muted transition-colors hover:bg-surface-2 hover:text-ink"
+      >
+        <MoreHorizontal size={17} strokeWidth={1.8} />
+        <span className="hidden xl:inline">{t("premium.nav.more")}</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label={t("premium.nav.more")}
+          className="glass absolute top-12 end-0 z-50 w-72 rounded-3xl p-2"
+        >
+          {sections.map((section) => {
+            const items = section.items.filter(
+              (item) => !primaryHrefs.has(item.href),
+            );
+            if (items.length === 0) return null;
+            return (
+              <div key={section.titleKey} className="mb-1">
+                <p className="px-3 pt-2 pb-1 text-[10px] font-bold tracking-[0.16em] text-faint uppercase">
+                  {t(section.titleKey)}
+                </p>
+                {items.map((item) => {
+                  const label = t(item.labelKey);
+                  const active = !item.soon && isActive(pathname, item.href);
+                  const IconCmp = LUCIDE[item.icon];
+                  const row = (
+                    <>
+                      <span
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+                          active ? "bg-accent-soft text-accent" : "bg-surface-2 text-muted"
+                        }`}
+                      >
+                        <IconCmp size={16} strokeWidth={1.8} />
+                      </span>
+                      <span
+                        className={`min-w-0 flex-1 truncate text-sm font-semibold ${
+                          item.soon ? "text-faint" : "text-ink"
+                        }`}
+                      >
+                        {label}
+                      </span>
+                      {item.soon && (
+                        <span className="text-[9px] font-bold tracking-[0.08em] text-faint uppercase">
+                          {t("nav.soon")}
+                        </span>
+                      )}
+                    </>
+                  );
+                  return item.soon ? (
+                    <div
+                      key={item.labelKey}
+                      role="menuitem"
+                      aria-disabled="true"
+                      className="flex items-center gap-3 rounded-2xl px-3 py-1.5"
+                    >
+                      {row}
+                    </div>
+                  ) : (
+                    <Link
+                      key={item.labelKey}
+                      role="menuitem"
+                      href={item.href}
+                      onClick={() => setOpen(false)}
+                      className={`flex items-center gap-3 rounded-2xl px-3 py-1.5 transition-colors hover:bg-surface-2 ${
+                        active ? "bg-accent-soft/60" : ""
+                      }`}
+                    >
+                      {row}
+                    </Link>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

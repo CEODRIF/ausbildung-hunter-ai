@@ -8,6 +8,7 @@ import {
   useTransition,
 } from "react";
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { Card, Input } from "@/components/ui";
 import { RecipientManager } from "@/components/recipient-manager";
 import { RecipientTable } from "@/components/recipient-table";
@@ -184,10 +185,10 @@ export function ApplicationComposer({
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="space-y-5">
           {from === "company-discovery" && (
-            <Link
-              href="/company-discovery"
-              className="inline-flex items-center text-xs font-semibold text-muted transition hover:text-ink"
-            >
+             <Link
+               href="/company-discovery"
+               className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-surface-2 hover:text-ink"
+             >
               <span
                 aria-hidden="true"
                 className="me-1.5 inline-block rtl:rotate-180"
@@ -220,19 +221,19 @@ export function ApplicationComposer({
               )}
             </Card>
           )}
-          <Card className="p-5 sm:p-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-[0.12em] text-accent">
-                  New application
-                </p>
-                <h1 className="mt-2 text-2xl font-bold tracking-[-0.04em] text-ink">
-                  Prepare your Bewerbung
-                </h1>
-                <p className="mt-1 text-sm text-muted">
-                  {t("apps.draftNote")}
-                </p>
-              </div>
+            <Card className="p-5 sm:p-7">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.12em] text-accent">
+                    New application
+                  </p>
+                  <h1 className="display-title mt-2 text-3xl text-ink">
+                    Prepare your Bewerbung
+                  </h1>
+                  <p className="mt-1.5 text-sm text-muted">
+                    {t("apps.draftNote")}
+                  </p>
+                </div>
               <span
                 className={`text-xs font-semibold ${saveState === "error" ? "text-danger" : saveState === "saving" || isPending ? "text-warning" : "text-success"}`}
               >
@@ -279,7 +280,8 @@ export function ApplicationComposer({
                   PDF, DOC, DOCX, PNG, JPG · up to 10 MB each
                 </p>
               </div>
-              <label className="cursor-pointer rounded-lg border border-line-strong px-3 py-2 text-xs font-bold text-accent hover:bg-surface-2">
+              <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-xs font-bold text-accent shadow-[var(--shadow-card)] transition-colors hover:border-accent">
+                <Plus size={14} strokeWidth={2.2} />
                 {uploading ? "Uploading…" : "Add files"}
                 <input
                   className="hidden"
@@ -300,7 +302,7 @@ export function ApplicationComposer({
                 {attachments.map((attachment) => (
                   <div
                     key={attachment.id}
-                    className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-3 py-2.5"
+                    className="flex items-center justify-between rounded-2xl border border-line bg-surface px-3.5 py-3 shadow-[var(--shadow-card)]"
                   >
                     <div className="min-w-0">
                       <p className="truncate text-xs font-semibold text-ink-soft">
@@ -332,7 +334,7 @@ export function ApplicationComposer({
                 ))}
               </div>
             ) : (
-              <p className="mt-5 rounded-xl bg-surface-2 px-4 py-4 text-center text-xs text-muted">
+              <p className="mt-5 rounded-2xl border border-dashed border-line-strong bg-surface px-4 py-5 text-center text-xs text-muted">
                 No attachments added yet.
               </p>
             )}
@@ -363,7 +365,7 @@ export function ApplicationComposer({
             </p>
             <div className="mt-3 flex items-center gap-3">
               <span
-                className={`flex h-10 w-10 items-center justify-center rounded-xl text-sm font-bold ${sender.provider === "gmail" ? "bg-danger-soft text-danger" : "bg-accent-soft text-accent-deep"}`}
+                className={`flex h-11 w-11 items-center justify-center rounded-2xl text-sm font-bold shadow-[var(--shadow-card)] ${sender.provider === "gmail" ? "bg-danger-soft text-danger" : "bg-accent-soft text-accent-deep"}`}
               >
                 {sender.provider === "gmail" ? "G" : "O"}
               </span>
@@ -380,7 +382,7 @@ export function ApplicationComposer({
               aria-label={t("apps.senderAccount")}
               value={senderId}
               onChange={(event) => setSenderId(event.target.value)}
-              className="mt-4 h-10 w-full rounded-xl border border-line-strong bg-surface px-3 text-xs text-ink-soft"
+              className="mt-4 h-11 w-full rounded-2xl border border-line bg-surface px-3.5 text-xs font-medium text-ink shadow-[var(--shadow-card)] outline-none focus:border-accent focus:ring-4 focus:ring-accent/10"
             >
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>
@@ -397,14 +399,14 @@ export function ApplicationComposer({
               <button
                 type="button"
                 onClick={() => setGoal("ausbildung")}
-                className={`rounded-xl border p-3 text-left text-xs font-bold ${goal === "ausbildung" ? "border-accent bg-accent-soft text-accent" : "border-line text-muted"}`}
+                className={`rounded-2xl border p-3 text-left text-xs font-bold transition-colors ${goal === "ausbildung" ? "border-accent bg-accent-soft text-accent shadow-[var(--shadow-card)]" : "border-line text-muted hover:border-line-strong hover:text-ink-soft"}`}
               >
                 Ausbildung
               </button>
               <button
                 type="button"
                 onClick={() => setGoal("arbeit")}
-                className={`rounded-xl border p-3 text-left text-xs font-bold ${goal === "arbeit" ? "border-accent bg-accent-soft text-accent" : "border-line text-muted"}`}
+                className={`rounded-2xl border p-3 text-left text-xs font-bold transition-colors ${goal === "arbeit" ? "border-accent bg-accent-soft text-accent shadow-[var(--shadow-card)]" : "border-line text-muted hover:border-line-strong hover:text-ink-soft"}`}
               >
                 Arbeit
               </button>
@@ -426,7 +428,7 @@ export function ApplicationComposer({
                 isSending ||
                 saveState !== "saved"
               }
-              className="mt-4 h-11 w-full rounded-xl bg-accent text-sm font-semibold text-white hover:bg-accent-deep disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn-neon mt-4 h-12 w-full rounded-2xl text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
               Send applications
             </button>
@@ -442,14 +444,14 @@ export function ApplicationComposer({
               <button
                 type="button"
                 onClick={() => applyTemplate("ausbildung")}
-                className="w-full rounded-xl border border-line px-3 py-2.5 text-left text-xs font-semibold text-muted hover:bg-surface-2"
+                className="w-full rounded-2xl border border-line bg-surface px-3.5 py-3 text-left text-xs font-bold text-ink-soft shadow-[var(--shadow-card)] transition-colors hover:border-accent hover:text-accent"
               >
                 Ausbildung Bewerbung
               </button>
               <button
                 type="button"
                 onClick={() => applyTemplate("arbeit")}
-                className="w-full rounded-xl border border-line px-3 py-2.5 text-left text-xs font-semibold text-muted hover:bg-surface-2"
+                className="w-full rounded-2xl border border-line bg-surface px-3.5 py-3 text-left text-xs font-bold text-ink-soft shadow-[var(--shadow-card)] transition-colors hover:border-accent hover:text-accent"
               >
                 Arbeit Bewerbung
               </button>
@@ -457,9 +459,9 @@ export function ApplicationComposer({
           </Card>
         </aside>
         {confirmOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/40 p-5">
-            <div className="w-full max-w-md rounded-2xl bg-surface p-6 shadow-2xl">
-              <h2 className="text-lg font-bold text-ink">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/50 p-5 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 shadow-[var(--shadow-float)]">
+              <h2 className="display-title text-2xl text-ink">
                 Confirm applications
               </h2>
               <p className="mt-3 text-sm leading-6 text-muted">
@@ -495,7 +497,7 @@ export function ApplicationComposer({
                   type="button"
                   onClick={() => setConfirmOpen(false)}
                   disabled={isSending}
-                  className="h-10 rounded-xl border border-line-strong px-4 text-sm font-semibold text-muted disabled:cursor-not-allowed disabled:opacity-50"
+                  className="h-11 rounded-2xl border border-line bg-surface px-4 text-sm font-bold text-muted shadow-[var(--shadow-card)] transition-colors hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Review again
                 </button>
@@ -520,7 +522,7 @@ export function ApplicationComposer({
                     type="submit"
                     disabled={isSending}
                     aria-busy={isSending}
-                    className="flex h-10 items-center gap-2 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-70"
+                    className="btn-neon flex h-11 items-center gap-2 rounded-2xl px-5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     {isSending && (
                       <span

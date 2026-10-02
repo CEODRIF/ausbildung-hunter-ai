@@ -1,114 +1,114 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
- * Design tokens — Ausbildung Hunter AI
- * One visual identity, two scopes: the .dark scope is the dark neon theme,
- * the light scope is the same pink/magenta/purple identity on a light
- * background. Every component that uses the semantic utilities
- * (bg-surface, text-ink, border-line, bg-accent, …) picks the palette up
- * from here — no per-theme branching in components.
+ * Design tokens — Ausbildung Hunter AI (Premium 2026 identity)
+ * One visual identity, two scopes: the .dark scope is the dimmed glass
+ * variant of the same violet/blue identity, the light scope is the default
+ * (very light, calm, layered). Every component picks the palette up from
+ * here via the semantic utilities (bg-surface, text-ink, border-line,
+ * bg-accent, …) — no per-theme branching in components.
+ *
+ * Layering scale (light):
+ *   --background      #f6f6fb  (off-white lavender page base)
+ *   --surface          #ffffff (crisp cards, inputs, dropdowns)
+ *   --surface-2        #efeff7 (fills, chips, hover, skeletons)
+ *   --glass            translucent white for the premium floating surfaces
+ *   --surface-floating #ffffff (elevated panels that float above the page)
  * --------------------------------------------------------------------------- */
 :root {
-  /* Light mode — same identity as dark neon, on a soft light-gray
-   * application background: white surfaces/cards float above it with
-   * neutral gray borders (clear visual layering), dark navy text and the
-   * pink/magenta/purple accent family.
-   *
-   * Layering scale (light):
-   *   page background  #f5f5f7  (soft gray — shell, page areas, chat canvas)
-   *   surface          #ffffff  (cards, header, sidebar, inputs, modals,
-   *                              dropdowns, CV/CL paper, elevated panels)
-   *   surface-2        #f1f1f4  (fills, chips, hover states, skeletons —
-   *                              one step darker than the page so it reads
-   *                              on both white surfaces and gray pages)
-   *   border           #e5e7eb / #d1d5db (subtle / strong) */
-  --background: #f5f5f7;
-  --foreground: #10203b;
+  --background: #f6f6fb;
+  --foreground: #17183a;
   --surface: #ffffff;
-  --surface-2: #f1f1f4;
-  --ink: #10203b;
-  --ink-soft: #1d3458;
-  --muted: #6d7d96;
-  --faint: #8b9ab0;
-  --line: #e5e7eb;
-  --line-strong: #d1d5db;
-  --navy: #10203b;
-  --navy-soft: #1d3458;
-  --blue: #d946ef;
-  --blue-deep: #c026d3;
-  --blue-soft: #fce7f9;
-  --ai: #a855f7;
-  --ai-deep: #9333ea;
-  --ai-soft: #f3e8ff;
-  --success: #1b9b70;
-  --success-soft: #eaf8f3;
+  --surface-2: #efeff7;
+  --surface-floating: #ffffff;
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-strong: rgba(255, 255, 255, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.9);
+  --ink: #17183a;
+  --ink-soft: #3d3f66;
+  --muted: #686b8c;
+  --faint: #9598b6;
+  --line: #e5e5f1;
+  --line-strong: #d3d4e6;
+  --navy: #17183a;
+  --navy-soft: #2b2d58;
+  --blue: #6d5df6;
+  --blue-deep: #5847e8;
+  --blue-soft: rgba(109, 93, 246, 0.09);
+  --cyan: #5a8df8;
+  --cyan-soft: rgba(90, 141, 248, 0.1);
+  --ai: #9b7bf7;
+  --ai-deep: #8258f0;
+  --ai-soft: rgba(155, 123, 247, 0.1);
+  --success: #1f9d72;
+  --success-soft: rgba(31, 157, 114, 0.11);
   --warning: #a3611c;
-  --warning-soft: #fff4e5;
+  --warning-soft: rgba(163, 97, 28, 0.11);
   --danger: #d9535d;
-  --danger-soft: #fdecec;
-  --focus-ring: rgba(217, 70, 239, 0.25);
-  --selection: #fbcfe8;
-  --shadow-color: 16, 32, 59;
-  /* Accent family in the light scope — pink/magenta/purple instead of
-   * the old blues, so the light theme keeps the neon identity. */
-  --cyan: #c084fc;
-  --cyan-soft: rgba(168, 85, 247, 0.08);
-  --glow-accent-rgb: 217, 70, 239;
-  --glow-navy-rgb: 16, 32, 59;
-  --gradient-neon: linear-gradient(
-    90deg,
-    #d946ef 0%,
-    #ec4899 55%,
-    #8b5cf6 100%
-  );
-  --gradient-headline: linear-gradient(0deg, #10203b, #10203b);
+  --danger-soft: rgba(217, 83, 93, 0.1);
+  --focus-ring: rgba(109, 93, 246, 0.28);
+  --selection: #ddd6fe;
+  --shadow-color: 76, 70, 160;
+  /* Depth scale — soft, colored, layered. */
+  --shadow-card:
+    0 1px 2px rgba(var(--shadow-color), 0.04),
+    0 6px 20px -8px rgba(var(--shadow-color), 0.1);
+  --shadow-float:
+    0 2px 6px rgba(var(--shadow-color), 0.05),
+    0 24px 48px -16px rgba(var(--shadow-color), 0.18);
+  --shadow-pop:
+    0 16px 30px -10px rgba(var(--blue-deep), 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  --glow-accent-rgb: 109, 93, 246;
+  --glow-navy-rgb: 23, 24, 58;
+  --gradient-neon: linear-gradient(120deg, #7b6cf6 0%, #5a8df8 55%, #9b7bf7 100%);
+  --gradient-headline: linear-gradient(120deg, #4f3ee0 0%, #6d5df6 48%, #9b7bf7 100%);
+  --blur-glass: 18px;
+  --radius-2xl: 1.5rem;
+  --radius-3xl: 2rem;
 }
 
 .dark {
-  --background: #08080d;
-  --foreground: #f5f5f7;
-  --surface: #11101a;
-  --surface-2: #16151f;
-  --ink: #f5f5f7;
-  --ink-soft: #d6dcee;
-  --muted: #9aa6c0;
-  --faint: #667192;
-  --line: #263a63;
-  --line-strong: #33497a;
-  --navy: #0a0910;
-  --navy-soft: #131219;
-  --blue: #c83cff;
-  --blue-deep: #a82be0;
-  --blue-soft: rgba(200, 60, 255, 0.14);
-  --cyan: #5c8cff;
-  --cyan-soft: rgba(92, 140, 255, 0.14);
-  --ai: #9d6bff;
-  --ai-deep: #8250f0;
-  --ai-soft: rgba(157, 107, 255, 0.16);
+  --background: #0b0b14;
+  --foreground: #f2f2f9;
+  --surface: #14141f;
+  --surface-2: #1b1b29;
+  --surface-floating: #191927;
+  --glass: rgba(24, 24, 38, 0.6);
+  --glass-strong: rgba(24, 24, 38, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --ink: #f2f2f9;
+  --ink-soft: #d4d5ea;
+  --muted: #9ba0c2;
+  --faint: #6a6f97;
+  --line: #26263a;
+  --line-strong: #34344e;
+  --navy: #0d0d18;
+  --navy-soft: #16162a;
+  --blue: #8b7bff;
+  --blue-deep: #7a63ff;
+  --blue-soft: rgba(139, 123, 255, 0.14);
+  --cyan: #6f9dff;
+  --cyan-soft: rgba(111, 157, 255, 0.14);
+  --ai: #b08cff;
+  --ai-deep: #9d6bff;
+  --ai-soft: rgba(176, 140, 255, 0.16);
   --success: #2fd6a5;
   --success-soft: rgba(47, 214, 165, 0.13);
   --warning: #f2b04c;
   --warning-soft: rgba(242, 176, 76, 0.13);
   --danger: #ff5c7a;
   --danger-soft: rgba(255, 92, 122, 0.13);
-  --focus-ring: rgba(200, 60, 255, 0.45);
-  --selection: rgba(200, 60, 255, 0.4);
+  --focus-ring: rgba(139, 123, 255, 0.45);
+  --selection: rgba(139, 123, 255, 0.4);
   --shadow-color: 0, 0, 0;
-  /* Dark scope — the neon variants of the tokens above. */
-  --glow-accent-rgb: 200, 60, 255;
+  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-float: 0 24px 48px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 16px 30px -10px rgba(0, 0, 0, 0.6);
+  --glow-accent-rgb: 139, 123, 255;
   --glow-navy-rgb: 0, 0, 0;
-  --gradient-neon: linear-gradient(
-    90deg,
-    #c83cff 0%,
-    #ff3fd1 52%,
-    #5c8cff 100%
-  );
-  --gradient-headline: linear-gradient(
-    90deg,
-    #c83cff 0%,
-    #ff3fd1 52%,
-    #5c8cff 100%
-  );
+  --gradient-neon: linear-gradient(120deg, #8b7bff 0%, #6f9dff 55%, #b08cff 100%);
+  --gradient-headline: linear-gradient(120deg, #8b7bff 0%, #6f9dff 55%, #b08cff 100%);
 }
 
 @theme inline {
@@ -116,6 +116,9 @@
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
+  --color-surface-floating: var(--surface-floating);
+  --color-glass: var(--glass);
+  --color-glass-strong: var(--glass-strong);
   --color-ink: var(--ink);
   --color-ink-soft: var(--ink-soft);
   --color-muted: var(--muted);
@@ -168,8 +171,21 @@ body {
   margin: 0;
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family:
+    var(--font-ui),
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    "Noto Sans",
+    "Noto Sans Arabic",
+    sans-serif;
+  font-feature-settings: "ss01";
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 a {
@@ -200,40 +216,149 @@ textarea:focus-visible,
   color: #fff;
 }
 
+/* ---------------------------------------------------------------------------
+ * Backgrounds & depth
+ * --------------------------------------------------------------------------- */
+
+/* Large, very soft radial glow field. Rendered ONCE per screen (fixed,
+ * behind the content, no blur filters — pure radial gradients, so it stays
+ * cheap on phones). */
+.app-mesh {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      52rem 34rem at 12% -6%,
+      rgba(123, 108, 246, 0.13) 0%,
+      rgba(123, 108, 246, 0) 65%
+    ),
+    radial-gradient(
+      46rem 30rem at 96% -10%,
+      rgba(90, 141, 248, 0.12) 0%,
+      rgba(90, 141, 248, 0) 65%
+    ),
+    radial-gradient(
+      40rem 30rem at 78% 108%,
+      rgba(244, 114, 182, 0.07) 0%,
+      rgba(244, 114, 182, 0) 70%
+    );
+}
+
+.dark .app-mesh {
+  background:
+    radial-gradient(
+      52rem 34rem at 12% -6%,
+      rgba(139, 123, 255, 0.12) 0%,
+      rgba(139, 123, 255, 0) 65%
+    ),
+    radial-gradient(
+      46rem 30rem at 96% -10%,
+      rgba(111, 157, 255, 0.1) 0%,
+      rgba(111, 157, 255, 0) 65%
+    ),
+    radial-gradient(
+      40rem 30rem at 78% 108%,
+      rgba(255, 92, 160, 0.05) 0%,
+      rgba(255, 92, 160, 0) 70%
+    );
+}
+
 .grid-fade {
   background-image:
-    linear-gradient(rgba(217, 70, 239, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(217, 70, 239, 0.05) 1px, transparent 1px);
+    linear-gradient(rgba(109, 93, 246, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(109, 93, 246, 0.05) 1px, transparent 1px);
 }
 
 .dark .grid-fade {
   background-image:
-    linear-gradient(rgba(92, 140, 255, 0.075) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(92, 140, 255, 0.075) 1px, transparent 1px);
+    linear-gradient(rgba(111, 157, 255, 0.075) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(111, 157, 255, 0.075) 1px, transparent 1px);
 }
 
 .hero-orb {
   background:
-    radial-gradient(circle, rgba(217, 70, 239, 0.12) 0%, rgba(217, 70, 239, 0) 65%),
+    radial-gradient(circle, rgba(123, 108, 246, 0.12) 0%, rgba(123, 108, 246, 0) 65%),
     radial-gradient(
       circle at 70% 70%,
-      rgba(168, 85, 247, 0.1) 0%,
-      rgba(168, 85, 247, 0) 60%
+      rgba(90, 141, 248, 0.1) 0%,
+      rgba(90, 141, 248, 0) 60%
     );
 }
 
 .dark .hero-orb {
   background:
-    radial-gradient(circle, rgba(200, 60, 255, 0.16) 0%, rgba(200, 60, 255, 0) 65%),
+    radial-gradient(circle, rgba(139, 123, 255, 0.16) 0%, rgba(139, 123, 255, 0) 65%),
     radial-gradient(
       circle at 70% 70%,
-      rgba(92, 140, 255, 0.13) 0%,
-      rgba(92, 140, 255, 0) 60%
+      rgba(111, 157, 255, 0.13) 0%,
+      rgba(111, 157, 255, 0) 60%
     );
 }
 
-/* Gradient text for the key headline — solid ink in light mode, the neon
- * gradient in dark mode (driven by the scoped --gradient-headline token). */
+/* ---------------------------------------------------------------------------
+ * Surfaces — the premium card language
+ * --------------------------------------------------------------------------- */
+
+/* Translucent glass with a subtle inner top highlight. Use for the key
+ * floating elements (nav, hero, search card, run orb) — not for everything. */
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--blur-glass)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(1.4);
+  box-shadow:
+    var(--shadow-float),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+.dark .glass {
+  box-shadow:
+    var(--shadow-float),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Crisp elevated surface (non-translucent) for data-dense cards. */
+.surface-elevated {
+  background: var(--surface-floating);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-card);
+}
+
+.soft-shadow {
+  box-shadow: var(--shadow-float);
+}
+
+.card-shadow {
+  box-shadow: var(--shadow-card);
+}
+
+/* Primary CTA — soft 3D floating button. */
+.btn-neon {
+  background-image: var(--gradient-neon);
+  box-shadow: var(--shadow-pop);
+  transition:
+    filter 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.btn-neon:hover {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+.btn-neon:active {
+  transform: translateY(0) scale(0.99);
+  filter: brightness(0.98);
+}
+
+.btn-neon:disabled {
+  transform: none;
+}
+
+/* Gradient text for the key headline. */
 .text-neon-gradient {
   background-image: var(--gradient-headline);
   background-clip: text;
@@ -241,33 +366,21 @@ textarea:focus-visible,
   color: transparent;
 }
 
-/* Primary CTA surface — neon gradient with a soft hover lift (visual only). */
-.btn-neon {
-  background-image: var(--gradient-neon);
-  transition:
-    filter 160ms ease,
-    box-shadow 160ms ease;
+/* Large expressive display type for heroes. */
+.display-title {
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  font-weight: 800;
 }
 
-.btn-neon:hover {
-  filter: brightness(1.1);
+.num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
-.soft-shadow {
-  box-shadow: 0 18px 50px rgba(var(--shadow-color), 0.08);
-}
-
-.card-shadow {
-  box-shadow: 0 8px 24px rgba(var(--shadow-color), 0.055);
-}
-
-.dark .card-shadow {
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
-
-.dark .soft-shadow {
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
-}
+/* ---------------------------------------------------------------------------
+ * Skeletons
+ * --------------------------------------------------------------------------- */
 
 .shimmer {
   position: relative;
@@ -282,7 +395,7 @@ textarea:focus-visible,
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(255, 255, 255, 0.66),
+    rgba(255, 255, 255, 0.7),
     transparent
   );
   animation: shimmer 1.6s infinite;
@@ -293,7 +406,7 @@ textarea:focus-visible,
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(255, 255, 255, 0.06),
+    rgba(255, 255, 255, 0.07),
     transparent
   );
 }
@@ -302,6 +415,100 @@ textarea:focus-visible,
   100% {
     transform: translateX(100%);
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * Motion — entrance, float, orb
+ * (the global prefers-reduced-motion rule below disables all of it)
+ * --------------------------------------------------------------------------- */
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.anim-fade-up {
+  animation: fade-up 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes float-y {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+.anim-float {
+  animation: float-y 7s ease-in-out infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.72);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+
+.orb-ring {
+  animation: pulse-ring 2.6s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+}
+
+@keyframes orbit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.anim-orbit {
+  animation: orbit-spin 14s linear infinite;
+}
+
+.anim-orbit-reverse {
+  animation: orbit-spin 20s linear infinite reverse;
+}
+
+@keyframes orb-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.045);
+  }
+}
+
+.anim-orb-breathe {
+  animation: orb-breathe 3.4s ease-in-out infinite;
+}
+
+@keyframes gradient-pan {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.anim-gradient {
+  background-size: 200% 200%;
+  animation: gradient-pan 9s ease infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

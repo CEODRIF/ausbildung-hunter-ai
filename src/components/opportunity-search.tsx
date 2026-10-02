@@ -9,9 +9,11 @@ import {
 } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
+import { Search } from "lucide-react";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
 import { Icon } from "@/components/icon";
 import { EmptyState } from "@/components/empty-state";
+import { Skeleton } from "@/components/ui/feedback";
 import {
   SEARCH_SOURCE_LIMIT,
   WORKPLACE_CITIES,
@@ -152,7 +154,7 @@ function ViewDetailsButton({
       onClick={() => onOpen(opportunityId, href)}
       onPointerEnter={() => onHoverPrefetch(opportunityId, href)}
       onFocus={() => onHoverPrefetch(opportunityId, href)}
-      className={`rounded-xl px-4 py-2 text-xs font-semibold text-white transition ${
+      className={`rounded-2xl px-4 py-2.5 text-xs font-bold text-white transition ${
         opening
           ? "cursor-wait bg-accent"
           : "bg-navy hover:bg-accent disabled:opacity-60"
@@ -458,7 +460,7 @@ export function OpportunitySearch({
           event.preventDefault();
           commitSearch((current) => current);
         }}
-        className="rounded-2xl border border-line bg-surface p-5 sm:p-6"
+        className="surface-elevated rounded-3xl p-5 sm:p-6"
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -469,10 +471,11 @@ export function OpportunitySearch({
                 onClick={() =>
                   commitSearch((current) => ({ ...current, goal: value }))
                 }
+                aria-pressed={state.goal === value}
                 className={
                   state.goal === value
-                    ? "rounded-lg bg-navy px-4 py-2 text-xs font-bold text-white"
-                    : "rounded-lg bg-surface-2 px-4 py-2 text-xs font-semibold text-muted"
+                    ? "rounded-full bg-navy px-4 py-2 text-xs font-bold text-white"
+                    : "rounded-full bg-surface-2 px-4 py-2 text-xs font-semibold text-muted transition hover:bg-line"
                 }
               >
                 {t(value === "ausbildung" ? "dash.goalAusbildung" : "dash.goalArbeit")}
@@ -482,14 +485,15 @@ export function OpportunitySearch({
           <button
             type="submit"
             disabled={loading}
-            className="rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-deep disabled:opacity-60"
+            className="btn-neon rounded-2xl px-5 py-2.5 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-70"
           >
+            <Search size={15} strokeWidth={2} className="inline me-1.5 -translate-y-px" />
             {loading ? t("search.searching") : t("search.search")}
           </button>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <input
-            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent sm:col-span-1"
+            className="rounded-2xl border border-line bg-surface px-4 py-3 text-sm text-ink shadow-sm outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/10 sm:col-span-1"
             placeholder={t("search.ph.keyword")}
             value={state.keyword}
             maxLength={120}
@@ -502,7 +506,7 @@ export function OpportunitySearch({
             aria-label={t("search.ph.keyword")}
           />
           <input
-            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
+            className="rounded-2xl border border-line bg-surface px-4 py-3 text-sm text-ink shadow-sm outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/10"
             placeholder={t("search.ph.role")}
             value={state.role}
             maxLength={120}
@@ -515,7 +519,7 @@ export function OpportunitySearch({
             aria-label={t("search.ph.role")}
           />
           <input
-            className="rounded-xl border border-line px-4 py-3 text-sm text-ink outline-none focus:border-accent"
+            className="rounded-2xl border border-line bg-surface px-4 py-3 text-sm text-ink shadow-sm outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/10"
             placeholder={t("search.ph.company")}
             value={state.company}
             maxLength={160}
@@ -536,7 +540,7 @@ export function OpportunitySearch({
           <button
             type="button"
             onClick={() => setShowMobileFilters((value) => !value)}
-            className="rounded-xl bg-surface-2 px-4 py-2.5 text-xs font-semibold text-ink-soft"
+            className="rounded-2xl border border-line bg-surface px-4 py-2.5 text-xs font-bold text-ink shadow-sm"
             aria-expanded={showMobileFilters}
           >
             {t("search.filters")}
@@ -553,7 +557,7 @@ export function OpportunitySearch({
         <aside
           className={`${
             showMobileFilters ? "block" : "hidden"
-          } rounded-2xl border border-line bg-surface lg:sticky lg:top-6 lg:block`}
+          } surface-elevated rounded-3xl lg:sticky lg:top-6 lg:block`}
         >
           <div className="flex items-center justify-between border-b border-line px-5 py-4">
             <span className="text-sm font-bold text-ink">{t("search.filters")}</span>
@@ -775,7 +779,7 @@ export function OpportunitySearch({
             {/* Employment / training type */}
             <FilterGroup title={t("search.employment.any")}>
               <select
-                className="w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent"
+                className="w-full rounded-2xl border border-line bg-surface px-3 py-2.5 text-sm text-ink shadow-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent/10"
                 value={state.employment}
                 onChange={(event) =>
                   commitSearch((current) => ({
@@ -844,20 +848,20 @@ export function OpportunitySearch({
         <div className="min-w-0">
           {/* Source notice — only when the official source actually degraded */}
           {sourceStatus && sourceStatus.status === "degraded" && !error && (
-            <div className="mb-4 rounded-xl bg-warning-soft p-3 text-sm font-medium text-warning">
+            <div className="mb-4 rounded-2xl bg-warning-soft px-4 py-3 text-sm font-medium text-warning">
               {t("search.sourcePartial")}
             </div>
           )}
 
           {error && (
-            <div className="mb-4 rounded-xl bg-warning-soft p-3 text-sm font-medium text-danger">
+            <div className="mb-4 rounded-2xl bg-danger-soft px-4 py-3 text-sm font-medium text-danger">
               <p>{error}</p>
               {sourceStatus?.retryable && (
                 <button
                   type="button"
                   disabled={loading}
                   onClick={() => void search(stateRef.current)}
-                  className="mt-2 rounded-lg border border-danger/30 px-3 py-1.5 text-xs font-bold text-danger transition hover:bg-danger/10 disabled:opacity-60"
+                  className="mt-2 rounded-xl border border-danger/30 bg-surface px-3 py-1.5 text-xs font-bold text-danger transition hover:bg-danger/10 disabled:opacity-60"
                 >
                   {t("search.retry")}
                 </button>
@@ -898,7 +902,7 @@ export function OpportunitySearch({
                   </Link>
                 )}
                 <select
-                  className="rounded-xl border border-line bg-surface px-3 py-2 text-xs font-semibold text-ink outline-none focus:border-accent"
+                  className="rounded-2xl border border-line bg-surface px-3 py-2 text-xs font-bold text-ink shadow-sm outline-none focus:border-accent"
                   value={state.sort}
                   onChange={(event) =>
                     commitSearch((current) => ({
@@ -952,8 +956,25 @@ export function OpportunitySearch({
             }`}
           >
             {loading && (results === null || results.length === 0) && (
-              <div className="rounded-2xl border border-line bg-surface p-10 text-center text-sm text-muted">
-                {t("search.loading")}
+              <div
+                className="space-y-3"
+                role="status"
+                aria-label={t("search.loading")}
+              >
+                {[0, 1, 2].map((index) => (
+                  <div
+                    key={index}
+                    className="surface-elevated rounded-3xl p-5"
+                  >
+                    <div className="flex gap-2">
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                      <Skeleton className="h-5 w-24 rounded-full" />
+                    </div>
+                    <Skeleton className="mt-4 h-6 w-2/3" />
+                    <Skeleton className="mt-2 h-4 w-1/2" />
+                    <Skeleton className="mt-4 h-9 w-36 rounded-2xl" />
+                  </div>
+                ))}
               </div>
             )}
             {!loading && results !== null && results.length === 0 && (
@@ -968,12 +989,12 @@ export function OpportunitySearch({
               return (
                 <article
                   key={opportunity.id}
-                  className="rounded-2xl border border-line bg-surface p-5"
+                  className="surface-elevated group rounded-3xl p-5 transition-shadow duration-300 hover:shadow-[var(--shadow-float)]"
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-lg bg-accent-soft px-2 py-1 text-[10px] font-bold uppercase text-accent">
+                        <span className="rounded-full bg-accent-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-accent">
                           {t(
                             opportunity.goal === "ausbildung"
                               ? "dash.goalAusbildung"
@@ -981,38 +1002,38 @@ export function OpportunitySearch({
                           )}
                         </span>
                         {opportunity.training_type && (
-                          <span className="rounded-lg bg-ai-soft px-2 py-1 text-[10px] font-bold uppercase text-ai">
+                          <span className="rounded-full bg-ai-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-ai">
                             {opportunity.training_type
                               .toLowerCase()
                               .replaceAll("_", " ")}
                           </span>
                         )}
                         {opportunity.salary?.label ? (
-                          <span className="rounded-lg bg-success-soft px-2 py-1 text-[10px] font-bold text-success">
+                          <span className="rounded-full bg-success-soft px-2.5 py-1 text-[10px] font-bold text-success">
                             {opportunity.salary.label}
                           </span>
                         ) : (
-                          <span className="rounded-lg bg-surface-2 px-2 py-1 text-[10px] font-semibold text-faint">
+                          <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-semibold text-faint">
                             {t("search.salaryNotSpecified")}
                           </span>
                         )}
                         {opportunity.employment_type && (
-                          <span className="rounded-lg bg-surface-2 px-2 py-1 text-[10px] font-bold text-muted">
+                          <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-bold text-muted">
                             {opportunity.employment_type}
                           </span>
                         )}
                         {opportunity.home_office === true && (
-                          <span className="rounded-lg bg-surface-2 px-2 py-1 text-[10px] font-bold text-muted">
+                          <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-bold text-muted">
                             {t("search.homeOfficeBadge")}
                           </span>
                         )}
                         {opportunity.career_change_friendly === true && (
-                          <span className="rounded-lg bg-success-soft px-2 py-1 text-[10px] font-bold text-success">
+                          <span className="rounded-full bg-success-soft px-2.5 py-1 text-[10px] font-bold text-success">
                             {t("search.careerChanger")}
                           </span>
                         )}
                       </div>
-                      <h2 className="mt-3 text-lg font-bold leading-6 text-ink-soft">
+                      <h2 className="mt-3 text-lg font-bold leading-7 text-ink transition-colors group-hover:text-accent">
                         {opportunity.title}
                       </h2>
                       <p className="mt-1 text-sm text-muted">
@@ -1040,7 +1061,7 @@ export function OpportunitySearch({
                           .join(" · ")}
                       </p>
                       {opportunity.match && (
-                        <div className="mt-3 rounded-xl bg-surface-2 p-3">
+                        <div className="mt-3 rounded-2xl bg-surface-2 p-3.5">
                           {opportunity.match.status === "complete" ? (
                             <>
                               {opportunity.match.score !== null && (
@@ -1116,13 +1137,13 @@ export function OpportunitySearch({
                     false,
                   )
                 }
-                className="rounded-xl bg-surface px-4 py-2.5 text-sm font-semibold text-accent shadow-sm transition hover:bg-background disabled:opacity-40"
+                className="rounded-2xl border border-line bg-surface px-4 py-2.5 text-sm font-bold text-accent shadow-sm transition hover:bg-accent-soft disabled:opacity-40"
               >
                 <Icon name="chevronLeft" size={15} className="rtl:hidden" />
                 <Icon name="chevronRight" size={15} className="hidden rtl:block" />
                 {t("search.previous")}
               </button>
-              <span className="text-sm font-semibold text-muted">
+              <span className="num text-sm font-bold text-muted">
                 {t("search.page", {
                   page: state.page,
                   total: Math.max(1, Math.ceil(maxReachable / PAGE_SIZE)),
@@ -1137,7 +1158,7 @@ export function OpportunitySearch({
                     false,
                   )
                 }
-                className="rounded-xl bg-surface px-4 py-2.5 text-sm font-semibold text-accent shadow-sm transition hover:bg-background disabled:opacity-40"
+                className="rounded-2xl border border-line bg-surface px-4 py-2.5 text-sm font-bold text-accent shadow-sm transition hover:bg-accent-soft disabled:opacity-40"
               >
                 {t("search.next")}
                 <Icon name="chevronRight" size={15} className="rtl:hidden" />
