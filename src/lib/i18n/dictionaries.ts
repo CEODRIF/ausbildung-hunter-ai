@@ -651,6 +651,9 @@ const de = {
       create: "Kampagne aus Auswahl erstellen",
       createFailed: "Der Entwurf konnte nicht erstellt werden. Bitte erneut versuchen.",
       noAccount: "Bitte zuerst ein E-Mail-Konto verbinden.",
+      backToDiscovery: "Zurück zur Unternehmens-Suche",
+      linkPending:
+        "Der Entwurf ist gespeichert. Die Verknüpfung zum Durchlauf konnte nicht gespeichert werden, weil die Datenbank noch nicht migriert ist.",
       selected: "{count} ausgewählt",
       status: {
         draft: "Entwurf",
@@ -1918,6 +1921,9 @@ const en: Dict = {
       create: "Create campaign from selection",
       createFailed: "The draft could not be created. Please try again.",
       noAccount: "Connect an email account first.",
+      backToDiscovery: "Back to Company Discovery",
+      linkPending:
+        "The draft is saved. The link to the run could not be stored because the database has not been migrated yet.",
       selected: "{count} selected",
       status: {
         draft: "Draft",
@@ -3172,6 +3178,9 @@ const fr: Dict = {
       create: "Créer une campagne à partir de la sélection",
       createFailed: "Le brouillon n'a pas pu être créé. Veuillez réessayer.",
       noAccount: "Connectez d'abord un compte e-mail.",
+      backToDiscovery: "Retour à la recherche d'entreprises",
+      linkPending:
+        "Le brouillon est enregistré. Le lien vers l'exécution n'a pas pu être enregistré car la base de données n'a pas encore été migrée.",
       selected: "{count} sélectionné(s)",
       status: {
         draft: "Brouillon",
@@ -4430,6 +4439,9 @@ const ar: Dict = {
       create: "إنشاء حملة من التحديد",
       createFailed: "تعذّر إنشاء المسودة. حاول مرة أخرى.",
       noAccount: "اربط حساب بريد إلكتروني أولًا.",
+      backToDiscovery: "العودة إلى اكتشاف الشركات",
+      linkPending:
+        "تم حفظ المسودة. تعذّر حفظ الرابط بعملية الاكتشاف لأن قاعدة البيانات لم تُحدَّث بعد.",
       selected: "{count} محدد",
       status: {
         draft: "مسودة",

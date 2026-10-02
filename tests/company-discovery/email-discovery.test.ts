@@ -240,3 +240,44 @@ describe("results UI (component contract)", () => {
     expect(component).toContain("companyDiscovery.campaigns.noAccount");
   });
 });
+
+describe("the way back from the campaign editor (reported: it went to Dashboard)", () => {
+  const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+  const read = (relative: string) => readFileSync(resolve(root, relative), "utf8");
+  const component = read("src/components/company-discovery.tsx");
+  const composer = read("src/components/application-composer.tsx");
+  const composerPage = read("src/app/applications/new/page.tsx");
+
+  it("the composer offers the way back to Company Discovery when it came from there", () => {
+    expect(composer).toContain('from === "company-discovery"');
+    expect(composer).toContain('href="/company-discovery"');
+    expect(composer).toContain('t("companyDiscovery.campaigns.backToDiscovery")');
+    // It never restarts anything: the control is a plain link.
+    expect(composer).not.toMatch(/onClick=\{[^}]*company-discovery/);
+  });
+
+  it("the composer page passes ?from= through to the composer", () => {
+    expect(composerPage).toContain(
+      'from={typeof params.from === "string" ? params.from : ""}',
+    );
+  });
+
+  it("EVERY link from the discovery page into the editor keeps the origin", () => {
+    const editorLinks =
+      component.match(/\/applications\/new\?draft=\$\{[^}]+\}[^`"']*/g) ?? [];
+    expect(editorLinks.length).toBeGreaterThanOrEqual(2); // after saving + a listed draft
+    for (const link of editorLinks) {
+      expect(link).toContain("from=company-discovery");
+    }
+  });
+
+  it("the history panel is rendered on the form AND on the result view", () => {
+    expect(component.split("<CampaignsPanel").length - 1).toBe(2);
+    // A draft row (no campaign yet) opens in the composer, a campaign in its monitor.
+    expect(component).toContain("campaign.campaignId");
+  });
+
+  it("the freshly created draft appears without a new search (server refresh)", () => {
+    expect(component).toContain("router.refresh()");
+  });
+});

@@ -91,9 +91,14 @@ export function retryAfterSeconds(
   return 0;
 }
 
-/** PostgREST / Postgres signatures of a missing relation or stale schema cache. */
+/**
+ * PostgREST / Postgres signatures of a database that is not ready for this
+ * feature: a missing relation OR a missing column (the deployed schema is
+ * older than the code). A missing column is deliberately part of this: the
+ * user-facing truth is "not migrated yet", never "your search failed".
+ */
 const MISSING_RELATION_RE =
-  /PGRST205|42P01|does not exist|could not find the table|schema cache/i;
+  /PGRST205|PGRST204|42P01|does not exist|could not find the table|schema cache/i;
 
 /**
  * Classify a persistence failure WITHOUT leaking it to the user.
@@ -102,7 +107,7 @@ const MISSING_RELATION_RE =
  * readiness problem — `database_not_ready` — not a failed search: the UI must
  * say "not ready", not "try again", and the log carries the real message.
  */
-export function classifyDiscoveryDbError(error: unknown): DiscoveryErrorCode {
+function describeError(error: unknown): string {
   const parts: string[] = [];
   if (typeof error === "string") parts.push(error);
   if (error instanceof Error) parts.push(error.message);
@@ -113,9 +118,29 @@ export function classifyDiscoveryDbError(error: unknown): DiscoveryErrorCode {
       if (typeof value === "string") parts.push(value);
     }
   }
-  const text = parts.join(" | ");
-  if (MISSING_RELATION_RE.test(text)) return "database_not_ready";
+  return parts.join(" | ");
+}
+
+export function classifyDiscoveryDbError(error: unknown): DiscoveryErrorCode {
+  if (MISSING_RELATION_RE.test(describeError(error))) return "database_not_ready";
   return "search_failed";
+}
+
+/** PostgREST signature of a column the LIVE schema does not have (drift). */
+const UNKNOWN_COLUMN_RE =
+  /PGRST204|could not find the '[^']+' column|column [\w."]+ does not exist/i;
+
+/**
+ * True when Postgres/PostgREST rejected a statement because a COLUMN does not
+ * exist in the deployed schema — the normal state of a database that has not
+ * received the newest migration yet.
+ *
+ * Callers use it to retry the same write WITHOUT the optional column instead of
+ * losing the user's work: a draft without its provenance link is still a saved
+ * draft, while a failed insert is lost work.
+ */
+export function isUnknownColumnError(error: unknown): boolean {
+  return UNKNOWN_COLUMN_RE.test(describeError(error));
 }
 
 /** Whether a persisted run status is terminal (no further work happens). */

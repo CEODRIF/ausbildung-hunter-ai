@@ -16,9 +16,17 @@ type Row = Record<string, unknown>;
 const state = vi.hoisted(() => ({
   db: {} as Record<string, Row[]>,
   failNext: false,
+  /** Simulates a database that has NOT received the link migration yet. */
+  missingLinkColumn: false,
   lastUpsert: null as null | { table: string; options: unknown },
   auth: { user: { id: "" } as { id: string } | null, accountStatus: "active" },
 }));
+
+const UNKNOWN_COLUMN_ERROR = {
+  code: "PGRST204",
+  message:
+    "Could not find the 'discovery_run_id' column of 'application_drafts' in the schema cache",
+};
 
 function matches(row: Row, filters: Array<[string, unknown]>, sets: Array<[string, unknown[]]>) {
   return (
@@ -32,9 +40,11 @@ function makeClient() {
     from(table: string) {
       const filters: Array<[string, unknown]> = [];
       const sets: Array<[string, unknown[]]> = [];
+      const nullFilters: Array<[string]> = [];
       let limit: number | null = null;
       let payload: Row[] | null = null;
       let op: "select" | "insert" | "upsert" = "select";
+      let touchesLinkColumn = false;
       const rows = () => (state.db[table] ??= []);
       const exec = () => {
         if (state.failNext) {
@@ -44,16 +54,36 @@ function makeClient() {
             error: { code: "PGRST205", message: "schema cache" },
           };
         }
+        if (state.missingLinkColumn && touchesLinkColumn) {
+          return { data: null, error: UNKNOWN_COLUMN_ERROR };
+        }
         if (op !== "select") {
-          for (const row of payload ?? []) rows().push(row);
-          return { data: payload ?? [], error: null };
+          // PostgREST returns the STORED row (defaults included) — the fake
+          // therefore assigns the id/created_at defaults the schema declares.
+          const stored = (payload ?? []).map((row) => ({
+            id: row.id ?? `generated-${rows().length + 1}`,
+            created_at: row.created_at ?? "2026-10-03T00:00:00.000Z",
+            ...row,
+          }));
+          rows().push(...stored);
+          return { data: stored, error: null };
         }
         let found = rows().filter((row) => matches(row, filters, sets));
+        for (const [column] of nullFilters) {
+          found = found.filter((row) => row[column] !== null && row[column] !== undefined);
+        }
         if (limit !== null) found = found.slice(0, limit);
         return { data: found, error: null };
       };
       const api = {
-        select: () => api,
+        select: (columns?: string) => {
+          if (columns && columns.includes("discovery_run_id")) touchesLinkColumn = true;
+          return api;
+        },
+        not: (column: string) => {
+          nullFilters.push([column]);
+          return api;
+        },
         eq: (column: string, value: unknown) => {
           filters.push([column, value]);
           return api;
@@ -70,6 +100,7 @@ function makeClient() {
         insert: (values: Row | Row[]) => {
           op = "insert";
           payload = Array.isArray(values) ? values : [values];
+          if (payload.some((row) => "discovery_run_id" in row)) touchesLinkColumn = true;
           return api;
         },
         upsert: (values: Row | Row[], options?: unknown) => {
@@ -187,6 +218,7 @@ beforeEach(() => {
     email_accounts: [],
   };
   state.failNext = false;
+  state.missingLinkColumn = false;
   state.lastUpsert = null;
   state.auth.user = { id: USER_ID };
   state.auth.accountStatus = "active";
@@ -468,5 +500,121 @@ describe("Excel export", () => {
     );
     expect(missing.status).toBe(404);
     expect((await missing.json()).code).toBe("not_found");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The reported failures: campaign not saved / not listed / wrong way back
+// ---------------------------------------------------------------------------
+
+const DRAFT_ID = "66666666-6666-4666-8666-666666666666";
+const CAMPAIGN_ID = "77777777-7777-4777-8777-777777777777";
+
+function draftRow(overrides: Row = {}): Row {
+  return {
+    id: DRAFT_ID,
+    user_id: USER_ID,
+    subject: "Kaufmann E-Commerce — 2027",
+    opportunity_title: null,
+    created_at: "2026-10-02T09:00:00.000Z",
+    updated_at: "2026-10-02T09:05:00.000Z",
+    discovery_run_id: RUN_ID,
+    ...overrides,
+  };
+}
+
+function campaignRow(overrides: Row = {}): Row {
+  return {
+    id: CAMPAIGN_ID,
+    user_id: USER_ID,
+    draft_id: DRAFT_ID,
+    status: "queued",
+    total_recipients: 2,
+    sent_count: 0,
+    failed_count: 0,
+    created_at: "2026-10-02T09:30:00.000Z",
+    started_at: null,
+    completed_at: null,
+    discovery_run_id: RUN_ID,
+    ...overrides,
+  };
+}
+
+describe("a database without the link migration (the reported failure)", () => {
+  it("still saves the draft AND its recipients, and reports the missing link", async () => {
+    state.missingLinkColumn = true;
+    state.db.email_accounts = [
+      { id: ACCOUNT_ID, user_id: USER_ID, is_active: true, created_at: "2026-09-01" },
+    ];
+    const result = await createDiscoveryDraft({
+      userId: USER_ID,
+      runId: RUN_ID,
+      recipients: [
+        { email: "bewerbung@mustermann-gmbh.de", companyName: "Mustermann GmbH" },
+        { email: "kontakt@ohne-ag.de", companyName: "Ohne AG" },
+      ],
+    });
+    // Nothing of the user's work is lost: only the provenance is deferred.
+    expect(result).toEqual({ ok: true, draftId: expect.any(String), linked: false });
+    expect(state.db.application_drafts).toHaveLength(1);
+    expect(state.db.application_drafts[0]).not.toHaveProperty("discovery_run_id");
+    expect(state.db.application_draft_recipients).toHaveLength(2);
+  });
+
+  it("still lists previous campaigns instead of showing an empty history", async () => {
+    state.missingLinkColumn = true;
+    state.db.application_drafts = [draftRow()];
+    state.db.email_campaigns = [campaignRow()];
+    const rows = await listRecentDiscoveryCampaigns(USER_ID, 5);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].campaignId).toBe(CAMPAIGN_ID);
+    expect(rows[0].discoveryRunId).toBeNull();
+  });
+});
+
+describe("the created campaign is visible immediately and exactly once", () => {
+  it("lists a discovery draft that has no campaign yet as a draft", async () => {
+    state.db.application_drafts = [draftRow()];
+    state.db.application_draft_recipients = [
+      { draft_id: DRAFT_ID, email: "bewerbung@mustermann-gmbh.de" },
+      { draft_id: DRAFT_ID, email: "kontakt@ohne-ag.de" },
+    ];
+    const rows = await listRecentDiscoveryCampaigns(USER_ID, 5);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      campaignId: "",
+      draftId: DRAFT_ID,
+      title: "Kaufmann E-Commerce — 2027",
+      status: "draft",
+      totalRecipients: 2,
+      discoveryRunId: RUN_ID,
+    });
+  });
+
+  it("lists the sent campaign once — never as a draft duplicate", async () => {
+    state.db.application_drafts = [draftRow()];
+    state.db.application_draft_recipients = [{ draft_id: DRAFT_ID }];
+    state.db.email_campaigns = [campaignRow()];
+    const rows = await listRecentDiscoveryCampaigns(USER_ID, 5);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].campaignId).toBe(CAMPAIGN_ID);
+    expect(rows[0].status).toBe("queued");
+  });
+
+  it("is idempotent across a refresh: reading twice creates nothing and repeats nothing", async () => {
+    state.db.application_drafts = [draftRow()];
+    state.db.application_draft_recipients = [{ draft_id: DRAFT_ID }];
+    const first = await listRecentDiscoveryCampaigns(USER_ID, 5);
+    const second = await listRecentDiscoveryCampaigns(USER_ID, 5);
+    expect(second).toEqual(first);
+    expect(state.db.application_drafts).toHaveLength(1);
+    expect(state.db.email_campaigns).toEqual([]);
+  });
+
+  it("ignores drafts that were not built from a discovery run", async () => {
+    state.db.application_drafts = [
+      draftRow({ id: "88888888-8888-4888-8888-888888888888", discovery_run_id: null }),
+    ];
+    expect(await listRecentDiscoveryCampaigns(USER_ID, 5)).toEqual([]);
   });
 });

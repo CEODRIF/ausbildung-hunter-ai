@@ -21,6 +21,7 @@
  */
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -187,6 +188,85 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
   );
 }
 
+/**
+ * "Previous Campaigns" — persisted rows only: campaigns AND discovery drafts
+ * that have not been sent yet, so the list is identical after a refresh, after
+ * leaving the page or after a re-login. A draft opens in the composer (with the
+ * journey back to this page), a campaign in its monitor.
+ */
+function CampaignsPanel({
+  campaigns,
+  t,
+  lang,
+}: {
+  campaigns: DiscoveryCampaignRow[];
+  t: TranslateFn;
+  lang: string;
+}) {
+  return (
+    <section className="mt-6 rounded-2xl border border-line bg-surface p-4 sm:p-5">
+      <h2 className="text-sm font-bold text-ink">
+        {t("companyDiscovery.campaigns.title")}
+      </h2>
+      {campaigns.length === 0 ? (
+        <p className="mt-2 text-xs leading-5 text-muted">
+          {t("companyDiscovery.campaigns.empty")}
+        </p>
+      ) : (
+        <ul className="mt-2 divide-y divide-line">
+          {campaigns.map((campaign) => (
+            <li
+              key={campaign.campaignId || campaign.draftId}
+              className="flex flex-wrap items-center justify-between gap-3 py-3"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-ink">
+                  {campaign.title || t("companyDiscovery.campaigns.run")}
+                </p>
+                <p className="mt-0.5 text-xs text-muted">
+                  {t("companyDiscovery.campaigns.recipients", {
+                    count: campaign.totalRecipients,
+                  })}
+                  {" · "}
+                  {t("companyDiscovery.campaigns.created")}:{" "}
+                  {formatDate(campaign.createdAt, lang)}
+                  {" · "}
+                  {t("companyDiscovery.campaigns.updated")}:{" "}
+                  {formatDate(campaign.updatedAt, lang)}
+                </p>
+                {campaign.discoveryRunId && (
+                  <p
+                    dir="ltr"
+                    className="mt-0.5 truncate font-mono text-xs text-ink-soft"
+                  >
+                    {t("companyDiscovery.campaigns.run")}:{" "}
+                    {campaign.discoveryRunId}
+                  </p>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="rounded-lg bg-accent-soft px-2.5 py-1 text-xs font-bold text-accent">
+                  {t(`companyDiscovery.campaigns.status.${campaign.status}`)}
+                </span>
+                <Link
+                  href={
+                    campaign.campaignId
+                      ? `/applications/campaign/${campaign.campaignId}`
+                      : `/applications/new?draft=${campaign.draftId}&from=company-discovery`
+                  }
+                  className="rounded-xl border border-line px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-surface-2"
+                >
+                  {t("companyDiscovery.campaigns.open")}
+                </Link>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function CompanyDiscovery({
   initialRun = null,
   initialCompanies = [],
@@ -200,6 +280,7 @@ export function CompanyDiscovery({
   campaigns?: DiscoveryCampaignRow[];
 }) {
   const { t, lang } = useI18n();
+  const router = useRouter();
 
   // ---- form state ----------------------------------------------------------
   const [phase, setPhase] = useState<Phase>(initialRun ? "created" : "idle");
@@ -216,7 +297,7 @@ export function CompanyDiscovery({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [draftState, setDraftState] = useState<
     | { status: "saving" }
-    | { status: "saved"; draftId: string }
+    | { status: "saved"; draftId: string; linked: boolean }
     | { status: "error"; key: string }
     | null
   >(null);
@@ -475,11 +556,19 @@ export function CompanyDiscovery({
     setDraftState({ status: "saving" });
     try {
       const result = await createDiscoveryDraftAction({ runId, recipients });
-      setDraftState(
-        result.ok && result.draftId
-          ? { status: "saved", draftId: result.draftId }
-          : { status: "error", key: draftErrorKey(result.code) },
-      );
+      if (result.ok && result.draftId) {
+        setDraftState({
+          status: "saved",
+          draftId: result.draftId,
+          linked: result.linked !== false,
+        });
+        setSelected(new Set());
+        // The history list is read from the database on the server, so the
+        // draft must appear immediately without starting a new search.
+        router.refresh();
+      } else {
+        setDraftState({ status: "error", key: draftErrorKey(result.code) });
+      }
     } catch {
       setDraftState({
         status: "error",
@@ -750,7 +839,7 @@ export function CompanyDiscovery({
                   </span>
                   {draftState?.status === "saved" && (
                     <Link
-                      href={`/applications/new?draft=${draftState.draftId}`}
+                      href={`/applications/new?draft=${draftState.draftId}&from=company-discovery`}
                       className="text-xs font-semibold text-accent underline"
                     >
                       {t("companyDiscovery.campaigns.open")}
@@ -760,6 +849,11 @@ export function CompanyDiscovery({
                 {draftState?.status === "error" && (
                   <p className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-sm font-semibold text-danger">
                     {t(draftState.key)}
+                  </p>
+                )}
+                {draftState?.status === "saved" && !draftState.linked && (
+                  <p className="mt-3 rounded-xl bg-surface-2 px-3 py-2 text-xs leading-5 text-warning">
+                    {t("companyDiscovery.campaigns.linkPending")}
                   </p>
                 )}
               </>
@@ -774,6 +868,10 @@ export function CompanyDiscovery({
             {t("companyDiscovery.runCreated.newSearch")}
           </button>
         </div>
+
+        {/* The history lives below the result: creating a campaign from this
+            very result must show up here immediately (server round trip). */}
+        <CampaignsPanel campaigns={campaigns} t={t} lang={lang} />
       </div>
     );
   }
@@ -1014,63 +1112,7 @@ export function CompanyDiscovery({
         </button>
       </form>
 
-      {/* ---- Previous Campaigns (persisted rows, read on the server) ------ */}
-      <section className="mt-6 rounded-2xl border border-line bg-surface p-4 sm:p-5">
-        <h2 className="text-sm font-bold text-ink">
-          {t("companyDiscovery.campaigns.title")}
-        </h2>
-        {campaigns.length === 0 ? (
-          <p className="mt-2 text-xs leading-5 text-muted">
-            {t("companyDiscovery.campaigns.empty")}
-          </p>
-        ) : (
-          <ul className="mt-2 divide-y divide-line">
-            {campaigns.map((campaign) => (
-              <li
-                key={campaign.campaignId}
-                className="flex flex-wrap items-center justify-between gap-3 py-3"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-ink">
-                    {campaign.title || t("companyDiscovery.campaigns.run")}
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted">
-                    {t("companyDiscovery.campaigns.recipients", {
-                      count: campaign.totalRecipients,
-                    })}
-                    {" · "}
-                    {t("companyDiscovery.campaigns.created")}:{" "}
-                    {formatDate(campaign.createdAt, lang)}
-                    {" · "}
-                    {t("companyDiscovery.campaigns.updated")}:{" "}
-                    {formatDate(campaign.updatedAt, lang)}
-                  </p>
-                  {campaign.discoveryRunId && (
-                    <p
-                      dir="ltr"
-                      className="mt-0.5 truncate font-mono text-xs text-ink-soft"
-                    >
-                      {t("companyDiscovery.campaigns.run")}:{" "}
-                      {campaign.discoveryRunId}
-                    </p>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <span className="rounded-lg bg-accent-soft px-2.5 py-1 text-xs font-bold text-accent">
-                    {t(`companyDiscovery.campaigns.status.${campaign.status}`)}
-                  </span>
-                  <Link
-                    href={`/applications/campaign/${campaign.campaignId}`}
-                    className="rounded-xl border border-line px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-surface-2"
-                  >
-                    {t("companyDiscovery.campaigns.open")}
-                  </Link>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <CampaignsPanel campaigns={campaigns} t={t} lang={lang} />
     </div>
   );
 }

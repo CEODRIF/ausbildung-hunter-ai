@@ -14,6 +14,8 @@ import { createDiscoveryDraft } from "@/lib/company-discovery/campaigns";
 export interface CreateDiscoveryDraftState {
   ok: boolean;
   draftId?: string;
+  /** false when the draft was saved WITHOUT its run link (schema drift). */
+  linked?: boolean;
   /** Machine code the UI maps to a translated message (never internals). */
   code?: string;
 }
@@ -34,6 +36,6 @@ export async function createDiscoveryDraftAction(input: {
     recipients: input.recipients,
   });
   return result.ok
-    ? { ok: true, draftId: result.draftId }
+    ? { ok: true, draftId: result.draftId, linked: result.linked }
     : { ok: false, code: result.code };
 }

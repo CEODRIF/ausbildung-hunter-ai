@@ -108,6 +108,7 @@ export default async function NewApplicationPage({
             accounts={data.accounts}
             prefillNotice={prefillNotice}
             prefillError={prefillError}
+            from={typeof params.from === "string" ? params.from : ""}
           />
         </div>
       </div>
