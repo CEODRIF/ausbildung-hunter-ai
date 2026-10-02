@@ -21,7 +21,6 @@ const de = {
     account: "Konto",
     dashboard: "Dashboard",
     aiAssistant: "KI-Assistent",
-    ausbildungSearch: "Ausbildungssuche",
     opportunities: "Stellenangebote",
     bewerbungen: "Bewerbungen",
     bewerbungScanner: "Bewerbungsscan",
@@ -57,7 +56,6 @@ const de = {
     settingsProfile: { title: "Profil", subtitle: "Name, Foto und verknüpfte Konten" },
     dashboard: { title: "Dashboard", subtitle: "Ihr zentraler Überblick" },
     aiAssistant: { title: "KI-Assistent", subtitle: "Ihr KI-Partner für Bewerbungen" },
-    ausbildungSearch: { title: "Ausbildungssuche", subtitle: "Fragen stellen, Plätze finden" },
     opportunities: { title: "Stellenangebote", subtitle: "Stellen durchsuchen und merken" },
     opportunitiesSaved: { title: "Merken", subtitle: "Ihre gespeicherten Stellen" },
     opportunityDetail: { title: "Stellenanzeige", subtitle: "Details und Passung" },
@@ -321,15 +319,9 @@ const de = {
       title: "Ihr intelligenter Weg zur Ausbildung.",
       subtitle:
         "Ausbildung Hunter AI findet passende Ausbildungsplätze, analysiert Ihre Bewerbung und hilft Ihnen bei jedem Schritt – von der Suche bis zum Kontakt mit dem Unternehmen.",
-      ctaFind: "Ausbildung mit KI finden",
       ctaAnalyze: "Lebenslauf analysieren",
     },
     features: {
-      search: {
-        title: "KI-Ausbildungssuche",
-        text: "Stellen aus öffentlichen Quellen, abgeglichen mit Ihrem Profil.",
-        action: "Suchen starten",
-      },
       assistant: {
         title: "KI-Assistent",
         text: "Fragen zu Ihrer Bewerbung, mit Dokumenten und Quellen.",
@@ -698,8 +690,7 @@ const de = {
       "Die KI konnte aus Ihren Dokumenten kein vollständiges Profil erstellen. Bitte versuchen Sie es erneut.",
     nextStep: "Nächster Schritt",
     nextStepBody:
-      "Ihr Profil ist bereit. Lassen Sie die KI damit echte {goal}-Angebote in der öffentlichen Jobsuche finden — mit Live-Verlauf und Excel-Export.",
-    startAiSearch: "KI-Suche starten",
+      "Ihr Profil ist bereit. Finden Sie jetzt passende {goal}-Angebote in der öffentlichen Jobsuche.",
     deletePersonalTitle: "Persönliche Daten löschen",
     deletePersonalBody:
       "Entfernt diesen Scan, das extrahierte Kandidatenprofil und die hochgeladenen Dokumente, die von keinem anderen Scan verwendet werden. Das kann nicht rückgängig gemacht werden.",
@@ -757,11 +748,6 @@ const de = {
     eduUniversity: "Hochschulzugangsberechtigung (Abitur)",
     eduUnknown: "Siehe Quelle (nicht klassifiziert)",
     unknownDate: "unbekanntem Datum",
-    aiSearchIntro1:
-      "Laden Sie Ihre Bewerbung hoch — die KI liest Ihr Profil und erstellt gezielte Suchen über die öffentliche ",
-    aiSearchSource: "Bundesagentur für Arbeit Jobsuche",
-    aiSearchIntro2:
-      ". Sie erhalten echte, aktuell veröffentlichte Stellen — nichts erfunden — mit Live-Verlauf und Excel-Export.",
     scannerIntro:
       "Laden Sie Ihre Dokumente hoch und bauen Sie ein strukturiertes Profil für Ihren nächsten Schritt in Deutschland.",
     scannerGoalQuestion: "Worauf suchen Sie?",
@@ -893,68 +879,6 @@ const de = {
   },
 
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
-  aiSearch: {
-    searching: "Öffentliche Quellen werden durchsucht",
-    sourceNotice:
-      "Bundesagentur für Arbeit ist momentan nicht erreichbar. Andere Quellen wurden trotzdem durchsucht.",
-    empty: "Keine Stellenangebote gefunden",
-    exportTitle: "Excel-Export für Ihre Bewerbung",
-    exportSummary:
-      "{email} von {total} Angeboten enthalten eine E-Mail-Adresse.",
-    exportNone: "Keine Angebote mit E-Mail-Adresse gefunden.",
-    exportNote:
-      "Es werden nur Angebote mit gültiger E-Mail-Adresse exportiert; doppelte E-Mail-Adressen werden entfernt.",
-    exportButton: "Excel herunterladen",
-    exportPreparing: "Excel wird vorbereitet…",
-    exportError:
-      "Der Excel-Export ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
-    // ---- AI Search 2.0: stats, filters, provenance ----------------------
-    statsFound: "Möglichkeiten gefunden",
-    statsEmail: "{count} mit öffentlicher E-Mail",
-    statsApply: "{count} mit Bewerbungslink",
-    statsOfficial: "{count} mit offizieller Unternehmensquelle",
-    emailNotFound: "E-Mail nicht öffentlich verfügbar",
-    foundAt: "gefunden auf",
-    officialBadge: "offiziell",
-    sourcesLabel: "Quellen",
-    filtersTitle: "Filter",
-    filterMatch: "Match",
-    filterBundesland: "Bundesland",
-    filterCity: "Stadt",
-    filterSource: "Quelle",
-    filterStartYear: "Startjahr",
-    filterDistance: "Max. km",
-    filterHasEmail: "Hat E-Mail",
-    filterHasApplyLink: "Hat Bewerbungslink",
-    filterOfficialSource: "Offizielle Unternehmensquelle",
-    filterAll: "Alle",
-    shownOf: "{shown} von {total} Ergebnissen",
-    noResultsAfterFilter:
-      "Keine Ergebnisse entsprechen den gewählten Filtern.",
-    verifiedAt: "zuletzt geprüft",
-    careerLink: "Karriereseite",
-    websiteLink: "Unternehmenswebsite",
-    confidenceLabel: "Vertrauen",
-    enrichingStep: "Unternehmenskontakte ermitteln",
-    emailSourceLabel: "E-Mail-Quelle",
-    // ---- AI Search 2.1: diagnostics + extended stats -------------------
-    diagTitle: "Quellendiagnostik",
-    sourcesSearched: "Quellen geprüft",
-    sourcesWithResults: "Quellen mit Treffern",
-    companiesEnriched: "Unternehmen angereichert",
-    companiesWithEmail: "Unternehmen mit öffentl. E-Mail",
-    officialWebsites: "Offizielle Websites gefunden",
-    officialApplyLinks: "Offizielle Bewerbungslinks",
-    webSearchesExecuted: "Web-Suchen ausgeführt",
-    providerErrors:
-      "Websuche: {n} Provider-Fehler — TAVILY_API_KEY prüfen (Details in den Function-Logs).",
-    providerErrorDetail:
-      "Modell: {model} · HTTP {http} · Code {code} · {providerStatus}",
-    statusOk: "erfolgreich",
-    statusDegraded: "teilweise",
-    statusFailed: "fehlgeschlagen",
-    statusSkipped: "Budget übersprungen",
-  },
   chat: {
     fileHint:
       "PDF, DOC, DOCX, TXT, JPG, PNG · max. 10 MB pro Datei · KI-Antworten bitte vor Verwendung prüfen",
@@ -1273,7 +1197,6 @@ const en: Dict = {
     account: "Account",
     dashboard: "Dashboard",
     aiAssistant: "AI Assistant",
-    ausbildungSearch: "Apprenticeship Search",
     opportunities: "Opportunities",
     bewerbungen: "Applications",
     bewerbungScanner: "Application Scanner",
@@ -1304,7 +1227,6 @@ const en: Dict = {
     settingsProfile: { title: "Profile", subtitle: "Name, photo and connected accounts" },
     dashboard: { title: "Dashboard", subtitle: "Your central overview" },
     aiAssistant: { title: "AI Assistant", subtitle: "Your AI partner for applications" },
-    ausbildungSearch: { title: "Apprenticeship Search", subtitle: "Ask questions, find places" },
     opportunities: { title: "Opportunities", subtitle: "Browse and save vacancies" },
     opportunitiesSaved: { title: "Saved", subtitle: "Your saved vacancies" },
     opportunityDetail: { title: "Vacancy", subtitle: "Details and match" },
@@ -1548,15 +1470,9 @@ const en: Dict = {
       title: "Your intelligent path to an apprenticeship.",
       subtitle:
         "Ausbildung Hunter AI finds matching apprenticeships, analyzes your application and helps you at every step — from search to contacting the company.",
-      ctaFind: "Find apprenticeships with AI",
       ctaAnalyze: "Analyze your CV",
     },
     features: {
-      search: {
-        title: "AI Apprenticeship Search",
-        text: "Vacancies from public sources, matched against your profile.",
-        action: "Start searching",
-      },
       assistant: {
         title: "AI Assistant",
         text: "Questions about your application, with documents and sources.",
@@ -1909,8 +1825,7 @@ const en: Dict = {
       "The AI could not create a complete profile from your documents. Please try again.",
     nextStep: "Next step",
     nextStepBody:
-      "Your profile is ready. Let the AI use it to find real {goal} opportunities across the public Jobsuche — with live progress and an Excel export.",
-    startAiSearch: "Start AI Search",
+      "Your profile is ready. Find matching {goal} opportunities in the public jobs search now.",
     deletePersonalTitle: "Delete personal data",
     deletePersonalBody:
       "Removes this scan, its extracted candidate profile, and the uploaded documents that are not used by another scan. This cannot be undone.",
@@ -1968,11 +1883,6 @@ const en: Dict = {
     eduUniversity: "University entrance qualification (Abitur)",
     eduUnknown: "See source (not classified)",
     unknownDate: "unknown date",
-    aiSearchIntro1:
-      "Upload your CV, and the AI reads your profile to build focused searches across the public ",
-    aiSearchSource: "Bundesagentur für Arbeit Jobsuche",
-    aiSearchIntro2:
-      ". You get real, currently published postings — nothing invented — with live progress and an Excel export.",
     scannerIntro:
       "Upload your documents and build a structured profile for your next step in Germany.",
     scannerGoalQuestion: "What are you looking for?",
@@ -2103,67 +2013,6 @@ const en: Dict = {
   },
 
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
-  aiSearch: {
-    searching: "Searching public sources",
-    sourceNotice:
-      "The Federal Employment Agency (Jobbörse) is currently unreachable. The other sources were still searched.",
-    empty: "No opportunities found",
-    exportTitle: "Excel export for your applications",
-    exportSummary:
-      "{email} of {total} opportunities include an email address.",
-    exportNone: "No opportunities with an email address found.",
-    exportNote:
-      "Only opportunities with a valid email address are exported; duplicate email addresses are removed.",
-    exportButton: "Download Excel",
-    exportPreparing: "Preparing Excel…",
-    exportError:
-      "The Excel export failed. Please try again.",
-    // ---- AI Search 2.0: stats, filters, provenance ----------------------
-    statsFound: "Opportunities found",
-    statsEmail: "{count} with public email",
-    statsApply: "{count} with application link",
-    statsOfficial: "{count} with official company source",
-    emailNotFound: "Email not publicly available",
-    foundAt: "found at",
-    officialBadge: "official",
-    sourcesLabel: "Sources",
-    filtersTitle: "Filters",
-    filterMatch: "Match",
-    filterBundesland: "Bundesland",
-    filterCity: "City",
-    filterSource: "Source",
-    filterStartYear: "Start year",
-    filterDistance: "Max. km",
-    filterHasEmail: "Has email",
-    filterHasApplyLink: "Has application link",
-    filterOfficialSource: "Official company source",
-    filterAll: "All",
-    shownOf: "{shown} of {total} results",
-    noResultsAfterFilter: "No results match the selected filters.",
-    verifiedAt: "last checked",
-    careerLink: "Career page",
-    websiteLink: "Company website",
-    confidenceLabel: "Confidence",
-    enrichingStep: "Collecting company contacts",
-    emailSourceLabel: "Email source",
-    // ---- AI Search 2.1: diagnostics + extended stats -------------------
-    diagTitle: "Source diagnostics",
-    sourcesSearched: "Sources searched",
-    sourcesWithResults: "Sources with results",
-    companiesEnriched: "Companies enriched",
-    companiesWithEmail: "Companies with public email",
-    officialWebsites: "Official websites found",
-    officialApplyLinks: "Official application links",
-    webSearchesExecuted: "Web searches executed",
-    providerErrors:
-      "Web search: {n} provider errors — check TAVILY_API_KEY (details in the function logs).",
-    providerErrorDetail:
-      "Model: {model} · HTTP {http} · Code {code} · {providerStatus}",
-    statusOk: "success",
-    statusDegraded: "degraded",
-    statusFailed: "failed",
-    statusSkipped: "skipped (budget)",
-  },
   chat: {
     fileHint:
       "PDF, DOC, DOCX, TXT, JPG, PNG · max 10 MB per file · Verify AI answers before use",
@@ -2469,7 +2318,6 @@ const fr: Dict = {
     account: "Compte",
     dashboard: "Tableau de bord",
     aiAssistant: "Assistant IA",
-    ausbildungSearch: "Recherche d'alternance",
     opportunities: "Offres",
     bewerbungen: "Candidatures",
     bewerbungScanner: "Scan de candidature",
@@ -2500,7 +2348,6 @@ const fr: Dict = {
     settingsProfile: { title: "Profil", subtitle: "Nom, photo et comptes liés" },
     dashboard: { title: "Tableau de bord", subtitle: "Votre vue d'ensemble" },
     aiAssistant: { title: "Assistant IA", subtitle: "Votre partenaire IA pour les candidatures" },
-    ausbildungSearch: { title: "Recherche d'alternance", subtitle: "Posez des questions, trouvez des places" },
     opportunities: { title: "Offres", subtitle: "Parcourir et enregistrer les offres" },
     opportunitiesSaved: { title: "Enregistrées", subtitle: "Vos offres enregistrées" },
     opportunityDetail: { title: "Offre", subtitle: "Détails et correspondance" },
@@ -2744,15 +2591,9 @@ const fr: Dict = {
       title: "Votre chemin intelligent vers l'alternance.",
       subtitle:
         "Ausbildung Hunter AI trouve des alternances adaptées, analyse votre candidature et vous accompagne à chaque étape — de la recherche au contact avec l'entreprise.",
-      ctaFind: "Trouver des alternances avec l'IA",
       ctaAnalyze: "Analyser votre CV",
     },
     features: {
-      search: {
-        title: "Recherche d'alternance IA",
-        text: "Des offres de sources publiques, comparées à votre profil.",
-        action: "Lancer la recherche",
-      },
       assistant: {
         title: "Assistant IA",
         text: "Des questions sur votre candidature, avec documents et sources.",
@@ -3105,8 +2946,7 @@ const fr: Dict = {
       "L'IA n'a pas pu créer un profil complet à partir de vos documents. Veuillez réessayer.",
     nextStep: "Étape suivante",
     nextStepBody:
-      "Votre profil est prêt. Laissez l'IA trouver de vraies offres de {goal} dans la Jobsuche publique — avec suivi en direct et export Excel.",
-    startAiSearch: "Démarrer la recherche IA",
+      "Votre profil est prêt. Trouvez maintenant des offres {goal} adaptées dans la recherche d'emploi publique.",
     deletePersonalTitle: "Supprimer les données personnelles",
     deletePersonalBody:
       "Supprime ce scan, le profil candidat extrait et les documents téléversés non utilisés par un autre scan. Irréversible.",
@@ -3164,11 +3004,6 @@ const fr: Dict = {
     eduUniversity: "Qualification universitaire (Abitur)",
     eduUnknown: "Voir la source (non classifié)",
     unknownDate: "date inconnue",
-    aiSearchIntro1:
-      "Téléversez votre CV — l'IA lit votre profil et construit des recherches ciblées sur la ",
-    aiSearchSource: "Jobsuche publique de l'Agence fédérale pour l'emploi",
-    aiSearchIntro2:
-      ". Vous obtenez de vraies offres actuellement publiées — rien d'inventé — avec suivi en direct et export Excel.",
     scannerIntro:
       "Téléversez vos documents et construisez un profil structuré pour votre prochaine étape en Allemagne.",
     scannerGoalQuestion: "Que cherchez-vous ?",
@@ -3300,68 +3135,6 @@ const fr: Dict = {
   },
 
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
-  aiSearch: {
-    searching: "Recherche dans les sources publiques",
-    sourceNotice:
-      "L'Agence fédérale pour l'emploi (Jobbörse) est momentanément inaccessible. Les autres sources ont quand même été consultées.",
-    empty: "Aucune offre trouvée",
-    exportTitle: "Export Excel pour vos candidatures",
-    exportSummary:
-      "{email} offres sur {total} incluent une adresse e-mail.",
-    exportNone: "Aucune offre avec adresse e-mail trouvée.",
-    exportNote:
-      "Seules les offres avec une adresse e-mail valide sont exportées ; les adresses en double sont supprimées.",
-    exportButton: "Télécharger l'Excel",
-    exportPreparing: "Préparation de l'Excel…",
-    exportError:
-      "L'export Excel a échoué. Veuillez réessayer.",
-    // ---- AI Search 2.0: stats, filters, provenance ----------------------
-    statsFound: "Opportunités trouvées",
-    statsEmail: "{count} avec e-mail public",
-    statsApply: "{count} avec lien de candidature",
-    statsOfficial: "{count} avec source officielle de l'entreprise",
-    emailNotFound: "E-mail non publiquement disponible",
-    foundAt: "trouvé sur",
-    officialBadge: "officiel",
-    sourcesLabel: "Sources",
-    filtersTitle: "Filtres",
-    filterMatch: "Correspondance",
-    filterBundesland: "Bundesland",
-    filterCity: "Ville",
-    filterSource: "Source",
-    filterStartYear: "Année de début",
-    filterDistance: "Max. km",
-    filterHasEmail: "A un e-mail",
-    filterHasApplyLink: "A un lien de candidature",
-    filterOfficialSource: "Source officielle de l'entreprise",
-    filterAll: "Tous",
-    shownOf: "{shown} sur {total} résultats",
-    noResultsAfterFilter:
-      "Aucun résultat ne correspond aux filtres sélectionnés.",
-    verifiedAt: "dernière vérification",
-    careerLink: "Page carrière",
-    websiteLink: "Site de l'entreprise",
-    confidenceLabel: "Confiance",
-    enrichingStep: "Collecte des contacts des entreprises",
-    emailSourceLabel: "Source de l'e-mail",
-    // ---- AI Search 2.1: diagnostics + extended stats -------------------
-    diagTitle: "Diagnostic des sources",
-    sourcesSearched: "Sources interrogées",
-    sourcesWithResults: "Sources avec résultats",
-    companiesEnriched: "Entreprises enrichies",
-    companiesWithEmail: "Entreprises avec e-mail public",
-    officialWebsites: "Sites officiels trouvés",
-    officialApplyLinks: "Liens de candidature officiels",
-    webSearchesExecuted: "Recherches web exécutées",
-    providerErrors:
-      "Recherche web : {n} erreurs fournisseur — vérifier TAVILY_API_KEY (détails dans les logs).",
-    providerErrorDetail:
-      "Modèle : {model} · HTTP {http} · Code {code} · {providerStatus}",
-    statusOk: "réussi",
-    statusDegraded: "partiel",
-    statusFailed: "échoué",
-    statusSkipped: "ignoré (budget)",
-  },
   chat: {
     fileHint:
       "PDF, DOC, DOCX, TXT, JPG, PNG · 10 Mo max. par fichier · Vérifiez les réponses de l'IA avant usage",
@@ -3671,7 +3444,6 @@ const ar: Dict = {
     account: "الحساب",
     dashboard: "لوحة التحكم",
     aiAssistant: "المساعد الذكي",
-    ausbildungSearch: "البحث عن التدريب المهني",
     opportunities: "الوظائف المتاحة",
     bewerbungen: "الطلبات",
     bewerbungScanner: "ماسح الطلبات",
@@ -3702,7 +3474,6 @@ const ar: Dict = {
     settingsProfile: { title: "الملف الشخصي", subtitle: "الاسم والصورة والحسابات المرتبطة" },
     dashboard: { title: "لوحة التحكم", subtitle: "نظرتك المركزية" },
     aiAssistant: { title: "المساعد الذكي", subtitle: "شريكك الذكي للطلبات" },
-    ausbildungSearch: { title: "البحث عن التدريب", subtitle: "اطرح الأسئلة واعثر على الأماكن" },
     opportunities: { title: "الوظائف المتاحة", subtitle: "تصفّح الوظائف واحفظها" },
     opportunitiesSaved: { title: "المحفوظة", subtitle: "الوظائف التي حفظتها" },
     opportunityDetail: { title: "إعلان الوظيفة", subtitle: "التفاصيل والملاءمة" },
@@ -3946,15 +3717,9 @@ const ar: Dict = {
       title: "طريقك الذكي نحو التدريب المهني.",
       subtitle:
         "يجد Ausbildung Hunter AI أماكن تدريب مناسبة، ويحلّل طلبك، ويساعدك في كل خطوة — من البحث إلى التواصل مع الشركة.",
-      ctaFind: "اعثر على التدريب بالذكاء الاصطناعي",
       ctaAnalyze: "حلّل سيرتك الذاتية",
     },
     features: {
-      search: {
-        title: "البحث الذكي عن التدريب",
-        text: "وظائف من مصادر عامة، مقابَلة مع ملفك.",
-        action: "ابدأ البحث",
-      },
       assistant: {
         title: "المساعد الذكي",
         text: "أسئلة عن طلبك، مع المستندات والمصادر.",
@@ -4299,8 +4064,7 @@ const ar: Dict = {
       "لم يتمكن الذكاء الاصطناعي من إنشاء ملف كامل من مستنداتك. يرجى المحاولة مرة أخرى.",
     nextStep: "الخطوة التالية",
     nextStepBody:
-      "ملفك جاهز. دع الذكاء الاصطناعي يجد عروض {goal} حقيقية في بحث الوظائف العام — مع تقدم مباشر وتصدير Excel.",
-    startAiSearch: "بدء بحث الذكاء الاصطناعي",
+      "ملفك جاهز. اعثر الآن على عروض {goal} مناسبة في بحث الوظائف العام.",
     deletePersonalTitle: "حذف البيانات الشخصية",
     deletePersonalBody:
       "يزيل هذا المسح وملف المرشح المستخرج والمستندات المرفوعة التي لا يستخدمها مسح آخر. لا يمكن التراجع.",
@@ -4357,11 +4121,6 @@ const ar: Dict = {
     eduUniversity: "تأهيل جامعي (Abitur)",
     eduUnknown: "انظر المصدر (غير مصنف)",
     unknownDate: "تاريخ غير معروف",
-    aiSearchIntro1:
-      "ارفع سيرتك الذاتية — يقرأ الذكاء الاصطناعي ملفك ويبني بحثًا مركَّزًا عبر ",
-    aiSearchSource: "بحث الوظائف في الوكالة الفيدرالية للعمل",
-    aiSearchIntro2:
-      ". تحصل على عروض حقيقية منشورة حاليًا — لا شيء مختلق — مع تقدم مباشر وتصدير Excel.",
     scannerIntro:
       "ارفع مستنداتك وابنِ ملفًا منظمًا لخطوتك التالية في ألمانيا.",
     scannerGoalQuestion: "ماذا تبحث عنه؟",
@@ -4490,66 +4249,6 @@ const ar: Dict = {
   },
 
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
-  aiSearch: {
-    searching: "جارٍ البحث في المصادر العامة",
-    sourceNotice:
-      "وكالة العمل الفيدرالية غير متاحة حاليًا. تم البحث في المصادر الأخرى على أي حال.",
-    empty: "لم تُعثر على وظائف",
-    exportTitle: "تصدير Excel للتقديم",
-    exportSummary:
-      "{email} من أصل {total} فرصة تحتوي على عنوان بريد إلكتروني.",
-    exportNone: "لم يتم العثور على فرص بعنوان بريد إلكتروني.",
-    exportNote:
-      "يتم تصدير الفرص التي تحتوي على عنوان بريد إلكتروني صالح فقط، مع إزالة عناوين البريد المكررة.",
-    exportButton: "تنزيل Excel",
-    exportPreparing: "جاري تجهيز ملف Excel…",
-    exportError: "فشل تصدير Excel. يرجى المحاولة مرة أخرى.",
-    // ---- AI Search 2.0: stats, filters, provenance ----------------------
-    statsFound: "فرص وُجدت",
-    statsEmail: "{count} ببريد إلكتروني عام",
-    statsApply: "{count} برابط للتقديم",
-    statsOfficial: "{count} بمصدر رسمي من الشركة",
-    emailNotFound: "البريد الإلكتروني غير متوفر علنًا",
-    foundAt: "وُجد في",
-    officialBadge: "رسمي",
-    sourcesLabel: "المصادر",
-    filtersTitle: "التصفية",
-    filterMatch: "التطابق",
-    filterBundesland: "الولاية",
-    filterCity: "المدينة",
-    filterSource: "المصدر",
-    filterStartYear: "سنة البداية",
-    filterDistance: "أقصى مسافة (كم)",
-    filterHasEmail: "يحتوي على بريد",
-    filterHasApplyLink: "يحتوي على رابط تقديم",
-    filterOfficialSource: "مصدر رسمي من الشركة",
-    filterAll: "الكل",
-    shownOf: "{shown} من أصل {total} نتيجة",
-    noResultsAfterFilter: "لا توجد نتائج تطابق الفلاتر المحددة.",
-    verifiedAt: "آخر فحص",
-    careerLink: "صفحة التوظيف",
-    websiteLink: "موقع الشركة",
-    confidenceLabel: "مستوى الثقة",
-    enrichingStep: "تجميع جهات الاتصال بالشركات",
-    emailSourceLabel: "مصدر البريد",
-    // ---- AI Search 2.1: diagnostics + extended stats -------------------
-    diagTitle: "تشخيص المصادر",
-    sourcesSearched: "المصادر التي فُحصت",
-    sourcesWithResults: "مصادر ذات نتائج",
-    companiesEnriched: "شركات مُثراء",
-    companiesWithEmail: "شركات ببريد عام",
-    officialWebsites: "مواقع رسمية وُجدت",
-    officialApplyLinks: "روابط تقديم رسمية",
-    webSearchesExecuted: "عمليات بحث منفذة",
-    providerErrors:
-      "البحث web: {n} أخطاء مزود — تحقق من TAVILY_API_KEY (التفاصيل في السجلات).",
-    providerErrorDetail:
-      "النموذج: {model} · HTTP {http} · الكود {code} · {providerStatus}",
-    statusOk: "ناجح",
-    statusDegraded: "جزئي",
-    statusFailed: "فشل",
-    statusSkipped: "تخطي (ميزانية)",
-  },
   chat: {
     fileHint:
       "PDF, DOC, DOCX, TXT, JPG, PNG · 10 م.ب كحد أقصى لكل ملف · تحقق من إجابات الذكاء الاصطناعي قبل الاستخدام",

@@ -265,7 +265,6 @@ describe("navigation + app shell", () => {
     for (const route of [
       "/dashboard",
       "/ai",
-      "/opportunities/ai-search",
       "/bewerbung-scanner",
       "/applications",
       "/opportunities/saved",
@@ -309,7 +308,6 @@ describe("navigation + app shell", () => {
       "src/app/settings/email/page.tsx",
       "src/app/settings/billing/page.tsx",
       "src/app/opportunities/saved/page.tsx",
-      "src/app/opportunities/ai-search/page.tsx",
       "src/app/applications/new/page.tsx",
       "src/app/applications/campaign/[id]/page.tsx",
       "src/app/bewerbung-scanner/page.tsx",

@@ -61,10 +61,10 @@ export default async function BewerbungScannerResultsPage({
               })}
             </p>
             <Link
-              href="/opportunities/ai-search"
+              href="/opportunities"
               className="mt-4 inline-flex h-11 items-center justify-center rounded-xl bg-accent px-5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(var(--glow-accent-rgb),0.22)] transition-colors hover:bg-accent-deep"
             >
-              ✦ {t("account.startAiSearch")}
+              {t("dash.features.opportunities.action")}
             </Link>
           </Card>
         )}

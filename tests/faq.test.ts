@@ -31,8 +31,8 @@ function assertFullLocalization(item: FaqItem) {
 // ---------------------------------------------------------------------------
 
 describe("FAQ data structure", () => {
-  it("has exactly 18 categories", () => {
-    expect(CATEGORIES).toHaveLength(18);
+  it("has exactly 17 categories", () => {
+    expect(CATEGORIES).toHaveLength(17);
   });
 
   it("has a large, comprehensive item set", () => {
@@ -134,9 +134,9 @@ describe("FAQ search", () => {
   });
 
   it("a question-text match ranks above an answer-only match", () => {
-    // "ausbildungssuche" appears verbatim in the search-category question text;
-    // it should be found.
-    const results = search({ query: "ausbildungssuche", lang: "de" });
+    // "stellenangebote" is the search-category label and appears in its
+    // answer texts, so it should be found (and rank the category first).
+    const results = search({ query: "stellenangebote", lang: "de" });
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].category).toBe("search");
   });

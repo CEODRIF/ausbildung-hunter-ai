@@ -29,10 +29,10 @@ export const CATEGORIES: FaqCategory[] = [
     id: "search",
     icon: "search",
     label: {
-      de: "Ausbildungssuche",
-      en: "Apprenticeship Search",
-      fr: "Recherche d'alternance",
-      ar: "البحث عن التدريب",
+      de: "Stellenangebote",
+      en: "Opportunities",
+      fr: "Offres",
+      ar: "الوظائف المتاحة",
     },
   },
   {
@@ -63,16 +63,6 @@ export const CATEGORIES: FaqCategory[] = [
       en: "Excel Export",
       fr: "Export Excel",
       ar: "تصدير Excel",
-    },
-  },
-  {
-    id: "ai-search",
-    icon: "target",
-    label: {
-      de: "KI-Suche",
-      en: "AI Search",
-      fr: "Recherche IA",
-      ar: "البحث بالذكاء الاصطناعي",
     },
   },
   {

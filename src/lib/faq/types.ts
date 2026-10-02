@@ -10,7 +10,7 @@ import type { Language } from "@/lib/i18n";
  * cross-language parity (every question exists in de/en/fr/ar).
  */
 
-/** The 18 FAQ categories, in display order. */
+/** The 17 FAQ categories, in display order. */
 export type CategoryId =
   | "general"
   | "account"
@@ -18,7 +18,6 @@ export type CategoryId =
   | "saved"
   | "email-collector"
   | "excel-export"
-  | "ai-search"
   | "ai-assistant"
   | "scanner"
   | "cv-templates"

@@ -218,11 +218,5 @@ describe("discovery queries + provider budget", () => {
     expect(source).not.toContain("getWebSearchClient");
     expect(source).not.toContain("search-credits");
     expect(source).not.toContain("createAdminClient");
-    const discoverySource = await import("node:fs").then((fs) =>
-      fs.readFileSync("src/lib/opportunities/web-discovery.ts", "utf8"),
-    );
-    // Discovery still spends at most the capped number of provider requests.
-    expect(discoverySource).toContain("const MAX_DISCOVERY_CALLS = 3;");
-    expect(discoverySource).not.toContain("search-credits");
   });
 });

@@ -1,18 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildExportRow,
-} from "@/lib/opportunities/ai-search";
-import {
   exportableOpportunities,
   normalizeOpportunityEmail,
   opportunityEmail,
   resultsWithEmailCount,
 } from "@/lib/opportunities/email-export";
 import type { Opportunity } from "@/lib/opportunities/types";
-import { dictionaries } from "@/lib/i18n/dictionaries";
 
 /**
- * Excel export email-eligibility rules (AI Search → outreach export).
+ * Excel export email-eligibility rules (opportunity outreach export).
  *
  * Contract: an opportunity is exported ONLY when its source published a
  * real, non-empty, non-placeholder email; duplicates are removed; the UI
@@ -248,21 +244,6 @@ describe("email export eligibility (AI Search Excel export)", () => {
       posted_at: null,
     });
     expect(exportableOpportunities([minimal])).toHaveLength(1);
-    const row = buildExportRow(minimal);
-    expect(row.email).toBe("only@this.de");
-    expect(row.company).toBe("");
-    expect(row.location).toBe("");
-    expect(row.bundesland).toBe("");
-    expect(row.phone).toBe("");
-    expect(row.company_website).toBe("");
-    expect(row.application_url).toBe("");
-    expect(row.start_date).toBe("");
-    expect(row.application_deadline).toBe("");
-    expect(row.requirements).toBe("");
-    expect(row.additional_sources).toBe("");
-    // identity fields from the source are always present
-    expect(row.title).toBe("Ausbildung Mechatroniker/in");
-    expect(row.source_url).toBe("https://example.test/1");
   });
 
   it("zero email results → nothing is exportable (button disabled / request blocked)", () => {
@@ -289,42 +270,4 @@ describe("email export eligibility (AI Search Excel export)", () => {
   });
 });
 
-describe("Excel export i18n — all four languages", () => {
-  const requiredKeys = [
-    "exportTitle",
-    "exportSummary",
-    "exportNone",
-    "exportNote",
-    "exportButton",
-    "exportPreparing",
-    "exportError",
-  ] as const;
 
-  for (const lang of ["de", "en", "fr", "ar"] as const) {
-    it(`${lang}: aiSearch export keys exist and are non-empty`, () => {
-      const aiSearch = dictionaries[lang].aiSearch as unknown as Record<
-        string,
-        string
-      >;
-      for (const key of requiredKeys) {
-        expect(typeof aiSearch[key], `${lang}.aiSearch.${key}`).toBe("string");
-        expect(aiSearch[key].length, `${lang}.aiSearch.${key}`).toBeGreaterThan(0);
-      }
-      // the summary must interpolate both numbers
-      expect(aiSearch.exportSummary).toContain("{email}");
-      expect(aiSearch.exportSummary).toContain("{total}");
-    });
-  }
-
-  it("de uses the requested wording", () => {
-    const aiSearch = dictionaries.de.aiSearch as unknown as Record<
-      string,
-      string
-    >;
-    expect(aiSearch.exportButton).toBe("Excel herunterladen");
-    expect(aiSearch.exportNone).toBe("Keine Angebote mit E-Mail-Adresse gefunden.");
-    expect(aiSearch.exportSummary).toBe(
-      "{email} von {total} Angeboten enthalten eine E-Mail-Adresse.",
-    );
-  });
-});

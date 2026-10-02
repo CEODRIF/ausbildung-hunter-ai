@@ -3,7 +3,6 @@ import { getCurrentUserAndProfile } from "@/lib/auth";
 import { OpportunitySearch } from "@/components/opportunity-search";
 import { sanitizeSearchUrlState } from "@/lib/opportunities/types";
 import { getServerT } from "@/lib/i18n/server";
-import { Icon } from "@/components/icon";
 
 export const dynamic = "force-dynamic";
 export default async function OpportunitiesPage({
@@ -39,13 +38,6 @@ export default async function OpportunitiesPage({
               className="text-sm font-semibold text-accent transition-colors hover:text-accent-deep"
             >
               {t("pages.opportunitiesSaved.title")}
-            </Link>
-            <Link
-              href="/opportunities/ai-search"
-              className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(var(--glow-accent-rgb),0.22)] transition-colors hover:bg-accent-deep"
-            >
-              <Icon name="spark" size={15} />
-              {t("nav.ausbildungSearch")}
             </Link>
           </div>
         </div>

@@ -14,8 +14,8 @@ import "server-only";
  *   TAVILY_API_KEY   required. This is the ONLY key this provider reads.
  *
  * Request budget: at most MAX_TAVILY_REQUESTS_PER_RUN Tavily requests per
- * search operation. The counter lives on the client instance, and
- * `ai-search` creates exactly one client per run — so the cap is per search
+ * search operation. The counter lives on the client instance, and each
+ * search run creates exactly one client — so the cap is per search
  * operation. Once spent, `search()` returns [] WITHOUT any network call:
  * no open loop, no unbounded retry, no per-company request.
  *

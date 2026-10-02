@@ -81,14 +81,8 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
             {t("dash.hero.subtitle")}
           </p>
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-            <Link href="/opportunities/ai-search">
-              <Button size="lg">
-                <Icon name="spark" size={17} />
-                {t("dash.hero.ctaFind")}
-              </Button>
-            </Link>
             <Link href="/bewerbung-scanner">
-              <Button size="lg" variant="secondary">
+              <Button size="lg">
                 <Icon name="scan" size={17} />
                 {t("dash.hero.ctaAnalyze")}
               </Button>
@@ -98,15 +92,9 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
       </section>
 
       {/* ----------------------------------------------------------------- */}
-      {/* Feature cards — the five ways in, each with a real action.         */}
+      {/* Feature cards — the four ways in, each with a real action.         */}
       {/* ----------------------------------------------------------------- */}
-      <section className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <FeatureCard
-          icon="search"
-          title={t("dash.features.search.title")}
-          text={t("dash.features.search.text")}
-          action={{ label: t("dash.features.search.action"), href: "/opportunities/ai-search" }}
-        />
+      <section className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <FeatureCard
           icon="spark"
           title={t("dash.features.assistant.title")}

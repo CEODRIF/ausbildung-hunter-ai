@@ -12,10 +12,10 @@ export const searchItems: FaqItem[] = [
       ar: "كيف أبحث عن تدريب مهني؟",
     },
     answer: {
-      de: "Öffnen Sie die Ausbildungssuche, wählen Sie das Ziel Ausbildung und geben Sie Stichwort, Rolle oder Ort ein. Sie können die Ergebnisse zusätzlich nach Radius, Aktualität und weiteren Filtern eingrenzen.",
-      en: "Open the Apprenticeship Search, select the goal Apprenticeship and enter a keyword, role or location. You can further narrow results by radius, freshness and other filters.",
-      fr: "Ouvrez la Recherche d'alternance, choisissez l'objectif Alternance et saisissez un mot-clé, une fonction ou un lieu. Vous pouvez affiner par rayon, fraîcheur et autres filtres.",
-      ar: "افتح البحث عن التدريب المهني، واختر هدف التدريب، وأدخل كلمة مفتاحية أو وظيفة أو موقعًا. ويمكنك تضييق النتائج عبر النطاق الزمني والمنطقة وغيرها من عوامل التصفية.",
+      de: "Öffnen Sie die Stellenangebote, wählen Sie das Ziel Ausbildung und geben Sie Stichwort, Rolle oder Ort ein. Sie können die Ergebnisse zusätzlich nach Radius, Aktualität und weiteren Filtern eingrenzen.",
+      en: "Open Opportunities, select the goal Apprenticeship and enter a keyword, role or location. You can further narrow results by radius, freshness and other filters.",
+      fr: "Ouvrez les Offres, choisissez l'objectif Alternance et saisissez un mot-clé, une fonction ou un lieu. Vous pouvez affiner par rayon, fraîcheur et autres filtres.",
+      ar: "افتح الوظائف المتاحة، واختر هدف التدريب، وأدخل كلمة مفتاحية أو وظيفة أو موقعًا. ويمكنك تضييق النتائج عبر النطاق الزمني والمنطقة وغيرها من عوامل التصفية.",
     },
     keywords: ["search", "ausbildung", "find"],
   },
@@ -188,23 +188,6 @@ export const searchItems: FaqItem[] = [
       ar: "افتح الوظائف المحفوظة واحذف الوظيفة المطلوبة. ستُحذف من قائمتك.",
     },
     keywords: ["delete", "saved", "remove"],
-  },
-  {
-    id: "search-vs-ai-search",
-    category: "search",
-    question: {
-      de: "Was ist der Unterschied zwischen Suche und KI-Suche?",
-      en: "What is the difference between Search and AI Search?",
-      fr: "Quelle est la différence entre Recherche et Recherche IA ?",
-      ar: "ما الفرق بين البحث والبحث بالذكاء الاصطناعي؟",
-    },
-    answer: {
-      de: "Die klassische Suche sucht ausschließlich in der Jobbörse der Bundesagentur für Arbeit. Die KI-Suche plant Ihre Anfrage und durchsucht zusätzlich Webquellen parallel – für breitere und vielfältigere Ergebnisse.",
-      en: "The classic search looks only in the Federal Employment Agency's Jobbörse. The AI Search plans your query and additionally searches web sources in parallel – for broader, more varied results.",
-      fr: "La recherche classique ne cherche que dans la Jobbörse de l'Agence fédérale. La Recherche IA planifie votre requête et recherche en parallèle des sources web – pour des résultats plus larges.",
-      ar: "البحث العادي يبحث فقط في لوحة وظائف وكالة العمل. أما البحث بالذكاء الاصطناعي فيخطّط لطلبك ويبحث أيضًا في مصادر الويب بالتوازي — لنتائج أوسع وأكثر تنوعًا.",
-    },
-    keywords: ["ai search", "search", "difference"],
   },
   {
     id: "search-ba-unavailable",

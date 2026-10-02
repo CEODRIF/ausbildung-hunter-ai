@@ -52,11 +52,6 @@ const NAV_SECTIONS: NavSection[] = [
       { labelKey: "nav.aiAssistant", href: "/ai", icon: "spark" },
       { labelKey: "nav.opportunities", href: "/opportunities", icon: "target" },
       {
-        labelKey: "nav.ausbildungSearch",
-        href: "/opportunities/ai-search",
-        icon: "search",
-      },
-      {
         labelKey: "nav.bewerbungScanner",
         href: "/bewerbung-scanner",
         icon: "scan",
@@ -119,10 +114,6 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
   {
     match: (p) => p === "/ai" || p.startsWith("/ai/"),
     heading: { titleKey: "pages.aiAssistant.title", subtitleKey: "pages.aiAssistant.subtitle" },
-  },
-  {
-    match: (p) => p === "/opportunities/ai-search" || p.startsWith("/opportunities/ai-search/"),
-    heading: { titleKey: "pages.ausbildungSearch.title", subtitleKey: "pages.ausbildungSearch.subtitle" },
   },
   {
     match: (p) => p === "/opportunities/saved" || p.startsWith("/opportunities/saved/"),
