@@ -16,7 +16,7 @@ import {
   type WebSearchClient,
 } from "@/lib/web-search";
 import { enabledAdapters } from "./adapters";
-import type { NormalizedOffer } from "./adapter";
+import type { NormalizedOffer, OfferSourceAdapter } from "./adapter";
 import {
   candidateFromOffer,
   companyFactsFromOffer,
@@ -61,10 +61,17 @@ import {
 /**
  * Company Discovery — the orchestrator.
  *
- * Pipeline: run (Phase 1 model) → per-goal passes over (a) the EXISTING
- * Opportunities engine (Arbeitsagentur: offers and companies ONLY — never an
- * email, §3.3) and (b) every portal adapter the access policy cleared → unique
- * companies → the multi-source public-email pass → incremental persistence.
+ * Pipeline: run (Phase 1 model) → per-goal passes over (a) the internet-
+ * discovery layer — the bounded search adapter FIRST, checkpointed on its
+ * own — then (b) the remaining portal adapters the access policy cleared,
+ * then (c) the EXISTING Opportunities engine (Arbeitsagentur: offers and
+ * companies ONLY — never an email, §3.3) → unique companies → the multi-
+ * source public-email pass → incremental persistence. Every discovery phase
+ * is checkpointed before the next one starts: on a serverless host the run
+ * shares the route's invocation budget (Vercel `maxDuration`) and can be
+ * killed at any instant, so the highest-value phase must reach the database
+ * first — a kill may delay or drop later phases, never the search layer's
+ * persisted results.
  *
  * Hard rules:
  *  - TARGET counts UNIQUE COMPANIES, never offers;
@@ -254,6 +261,8 @@ export async function runDiscoveryPipeline(
   /** Remaining official-site passes for the public-email resolution. */
   let emailSiteBudget = discoveryEmailSitePasses();
   let failedPasses = 0;
+  /** BA's window has been collected at least once (its report row is final). */
+  let baCollectedOnce = false;
   let candidateBuffer: DiscoveryCandidate[] = [];
   let aborted = false;
 
@@ -263,10 +272,15 @@ export async function runDiscoveryPipeline(
     candidateBuffer = [];
   };
   const flushProgress = async (): Promise<void> => {
-    if (failedPasses > 0 && failedPasses === goalPasses(params.goal).length) {
-      upsertSource(BA_SOURCE_ID, { status: "unavailable", candidates: delivered });
-    } else {
-      upsertSource(BA_SOURCE_ID, { status: "ok", candidates: delivered });
+    // The BA row stays `running` until its window has actually been
+    // collected: the early checkpoints (after the internet-discovery layer)
+    // must never claim a source that has not run yet.
+    if (baCollectedOnce) {
+      if (failedPasses > 0 && failedPasses === goalPasses(params.goal).length) {
+        upsertSource(BA_SOURCE_ID, { status: "unavailable", candidates: delivered });
+      } else {
+        upsertSource(BA_SOURCE_ID, { status: "ok", candidates: delivered });
+      }
     }
     await setRunCounters(runId, userId, { ...counters }, [...sourceStatus.values()]);
   };
@@ -291,15 +305,20 @@ export async function runDiscoveryPipeline(
   };
 
   /**
-   * Ask every enabled adapter. A blocked or failing adapter marks its own
-   * source entry and is then irrelevant to the rest of the run (§4.7).
+   * Ask the selected enabled adapters. A blocked or failing adapter marks
+   * its own source entry and is then irrelevant to the rest of the run
+   * (§4.7). `select` lets the pipeline run one adapter group at a time and
+   * checkpoint between groups — the ordering and the per-adapter behavior
+   * are otherwise exactly as before.
    */
   const collectAdapterOffers = async (
     passGoal: "ausbildung" | "arbeit",
+    select?: (adapter: OfferSourceAdapter) => boolean,
   ): Promise<DiscoveryOffer[]> => {
     const sp = mapToSearchParams(params, passGoal);
     const collected: DiscoveryOffer[] = [];
     for (const adapter of adapters) {
+      if (select !== undefined && !select(adapter)) continue;
       const source = sourceById(adapter.id);
       if (!source) continue;
       try {
@@ -568,16 +587,48 @@ export async function runDiscoveryPipeline(
         break;
       }
 
-      // (a) Arbeitsagentur: offers and companies only (§3.3) — collect the
-      //     window first (a fast read; no per-company email work yet).
+      // (a) Internet Discovery — the search layer FIRST, checkpointed on its
+      //     own. On a serverless host the run shares the route's invocation
+      //     budget (Vercel `maxDuration`) and can be killed at any instant;
+      //     the highest-value, network-heaviest source is therefore
+      //     collected and persisted BEFORE any other discovery work, so a
+      //     kill can no longer erase its execution.
+      const searchOffers = await collectAdapterOffers(
+        passGoal,
+        (adapter) => adapter.id === "search-api",
+      );
+      await flushProgress();
+      if (await isCancelled(runId, userId)) {
+        aborted = true;
+        break;
+      }
+
+      // (b) the remaining enabled portal adapters — collected exactly as
+      //     before, now after the search checkpoint, with their own flush.
+      const portalOffers = await collectAdapterOffers(
+        passGoal,
+        (adapter) => adapter.id !== "search-api",
+      );
+      await flushProgress();
+      if (await isCancelled(runId, userId)) {
+        aborted = true;
+        break;
+      }
+
+      // (c) Arbeitsagentur: offers and companies only (§3.3) — collected
+      //     AFTER the internet-discovery checkpoints, so its window (and any
+      //     provider backoff) can no longer delay the persistence of the
+      //     search layer's results.
       let baOffers: DiscoveryOffer[] = [];
       try {
         const { offers } = await collectOffers(passGoal);
         delivered += offers.length;
         baOffers = offers.map((opp) => discoveryOfferFromOpportunity(opp));
+        baCollectedOnce = true;
       } catch (error) {
         if (error instanceof BaFetchFailure) {
           failedPasses += 1;
+          baCollectedOnce = true;
           upsertSource(BA_SOURCE_ID, {
             status: "unavailable",
             reason: "SOURCE_UNAVAILABLE",
@@ -587,29 +638,19 @@ export async function runDiscoveryPipeline(
           throw error;
         }
       }
-
-      // (b) the enabled portal adapters (including the bounded search layer),
-      //     collected BEFORE the expensive per-company email resolution. On a
-      //     serverless host the run shares the route's invocation budget
-      //     (Vercel `maxDuration`): the email phase paces ≥1 s per host per
-      //     company and runs for minutes, so a kill would otherwise strike
-      //     before the search layer ever starts — and its stats would never
-      //     be persisted. Collecting all offer sources first keeps the entire
-      //     offer-discovery phase inside the budget, then a checkpoint
-      //     persists the BA row, the adapter rows and the search stats.
-      const adapterOffers = await collectAdapterOffers(passGoal);
       await flushProgress();
       if (await isCancelled(runId, userId)) {
         aborted = true;
         break;
       }
 
-      // Per-company email resolution — processing order unchanged (BA offers
-      // first, then the adapter offers) through the same funnel and dedupe
-      // set; its existing per-company flushes persist the partial progress.
+      // (d) Per-company email resolution — processing order unchanged (BA
+      //     offers first, then the adapter offers in registry order) through
+      //     the same funnel and dedupe set; its existing per-company flushes
+      //     persist the partial progress.
       await processOffers(baOffers, passGoal);
       if (aborted) break;
-      await processOffers(adapterOffers, passGoal);
+      await processOffers([...portalOffers, ...searchOffers], passGoal);
       if (aborted) break;
     }
 

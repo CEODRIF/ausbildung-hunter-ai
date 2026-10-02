@@ -622,15 +622,21 @@ describe("runDiscoveryPipeline", () => {
       gets += 1;
       return gets >= 2 ? baseRun({ status: "cancelled" }) : run;
     });
-    // Probe before pass 1 → not yet cancelled; probe before pass 2 →
-    // cancelled: pass 2 must never start, and no finish is written over it.
+    // Probe at every work-unit boundary of pass 1 (top, after internet
+    // discovery, after the portals, after BA, first email check) → not yet
+    // cancelled; probe before pass 2 → cancelled: pass 2 must never start,
+    // and no finish is written over it.
     const isCancelled = vi
       .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
     const result = await runPipeline(fn, { isCancelled });
     expect(calls).toHaveLength(1); // only the first pass ran
-    expect(isCancelled).toHaveBeenCalledTimes(2);
+    expect(isCancelled).toHaveBeenCalledTimes(6);
     expect(store.finishDiscoveryRun).not.toHaveBeenCalled();
     // The pipeline returns the authoritative (cancelled) store state.
     expect(result.status).toBe("cancelled");
