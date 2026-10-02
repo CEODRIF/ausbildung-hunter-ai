@@ -1075,10 +1075,10 @@ export function AIChat({
                     addFiles(pasted);
                   }
                 }}
-                placeholder="Nachricht senden …"
-                rows={1}
-                aria-label="Nachricht"
-                className="max-h-48 min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-sm leading-6 text-ink-soft outline-none placeholder:text-faint"
+                 placeholder="Nachricht senden …"
+                 rows={1}
+                 aria-label="Nachricht"
+                 className="max-h-48 min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-base leading-6 text-ink-soft outline-none placeholder:text-faint lg:text-sm"
               />
               {streaming ? (
                 <button

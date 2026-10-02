@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { I18nProvider } from "@/lib/i18n";
 import { langPreloadScript } from "@/lib/i18n/core";
@@ -11,6 +11,16 @@ export const metadata: Metadata = {
   },
   description:
     "A focused workspace for finding Ausbildung and jobs in Germany.",
+};
+
+/** iOS Safari: `viewport-fit=cover` extends the layout into the safe areas
+ *  so `env(safe-area-inset-*)` (used by the chat composer's padding) is
+ *  non-zero on notched devices. width/initialScale keep the baseline at
+ *  1:1 — the precondition that prevents Safari's focus auto-zoom. */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
