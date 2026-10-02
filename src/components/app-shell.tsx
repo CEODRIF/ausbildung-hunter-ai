@@ -50,6 +50,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { labelKey: "nav.dashboard", href: "/dashboard", icon: "grid" },
       { labelKey: "nav.aiAssistant", href: "/ai", icon: "spark" },
+      { labelKey: "nav.opportunities", href: "/opportunities", icon: "target" },
       {
         labelKey: "nav.ausbildungSearch",
         href: "/opportunities/ai-search",
