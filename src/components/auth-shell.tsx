@@ -20,7 +20,7 @@ export function AuthShell({
 }) {
   const { t } = useI18n();
   return (
-    <main className="grid min-h-screen bg-surface lg:grid-cols-[0.95fr_1.05fr]">
+    <main className="grid min-h-screen bg-background dark:bg-surface lg:grid-cols-[0.95fr_1.05fr]">
       <section className="relative hidden overflow-hidden bg-navy px-12 py-12 text-white lg:flex lg:flex-col lg:justify-between xl:px-20">
         <div className="absolute -right-32 top-8 h-[500px] w-[500px] rounded-full hero-orb" />
         <div className="relative">

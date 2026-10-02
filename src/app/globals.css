@@ -9,19 +9,29 @@
  * from here — no per-theme branching in components.
  * --------------------------------------------------------------------------- */
 :root {
-  /* Light mode — same identity as dark neon, on a light background:
-   * dark navy text, white surfaces, soft lavender borders and the
-   * pink/magenta/purple accent family. */
-  --background: #fafafc;
+  /* Light mode — same identity as dark neon, on a soft light-gray
+   * application background: white surfaces/cards float above it with
+   * neutral gray borders (clear visual layering), dark navy text and the
+   * pink/magenta/purple accent family.
+   *
+   * Layering scale (light):
+   *   page background  #f5f5f7  (soft gray — shell, page areas, chat canvas)
+   *   surface          #ffffff  (cards, header, sidebar, inputs, modals,
+   *                              dropdowns, CV/CL paper, elevated panels)
+   *   surface-2        #f1f1f4  (fills, chips, hover states, skeletons —
+   *                              one step darker than the page so it reads
+   *                              on both white surfaces and gray pages)
+   *   border           #e5e7eb / #d1d5db (subtle / strong) */
+  --background: #f5f5f7;
   --foreground: #10203b;
   --surface: #ffffff;
-  --surface-2: #f7f4fb;
+  --surface-2: #f1f1f4;
   --ink: #10203b;
   --ink-soft: #1d3458;
   --muted: #6d7d96;
   --faint: #8b9ab0;
-  --line: #f0e9fa;
-  --line-strong: #e9d5ff;
+  --line: #e5e7eb;
+  --line-strong: #d1d5db;
   --navy: #10203b;
   --navy-soft: #1d3458;
   --blue: #d946ef;
