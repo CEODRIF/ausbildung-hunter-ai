@@ -1448,24 +1448,48 @@ export function CvBuilder({
           <div
             className={`min-w-0 ${mobileView === "preview" ? "" : "hidden lg:block"}`}
           >
-            <div ref={previewOuterRef} className="w-full">
-              <div
-                className="mx-auto overflow-hidden rounded-[6px]"
-                style={{
-                  width: CV_SHEET_WIDTH * preview.scale,
-                  height: preview.sheetHeight * preview.scale,
-                }}
-              >
+            {/* Preview geometry (direction-independent, no magic offsets):
+                outer (measured width; overflow-x-clip guards the 1-frame
+                pre-scale flash so the page never gains a horizontal
+                scroll state)
+                └─ flex centering layer (inline-axis center: identical in
+                   LTR and RTL)
+                   └─ frame (tight: scaled width/height, overflow-hidden,
+                      DIRECTION: LTR — verified root cause of the iPhone
+                      bug: in an RTL app, the oversized 794px sheet block
+                      anchors to the frame's RIGHT edge, so its layout box
+                      starts at frame.right − 794 (e.g. −318px on a 390px
+                      phone) and `transform-origin: top left` (physical)
+                      scaled it further off-screen — only a thin strip
+                      survived the frame's clip. Forcing the containing
+                      block to LTR makes the sheet anchor to the frame's
+                      left edge in BOTH app directions, so the sheet's
+                      painted box === the frame box, and the flex layer
+                      centers the frame ⇒ sheet center = screen center.
+                      The document itself keeps its own dir (cv-sheet is
+                      dir="ltr" regardless of app language).)
+                      └─ sheet (true 794px layout, uniform transform) */}
+            <div ref={previewOuterRef} className="w-full overflow-x-clip">
+              <div className="flex w-full justify-center">
                 <div
-                  ref={previewSheetRef}
-                  className="shadow-[0_16px_48px_rgba(16,32,59,0.16)] dark:shadow-[0_16px_48px_rgba(0,0,0,0.5)]"
+                  className="overflow-hidden rounded-[6px]"
                   style={{
-                    width: CV_SHEET_WIDTH,
-                    transform: `scale(${preview.scale})`,
-                    transformOrigin: "top left",
+                    direction: "ltr",
+                    width: CV_SHEET_WIDTH * preview.scale,
+                    height: preview.sheetHeight * preview.scale,
                   }}
                 >
-                  <CvDocumentSheet cv={cv} labels={cvLabels} />
+                  <div
+                    ref={previewSheetRef}
+                    className="shadow-[0_16px_48px_rgba(16,32,59,0.16)] dark:shadow-[0_16px_48px_rgba(0,0,0,0.5)]"
+                    style={{
+                      width: CV_SHEET_WIDTH,
+                      transform: `scale(${preview.scale})`,
+                      transformOrigin: "top left",
+                    }}
+                  >
+                    <CvDocumentSheet cv={cv} labels={cvLabels} />
+                  </div>
                 </div>
               </div>
             </div>

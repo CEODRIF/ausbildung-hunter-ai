@@ -9,16 +9,21 @@
  * around the sheet is sized to the SCALED dimensions, so the preview
  * never exceeds the available width (fit-to-width on phones).
  *
- * Why the `active` re-measure exists (the iPhone bug):
- * On mobile the preview pane starts `display:none` (edit tab). While
- * hidden, `outer.clientWidth === 0`, and WebKit (iOS Safari) does not
- * reliably deliver a ResizeObserver entry when an element transitions
- * from display:none to visible — the element had no box to observe.
- * The scale then stayed stale and the 794px sheet rendered unscaled,
- * overflowing the phone viewport. The fix is a one-shot, deterministic
- * post-layout re-measure (double rAF = after layout, before paint)
- * whenever the preview tab becomes active. No polling, no timers, no
- * window visual-viewport APIs.
+ * Note: this hook is responsible for SCALE only (fit-to-width). The
+ * POSITION of the sheet is owned by the markup: the frame (containing
+ * block) must be `direction: ltr` — in an RTL app an oversized block
+ * child anchors to the container's right edge, which pushes the
+ * top-left-anchored transform off-screen (verified via headless-Chrome
+ * boundingClientRect measurements; see tests/preview-scaling.test.ts).
+ *
+ * Why the `active` re-measure exists:
+ * On mobile the preview pane starts `display:none` (edit tab) with
+ * `clientWidth === 0`, and WebKit does not always deliver a
+ * ResizeObserver entry for the display:none → visible transition
+ * (the element had no box to observe). A one-shot, deterministic
+ * post-layout re-measure (double rAF = after layout, before paint) on
+ * activation removes the dependence on that delivery. No polling, no
+ * timers, no window visual-viewport APIs.
  */
 import { useEffect, useState, type RefObject } from "react";
 

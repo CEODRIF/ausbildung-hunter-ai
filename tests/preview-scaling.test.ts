@@ -114,6 +114,116 @@ describe("shared rule — one implementation for CV and cover letter", () => {
   });
 });
 
+describe("visual positioning — sheet centered in the container (not just the math)", () => {
+  const cv = read("../src/components/cv-builder.tsx");
+  const cl = read("../src/components/cover-letter-builder.tsx");
+  const globals = read("../src/app/globals.css");
+
+  // The complete preview subtree: outer → centering layer → frame → sheet.
+  const previewBlock = (src: string) =>
+    src.match(/<div ref=\{previewOuterRef\}[\s\S]*?<\/div>\s*<\/div>\s*<\/div>\s*<\/div>/)
+      ?.[0] ?? "";
+
+  it.each([
+    ["CV", cv],
+    ["Cover Letter", cl],
+  ])("%s: centering is a flex inline-axis center — direction independent", (name, src) => {
+    const block = previewBlock(src);
+    expect(block).not.toBe("");
+    // Flex `justify-center` centers along the INLINE axis: the result is
+    // geometrically identical in LTR and RTL (no margin-based centering).
+    expect(block).toContain("flex w-full justify-center");
+    expect(block).not.toContain("mx-auto");
+    expect(block).not.toContain(":dir(");
+    expect(block).not.toContain("rtl:");
+  });
+
+  it.each([
+    ["CV", cv],
+    ["Cover Letter", cl],
+  ])("%s: no directional offsets anywhere in the preview subtree", (name, src) => {
+    const block = previewBlock(src);
+    // No left/right positioning, no directional margins, no translate
+    // compensation — the position comes from the container geometry.
+    expect(block).not.toMatch(/(^|[^a-z-])left\s*:/);
+    expect(block).not.toMatch(/(^|[^a-z-])right\s*:/);
+    expect(block).not.toContain("margin-left");
+    expect(block).not.toContain("margin-right");
+    expect(block).not.toContain("translateX");
+    expect(block).not.toMatch(/\bml-\d/);
+    expect(block).not.toMatch(/\bmr-\d/);
+    expect(block).not.toMatch(/\bms-\d/);
+    expect(block).not.toMatch(/\bme-\d/);
+  });
+
+  it.each([
+    ["CV", cv, "CV_SHEET_WIDTH"],
+    ["Cover Letter", cl, "CL_SHEET_WIDTH"],
+  ])(
+    "%s: visual box === frame box (tight frame + origin top-left), frame centered ⇒ sheet centered",
+    (name, src, widthConst) => {
+      const block = previewBlock(src);
+      // Sheet keeps its TRUE layout width (transform only scales the paint).
+      expect(block).toMatch(new RegExp(`width: ${widthConst},`));
+      expect(block).toContain("transform: `scale(${preview.scale})`");
+      // Origin top-left inside the TIGHT frame (frame width =
+      // SHEET_WIDTH * scale) makes the sheet's painted box coincide with
+      // the frame box exactly — so the flex-centered frame IS the
+      // centered sheet. (top-center would shift the painted box right
+      // by 397*(1-scale) and be clipped by the frame.)
+      expect(block).toContain('transformOrigin: "top left"');
+      // Frame is tight (scaled dims), never full-width with inner offset.
+      expect(block).toMatch(new RegExp(`width: ${widthConst} \\* preview\\.scale`));
+      expect(block).toContain("height: preview.sheetHeight * preview.scale");
+      expect(block).toContain("overflow-hidden");
+    },
+  );
+
+  it("the FRAME (containing block) is direction: ltr — the verified RTL fix", () => {
+    // Headless-Chrome boundingClientRect measurements proved: with an
+    // RTL app, the 794px sheet (block child of the tight scaled frame)
+    // anchors to the frame's RIGHT edge → layout box at
+    // frame.right − 794 (e.g. x=−318 on a 390px phone) → the physical
+    // `transform-origin: top left` scaled it 318px off-screen, leaving
+    // only a thin strip inside the frame's clip. The parent's direction
+    // governs child placement (the sheet's OWN direction does not), so
+    // the fix is `direction: "ltr"` on the frame itself. Document
+    // content keeps its own dir (cv-sheet / cover letter are dir="ltr").
+    for (const src of [cv, cl]) {
+      const block = previewBlock(src);
+      expect(block).toContain('direction: "ltr"');
+    }
+  });
+
+  it("outer still clip-guards the 1-frame pre-scale flash (no page scroll state)", () => {
+    for (const src of [cv, cl]) {
+      expect(src).toContain('ref={previewOuterRef} className="w-full overflow-x-clip"');
+    }
+  });
+
+  it("no global page-level overflow hacks (fix must live in the preview geometry)", () => {
+    // The earlier `html { overflow-x: clip }` attempt was reverted: the
+    // headless measurements showed off-screen fixed drawers do NOT
+    // extend WebKit page scrollable overflow, so a global clip would
+    // have been an unexplained side effect on every page.
+    const htmlRule = globals.match(/html\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(htmlRule).not.toContain("overflow-x");
+  });
+
+  it("final geometry fits on every phone width (no horizontal overflow by construction)", () => {
+    for (const viewport of [320, 375, 390, 393, 430]) {
+      const scale = computePreviewScale(viewport, SHEET, 1);
+      const frame = SHEET * scale;
+      // Frame ≤ available width, and the centered frame leaves equal
+      // (≥ 0) margins on BOTH sides — the "empty strip on one side"
+      // state is impossible.
+      expect(frame).toBeLessThanOrEqual(viewport);
+      const side = (viewport - frame) / 2;
+      expect(side).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
 describe("PDF / print path isolation (download unchanged)", () => {
   const globals = read("../src/app/globals.css");
   const cv = read("../src/components/cv-builder.tsx");

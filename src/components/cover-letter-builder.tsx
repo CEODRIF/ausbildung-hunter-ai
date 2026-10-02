@@ -1195,24 +1195,34 @@ export function CoverLetterBuilder({ userId }: CoverLetterBuilderProps) {
           <div
             className={`min-w-0 ${mobileView === "preview" ? "" : "hidden lg:block"}`}
           >
-            <div ref={previewOuterRef} className="w-full">
-              <div
-                className="mx-auto overflow-hidden rounded-[6px]"
-                style={{
-                  width: CL_SHEET_WIDTH * preview.scale,
-                  height: preview.sheetHeight * preview.scale,
-                }}
-              >
+            {/* Same direction-independent preview geometry as the CV
+                builder (see the shared block there): clip-guarded outer →
+                flex centering layer → tight scaled frame with
+                DIRECTION: LTR (the verified RTL fix — the frame is the
+                containing block that anchors the 794px sheet; its
+                direction must be direction-neutral) → uniform transform
+                of the true 794px sheet. */}
+            <div ref={previewOuterRef} className="w-full overflow-x-clip">
+              <div className="flex w-full justify-center">
                 <div
-                  ref={previewSheetRef}
-                  className="shadow-[0_16px_48px_rgba(16,32,59,0.16)] dark:shadow-[0_16px_48px_rgba(0,0,0,0.5)]"
+                  className="overflow-hidden rounded-[6px]"
                   style={{
-                    width: CL_SHEET_WIDTH,
-                    transform: `scale(${preview.scale})`,
-                    transformOrigin: "top left",
+                    direction: "ltr",
+                    width: CL_SHEET_WIDTH * preview.scale,
+                    height: preview.sheetHeight * preview.scale,
                   }}
                 >
-                  <CoverLetterDocument doc={doc} />
+                  <div
+                    ref={previewSheetRef}
+                    className="shadow-[0_16px_48px_rgba(16,32,59,0.16)] dark:shadow-[0_16px_48px_rgba(0,0,0,0.5)]"
+                    style={{
+                      width: CL_SHEET_WIDTH,
+                      transform: `scale(${preview.scale})`,
+                      transformOrigin: "top left",
+                    }}
+                  >
+                    <CoverLetterDocument doc={doc} />
+                  </div>
                 </div>
               </div>
             </div>
