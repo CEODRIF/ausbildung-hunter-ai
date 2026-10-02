@@ -251,6 +251,66 @@ describe("PDF / print path isolation (download unchanged)", () => {
   });
 });
 
+describe("desktop sticky preview (CV builder only)", () => {
+  const cv = read("../src/components/cv-builder.tsx");
+  const cl = read("../src/components/cover-letter-builder.tsx");
+  const appshell = read("../src/components/app-shell.tsx");
+  const hook = read("../src/lib/use-scaled-sheet.ts");
+
+  it("CV preview pane is sticky on desktop only, offset below the sticky app header", () => {
+    // Exact pane class list (the mobile tab-toggle part is unchanged).
+    expect(cv).toContain(
+      'min-w-0 lg:sticky lg:top-20 ${mobileView === "preview" ? "" : "hidden lg:block"}',
+    );
+    // Desktop-only: `sticky` must never appear without the lg: prefix
+    // (mobile keeps the edit/preview tabs, no sticky).
+    expect(cv).not.toMatch(/(^|[^:\w])sticky/);
+    // No position:fixed on the preview pane (sticky is the mechanism).
+    const paneLine = cv.match(/min-w-0 lg:sticky[^`]*`/)?.[0] ?? "";
+    expect(paneLine).not.toContain("fixed");
+  });
+
+  it("top-20 is derived from the AppShell sticky header (h-16 + 16px gap), not arbitrary", () => {
+    // The header the preview must clear.
+    expect(appshell).toContain("sticky top-0 z-20 flex h-16");
+    // 80px (top-20) = 64px (h-16) + 16px breathing room.
+    expect(cv).toContain("lg:top-20");
+  });
+
+  it("the sticky prerequisites hold (scroll container = document, row track sized by editor)", () => {
+    // main has no overflow → the document is the scroll container, so a
+    // sticky pane pins against the viewport and is NOT trapped.
+    const mainTag = appshell.match(/<main[^>]*>/)?.[0] ?? "";
+    expect(mainTag).toContain("flex-1");
+    expect(mainTag).not.toContain("overflow");
+    // The grid gives the pane a content-height box (items-start) whose
+    // containing block is the full row track → sticky releases naturally
+    // at the end of the builder container.
+    expect(cv).toContain("lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start");
+  });
+
+  it("no JavaScript scroll handling was added (pure CSS sticky)", () => {
+    expect(cv).not.toContain('addEventListener("scroll"');
+    expect(cv).not.toContain("addEventListener('scroll'");
+    expect(cv).not.toContain("onScroll");
+    expect(cv).not.toContain("window.scroll");
+  });
+
+  it("cover letter builder is untouched by the sticky change (CV-only request)", () => {
+    expect(cl).not.toContain("lg:sticky");
+    expect(cl).not.toMatch(/(^|[^:\w])sticky/);
+  });
+
+  it("use-scaled-sheet.ts has no positioning/sticky logic (scale responsibility only)", () => {
+    // Guards real positioning constructs: the `position` CSS property
+    // (lowercase), any `sticky`, or a Tailwind top-offset utility
+    // (top-<n> / top-[..] / top-auto|screen|full). The "top-left-anchored"
+    // prose in the doc comment is NOT a positioning declaration and is
+    // correctly ignored (top- followed by a letter).
+    expect(hook).not.toMatch(/sticky|position|top-(?:\d|\[|auto|screen|full)/);
+  });
+});
+
 describe("no forbidden workarounds (regression guard)", () => {
   const hook = read("../src/lib/use-scaled-sheet.ts");
 

@@ -1444,9 +1444,16 @@ export function CvBuilder({
             </div>
           </div>
 
-          {/* ----------------------------- Preview ----------------------------- */}
+          {/* ----------------------------- Preview -----------------------------
+              Desktop: the pane stays pinned in place so the A4 preview is
+              visible while the editor column scrolls. top-20 = 80px = the
+              AppShell header (h-16 = 64px) + 16px breathing room. The grid's
+              lg:items-start gives the pane a content-height box whose
+              containing block is the full row track (sized by the taller
+              editor column), so the pane releases naturally at the end of
+              the builder container — no JS, desktop-only via lg:. */}
           <div
-            className={`min-w-0 ${mobileView === "preview" ? "" : "hidden lg:block"}`}
+            className={`min-w-0 lg:sticky lg:top-20 ${mobileView === "preview" ? "" : "hidden lg:block"}`}
           >
             {/* Preview geometry (direction-independent, no magic offsets):
                 outer (measured width; overflow-x-clip guards the 1-frame
