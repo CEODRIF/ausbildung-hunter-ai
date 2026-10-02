@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import type {
   CvDocument,
   CvEducation,
@@ -23,12 +23,13 @@ import {
  * so the exported PDF is byte-for-byte the same document as the preview.
  *
  * Style: a traditionally typeset, monochrome A4 résumé. Classic serif
- * throughout, a centered name / italic title / icon contact row, uppercase
- * section headings underlined by a thin full-width black rule, right-aligned
- * dates + location, and two-column skills / languages / certificates. No
- * brand colors, no cards, no gradients. The sheet is ALWAYS light (paper) and
- * stays LTR even when the UI language is Arabic (the RTL fix lives on the
- * preview frame, not here).
+ * throughout, a two-column header (left: bold name, normal title and
+ * pipe-separated contact lines; right: a fixed-width rectangular photo),
+ * uppercase section headings underlined by a thin full-width black rule,
+ * right-aligned dates + location, and two-column skills / languages /
+ * certificates. No brand colors, no cards, no gradients. The sheet is ALWAYS
+ * light (paper) and stays LTR even when the UI language is Arabic (the RTL
+ * fix lives on the preview frame, not here).
  */
 
 export const CV_SHEET_WIDTH = 794; // 210mm @ 96dpi
@@ -47,9 +48,13 @@ const DOT = "#2a2a2a"; // bullet dots
 const SERIF =
   '"Times New Roman", Times, "Liberation Serif", "DejaVu Serif", Georgia, serif';
 
-// Passport-style profile photo (small, top-right of the header).
-const PHOTO_W = 72;
-const PHOTO_H = 88;
+// Passport-style profile photo — the top-right COLUMN of the header.
+// ~128px wide, portrait aspect, rectangular (no border-radius) per the design
+// brief. The header is a CSS grid (text column `1fr` + this fixed-width
+// column), so the photo can never overlap the text.
+const PHOTO_W = 128;
+const PHOTO_H = 170;
+const HEADER_COL_GAP = 26; // gap between the text column and the photo column
 
 /** Localized labels for the document (resolved upstream — the renderer
  *  itself stays pure so it works inside the print portal). */
@@ -78,26 +83,32 @@ export function CvDocument({ cv, labels }: Props) {
   const documentTitle = labels.documentTitle;
   const { personal } = cv;
 
-  // Contact row: icon-prefixed, in a fixed order (location first, to match
-  // the reference). Only non-empty fields render, so the row stays fully
-  // dynamic. Fields without a fitting glyph render as plain text.
-  const contactItems: { icon: ContactGlyphName | null; text: string }[] = [];
-  const withIcon = (icon: ContactGlyphName, value: string) => {
-    if (value.trim()) contactItems.push({ icon, text: value.trim() });
-  };
-  const plain = (value: string) => {
-    if (value.trim()) contactItems.push({ icon: null, text: value.trim() });
-  };
-  withIcon("location", personal.location);
-  withIcon("mail", personal.email);
-  withIcon("phone", personal.phone);
-  withIcon("linkedin", personal.linkedin);
-  withIcon("globe", personal.website);
-  plain(personal.nationality);
-  plain(personal.dateOfBirth);
-  plain(personal.availability);
+  // Header = two-column grid (text left, photo right). The text is split into
+  // a contact line and a "more" line, each pipe-joined and fully dynamic
+  // (non-empty fields only). The photo sits in its own fixed-width column, so
+  // the left text is physically constrained to stop before it — no overlap.
+  const contactLine = [
+    personal.email,
+    personal.phone,
+    personal.location,
+    personal.website,
+    personal.linkedin,
+  ]
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const otherLine = [
+    personal.nationality,
+    personal.dateOfBirth,
+    personal.availability,
+  ]
+    .map((v) => v.trim())
+    .filter(Boolean);
 
-  const hasHeader = Boolean(personal.fullName.trim()) || contactItems.length > 0;
+  const hasHeader =
+    Boolean(personal.fullName.trim()) ||
+    Boolean(personal.professionalTitle.trim()) ||
+    contactLine.length > 0 ||
+    otherLine.length > 0;
   const hasPhoto = Boolean(personal.photo);
 
   const education = cv.education.filter(educationVisible);
@@ -131,8 +142,15 @@ export function CvDocument({ cv, labels }: Props) {
     >
       {/* ---------------------------------------------------------------- */}
       {hasHeader && (
-        <header style={{ position: "relative", minHeight: hasPhoto ? PHOTO_H + 6 : undefined }}>
-          <div style={{ textAlign: "center" }}>
+        <header
+          style={{
+            display: "grid",
+            gridTemplateColumns: hasPhoto ? `1fr ${PHOTO_W}px` : "1fr",
+            columnGap: hasPhoto ? HEADER_COL_GAP : 0,
+            alignItems: "start",
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
             {personal.fullName.trim() && (
               <h1
                 style={{
@@ -148,32 +166,36 @@ export function CvDocument({ cv, labels }: Props) {
               </h1>
             )}
             {personal.professionalTitle.trim() && (
-              <p style={{ margin: "3px 0 0", fontSize: 15, fontStyle: "italic", color: MUTED }}>
+              <p
+                style={{ margin: "4px 0 0", fontSize: 19, fontWeight: 400, color: INK, lineHeight: 1.2 }}
+              >
                 {personal.professionalTitle}
               </p>
             )}
-            {contactItems.length > 0 && (
+            {contactLine.length > 0 && (
               <p
                 style={{
-                  margin: "9px 0 0",
-                  fontSize: 11,
+                  margin: "11px 0 0",
+                  fontSize: 11.5,
                   color: MUTED,
-                  display: "flex",
-                  flexWrap: "wrap",
-                  justifyContent: "center",
-                  columnGap: 15,
-                  rowGap: 3,
+                  lineHeight: 1.4,
+                  overflowWrap: "break-word",
                 }}
               >
-                {contactItems.map((item, index) => (
-                  <span
-                    key={`${item.text}-${index}`}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
-                  >
-                    {item.icon && <ContactGlyph name={item.icon} />}
-                    {item.text}
-                  </span>
-                ))}
+                {contactLine.join(" | ")}
+              </p>
+            )}
+            {otherLine.length > 0 && (
+              <p
+                style={{
+                  margin: "3px 0 0",
+                  fontSize: 11.5,
+                  color: MUTED,
+                  lineHeight: 1.4,
+                  overflowWrap: "break-word",
+                }}
+              >
+                {otherLine.join(" | ")}
               </p>
             )}
           </div>
@@ -183,13 +205,10 @@ export function CvDocument({ cv, labels }: Props) {
               src={personal.photo!}
               alt={personal.fullName.trim() ? documentTitle : ""}
               style={{
-                position: "absolute",
-                top: 0,
-                right: 0,
                 width: PHOTO_W,
                 height: PHOTO_H,
                 objectFit: "cover",
-                objectPosition: "center 22%",
+                objectPosition: "center 20%",
                 border: `1px solid ${RULE}`,
                 display: "block",
               }}
@@ -533,48 +552,4 @@ function CvProjectBlock({ entry, index }: { entry: CvProject; index: number }) {
       )}
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Contact-row glyphs (inline SVG — render identically on screen and in print)
-// ---------------------------------------------------------------------------
-
-type ContactGlyphName = "location" | "mail" | "phone" | "linkedin" | "globe";
-
-function ContactGlyph({ name }: { name: ContactGlyphName }) {
-  const style: CSSProperties = { width: 11, height: 11, flexShrink: 0 };
-  switch (name) {
-    case "location":
-      return (
-        <svg style={style} viewBox="0 0 24 24" fill={MUTED} aria-hidden="true" focusable="false">
-          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z" />
-        </svg>
-      );
-    case "mail":
-      return (
-        <svg style={style} viewBox="0 0 24 24" fill={MUTED} aria-hidden="true" focusable="false">
-          <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z" />
-        </svg>
-      );
-    case "phone":
-      return (
-        <svg style={style} viewBox="0 0 24 24" fill={MUTED} aria-hidden="true" focusable="false">
-          <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
-        </svg>
-      );
-    case "linkedin":
-      return (
-        <svg style={style} viewBox="0 0 24 24" fill={MUTED} aria-hidden="true" focusable="false">
-          <path d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14zm-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.32 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.79zM6.88 8.56a1.68 1.68 0 1 0-3.36 0 1.68 1.68 0 0 0 3.36 0zM8.27 18.5v-8.37H5.5v8.37h2.77z" />
-        </svg>
-      );
-    case "globe":
-      return (
-        <svg style={style} viewBox="0 0 24 24" fill={MUTED} aria-hidden="true" focusable="false">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />
-        </svg>
-      );
-    default:
-      return null;
-  }
 }
