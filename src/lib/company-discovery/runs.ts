@@ -151,6 +151,28 @@ export async function getDiscoveryRun(
   return rowToRun(data as DiscoveryRunRow);
 }
 
+/**
+ * Strict variant of {@link getDiscoveryRun} for the API routes: a MISSING row
+ * still returns null, but a persistence failure THROWS instead of being
+ * reported as "not found". A database outage must surface as a database
+ * error, never as a 404 the user would misread as "run deleted".
+ */
+export async function getDiscoveryRunStrict(
+  runId: string,
+  userId: string,
+): Promise<DiscoveryRun | null> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("discovery_runs")
+    .select("*")
+    .eq("run_id", runId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return rowToRun(data as DiscoveryRunRow);
+}
+
 /** pending → running (sets started_at once). Idempotent when already running. */
 export async function startDiscoveryRun(
   runId: string,

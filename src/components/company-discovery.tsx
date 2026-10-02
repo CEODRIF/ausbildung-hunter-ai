@@ -3,19 +3,33 @@
 /**
  * Company & Email Discovery — page UI (Phase 2).
  *
- * The form collects what a DISCOVERY run needs — field, role, planned start
- * (4 modes), offer type, target number of UNIQUE companies with a public
- * email, and the email-only toggle (on by default). Submitting registers
- * AND executes the Phase 2 candidate engine (BA via the shared
- * Opportunities search); the page then shows the FINAL real state from the
- * API — counters measured by the run, never simulated progress.
+ * Flow: the form collects what a DISCOVERY run needs — field, role, planned
+ * start (4 modes), offer type, target number of UNIQUE companies with a
+ * public email, and the email-only toggle (on by default). Submitting
+ * registers the run and shows the LIVE state of that same run: the API
+ * answers with the run id, the engine then works server-side, and this
+ * component polls `GET /api/company-discovery/[runId]` for the counters the
+ * engine actually measured. Nothing here is interpolated, estimated or
+ * animated towards a number the server did not report.
+ *
+ * Stop Search posts to `POST /api/company-discovery/[runId]/cancel`; the
+ * engine re-reads the run between work units, so a cancelled run never starts
+ * another source pass and never overwrites the terminal state.
  *
  * Layout: responsive (1 column mobile → 2 columns from sm), logical
  * properties (ps/pe, ms/me, start/end) so Arabic (dir=rtl) mirrors.
  */
 
-import { useMemo, useState, type FormEvent } from "react";
+import Link from "next/link";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
 import { useI18n } from "@/lib/i18n";
+import type { TranslateVars } from "@/lib/i18n/core";
 import {
   DISCOVERY_FIELD_SUGGESTIONS,
   DISCOVERY_TARGET_DEFAULT,
@@ -25,13 +39,29 @@ import {
   type DiscoveryBeginn,
   type DiscoveryGoal,
   type DiscoveryRun,
+  type DiscoveryRunStatus,
 } from "@/lib/company-discovery/types";
+import {
+  DISCOVERY_ERROR_FALLBACK_KEY,
+  DISCOVERY_STOP_FAILED_KEY,
+  discoveryErrorKey,
+  isTerminalRunStatus,
+  retryAfterSeconds,
+  type DiscoveryErrorBody,
+} from "@/lib/company-discovery/errors";
 
-type Phase = "idle" | "submitting" | "created";
+type Phase = "idle" | "submitting" | "running" | "created";
 type BeginnMode = DiscoveryBeginn["mode"];
+type TranslateFn = (key: string, vars?: TranslateVars) => string;
 
 const BEGINN_MODES: BeginnMode[] = ["from_now", "date", "month", "year"];
 const GOALS: DiscoveryGoal[] = ["ausbildung", "arbeit", "both"];
+
+/** Live status polling cadence while the engine works. */
+const POLL_INTERVAL_MS = 1500;
+/** After this long we stop polling and hand control back to the user — the
+ *  run may legitimately continue server-side; we never invent a state. */
+const POLL_BUDGET_MS = 90_000;
 
 function beginnLabelKey(mode: BeginnMode): string {
   switch (mode) {
@@ -57,6 +87,89 @@ function goalLabelKey(goal: DiscoveryGoal): string {
   }
 }
 
+/** Terminal-state badge (color follows the real status only). */
+function RunStatusBadge({
+  status,
+  t,
+}: {
+  status: DiscoveryRunStatus;
+  t: TranslateFn;
+}) {
+  const tone =
+    status === "completed"
+      ? "bg-success-soft text-success"
+      : status === "failed"
+        ? "bg-danger-soft text-danger"
+        : "bg-accent-soft text-accent";
+  return (
+    <span className={`rounded-lg px-2.5 py-1 text-xs font-bold uppercase ${tone}`}>
+      {t(`companyDiscovery.status.${status}`)}
+    </span>
+  );
+}
+
+/**
+ * The six REAL counters, shared by the running panel and the finished card.
+ * A source can be `running` (queried right now), `unavailable` (it failed —
+ * the run continues honestly without inventing rows) or `ok`.
+ */
+function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
+  const source = run.progress.sources[0];
+  const sourceLabel = !source
+    ? "—"
+    : source.status === "running"
+      ? t("companyDiscovery.runCreated.sourceSearching")
+      : source.status === "unavailable"
+        ? t("companyDiscovery.runCreated.sourceUnavailable")
+        : t("companyDiscovery.runCreated.sourceOk");
+  return (
+    <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="rounded-xl bg-surface-2 p-3">
+        <dd className="text-xl font-bold text-ink">
+          {run.progress.foundCompanies}
+          <span className="text-sm font-semibold text-muted">
+            {" "}
+            / {run.progress.targetCompanies}
+          </span>
+        </dd>
+        <dt className="mt-0.5 text-xs font-semibold text-muted">
+          {t("companyDiscovery.runCreated.found")}
+        </dt>
+      </div>
+      <div className="rounded-xl bg-surface-2 p-3">
+        <dd className="text-xl font-bold text-ink">{run.progress.offersAnalyzed}</dd>
+        <dt className="mt-0.5 text-xs font-semibold text-muted">
+          {t("companyDiscovery.runCreated.offers")}
+        </dt>
+      </div>
+      <div className="rounded-xl bg-surface-2 p-3">
+        <dd className="text-xl font-bold text-ink">{run.progress.uniqueCompanies}</dd>
+        <dt className="mt-0.5 text-xs font-semibold text-muted">
+          {t("companyDiscovery.runCreated.unique")}
+        </dt>
+      </div>
+      <div className="rounded-xl bg-surface-2 p-3">
+        <dd className="text-xl font-bold text-ink">{run.progress.duplicatesRemoved}</dd>
+        <dt className="mt-0.5 text-xs font-semibold text-muted">
+          {t("companyDiscovery.runCreated.duplicates")}
+        </dt>
+      </div>
+      <div className="rounded-xl bg-surface-2 p-3">
+        <dd className="text-xl font-bold text-ink">{run.progress.companiesRejected}</dd>
+        <dt className="mt-0.5 text-xs font-semibold text-muted">
+          {t("companyDiscovery.runCreated.rejected")}
+        </dt>
+      </div>
+      <div className="rounded-xl bg-surface-2 p-3">
+        <dd className="text-sm font-bold text-ink sm:mt-1">{sourceLabel}</dd>
+        <dt className="mt-0.5 text-xs font-semibold text-muted">
+          {t("companyDiscovery.runCreated.source")}
+        </dt>
+      </div>
+    </dl>
+  );
+}
+
 export function CompanyDiscovery() {
   const { t } = useI18n();
 
@@ -70,7 +183,13 @@ export function CompanyDiscovery() {
   const [target, setTarget] = useState(String(DISCOVERY_TARGET_DEFAULT));
   const [onlyPublicEmail, setOnlyPublicEmail] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [created, setCreated] = useState<DiscoveryRun | null>(null);
+  const [run, setRun] = useState<DiscoveryRun | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
+  const [pollExpired, setPollExpired] = useState(false);
+  const [pollNonce, setPollNonce] = useState(0);
+
+  const runId = run?.runId ?? null;
 
   const beginn: DiscoveryBeginn = useMemo(() => {
     switch (beginnMode) {
@@ -108,11 +227,91 @@ export function CompanyDiscovery() {
     return Object.keys(next).length === 0;
   }
 
+  /**
+   * Turn a failed API answer into the message that actually applies.
+   * The server's `code` wins; the HTTP status is the fallback; a rate limit
+   * shows the documented wait when the server sent one, and the neutral
+   * failure text (never an invented number) when it did not.
+   */
+  const applyFailure = useCallback(
+    (
+      status: number,
+      body: DiscoveryErrorBody | null,
+      headers?: Headers | null,
+    ) => {
+      if (body?.code === "rate_limited") {
+        const seconds = retryAfterSeconds(
+          body,
+          headers?.get("retry-after") ?? null,
+        );
+        setErrors({
+          submit: seconds
+            ? t(discoveryErrorKey(status, body.code), { seconds })
+            : t("companyDiscovery.error.searchFailed"),
+        });
+        return;
+      }
+      setErrors({ submit: t(discoveryErrorKey(status, body?.code)) });
+    },
+    [t],
+  );
+
+  // ---- live run state (polling; real counters only) ------------------------
+  useEffect(() => {
+    if (phase !== "running" || !runId) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const startedAt = Date.now();
+
+    const poll = async () => {
+      if (!active) return;
+      try {
+        const response = await fetch(`/api/company-discovery/${runId}`, {
+          cache: "no-store",
+        });
+        const body = (await response.json().catch(() => null)) as
+          | (DiscoveryErrorBody & { run?: DiscoveryRun })
+          | null;
+        if (!active) return;
+        if (!response.ok) {
+          applyFailure(response.status, body, response.headers);
+          setPhase("idle");
+          return;
+        }
+        if (body?.run) {
+          setRun(body.run);
+          if (isTerminalRunStatus(body.run.status)) {
+            setPhase("created");
+            return;
+          }
+        }
+      } catch {
+        // Transient network hiccup — the run continues server-side, so keep
+        // polling instead of reporting a failure we cannot prove.
+      }
+      if (!active) return;
+      if (Date.now() - startedAt > POLL_BUDGET_MS) {
+        setPollExpired(true);
+        return;
+      }
+      timer = setTimeout(poll, POLL_INTERVAL_MS);
+    };
+
+    timer = setTimeout(poll, POLL_INTERVAL_MS);
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [phase, runId, applyFailure, pollNonce]);
+
   // ---- submit --------------------------------------------------------------
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (phase === "submitting" || !validate()) return;
     setPhase("submitting");
+    setErrors({});
+    setStopError(null);
+    setPollExpired(false);
     const params = {
       field: field.trim(),
       role: role.trim(),
@@ -127,116 +326,169 @@ export function CompanyDiscovery() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(params),
       });
-      const data = (await response.json().catch(() => null)) as
-        | { run?: DiscoveryRun; error?: string }
+      const body = (await response.json().catch(() => null)) as
+        | (DiscoveryErrorBody & { run?: DiscoveryRun })
         | null;
-      if (!response.ok || !data?.run) {
-        throw new Error(data?.error ?? "unavailable");
+      if (!response.ok || !body?.run) {
+        applyFailure(response.status, body, response.headers);
+        setPhase("idle");
+        return;
       }
-      setCreated(data.run);
-      setPhase("created");
+      // The run exists. The engine continues server-side; the live state
+      // comes from polling that same run — never from the request itself.
+      setRun(body.run);
+      setPhase("running");
     } catch {
-      setErrors({ submit: t("companyDiscovery.error.generic") });
+      setErrors({ submit: t(DISCOVERY_ERROR_FALLBACK_KEY) });
       setPhase("idle");
     }
   }
 
+  // ---- stop search ---------------------------------------------------------
+  async function onStop() {
+    if (!runId || stopping) return;
+    setStopping(true);
+    setStopError(null);
+    try {
+      const response = await fetch(`/api/company-discovery/${runId}/cancel`, {
+        method: "POST",
+      });
+      const body = (await response.json().catch(() => null)) as
+        | (DiscoveryErrorBody & { run?: DiscoveryRun })
+        | null;
+      if (!response.ok) {
+        setStopError(t(DISCOVERY_STOP_FAILED_KEY));
+        return;
+      }
+      if (body?.run) {
+        setRun(body.run);
+        if (isTerminalRunStatus(body.run.status)) setPhase("created");
+      }
+    } catch {
+      setStopError(t(DISCOVERY_STOP_FAILED_KEY));
+    } finally {
+      setStopping(false);
+    }
+  }
+
+  /** Manual re-check after the polling budget ran out (a real read). */
+  function refresh() {
+    setPollExpired(false);
+    setPollNonce((value) => value + 1);
+  }
+
   function reset() {
-    setCreated(null);
+    setRun(null);
     setPhase("idle");
     setErrors({});
+    setStopError(null);
+    setPollExpired(false);
   }
 
   // ---- inputs (shared styling) ----------------------------------------------
   const inputClass =
     "w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent";
   const labelClass = "mb-1.5 block text-xs font-semibold text-muted";
+  /** Back to the dashboard — present in EVERY state of this page. */
+  const backLink = (
+    <Link
+      href="/dashboard"
+      className="inline-flex items-center text-xs font-semibold text-muted transition hover:text-ink"
+    >
+      <span aria-hidden="true" className="me-1.5 inline-block rtl:rotate-180">
+        ←
+      </span>
+      {t("companyDiscovery.backToDashboard")}
+    </Link>
+  );
+
+  // ===========================================================================
+  // Running — the honest live state (polled, server-measured)
+  // ===========================================================================
+  if (phase === "running" && run) {
+    return (
+      <div className="mx-auto max-w-3xl">
+        {backLink}
+        <div className="mt-4 rounded-2xl border border-line bg-surface p-5 sm:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-bold text-ink">
+              {t("companyDiscovery.progress.title")}
+            </h2>
+            <RunStatusBadge status={run.status} t={t} />
+          </div>
+          {run.status === "pending" && (
+            <p className="mt-2 text-xs leading-5 text-muted">
+              {t("companyDiscovery.progress.pending")}
+            </p>
+          )}
+
+          <RunCounters run={run} t={t} />
+
+          <p className="mt-3 truncate font-mono text-xs text-ink-soft">
+            {t("companyDiscovery.runCreated.runId")}: {run.runId}
+          </p>
+          <p className="mt-4 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-5 text-ink-soft">
+            {t("companyDiscovery.progress.note")}
+          </p>
+
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={onStop}
+              disabled={stopping}
+              className="rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink transition hover:bg-surface-2 disabled:cursor-wait disabled:opacity-60"
+            >
+              {stopping
+                ? t("companyDiscovery.form.stopping")
+                : t("companyDiscovery.form.stop")}
+            </button>
+            <p className="text-xs leading-5 text-muted">
+              {t("companyDiscovery.progress.stopNote")}
+            </p>
+          </div>
+
+          {stopError && (
+            <p className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-sm font-semibold text-danger">
+              {stopError}
+            </p>
+          )}
+
+          {pollExpired && (
+            <div className="mt-4 rounded-xl bg-surface-2 px-3 py-2.5">
+              <p className="text-xs leading-5 text-ink-soft">
+                {t("companyDiscovery.progress.keepOpen")}
+              </p>
+              <button
+                type="button"
+                onClick={refresh}
+                className="mt-2 rounded-xl border border-line px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-surface"
+              >
+                {t("companyDiscovery.progress.refresh")}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // ===========================================================================
   // Finished run (honest state — every number comes from the run)
   // ===========================================================================
-  if (phase === "created" && created) {
-    const run = created;
-    const source = run.progress.sources[0];
+  if (phase === "created" && run) {
     return (
       <div className="mx-auto max-w-3xl">
-        <div className="rounded-2xl border border-line bg-surface p-5 sm:p-6">
+        {backLink}
+        <div className="mt-4 rounded-2xl border border-line bg-surface p-5 sm:p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-bold text-ink">
               {t("companyDiscovery.runCreated.title")}
             </h2>
-            <span
-              className={`rounded-lg px-2.5 py-1 text-xs font-bold uppercase ${
-                run.status === "completed"
-                  ? "bg-success-soft text-success"
-                  : run.status === "failed"
-                    ? "bg-danger-soft text-danger"
-                    : "bg-accent-soft text-accent"
-              }`}
-            >
-              {t(`companyDiscovery.status.${run.status}`)}
-            </span>
+            <RunStatusBadge status={run.status} t={t} />
           </div>
 
           {/* Real run counters — measured by the engine, never simulated. */}
-          <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <div className="rounded-xl bg-surface-2 p-3">
-              <dd className="text-xl font-bold text-ink">
-                {run.progress.foundCompanies}
-                <span className="text-sm font-semibold text-muted">
-                  {" "}
-                  / {run.progress.targetCompanies}
-                </span>
-              </dd>
-              <dt className="mt-0.5 text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.found")}
-              </dt>
-            </div>
-            <div className="rounded-xl bg-surface-2 p-3">
-              <dd className="text-xl font-bold text-ink">
-                {run.progress.offersAnalyzed}
-              </dd>
-              <dt className="mt-0.5 text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.offers")}
-              </dt>
-            </div>
-            <div className="rounded-xl bg-surface-2 p-3">
-              <dd className="text-xl font-bold text-ink">
-                {run.progress.uniqueCompanies}
-              </dd>
-              <dt className="mt-0.5 text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.unique")}
-              </dt>
-            </div>
-            <div className="rounded-xl bg-surface-2 p-3">
-              <dd className="text-xl font-bold text-ink">
-                {run.progress.duplicatesRemoved}
-              </dd>
-              <dt className="mt-0.5 text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.duplicates")}
-              </dt>
-            </div>
-            <div className="rounded-xl bg-surface-2 p-3">
-              <dd className="text-xl font-bold text-ink">
-                {run.progress.companiesRejected}
-              </dd>
-              <dt className="mt-0.5 text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.rejected")}
-              </dt>
-            </div>
-            <div className="rounded-xl bg-surface-2 p-3">
-              <dd className="text-sm font-bold text-ink sm:mt-1">
-                {source
-                  ? source.status === "unavailable"
-                    ? t("companyDiscovery.runCreated.sourceUnavailable")
-                    : t("companyDiscovery.runCreated.sourceOk")
-                  : "—"}
-              </dd>
-              <dt className="mt-0.5 text-xs font-semibold text-muted">
-                {t("companyDiscovery.runCreated.source")}
-              </dt>
-            </div>
-          </dl>
+          <RunCounters run={run} t={t} />
 
           <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
             <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2">
@@ -284,6 +536,12 @@ export function CompanyDiscovery() {
             </div>
           </dl>
 
+          {run.status === "cancelled" && (
+            <p className="mt-4 rounded-xl bg-accent-soft px-3 py-2.5 text-xs leading-5 text-accent">
+              {t("companyDiscovery.progress.stopNote")}
+            </p>
+          )}
+
           <p className="mt-4 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-5 text-ink-soft">
             {t("companyDiscovery.runCreated.resultsNote")}
           </p>
@@ -305,7 +563,8 @@ export function CompanyDiscovery() {
   // ===========================================================================
   return (
     <div className="mx-auto max-w-3xl">
-      <h1 className="text-xl font-bold text-ink sm:text-2xl">
+      {backLink}
+      <h1 className="mt-3 text-xl font-bold text-ink sm:text-2xl">
         {t("companyDiscovery.title")}
       </h1>
       <p className="mt-2 text-sm leading-6 text-muted">

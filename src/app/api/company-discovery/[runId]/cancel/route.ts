@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import {
+  discoveryFailure,
+  rateLimitedResponse,
+  unauthorizedResponse,
+} from "@/lib/company-discovery/api";
+import { classifyDiscoveryDbError } from "@/lib/company-discovery/errors";
 import { cancelDiscoveryRun } from "@/lib/company-discovery/runs";
-import { checkRateLimit, rateLimitHeaders, tooManyRequests } from "@/lib/rate-limit";
+import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 /**
  * POST /api/company-discovery/[runId]/cancel — Stop Search.
@@ -17,10 +23,10 @@ export async function POST(
 ) {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active")
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return unauthorizedResponse();
 
   const limited = await checkRateLimit("company_discovery", user.id);
-  if (!limited.allowed) return tooManyRequests(limited);
+  if (!limited.allowed) return rateLimitedResponse(limited);
 
   const { runId } = await context.params;
   try {
@@ -28,16 +34,20 @@ export async function POST(
     return NextResponse.json({ run }, { headers: rateLimitHeaders(limited) });
   } catch (error) {
     const notFound = error instanceof Error && /not found/i.test(error.message);
-    return NextResponse.json(
-      {
-        error: notFound
-          ? "Run not found."
-          : "The run could not be cancelled. Please try again.",
-      },
-      {
-        status: notFound ? 404 : 500,
+    if (notFound)
+      return discoveryFailure("not_found", 404, "Run not found.", {
         headers: rateLimitHeaders(limited),
-      },
+      });
+    const code = classifyDiscoveryDbError(error);
+    console.error(
+      `[company-discovery] cancel failed run="${runId}" code="${code}"`,
+      error,
+    );
+    return discoveryFailure(
+      code,
+      500,
+      "The run could not be cancelled. Please try again.",
+      { headers: rateLimitHeaders(limited) },
     );
   }
 }

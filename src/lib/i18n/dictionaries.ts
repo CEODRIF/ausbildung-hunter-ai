@@ -561,6 +561,7 @@ const de = {
   // ---- Company & Email Discovery -------------------------------------------
   companyDiscovery: {
     title: "Unternehmens-Suche",
+    backToDashboard: "Zurück zum Dashboard",
     subtitle: "Deutsche Unternehmen mit öffentlicher Firmen-E-Mail für Ihr Fachgebiet finden",
     intro: "Die Suche durchläuft mehrere öffentliche Quellen, sammelt Kandidaten-Angebote, dedupliziert Unternehmen und stoppt erst, wenn die Zielzahl an EINDEUTIGEN Unternehmen mit veröffentlichter Firmen-E-Mail erreicht ist. 1 Unternehmen = 1 Ergebnis – niemals 1 Angebot = 1 Ergebnis.",
     form: {
@@ -583,6 +584,8 @@ const de = {
       onlyEmailHint: "Ohne veröffentlichte E-Mail zählt ein Unternehmen nicht und erscheint nicht im Excel.",
       search: "Unternehmen suchen",
       searching: "Wird eingereicht…",
+      stop: "Suche stoppen",
+      stopping: "Wird gestoppt…",
     },
     validation: {
       fieldRequired: "Bitte ein Fachgebiet angeben.",
@@ -610,8 +613,17 @@ const de = {
       source: "Quelle",
       sourceOk: "Jobbörse erreichbar",
       sourceUnavailable: "Quelle vorübergehend nicht verfügbar",
+      sourceSearching: "Jobbörse wird abgefragt",
       resultsNote: "Eindeutige Unternehmen wurden aus der Jobbörse der Bundesagentur für Arbeit gesammelt. Offizielle Websites, veröffentlichte Firmen-E-Mails und der Excel-Export folgen in einer späteren Auslieferung.",
       newSearch: "Neue Suche",
+    },
+    progress: {
+      title: "Suche läuft…",
+      pending: "Der Durchlauf startet…",
+      note: "Alle Zahlen stammen aus dem laufenden Durchlauf. Das Ziel zählt EINDEUTIGE Unternehmen mit veröffentlichter E-Mail – weniger als das Ziel ist kein Fehler, sondern ein ehrliches Teilergebnis.",
+      keepOpen: "Die Suche läuft serverseitig weiter. Sie können die Seite offen lassen oder später erneut prüfen.",
+      refresh: "Status aktualisieren",
+      stopNote: "Stoppen bricht den Durchlauf sicher ab; bereits gezählte Unternehmen bleiben erhalten.",
     },
     status: {
       pending: "Wartend",
@@ -623,6 +635,20 @@ const de = {
     },
     error: {
       generic: "Die Suche konnte nicht gestartet werden. Bitte erneut versuchen.",
+      unauthorized:
+        "Ihre Sitzung ist abgelaufen oder Ihr Konto ist nicht aktiv. Bitte melden Sie sich erneut an.",
+      rateLimited:
+        "Zu viele Suchläufe in kurzer Zeit. Bitte in {seconds} Sekunden erneut versuchen.",
+      invalidParams:
+        "Die Suchangaben sind unvollständig oder ungültig. Bitte prüfen Sie die Felder.",
+      databaseNotReady:
+        "Die Unternehmens-Suche ist derzeit nicht einsatzbereit (Datenbank). Die Details stehen im Server-Log.",
+      sourceUnavailable:
+        "Die Jobbörse der Bundesagentur für Arbeit ist derzeit nicht erreichbar. Bitte später erneut versuchen.",
+      searchFailed: "Der Durchlauf ist fehlgeschlagen. Bitte erneut versuchen.",
+      notFound: "Der Durchlauf wurde nicht gefunden.",
+      cancelled: "Der Durchlauf wurde gestoppt.",
+      stopFailed: "Der Durchlauf konnte nicht gestoppt werden. Bitte erneut versuchen.",
     },
   },
 
@@ -1766,6 +1792,7 @@ const en: Dict = {
   // ---- Company & Email Discovery -------------------------------------------
   companyDiscovery: {
     title: "Company Discovery",
+    backToDashboard: "Back to Dashboard",
     subtitle: "Find German companies with a public company email for your field",
     intro: "The search walks through several public sources, collects candidate offers, deduplicates companies and stops only when the target number of UNIQUE companies with a published company email is reached. 1 company = 1 result – never 1 offer = 1 result.",
     form: {
@@ -1788,6 +1815,8 @@ const en: Dict = {
       onlyEmailHint: "Without a published email a company is not counted and does not appear in the Excel.",
       search: "Search Companies",
       searching: "Submitting…",
+      stop: "Stop search",
+      stopping: "Stopping…",
     },
     validation: {
       fieldRequired: "Please provide a field.",
@@ -1815,8 +1844,17 @@ const en: Dict = {
       source: "Source",
       sourceOk: "Jobbörse available",
       sourceUnavailable: "Source temporarily unavailable",
+      sourceSearching: "Jobbörse being queried",
       resultsNote: "Unique companies were collected from the Federal Employment Agency (Jobbörse). Official websites, published company emails and the Excel export follow in a later release.",
       newSearch: "New search",
+    },
+    progress: {
+      title: "Searching…",
+      pending: "The run is starting…",
+      note: "Every number comes from the running pass. The target counts UNIQUE companies with a published email – fewer than the target is not an error, it is an honest partial result.",
+      keepOpen: "The search continues server-side. You can keep this page open or check back later.",
+      refresh: "Refresh status",
+      stopNote: "Stopping aborts the run safely; companies already counted are kept.",
     },
     status: {
       pending: "Pending",
@@ -1828,6 +1866,20 @@ const en: Dict = {
     },
     error: {
       generic: "The search could not be started. Please try again.",
+      unauthorized:
+        "Your session has expired or your account is not active. Please sign in again.",
+      rateLimited:
+        "Too many search runs in a short time. Please try again in {seconds} seconds.",
+      invalidParams:
+        "The search parameters are incomplete or invalid. Please check the fields.",
+      databaseNotReady:
+        "Company Discovery is not ready right now (database). Details are in the server log.",
+      sourceUnavailable:
+        "The Federal Employment Agency (Jobbörse) is currently unreachable. Please try again later.",
+      searchFailed: "The run failed. Please try again.",
+      notFound: "The run was not found.",
+      cancelled: "The run was stopped.",
+      stopFailed: "The run could not be stopped. Please try again.",
     },
   },
 
@@ -2957,6 +3009,7 @@ const fr: Dict = {
   // ---- Company & Email Discovery -------------------------------------------
   companyDiscovery: {
     title: "Recherche d'entreprises",
+    backToDashboard: "Retour au tableau de bord",
     subtitle: "Trouver des entreprises allemandes avec une e-mail professionnelle publique pour votre domaine",
     intro: "La recherche parcourt plusieurs sources publiques, collecte des offres candidates, déduplique les entreprises et ne s'arrête que lorsque l'objectif d'entreprises UNIQUES avec e-mail publique est atteint. 1 entreprise = 1 résultat – jamais 1 offre = 1 résultat.",
     form: {
@@ -2979,6 +3032,8 @@ const fr: Dict = {
       onlyEmailHint: "Sans e-mail publié, une entreprise n'est pas comptée et n'apparaît pas dans l'Excel.",
       search: "Rechercher les entreprises",
       searching: "Envoi…",
+      stop: "Arrêter la recherche",
+      stopping: "Arrêt en cours…",
     },
     validation: {
       fieldRequired: "Veuillez indiquer un domaine.",
@@ -3006,8 +3061,17 @@ const fr: Dict = {
       source: "Source",
       sourceOk: "Jobbörse disponible",
       sourceUnavailable: "Source temporairement indisponible",
+      sourceSearching: "Jobbörse en cours d'interrogation",
       resultsNote: "Des entreprises uniques ont été collectées depuis la Jobbörse de l'Agence fédérale pour l'emploi. Les sites web officiels, les e-mails d'entreprise publiés et l'export Excel suivront dans une livraison ultérieure.",
       newSearch: "Nouvelle recherche",
+    },
+    progress: {
+      title: "Recherche en cours…",
+      pending: "L'exécution démarre…",
+      note: "Tous les chiffres proviennent de l'exécution en cours. L'objectif compte des entreprises UNIQUES avec e-mail publié – moins que l'objectif n'est pas une erreur, mais un résultat partiel honnête.",
+      keepOpen: "La recherche continue côté serveur. Vous pouvez laisser cette page ouverte ou revenir plus tard.",
+      refresh: "Actualiser le statut",
+      stopNote: "L'arrêt interrompt l'exécution en toute sécurité ; les entreprises déjà comptées sont conservées.",
     },
     status: {
       pending: "En attente",
@@ -3019,6 +3083,20 @@ const fr: Dict = {
     },
     error: {
       generic: "La recherche n'a pas pu être démarrée. Veuillez réessayer.",
+      unauthorized:
+        "Votre session a expiré ou votre compte n'est pas actif. Veuillez vous reconnecter.",
+      rateLimited:
+        "Trop de recherches en peu de temps. Veuillez réessayer dans {seconds} secondes.",
+      invalidParams:
+        "Les paramètres de recherche sont incomplets ou invalides. Veuillez vérifier les champs.",
+      databaseNotReady:
+        "La recherche d'entreprises n'est pas disponible pour le moment (base de données). Les détails figurent dans le journal serveur.",
+      sourceUnavailable:
+        "La Jobbörse de l'Agence fédérale pour l'emploi est actuellement inaccessible. Veuillez réessayer plus tard.",
+      searchFailed: "L'exécution a échoué. Veuillez réessayer.",
+      notFound: "L'exécution est introuvable.",
+      cancelled: "L'exécution a été arrêtée.",
+      stopFailed: "L'exécution n'a pas pu être arrêtée. Veuillez réessayer.",
     },
   },
 
@@ -4153,6 +4231,7 @@ const ar: Dict = {
   // ---- Company & Email Discovery -------------------------------------------
   companyDiscovery: {
     title: "اكتشاف الشركات",
+    backToDashboard: "العودة إلى Dashboard",
     subtitle: "ابحث عن شركات ألمانية لديها بريد إلكتروني منشور في مجالك",
     intro: "يمر البحث بعدة مصادر عامة، ويجمع العروض المرشحة، ويرفع تكرار الشركات، ولا يتوقف إلا عند الوصول إلى العدد المستهدف من الشركات الفريدة التي لديها بريد منشور. شركة واحدة = نتيجة واحدة — وليس عرضًا واحدًا = نتيجة واحدة.",
     form: {
@@ -4175,6 +4254,8 @@ const ar: Dict = {
       onlyEmailHint: "الشركة بدون بريد منشور لا تُحسب ولا تظهر في Excel.",
       search: "بحث عن شركات",
       searching: "جارٍ الإرسال…",
+      stop: "إيقاف البحث",
+      stopping: "جارٍ الإيقاف…",
     },
     validation: {
       fieldRequired: "يرجى تحديد المجال.",
@@ -4202,8 +4283,17 @@ const ar: Dict = {
       source: "المصدر",
       sourceOk: "لوحة الفرص الفيدرالية متاحة",
       sourceUnavailable: "المصدر غير متاح مؤقتًا",
+      sourceSearching: "جارٍ الاستعلام من لوحة الفرص",
       resultsNote: "تمت جمع الشركات الفريدة من لوحة فرص العمل الفيدرالية. الموقع الرسمي وبريد الشركة المنشور وتصدير Excel سيصلون في إصدار لاحق.",
       newSearch: "بحث جديد",
+    },
+    progress: {
+      title: "جارٍ البحث…",
+      pending: "يبدأ التشغيل…",
+      note: "كل الأرقام مصدرها التشغيل الجاري. الهدف يُحسب بالشركات الفريدة التي لديها بريد منشور — وأقل من الهدف ليس خطأ بل نتيجة جزئية صادقة.",
+      keepOpen: "يستمر البحث على الخادم. يمكنك إبقاء الصفحة مفتوحة أو العودة لاحقًا.",
+      refresh: "تحديث الحالة",
+      stopNote: "الإيقاف يوقف التشغيل بأمان، وتبقى الشركات المحسوبة محفوظة.",
     },
     status: {
       pending: "قيد الانتظار",
@@ -4215,6 +4305,16 @@ const ar: Dict = {
     },
     error: {
       generic: "تعذّر بدء البحث. حاول مرة أخرى.",
+      unauthorized: "انتهت جلستك أو حسابك غير نشط. يرجى تسجيل الدخول من جديد.",
+      rateLimited: "عدد كبير من عمليات البحث في وقت قصير. حاول مجددًا بعد {seconds} ثانية.",
+      invalidParams: "بيانات البحث ناقصة أو غير صحيحة. يرجى مراجعة الحقول.",
+      databaseNotReady:
+        "خدمة اكتشاف الشركات غير متاحة حاليًا (قاعدة البيانات). التفاصيل في سجل الخادم.",
+      sourceUnavailable: "لوحة الفرص الفيدرالية غير متاحة حاليًا. حاول لاحقًا.",
+      searchFailed: "فشل التشغيل. حاول مرة أخرى.",
+      notFound: "لم يتم العثور على التشغيل.",
+      cancelled: "تم إيقاف التشغيل.",
+      stopFailed: "تعذّر إيقاف التشغيل. حاول مرة أخرى.",
     },
   },
 

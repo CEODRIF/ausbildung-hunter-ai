@@ -1,10 +1,17 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import {
+  discoveryFailure,
+  rateLimitedResponse,
+  unauthorizedResponse,
+} from "@/lib/company-discovery/api";
+import { classifyDiscoveryDbError } from "@/lib/company-discovery/errors";
 import { createDiscoveryRun } from "@/lib/company-discovery/runs";
+import { runAfterResponse } from "@/lib/company-discovery/schedule";
 import { runDiscoveryPipeline } from "@/lib/company-discovery/search";
 import { discoveryRunParamsSchema } from "@/lib/company-discovery/types";
-import { checkRateLimit, rateLimitHeaders, tooManyRequests } from "@/lib/rate-limit";
+import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 /**
  * POST /api/company-discovery/start — register AND execute a Company &
@@ -15,34 +22,35 @@ import { checkRateLimit, rateLimitHeaders, tooManyRequests } from "@/lib/rate-li
  *  - rate-limit the heavy-run scope (`company_discovery`);
  *  - validate with the SHARED zod schema (server is the source of truth —
  *    extra/unknown fields are stripped, the target is bounded);
- *  - persist the run (status `pending`) and run the Phase 2 candidate
- *    engine synchronously; the response carries the FINAL real state.
+ *  - persist the run (status `pending`) and answer with the run id
+ *    IMMEDIATELY; the candidate engine then runs after the response and
+ *    writes its real counters to the run row, which the client reads via
+ *    `GET /[runId]` (live progress) and can stop via `POST /[runId]/cancel`.
+ *  - every failure carries a stable machine `code` (see lib/…/errors.ts) so
+ *    the UI shows an actionable, translated message instead of one generic
+ *    line; internal details only reach the server log.
  *
  * Credits are NOT charged in this phase (wired to charge_search_credits in
  * the orchestration/credits phase). No client value (target, bounds,
  * concurrency, …) is trusted beyond the validated schema.
- *
- * Duration: one run is a few BA batch fetches (bounded by the server-side
- * limits), so the request stays within the platform's function budget.
  */
 export const maxDuration = 60;
 
 export async function POST(request: Request) {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active")
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return unauthorizedResponse();
 
   const limited = await checkRateLimit("company_discovery", user.id);
-  if (!limited.allowed) return tooManyRequests(limited);
+  if (!limited.allowed) return rateLimitedResponse(limited);
 
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json(
-      { error: "Invalid JSON body." },
-      { status: 400, headers: rateLimitHeaders(limited) },
-    );
+    return discoveryFailure("invalid_params", 400, "Invalid JSON body.", {
+      headers: rateLimitHeaders(limited),
+    });
   }
 
   let params;
@@ -53,47 +61,53 @@ export async function POST(request: Request) {
       error instanceof z.ZodError
         ? error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`)
         : [];
-    return NextResponse.json(
-      { error: "Invalid discovery parameters.", issues },
-      { status: 400, headers: rateLimitHeaders(limited) },
+    console.error(
+      `[company-discovery] invalid params user="${user.id}" issues=[${issues.join(", ")}]`,
     );
+    return discoveryFailure("invalid_params", 400, "Invalid discovery parameters.", {
+      issues,
+      headers: rateLimitHeaders(limited),
+    });
   }
 
   let run;
   try {
     run = await createDiscoveryRun(user.id, params);
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error && error.message
-            ? error.message
-            : "Failed to start the discovery run.",
-      },
-      { status: 500, headers: rateLimitHeaders(limited) },
+    const code = classifyDiscoveryDbError(error);
+    console.error(
+      `[company-discovery] run creation failed user="${user.id}" code="${code}"`,
+      error,
     );
+    return discoveryFailure(code, 500, "Failed to start the discovery run.", {
+      headers: rateLimitHeaders(limited),
+    });
   }
 
-  // Execute the candidate engine. The pipeline writes its own terminal
-  // state (completed/partial/failed) and re-checks cancellation; an
-  // unexpected throw lands on the 500 path below, which also finishes the
-  // run as failed (controlled message, no internals).
+  /** The engine pass. It persists its own terminal state (completed/partial/
+   *  failed) and honors cancellation; a throw is logged, never returned. */
+  const execute = async (): Promise<void> => {
+    try {
+      await runDiscoveryPipeline(run.runId, user.id);
+    } catch (error) {
+      console.error(`[company-discovery] run "${run.runId}" failed`, error);
+    }
+  };
+
+  // Answer FIRST: the run row is the contract the client mirrors. The pass
+  // then continues after the response (same invocation budget). If the
+  // runtime offers no `after` support, fall back to awaiting it — a run must
+  // never be silently dropped.
+  let scheduled = true;
   try {
-    run = await runDiscoveryPipeline(run.runId, user.id);
-    return NextResponse.json(
-      { runId: run.runId, status: run.status, run },
-      { status: 201, headers: rateLimitHeaders(limited) },
-    );
-  } catch (error) {
-    return NextResponse.json(
-      {
-        runId: run.runId,
-        error:
-          error instanceof Error && error.message
-            ? error.message
-            : "The discovery run failed.",
-      },
-      { status: 500, headers: rateLimitHeaders(limited) },
-    );
+    runAfterResponse(execute);
+  } catch {
+    scheduled = false;
   }
+  if (!scheduled) await execute();
+
+  return NextResponse.json(
+    { runId: run.runId, status: run.status, scheduled, run },
+    { status: 201, headers: rateLimitHeaders(limited) },
+  );
 }
