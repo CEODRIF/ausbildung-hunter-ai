@@ -82,7 +82,9 @@ create policy "Users can read their own deckblatt runs"
 
 create or replace function public.get_deckblatt_usage_status(target_user_id uuid)
 returns table (
-  limit integer,
+  -- "limit" is a fully reserved PostgreSQL word and cannot be a
+  -- RETURNS TABLE field name (syntax error 42601) — hence daily_limit.
+  daily_limit integer,
   used integer,
   remaining integer,
   usage_date date

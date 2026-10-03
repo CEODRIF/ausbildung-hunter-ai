@@ -40,33 +40,80 @@ type RpcName =
   | "release_deckblatt_generation"
   | "complete_deckblatt_generation";
 
-async function callQuotaRpc(name: RpcName, args: Record<string, unknown>): Promise<QuotaRow | null> {
+/** PostgREST error fields that are safe to log: a controlled message and a
+ *  code. Codes that identify the production failure directly:
+ *   - PGRST205  → function not found in the schema cache (migration not
+ *                 applied to the database)
+ *   - 42501     → permission denied for function (grants wrong)
+ *   - 42883     → argument name/type mismatch
+ *   - "transport" → the call never reached PostgREST (network/client) */
+interface PostgrestErrorLike {
+  message: string;
+  code?: string;
+}
+
+/**
+ * Diagnostics for quota RPC failures. PII discipline: the line contains ONLY
+ * the kind of failure, the route, the RPC name, the authenticated state, the
+ * PostgREST error code and the controlled error message — never a user id,
+ * run id, RPC argument or field value. The underlying Supabase error is
+ * preserved (code + message), not replaced by a generic string.
+ */
+function logQuotaRpcFailure(
+  kind: "rpc" | "threw" | "unauthenticated",
+  route: string,
+  rpcName: string,
+  authenticated: boolean,
+  error: PostgrestErrorLike | null,
+): void {
+  console.error(
+    `[deckblatt] quota ${kind} route=${route} rpc=${rpcName} auth=${authenticated ? "authenticated" : "unauthenticated"} postgrest_code=${error?.code ?? "n/a"} message=${error?.message ?? "unknown"}`,
+  );
+}
+
+async function callQuotaRpc(
+  name: RpcName,
+  args: Record<string, unknown>,
+  route: string,
+  authenticated: boolean,
+): Promise<QuotaRow | null> {
   try {
     const supabase = await createClient();
     const { data, error } = (await supabase.rpc(name, args)) as {
       data: unknown;
-      error: { message: string } | null;
+      error: PostgrestErrorLike | null;
     };
     if (error) {
-      // The RPC error message is logged (it is a controlled server-side
-      // string, never user data), then the caller degrades gracefully.
-      console.error(`[deckblatt] quota rpc ${name} failed: ${error.message}`);
+      logQuotaRpcFailure("rpc", route, name, authenticated, error);
       return null;
     }
     // The reserve/release RPCs return exactly one row.
     const row = Array.isArray(data) ? data[0] : data;
-    if (!row || typeof row !== "object") return null;
+    if (!row || typeof row !== "object") {
+      logQuotaRpcFailure("rpc", route, name, authenticated, {
+        message: "malformed_rpc_row",
+        code: "shape",
+      });
+      return null;
+    }
     const record = row as Record<string, unknown>;
-    if (typeof record.status !== "string") return null;
+    if (typeof record.status !== "string") {
+      logQuotaRpcFailure("rpc", route, name, authenticated, {
+        message: "malformed_rpc_row",
+        code: "shape",
+      });
+      return null;
+    }
     return {
       status: record.status,
       used: Number(record.used) || 0,
       remaining: Number(record.remaining) || 0,
     };
   } catch (error) {
-    console.error(
-      `[deckblatt] quota rpc ${name} threw: ${error instanceof Error ? error.message : "unknown"}`,
-    );
+    logQuotaRpcFailure("threw", route, name, authenticated, {
+      message: error instanceof Error ? error.message : "unknown",
+      code: "transport",
+    });
     return null;
   }
 }
@@ -77,33 +124,44 @@ async function callQuotaRpc(name: RpcName, args: Record<string, unknown>): Promi
  * `status` column — so it does not go through callQuotaRpc.)
  */
 export async function getDeckblattUsageStatus(): Promise<DeckblattUsageStatus | null> {
+  const ROUTE = "/api/deckblatt/status";
+  const RPC = "get_deckblatt_usage_status";
+  const malformed = { message: "malformed_rpc_row", code: "shape" } as const;
   try {
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return null;
-    const { data, error } = (await supabase.rpc("get_deckblatt_usage_status", {
+    if (!user) {
+      logQuotaRpcFailure("unauthenticated", ROUTE, RPC, false, null);
+      return null;
+    }
+    const { data, error } = (await supabase.rpc(RPC, {
       target_user_id: user.id,
-    })) as { data: unknown; error: { message: string } | null };
+    })) as { data: unknown; error: PostgrestErrorLike | null };
     if (error) {
-      console.error(
-        `[deckblatt] quota rpc get_deckblatt_usage_status failed: ${error.message}`,
-      );
+      logQuotaRpcFailure("rpc", ROUTE, RPC, true, error);
       return null;
     }
     const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
-    if (!row || typeof row !== "object") return null;
+    if (!row || typeof row !== "object") {
+      logQuotaRpcFailure("rpc", ROUTE, RPC, true, malformed);
+      return null;
+    }
     const used = Number(row.used);
     const remaining = Number(row.remaining);
-    if (!Number.isInteger(used) || !Number.isInteger(remaining)) return null;
-    return { limit: Number(row.limit) || used + remaining, used, remaining };
+    if (!Number.isInteger(used) || !Number.isInteger(remaining)) {
+      logQuotaRpcFailure("rpc", ROUTE, RPC, true, malformed);
+      return null;
+    }
+    // The SQL return field is "daily_limit" (bare "limit" is a fully
+    // reserved PostgreSQL word and cannot be a RETURNS TABLE field name).
+    return { limit: Number(row.daily_limit) || used + remaining, used, remaining };
   } catch (error) {
-    console.error(
-      `[deckblatt] quota rpc get_deckblatt_usage_status threw: ${
-        error instanceof Error ? error.message : "unknown"
-      }`,
-    );
+    logQuotaRpcFailure("threw", ROUTE, RPC, true, {
+      message: error instanceof Error ? error.message : "unknown",
+      code: "transport",
+    });
     return null;
   }
 }
@@ -113,15 +171,22 @@ export async function getDeckblattUsageStatus(): Promise<DeckblattUsageStatus | 
  * `runId` is the client's idempotency key (a UUID generated per click).
  */
 export async function reserveDeckblattGeneration(runId: string): Promise<ReserveOutcome | null> {
+  const ROUTE = "/api/deckblatt/generate";
+  const RPC = "reserve_deckblatt_generation";
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return null;
-  const row = await callQuotaRpc("reserve_deckblatt_generation", {
-    target_user_id: user.id,
-    p_run_id: runId,
-  });
+  if (!user) {
+    logQuotaRpcFailure("unauthenticated", ROUTE, RPC, false, null);
+    return null;
+  }
+  const row = await callQuotaRpc(
+    "reserve_deckblatt_generation",
+    { target_user_id: user.id, p_run_id: runId },
+    ROUTE,
+    true,
+  );
   if (!row) return null;
   if (row.status === "already_reserved") {
     return { status: "already_reserved", used: row.used, remaining: row.remaining };
@@ -142,15 +207,22 @@ export async function reserveDeckblattGeneration(runId: string): Promise<Reserve
  * runs are no-ops. Never throws.
  */
 export async function releaseDeckblattGeneration(runId: string): Promise<boolean> {
+  const ROUTE = "/api/deckblatt/generate";
+  const RPC = "release_deckblatt_generation";
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return false;
-  const row = await callQuotaRpc("release_deckblatt_generation", {
-    target_user_id: user.id,
-    p_run_id: runId,
-  });
+  if (!user) {
+    logQuotaRpcFailure("unauthenticated", ROUTE, RPC, false, null);
+    return false;
+  }
+  const row = await callQuotaRpc(
+    "release_deckblatt_generation",
+    { target_user_id: user.id, p_run_id: runId },
+    ROUTE,
+    true,
+  );
   return row?.status === "released";
 }
 
@@ -160,14 +232,34 @@ export async function releaseDeckblattGeneration(runId: string): Promise<boolean
  * the design is already generated, a ledger hiccup must not fail the user.
  */
 export async function completeDeckblattGeneration(runId: string): Promise<boolean> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return false;
-  const row = await callQuotaRpc("complete_deckblatt_generation", {
-    target_user_id: user.id,
-    p_run_id: runId,
-  });
-  return row !== null;
+  const ROUTE = "/api/deckblatt/generate";
+  const RPC = "complete_deckblatt_generation";
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      logQuotaRpcFailure("unauthenticated", ROUTE, RPC, false, null);
+      return false;
+    }
+    // The SQL function returns VOID: PostgREST answers { data: null,
+    // error: null } on success — so "no error" IS success. Parsing it as a
+    // row (callQuotaRpc) would report every completion as a failure.
+    const { error } = (await supabase.rpc(RPC, {
+      target_user_id: user.id,
+      p_run_id: runId,
+    })) as { error: PostgrestErrorLike | null };
+    if (error) {
+      logQuotaRpcFailure("rpc", ROUTE, RPC, true, error);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    logQuotaRpcFailure("threw", ROUTE, RPC, true, {
+      message: error instanceof Error ? error.message : "unknown",
+      code: "transport",
+    });
+    return false;
+  }
 }
