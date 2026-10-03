@@ -75,6 +75,8 @@ type GenError =
   | "provider_rate"
   | "provider_content_blocked"
   | "provider_unconfigured"
+  | "provider_timeout"
+  | "provider_rejected"
   | "usage_unavailable"
   | "network"
   | "session"
@@ -98,6 +100,8 @@ interface GenerateResponse {
   styleId?: string;
   design?: string;
   usage?: { used?: number; remaining?: number };
+  /** Set on a provider failure: whether the reserved generation was refunded. */
+  quotaRefunded?: boolean;
   fields?: Partial<Record<DeckblattFieldKey, string>>;
   photo?: "invalidFormat" | "tooLarge";
 }
@@ -288,6 +292,13 @@ export function DeckblattGenerator() {
   const [dragging, setDragging] = useState(false);
   const [styleChoice, setStyleChoice] = useState<DeckblattStyleId | "auto">("auto");
   const [usage, setUsage] = useState<UsageState | null>(null);
+  /**
+   * Whether the server CONFIRMED that a failed generation was refunded. The
+   * "your quota was not used" note may only be shown when this is true — it
+   * used to be shown unconditionally, so a user whose reservation was lost
+   * (function killed mid-generation) was told the opposite of the truth.
+   */
+  const [quotaRefunded, setQuotaRefunded] = useState<boolean | null>(null);
   const [phase, setPhase] = useState<GenPhase>("idle");
   const [error, setError] = useState<GenError>("");
   const [result, setResult] = useState<{ dataUrl: string; styleId: DeckblattStyleId } | null>(
@@ -540,9 +551,14 @@ export function DeckblattGenerator() {
       } else if (response.status === 429) {
         setError("rate_limited");
       } else if (response.status === 502) {
+        // The server reports whether the failed run was actually refunded; the
+        // note below depends on it instead of always claiming the quota is safe.
+        setQuotaRefunded(payload.quotaRefunded === true);
         if (payload.code === "provider_rate_limited") setError("provider_rate");
         else if (payload.code === "provider_unauthorized") setError("provider_unconfigured");
         else if (payload.code === "provider_content_blocked") setError("provider_content_blocked");
+        else if (payload.code === "provider_timeout") setError("provider_timeout");
+        else if (payload.code === "provider_rejected") setError("provider_rejected");
         else setError("provider");
       } else if (response.status === 503) {
         setError("usage_unavailable");
@@ -620,6 +636,17 @@ export function DeckblattGenerator() {
   const generating = phase !== "idle";
   const quotaExhausted = usage !== null && usage.remaining <= 0;
 
+  /**
+   * Quota note under a provider error. The reassuring text is only used when
+   * the server confirmed the refund ("quotaRefunded"); otherwise the user is
+   * told the truth — the return could not be confirmed and happens
+   * automatically (expire_stale_deckblatt_runs).
+   */
+  const providerNote =
+    quotaRefunded === false
+      ? t("deckblatt.errorProviderNotePending")
+      : t("deckblatt.errorProviderNote");
+
   const photoErrorCopy =
     photoError === ""
       ? ""
@@ -661,17 +688,27 @@ export function DeckblattGenerator() {
     },
     provider: {
       title: t("deckblatt.errorProvider"),
-      description: t("deckblatt.errorProviderNote"),
+      description: providerNote,
       retryable: true,
     },
     provider_rate: {
       title: t("deckblatt.errorProviderRate"),
-      description: t("deckblatt.errorProviderNote"),
+      description: providerNote,
       retryable: true,
     },
     provider_content_blocked: {
       title: t("deckblatt.errorProviderContentBlocked"),
-      description: t("deckblatt.errorProviderNote"),
+      description: providerNote,
+      retryable: true,
+    },
+    provider_timeout: {
+      title: t("deckblatt.errorProviderTimeout"),
+      description: providerNote,
+      retryable: true,
+    },
+    provider_rejected: {
+      title: t("deckblatt.errorProviderRejected"),
+      description: providerNote,
       retryable: true,
     },
     provider_unconfigured: {

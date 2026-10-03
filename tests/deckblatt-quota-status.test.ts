@@ -142,7 +142,7 @@ describe("status behaviour (mocked PostgREST chain)", () => {
     expect(await getDeckblattUsageStatus()).toEqual({ limit: 2, used: 2, remaining: 0 });
   });
 
-  it("4. status is READ-ONLY: only the status RPC is ever called, with only target_user_id", async () => {
+  it("4. status never CHARGES: it only reads the quota and settles abandoned reservations", async () => {
     const { rpcCalls } = makeClient({
       rpc: (name) =>
         name === "get_deckblatt_usage_status"
@@ -151,12 +151,22 @@ describe("status behaviour (mocked PostgREST chain)", () => {
     });
     await getDeckblattUsageStatus();
     await getDeckblattUsageStatus(); // repeated page loads must stay free
+    // Per load: read the quota, then give back any reservation that was never
+    // settled. The status page is the only place the user sees the number (and
+    // the generate button is disabled while it reads "exhausted"), so a lost
+    // reservation has to be recovered here or the user stays stuck.
     expect(rpcCalls.map((call) => call.name)).toEqual([
+      "expire_stale_deckblatt_runs",
       "get_deckblatt_usage_status",
+      "expire_stale_deckblatt_runs",
       "get_deckblatt_usage_status",
     ]);
+    // No charging RPC may ever be reachable from a GET path.
     for (const call of rpcCalls) {
-      expect(call.args).toEqual({ target_user_id: USER_ID });
+      expect(["get_deckblatt_usage_status", "expire_stale_deckblatt_runs"]).toContain(
+        call.name,
+      );
+      expect(JSON.stringify(call.args)).toContain(USER_ID);
     }
   });
 });
@@ -271,9 +281,17 @@ describe("reserve — atomic wiring", () => {
       used: 1,
       remaining: 1,
     });
-    expect(rpcCalls).toHaveLength(1);
-    expect(rpcCalls[0].name).toBe("reserve_deckblatt_generation");
-    expect(rpcCalls[0].args).toEqual({ target_user_id: USER_ID, p_run_id: RUN_ID });
+    // Exactly ONE charge: the abandoned-reservation recovery runs first (it
+    // only gives quota back), then the reservation itself.
+    const reserveCalls = rpcCalls.filter(
+      (call) => call.name === "reserve_deckblatt_generation",
+    );
+    expect(reserveCalls).toHaveLength(1);
+    expect(reserveCalls[0].args).toEqual({ target_user_id: USER_ID, p_run_id: RUN_ID });
+    expect(rpcCalls.map((call) => call.name)).toEqual([
+      "expire_stale_deckblatt_runs",
+      "reserve_deckblatt_generation",
+    ]);
   });
 
   it("7b. replayed run_id → already_reserved (never charged twice)", async () => {

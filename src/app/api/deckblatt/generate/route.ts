@@ -26,9 +26,23 @@ import { getCurrentUserAndProfile } from "@/lib/auth";
 import { checkRateLimit, rateLimitHeaders, tooManyRequests } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
-/** A single GPT Image 2 generation with image input can take up to ~2 min
- *  incl. one retry. */
-export const maxDuration = 180;
+/**
+ * MUST be a literal: Next.js only accepts a statically analyzable value for a
+ * route segment config (deriving it from the provider budget made the build fail
+ * with "Invalid segment configuration export detected").
+ *
+ * 259 s = the provider module's 244 s budget (2 × 120 s attempt + 4 s backoff)
+ * plus ~15 s of route overhead. The relationship is enforced by
+ * tests/deckblatt-provider-recovery.test.ts, so the two cannot drift: a retry
+ * the function cannot finish is worse than no retry — the platform kills the
+ * request mid-flight, the catch block never runs and the reservation used to be
+ * lost.
+ *
+ * The platform clamps this to the plan's limit (Vercel Hobby: 60 s). When that
+ * happens the generation fails, but the quota is recovered (see
+ * expire_stale_deckblatt_runs) instead of being silently consumed.
+ */
+export const maxDuration = 259;
 
 /**
  * POST /api/deckblatt/generate
@@ -69,8 +83,30 @@ const RUN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
  * user id (already the convention across this codebase) and error CODES —
  * never field values, never the provider key, never the prompt.
  */
-function logFailure(userId: string, tag: string) {
-  console.error(`[deckblatt] generation failed user=${userId} tag=${tag}`);
+function logFailure(
+  userId: string,
+  tag: string,
+  detail: {
+    httpStatus?: number;
+    providerCode?: string;
+    providerMessage?: string;
+    requestId?: string;
+    quotaRefunded?: boolean;
+  } = {},
+) {
+  // One structured line: which provider, which operation, what the provider
+  // actually answered, and whether the quota was given back. The provider
+  // message is already redacted at the source; the user id is the existing
+  // convention across this codebase.
+  console.error(
+    `[deckblatt] generation failed user=${userId} tag=${tag}` +
+      " provider=pollinations operation=images.edits endpoint=gen.pollinations.ai" +
+      ` http_status=${detail.httpStatus ?? "n/a"}` +
+      ` provider_code=${detail.providerCode ?? "n/a"}` +
+      ` provider_message=${detail.providerMessage ?? "n/a"}` +
+      ` request_id=${detail.requestId ?? "n/a"}` +
+      ` quota_refunded=${detail.quotaRefunded ?? "n/a"}`,
+  );
 }
 
 function json(body: Record<string, unknown>, init?: ResponseInit): NextResponse {
@@ -155,6 +191,26 @@ export async function POST(request: Request) {
     );
   }
 
+  // 4b. Safety net for the case the catch block never runs: if the client goes
+  //     away mid-generation (navigation, retry, closed tab) the reserved quota
+  //     is given back immediately instead of waiting for the stale-reservation
+  //     recovery. Refund exactly once.
+  let refunded = false;
+  const releaseOnce = async () => {
+    if (refunded) return false;
+    refunded = true;
+    try {
+      return await releaseDeckblattGeneration(runId);
+    } catch {
+      logFailure(user.id, "release_rpc");
+      return false;
+    }
+  };
+  const onAbort = () => {
+    void releaseOnce();
+  };
+  request.signal?.addEventListener?.("abort", onAbort, { once: true });
+
   // 5. Provider — GPT Image 2 via /v1/images/edits. The prompt contains
   //    the style direction + profession context + reserved zones only;
   //    the model's image input is a deterministic NEUTRAL base image in
@@ -163,6 +219,8 @@ export async function POST(request: Request) {
   const prompt = buildDeckblattPrompt(style, form.profession);
   try {
     const designBase64 = await generateDeckblattDesign(prompt, buildDeckblattBaseImage(style));
+    // The design exists: an abort from here on must not refund it.
+    request.signal?.removeEventListener?.("abort", onAbort);
 
     // 6. Ledger — mark the run succeeded (best effort: the design is
     //    already generated; a ledger hiccup must not fail the response).
@@ -185,12 +243,20 @@ export async function POST(request: Request) {
     // FAILED generation → refund the reserved quota (idempotent; only runs
     // still in 'reserved' are refunded, so a slow-but-successful first
     // attempt can never be double-refunded by a late retry).
-    try {
-      await releaseDeckblattGeneration(runId);
-    } catch {
-      logFailure(user.id, "release_rpc");
-    }
+    const quotaRefunded = await releaseOnce();
+    // The browser is told whether the generation was really given back — the
+    // UI must not claim "quota was not used" when the refund did not happen.
+    const usage = { used: reservation.used, remaining: reservation.remaining };
+
     if (error instanceof PollinationsError) {
+      const detail = {
+        httpStatus: error.httpStatus,
+        providerCode: error.providerCode,
+        providerMessage: error.providerMessage,
+        requestId: error.requestId,
+        quotaRefunded,
+      };
+      logFailure(user.id, error.code, detail);
       const code =
         error.code === "provider_rate_limited"
           ? "provider_rate_limited"
@@ -198,11 +264,17 @@ export async function POST(request: Request) {
             ? "provider_unauthorized"
             : error.code === "provider_content_blocked"
               ? "provider_content_blocked"
-              : "provider_error";
-      logFailure(user.id, error.code);
-      return json({ code }, { status: 502 });
+              : error.code === "provider_timeout"
+                ? "provider_timeout"
+                : error.code === "provider_bad_request"
+                  ? "provider_rejected"
+                  : "provider_error";
+      return json({ code, quotaRefunded, usage }, { status: 502 });
     }
-    logFailure(user.id, "unexpected");
-    return json({ code: "provider_error" }, { status: 502 });
+    logFailure(user.id, "unexpected", { quotaRefunded });
+    return json(
+      { code: "provider_error", quotaRefunded, usage },
+      { status: 502 },
+    );
   }
 }

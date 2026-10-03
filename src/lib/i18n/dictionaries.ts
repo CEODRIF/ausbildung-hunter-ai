@@ -212,6 +212,12 @@ const de = {
     errorRateLimited: "Zu viele Anfragen. Bitte warte kurz und versuche es erneut.",
     errorProvider: "Der Design-Dienst ist gerade nicht erreichbar.",
     errorProviderNote: "Dein Design-Kontingent wurde nicht verbraucht.",
+    errorProviderNotePending:
+      "Die Rückgabe deines Design-Kontingents konnte nicht bestätigt werden – sie wird automatisch nachgeholt.",
+    errorProviderTimeout:
+      "Der Design-Dienst hat nicht rechtzeitig geantwortet. Bitte versuche es erneut.",
+    errorProviderRejected:
+      "Der Design-Dienst hat die Anfrage abgelehnt. Bitte versuche es erneut.",
     errorProviderRate:
       "Der Design-Dienst ist gerade überlastet. Bitte versuche es in wenigen Minuten erneut.",
     errorProviderContentBlocked:
@@ -1764,6 +1770,12 @@ const en: Dict = {
     errorRateLimited: "Too many requests. Please wait a moment and try again.",
     errorProvider: "The design service is currently unreachable.",
     errorProviderNote: "Your design quota was not used.",
+    errorProviderNotePending:
+      "We could not confirm that your design quota was returned — it will be restored automatically.",
+    errorProviderTimeout:
+      "The design service did not answer in time. Please try again.",
+    errorProviderRejected:
+      "The design service rejected the request. Please try again.",
     errorProviderRate:
       "The design service is currently under heavy load. Please try again in a few minutes.",
     errorProviderContentBlocked:
@@ -3265,6 +3277,12 @@ const fr: Dict = {
     errorRateLimited: "Trop de requêtes. Veuillez patienter un instant et réessayer.",
     errorProvider: "Le service de design est momentanément inaccessible.",
     errorProviderNote: "Votre quota de designs n'a pas été utilisé.",
+    errorProviderNotePending:
+      "Nous n'avons pas pu confirmer la restitution de votre quota de designs — elle sera rétablie automatiquement.",
+    errorProviderTimeout:
+      "Le service de design n'a pas répondu à temps. Veuillez réessayer.",
+    errorProviderRejected:
+      "Le service de design a refusé la demande. Veuillez réessayer.",
     errorProviderRate:
       "Le service de design est surchargé. Veuillez réessayer dans quelques minutes.",
     errorProviderContentBlocked:
@@ -4770,6 +4788,10 @@ const ar: Dict = {
     errorRateLimited: "طلبات كثيرة جدًا. يرجى الانتظار قليلًا ثم إعادة المحاولة.",
     errorProvider: "خدمة التصميم غير متاحة حاليًا.",
     errorProviderNote: "لم يُستهلك حصة تصاميمك.",
+    errorProviderNotePending:
+      "لم نتمكن من تأكيد إعادة حصة التصميم — سيتم استرجاعها تلقائيًا.",
+    errorProviderTimeout: "لم تستجب خدمة التصميم في الوقت المحدد. يرجى إعادة المحاولة.",
+    errorProviderRejected: "رفضت خدمة التصميم الطلب. يرجى إعادة المحاولة.",
     errorProviderRate: "خدمة التصميم مكتظة حاليًا. يرجى إعادة المحاولة بعد بضع دقائق.",
     errorProviderContentBlocked:
       "رفضت خدمة التصميم الصورة. يرجى استخدام صورة شخصية واضحة لشخص واحد (بدون صور جماعية) ثم إعادة المحاولة.",

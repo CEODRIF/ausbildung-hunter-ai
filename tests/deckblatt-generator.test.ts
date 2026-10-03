@@ -192,16 +192,19 @@ describe("pollinations integration (route + provider)", () => {
   });
 
   it("the flow is auth → rate limit → validate (form + photo) → reserve → provider → complete/release", () => {
-    // Order of the main flow in the route source.
+    // Order of the main flow in the route source. The abort safety net is
+    // armed right after the reservation (so a client that goes away still gets
+    // its quota back) and the refund itself runs in the catch block.
     const order = [
       "getCurrentUserAndProfile()",
       'checkRateLimit("deckblatt_generate", user.id)',
       "validateDeckblattForm(form)",
       "validateDeckblattPhotoDataUrl(photo)",
       "reserveDeckblattGeneration(runId)",
+      'request.signal?.addEventListener?.("abort", onAbort',
       "generateDeckblattDesign(prompt, buildDeckblattBaseImage(style))",
       "completeDeckblattGeneration(runId)",
-      "releaseDeckblattGeneration(runId)",
+      "const quotaRefunded = await releaseOnce();",
     ];
     let last = -1;
     for (const marker of order) {
@@ -227,16 +230,22 @@ describe("pollinations integration (route + provider)", () => {
     // timeout are retried once.
     expect(provider).toContain("if (!isTransient(error.code) || attempt === 2) break;");
     expect(provider).toContain("for (let attempt = 1; attempt <= 2; attempt++)");
-    expect(provider).toContain("return code === \"provider_rate_limited\" || code === \"provider_unavailable\";");
+    expect(provider).toContain("function isTransient(code: PollinationsErrorCode): boolean {");
+    expect(provider).toMatch(
+      /code === "provider_rate_limited"[\s\S]{0,140}code === "provider_unavailable"[\s\S]{0,140}code === "provider_timeout"/,
+    );
+    // A timeout is classified separately from an outage.
+    expect(provider).toContain('"provider_timeout"');
   });
 
   it("a safety-blocked photo surfaces a specific error (and the quota is refunded)", () => {
     expect(route).toContain('error.code === "provider_content_blocked"');
     expect(route).toContain('"provider_content_blocked"');
-    // Every failed generation — including 400-class — releases the quota.
+    // Every failed generation — including 400-class — releases the quota,
+    // through the single idempotent path.
     const catchIdx = route.indexOf("} catch (error) {");
     expect(catchIdx).toBeGreaterThan(-1);
-    expect(route.slice(catchIdx)).toContain("releaseDeckblattGeneration(runId)");
+    expect(route.slice(catchIdx)).toContain("await releaseOnce()");
   });
 });
 
@@ -517,10 +526,11 @@ describe("daily quota (2 per UTC day, server-enforced)", () => {
   });
 
   it("a FAILED generation restores the quota (release, idempotent)", () => {
-    // Route: the catch block releases the reservation.
+    // Route: the catch block releases the reservation through the single
+    // idempotent path (the same one the abort safety net uses).
     const catchIdx = route.indexOf("} catch (error) {");
     expect(catchIdx).toBeGreaterThan(-1);
-    expect(route.slice(catchIdx)).toContain("releaseDeckblattGeneration(runId)");
+    expect(route.slice(catchIdx)).toContain("await releaseOnce()");
     // Migration: only runs still 'reserved' are refunded — successes and
     // unknown runs are no-ops (a double release cannot refund twice).
     expect(migration).toContain("if run_row is null or run_row.status <> 'reserved' then");

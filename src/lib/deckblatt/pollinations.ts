@@ -58,9 +58,77 @@ const POLLINATIONS_QUALITY = "high";
 
 /** GPT Image 2 with an image input can take longer than diffusion models
  *  under load; the per-attempt budget is generous but bounded. */
-const ATTEMPT_TIMEOUT_MS = 180_000;
+export const ATTEMPT_TIMEOUT_MS = 120_000;
 /** One retry with backoff for transient failures (429/5xx/timeout). */
 const RETRY_BACKOFF_MS = 4_000;
+/**
+ * Total wall-clock budget this module may consume
+ * (2 × ATTEMPT_TIMEOUT_MS + RETRY_BACKOFF_MS = 244 s).
+ *
+ * The route derives `maxDuration` from this value so the two can never drift.
+ * They previously did: 180 s per attempt plus a retry against a 180 s
+ * `maxDuration` meant the second attempt could never finish, so a slow provider
+ * pushed the function into the platform's time limit — which is what left the
+ * quota reservation unsettled. Keep this strictly below the platform limit.
+ */
+export const DECKBLATT_FUNCTION_BUDGET_MS =
+  2 * ATTEMPT_TIMEOUT_MS + RETRY_BACKOFF_MS;
+
+/** Provider request-id headers, most specific first. */
+const REQUEST_ID_HEADERS = ["x-request-id", "request-id", "cf-ray", "x-amzn-trace-id"];
+
+function requestIdOf(response: Response): string | undefined {
+  for (const header of REQUEST_ID_HEADERS) {
+    const value = response.headers?.get?.(header);
+    if (value) return value.slice(0, 200);
+  }
+  return undefined;
+}
+
+/**
+ * Strip anything token-shaped from a provider message before it can reach a
+ * log line. A provider MAY echo the credential it rejected ("invalid key
+ * sk-…"), and the project's rule is that no key ever appears in a log.
+ */
+export function redactProviderMessage(message: string): string {
+  return message
+    .replace(/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/g, "[jwt]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [redacted]")
+    .replace(/\b(sk|pk|rk|key|token|secret|apikey)[-_ ]?[A-Za-z0-9._-]{12,}\b/gi, "[redacted]")
+    .replace(/[A-Za-z0-9+/]{60,}={0,2}/g, "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+}
+
+/**
+ * The provider's own error code/message. This is a DIAGNOSTIC: it is logged
+ * (never secrets, never PII) and never returned to the browser. The message is
+ * redacted here, at the source, so no downstream code can log a raw one.
+ */
+async function readProviderError(
+  response: Response,
+): Promise<{ providerCode?: string; providerMessage?: string }> {
+  try {
+    const body = (await response.json()) as {
+      error?: { code?: string; message?: string } | string;
+    };
+    const error = body?.error;
+    if (typeof error === "string") {
+      return { providerMessage: redactProviderMessage(error) };
+    }
+    return {
+      providerCode: typeof error?.code === "string" ? error.code.slice(0, 80) : undefined,
+      providerMessage:
+        typeof error?.message === "string"
+          ? redactProviderMessage(error.message)
+          : undefined,
+    };
+  } catch {
+    // Non-JSON body — nothing further to extract.
+    return {};
+  }
+}
 /** A valid A4 composition should be far below this; anything else is a
  *  provider anomaly (error payload served as image, etc.). */
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -173,6 +241,9 @@ export function buildDeckblattBaseImage(style: DeckblattStyle): string {
 export type PollinationsErrorCode =
   | "provider_unauthorized"
   | "provider_rate_limited"
+  /** The provider did not answer inside the per-attempt budget. Distinct from
+   *  an outage so the log says which one actually happened. */
+  | "provider_timeout"
   | "provider_unavailable"
   | "provider_bad_request"
   | "provider_content_blocked"
@@ -180,16 +251,65 @@ export type PollinationsErrorCode =
 
 export class PollinationsError extends Error {
   readonly code: PollinationsErrorCode;
-  constructor(code: PollinationsErrorCode, message: string) {
+  /** HTTP status the provider answered with, when there was one. */
+  readonly httpStatus?: number;
+  /** The provider's own machine-readable error code (e.g. "UNAUTHORIZED"). */
+  readonly providerCode?: string;
+  /** The provider's controlled error message. Diagnostics only — never
+   *  returned to the browser (it can echo request details). */
+  readonly providerMessage?: string;
+  /** Provider request id, when it exposes one (for support escalation). */
+  readonly requestId?: string;
+
+  constructor(
+    code: PollinationsErrorCode,
+    message: string,
+    detail: {
+      httpStatus?: number;
+      providerCode?: string;
+      providerMessage?: string;
+      requestId?: string;
+    } = {},
+  ) {
     super(message);
     this.name = "PollinationsError";
     this.code = code;
+    this.httpStatus = detail.httpStatus;
+    this.providerCode = detail.providerCode;
+    this.providerMessage = detail.providerMessage;
+    this.requestId = detail.requestId;
   }
+}
+
+/**
+ * Build a PollinationsError carrying the provider's own diagnostics.
+ *
+ * PII/secret discipline: the attached detail is the provider's error envelope
+ * (status, error code, error message, request id) — never the API key, never
+ * the prompt, never the image payload, never the applicant's data. Only the
+ * server-side log sees it; the HTTP response to the browser carries a code.
+ */
+async function failure(
+  response: Response,
+  code: PollinationsErrorCode,
+  message: string,
+): Promise<PollinationsError> {
+  const detail = await readProviderError(response);
+  return new PollinationsError(code, message, {
+    httpStatus: response.status,
+    providerCode: detail.providerCode,
+    providerMessage: detail.providerMessage,
+    requestId: requestIdOf(response),
+  });
 }
 
 /** True when a failed generation should be tried again (transient only). */
 function isTransient(code: PollinationsErrorCode): boolean {
-  return code === "provider_rate_limited" || code === "provider_unavailable";
+  return (
+    code === "provider_rate_limited" ||
+    code === "provider_unavailable" ||
+    code === "provider_timeout"
+  );
 }
 
 interface ImageEditBody {
@@ -220,13 +340,15 @@ async function fetchOnce(body: ImageEditBody, apiKey: string): Promise<string> {
     });
 
     if (response.status === 401 || response.status === 403) {
-      throw new PollinationsError(
+      throw await failure(
+        response,
         "provider_unauthorized",
         `Pollinations rejected the API key (HTTP ${response.status}).`,
       );
     }
     if (response.status === 429) {
-      throw new PollinationsError(
+      throw await failure(
+        response,
         "provider_rate_limited",
         "Pollinations rate limit exceeded (HTTP 429).",
       );
@@ -234,29 +356,34 @@ async function fetchOnce(body: ImageEditBody, apiKey: string): Promise<string> {
     if (response.status === 400) {
       // Documented 400 codes: content_blocked, failed_to_download_image,
       // invalid_image_url, image_too_large, unsupported_image_media_type.
-      // (The detail string is a controlled API message — never logged.)
-      let detail = "";
-      try {
-        const errorBody = (await response.json()) as {
-          error?: { code?: string; message?: string };
-        };
-        detail = `${errorBody.error?.code ?? ""} ${errorBody.error?.message ?? ""}`;
-      } catch {
-        // Non-JSON 400 body — treat as a plain bad request.
-      }
-      if (/content_blocked|blocked/i.test(detail)) {
+      const detail = await readProviderError(response);
+      const signal = `${detail.providerCode ?? ""} ${detail.providerMessage ?? ""}`;
+      if (/content_blocked|blocked/i.test(signal)) {
         throw new PollinationsError(
           "provider_content_blocked",
           "The provider safety filter blocked the request.",
+          {
+            httpStatus: response.status,
+            providerCode: detail.providerCode,
+            providerMessage: detail.providerMessage,
+            requestId: requestIdOf(response),
+          },
         );
       }
       throw new PollinationsError(
         "provider_bad_request",
         "The provider rejected the input (HTTP 400).",
+        {
+          httpStatus: response.status,
+          providerCode: detail.providerCode,
+          providerMessage: detail.providerMessage,
+          requestId: requestIdOf(response),
+        },
       );
     }
     if (!response.ok) {
-      throw new PollinationsError(
+      throw await failure(
+        response,
         "provider_unavailable",
         `Pollinations returned HTTP ${response.status}.`,
       );
@@ -281,7 +408,7 @@ async function fetchOnce(body: ImageEditBody, apiKey: string): Promise<string> {
     if (error instanceof PollinationsError) throw error;
     if (error instanceof Error && error.name === "AbortError") {
       throw new PollinationsError(
-        "provider_unavailable",
+        "provider_timeout",
         `Pollinations request timed out after ${ATTEMPT_TIMEOUT_MS} ms.`,
       );
     }
@@ -330,6 +457,7 @@ export async function generateDeckblattDesign(
     response_format: "b64_json",
   };
 
+  const startedAt = Date.now();
   let lastError: PollinationsError | null = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
@@ -338,6 +466,16 @@ export async function generateDeckblattDesign(
       if (!(error instanceof PollinationsError)) throw error;
       lastError = error;
       if (!isTransient(error.code) || attempt === 2) break;
+      // Only retry when a FULL attempt still fits in the function budget:
+      // starting a retry the platform will kill mid-flight is what used to
+      // leave the quota reservation unsettled.
+      const elapsed = Date.now() - startedAt;
+      if (
+        elapsed + RETRY_BACKOFF_MS + ATTEMPT_TIMEOUT_MS >
+        DECKBLATT_FUNCTION_BUDGET_MS
+      ) {
+        break;
+      }
       // One backoff between the two attempts (deterministic — no jitter
       // needed for a single-user request path).
       await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS));

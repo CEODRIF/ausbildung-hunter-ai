@@ -127,6 +127,9 @@ export async function getDeckblattUsageStatus(): Promise<DeckblattUsageStatus | 
   const ROUTE = "/api/deckblatt/status";
   const RPC = "get_deckblatt_usage_status";
   const malformed = { message: "malformed_rpc_row", code: "shape" } as const;
+  // Same recovery before reporting: the number shown to the user must not
+  // include a reservation that was never settled.
+  await expireStaleDeckblattRuns();
   try {
     const supabase = await createClient();
     const {
@@ -167,12 +170,71 @@ export async function getDeckblattUsageStatus(): Promise<DeckblattUsageStatus | 
 }
 
 /**
+ * How long a reservation may stay unsettled before it is refunded.
+ *
+ * A generation is charged at reserve time; the refund happens in the route's
+ * catch block. If the function is killed by the platform (its time limit hit
+ * while a slow image model was still running), if the browser navigated away,
+ * or if the release call itself failed, that catch never runs and the run stays
+ * 'reserved' — the user paid for a Deckblatt that never arrived and nothing
+ * ever gave the generation back.
+ *
+ * This window is the recovery bound: comfortably longer than any generation the
+ * function itself allows, and short enough that the user's very next attempt
+ * (or status refresh) repairs the day.
+ */
+const STALE_RESERVATION_MINUTES = 15;
+
+/**
+ * Refund reservations that were never settled. Best effort: a failure here must
+ * never block a generation, so the outcome is only reported (PII-free).
+ *
+ * @returns how many reservations were refunded.
+ */
+export async function expireStaleDeckblattRuns(): Promise<number> {
+  const ROUTE = "/api/deckblatt/generate";
+  const RPC = "expire_stale_deckblatt_runs";
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return 0;
+    const { data, error } = (await supabase.rpc(RPC, {
+      target_user_id: user.id,
+      p_max_age_minutes: STALE_RESERVATION_MINUTES,
+    })) as { data: unknown; error: PostgrestErrorLike | null };
+    if (error) {
+      logQuotaRpcFailure("rpc", ROUTE, RPC, true, error);
+      return 0;
+    }
+    const refunded = Number(data);
+    if (!Number.isInteger(refunded) || refunded <= 0) return 0;
+    // Diagnostics only — no user id, no run id, no field values.
+    console.warn(
+      `[deckblatt] quota recovered stale_reservations=${refunded} window_minutes=${STALE_RESERVATION_MINUTES}`,
+    );
+    return refunded;
+  } catch (error) {
+    logQuotaRpcFailure("threw", ROUTE, RPC, true, {
+      message: error instanceof Error ? error.message : "unknown",
+      code: "transport",
+    });
+    return 0;
+  }
+}
+
+/**
  * Atomically reserve ONE generation BEFORE the provider is called.
  * `runId` is the client's idempotency key (a UUID generated per click).
  */
 export async function reserveDeckblattGeneration(runId: string): Promise<ReserveOutcome | null> {
   const ROUTE = "/api/deckblatt/generate";
   const RPC = "reserve_deckblatt_generation";
+  // Settlement recovery first: if a previous attempt was never settled, its
+  // reservation is refunded here so this attempt is not blocked by quota that
+  // was in fact never used.
+  await expireStaleDeckblattRuns();
   const supabase = await createClient();
   const {
     data: { user },
