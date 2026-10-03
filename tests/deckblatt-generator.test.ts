@@ -10,6 +10,8 @@ import {
   selectDeckblattStyle,
 } from "@/lib/deckblatt/styles";
 import {
+  bytesToBase64,
+  detectDeckblattPhotoMime,
   DECKBLATT_FIELD_LIMITS,
   parseDeckblattForm,
   validateDeckblattForm,
@@ -250,8 +252,9 @@ describe("photo as AI image input", () => {
   it("the portrait travels to the model as image_url (data URI) in the edits body", () => {
     expect(provider).toContain("image: [{ image_url: portraitDataUrl }]");
     expect(route).toContain("generateDeckblattDesign(prompt, photo)");
-    // The client encodes the prepared photo into a data URL for the request.
-    expect(generator).toContain("photoUrlToDataUrl(photo.url)");
+    // The client encodes the prepared photo's stored Blob into a data URL
+    // for the request (never by fetching the object URL).
+    expect(generator).toContain("photoBlobToDataUrl(photo.blob)");
     expect(generator).toContain("photo: photoDataUrl");
   });
 
@@ -281,6 +284,153 @@ describe("photo as AI image input", () => {
     expect(prompt).toContain("Do not create a different person.");
     expect(prompt).toContain("Do not add unrelated people.");
     expect(prompt).toContain("recognizable and natural");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4c. Photo "readError" — root-cause regression (magic bytes + blob bytes)
+// ---------------------------------------------------------------------------
+
+describe("photo content detection (magic bytes)", () => {
+  const png = (extra: number[] = []) =>
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...extra]);
+  const jpeg = (extra: number[] = [0xe0, 0, 0]) => new Uint8Array([0xff, 0xd8, 0xff, ...extra]);
+  const webp = new Uint8Array([
+    0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+  ]);
+
+  it("detects valid PNG content (regardless of the file name)", () => {
+    expect(detectDeckblattPhotoMime(png([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]))).toBe("image/png");
+  });
+
+  it("detects valid JPEG content (JFIF and Exif start markers)", () => {
+    expect(detectDeckblattPhotoMime(jpeg())).toBe("image/jpeg");
+    expect(detectDeckblattPhotoMime(jpeg([0xe1, 1, 2]))).toBe("image/jpeg");
+  });
+
+  it("detects valid WEBP content (RIFF container)", () => {
+    expect(detectDeckblattPhotoMime(webp)).toBe("image/webp");
+  });
+
+  it("rejects corrupted, truncated or non-image bytes (no loosening)", () => {
+    expect(detectDeckblattPhotoMime(new Uint8Array([]))).toBeNull();
+    // Truncated PNG header (only 5 of the required 8 signature bytes).
+    expect(detectDeckblattPhotoMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d]))).toBeNull();
+    // RIFF container that is NOT webp (AVI marker at offset 8).
+    expect(
+      detectDeckblattPhotoMime(
+        new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x24, 0, 0, 0, 0x41, 0x56, 0x49, 0x20]),
+      ),
+    ).toBeNull();
+    // Plain text with an image extension is not an image.
+    expect(detectDeckblattPhotoMime(new TextEncoder().encode("<html>not an image</html>"))).toBeNull();
+    expect(detectDeckblattPhotoMime(new Uint8Array([0, 0, 0, 0, 0]))).toBeNull();
+  });
+});
+
+describe("photo bytes → base64", () => {
+  it("matches the platform encoder for arbitrary content (incl. chunk boundaries)", () => {
+    const small = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(bytesToBase64(small)).toBe(Buffer.from(small).toString("base64"));
+    // 200 000 bytes crosses many 0x8000 chunk boundaries.
+    const big = new Uint8Array(200_000);
+    for (let i = 0; i < big.length; i += 1) big[i] = (i * 31 + 7) & 0xff;
+    expect(bytesToBase64(big)).toBe(Buffer.from(big).toString("base64"));
+  });
+
+  it("encodes an empty buffer to the empty string", () => {
+    expect(bytesToBase64(new Uint8Array([]))).toBe("");
+  });
+});
+
+describe("photo encoding wiring — root-cause regression (no fetch on blob: URLs)", () => {
+  const generator = read("src/components/deckblatt-generator.tsx");
+
+  it("the data URL is built from the stored Blob's bytes — the object URL is never fetched", () => {
+    expect(generator).not.toContain("photoUrlToDataUrl");
+    expect(generator).toContain("photoBlobToDataUrl(photo.blob)");
+    expect(generator).toContain("await blob.arrayBuffer()");
+    // The only fetch() calls with a string target in the component are the
+    // two API routes — none touches a photo URL or a blob: URL.
+    const fetchCalls = generator.match(/fetch\(\s*[`"'][^`"']*[`"']/g) ?? [];
+    expect(fetchCalls).toHaveLength(2);
+    for (const call of fetchCalls) {
+      expect(call).not.toContain("blob:");
+      expect(call).not.toContain("photo.url");
+    }
+  });
+
+  it("the data URL label comes from the magic bytes and is verified before sending", () => {
+    expect(generator).toContain("detectDeckblattPhotoMime(bytes)");
+    const buildIdx = generator.indexOf("data:${mime};base64,${base64}");
+    const verifyIdx = generator.indexOf("validateDeckblattPhotoDataUrl(dataUrl)");
+    expect(buildIdx).toBeGreaterThan(-1);
+    // The same server-side payload rules run client-side AFTER the build
+    // and BEFORE the request.
+    expect(verifyIdx).toBeGreaterThan(buildIdx);
+  });
+
+  it("upload still decodes with robust Image.onload/Image.onerror (no Image.decode())", () => {
+    expect(generator).toContain("img.onload = () => resolve()");
+    expect(generator).toContain('img.onerror = () => reject(new Error("photo decode failed"))');
+    expect(generator).not.toContain(".decode()");
+  });
+
+  it("corrupted content is rejected at upload (magic bytes) — before any photo state is set", () => {
+    const acceptIdx = generator.indexOf("const acceptPhoto = useCallback(");
+    const guardIdx = generator.indexOf("if (!detected) {");
+    const stateIdx = generator.indexOf("setPhoto({ url: readyUrl, name: file.name, blob })");
+    expect(acceptIdx).toBeGreaterThan(-1);
+    expect(guardIdx).toBeGreaterThan(acceptIdx);
+    expect(stateIdx).toBeGreaterThan(guardIdx);
+  });
+
+  it("the re-encode decision uses the DETECTED mime, not file.type (the extension can lie)", () => {
+    expect(generator).toContain("sourceMime !== \"image/jpeg\"");
+    expect(generator).not.toContain("sourceFile.type !== \"image/jpeg\"");
+  });
+
+  it("the photo state carries the exact bytes that will be sent", () => {
+    expect(generator).toContain("blob: Blob");
+    expect(generator).toContain("setPhoto({ url: readyUrl, name: file.name, blob })");
+  });
+});
+
+describe("regression: the uploaded 498x651 PNG named 'Bewerbungsfoto.jpg'", () => {
+  // The exact failing upload: valid PNG bytes in a file whose extension —
+  // and therefore File.type — says JPEG ("image/jpeg"), 498x651 px.
+  const pngBytes = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
+    0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR chunk header
+    0x00, 0x00, 0x01, 0xf2, // width 498 (big-endian u32)
+    0x00, 0x00, 0x02, 0x8b, // height 651 (big-endian u32)
+    0x08, 0x06, 0x00, 0x00, 0x00, // bit depth 8, color type 6 (RGBA)
+  ]);
+
+  it("the CONTENT is detected as PNG — the extension's image/jpeg is ignored", () => {
+    // Before the fix the pipeline trusted File.type ("image/jpeg" from the
+    // .jpg name), mislabelled the payload, and the generation-time
+    // blob-URL fetch surfaced as "photo could not be read".
+    expect(detectDeckblattPhotoMime(pngBytes)).toBe("image/png");
+  });
+
+  it("the dimensions pass the 300px-per-side band (and the band is still enforced)", () => {
+    expect(validateDeckblattPhotoDimensions(498, 651)).toBeNull();
+    expect(validateDeckblattPhotoDimensions(300, 300)).toBeNull();
+    expect(validateDeckblattPhotoDimensions(299, 651)).toBe("tooSmall");
+    expect(validateDeckblattPhotoDimensions(498, 299)).toBe("tooSmall");
+  });
+
+  it("the data URL built from those bytes is labelled by content and passes the server check", () => {
+    const dataUrl = `data:image/png;base64,${bytesToBase64(pngBytes)}`;
+    expect(dataUrl).toMatch(/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/);
+    expect(validateDeckblattPhotoDataUrl(dataUrl)).toBeNull();
+  });
+
+  it("the upload-stage extension check does not false-reject the .jpg name", () => {
+    // The OS reports image/jpeg for the .jpg name — the first gate must
+    // pass; the content gate (magic bytes) is what decides.
+    expect(validateDeckblattPhotoFile({ type: "image/jpeg", size: pngBytes.length })).toBeNull();
   });
 });
 

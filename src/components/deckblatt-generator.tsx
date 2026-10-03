@@ -45,12 +45,16 @@ import {
   type DeckblattData,
 } from "@/lib/deckblatt/render";
 import {
+  bytesToBase64,
+  detectDeckblattPhotoMime,
   validateDeckblattForm,
+  validateDeckblattPhotoDataUrl,
   validateDeckblattPhotoDimensions,
   validateDeckblattPhotoFile,
   type DeckblattFieldErrors,
   type DeckblattFieldKey,
   type DeckblattPhotoFileError,
+  type DeckblattPhotoMime,
 } from "@/lib/deckblatt/validate";
 import { DeckblattSheet } from "@/components/deckblatt-sheet";
 
@@ -77,8 +81,15 @@ type GenError =
   | "render";
 
 interface PhotoState {
+  /** Object URL — used for the <img> preview ONLY. Never fetched, never
+   *  converted: fetching a blob: URL is not portable across browser
+   *  contexts and used to surface as "photo could not be read". */
   url: string;
   name: string;
+  /** The exact bytes that will be sent as the model's image input (the
+   *  original file, or the JPEG re-encode). The data URL is built from
+   *  THESE bytes at generation time. */
+  blob: Blob;
 }
 
 interface GenerateResponse {
@@ -156,45 +167,65 @@ async function decodePhotoFile(
  * a base64 data URL, so oversized originals and heavy PNG/WebP files are
  * re-encoded to JPEG. Small JPEGs keep their original quality (no
  * re-encode).
+ *
+ * `sourceMime` is the format DETECTED from the file's magic bytes — NOT
+ * `sourceFile.type`, which is derived from the extension and can lie (a PNG
+ * delivered as "Bewerbungsfoto.jpg" reports "image/jpeg").
  */
-async function preparePhotoUrl(
+async function preparePhoto(
   img: HTMLImageElement,
   sourceUrl: string,
   sourceFile: File,
-): Promise<string> {
+  sourceMime: string,
+): Promise<{ url: string; blob: Blob }> {
   const MAX_EDGE = 2000;
   const REENCODE_BYTES = 1_500_000;
   const w = img.naturalWidth;
   const h = img.naturalHeight;
   const needsResize = Math.max(w, h) > MAX_EDGE;
   const needsReencode =
-    !needsResize && (sourceFile.size > REENCODE_BYTES || sourceFile.type !== "image/jpeg");
-  if (!needsResize && !needsReencode) return sourceUrl;
+    !needsResize && (sourceFile.size > REENCODE_BYTES || sourceMime !== "image/jpeg");
+  if (!needsResize && !needsReencode) return { url: sourceUrl, blob: sourceFile };
   const scale = needsResize ? MAX_EDGE / Math.max(w, h) : 1;
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(w * scale));
   canvas.height = Math.max(1, Math.round(h * scale));
   const ctx = canvas.getContext("2d");
-  if (!ctx) return sourceUrl;
+  if (!ctx) return { url: sourceUrl, blob: sourceFile };
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   const blob = await new Promise<Blob | null>((resolve) =>
     canvas.toBlob(resolve, "image/jpeg", 0.92),
   );
-  if (!blob) return sourceUrl;
-  return URL.createObjectURL(blob);
+  // Re-encoding is best-effort: if the canvas fails, fall back to the
+  // verified original bytes (still a valid, decodable image).
+  if (!blob) return { url: sourceUrl, blob: sourceFile };
+  return { url: URL.createObjectURL(blob), blob };
 }
 
-/** Convert the prepared photo (blob/object URL) into the base64 data URL
- *  that the server forwards to the model as image input. */
-async function photoUrlToDataUrl(url: string): Promise<string> {
-  const blob = await (await fetch(url)).blob();
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("photo encode failed"));
-    reader.readAsDataURL(blob);
-  });
+/**
+ * Encode the prepared photo into the base64 data URL that the server
+ * forwards to the model as image input.
+ *
+ * The bytes are read DIRECTLY from the stored Blob (`blob.arrayBuffer()`) —
+ * never via `fetch()` on the object URL: fetching a `blob:` URL is not
+ * reliably supported in every browser context, and its failure used to
+ * surface as the misleading "photo could not be read" state.
+ *
+ * The MIME label comes from the bytes' magic signature (the extension can
+ * lie), and the finished data URL is verified with the SAME rules the
+ * server applies before anything is sent. Throws on undecodable content or
+ * an over-cap payload — the caller maps that to the photo read error.
+ */
+async function photoBlobToDataUrl(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const mime = detectDeckblattPhotoMime(bytes);
+  if (!mime) throw new Error("photo content undecodable");
+  const base64 = bytesToBase64(bytes);
+  const dataUrl = `data:${mime};base64,${base64}`;
+  const payloadError = validateDeckblattPhotoDataUrl(dataUrl);
+  if (payloadError) throw new Error(`photo payload ${payloadError}`);
+  return dataUrl;
 }
 
 function triggerDownload(dataUrl: string, filename: string) {
@@ -336,6 +367,22 @@ export function DeckblattGenerator() {
         setPhotoError(fileError);
         return;
       }
+      // Verify the ACTUAL format from the file's magic bytes. `file.type`
+      // is extension-derived and can lie (PNG content in a ".jpg" file);
+      // undetectable bytes = corrupted/unsupported content → reject.
+      let detectedMime: DeckblattPhotoMime;
+      try {
+        const header = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+        const detected = detectDeckblattPhotoMime(header);
+        if (!detected) {
+          setPhotoError("readError");
+          return;
+        }
+        detectedMime = detected;
+      } catch {
+        setPhotoError("readError");
+        return;
+      }
       let img: HTMLImageElement;
       let url: string;
       try {
@@ -354,9 +401,9 @@ export function DeckblattGenerator() {
         return;
       }
       try {
-        const readyUrl = await preparePhotoUrl(img, url, file);
+        const { url: readyUrl, blob } = await preparePhoto(img, url, file, detectedMime);
         setPhotoUrl(readyUrl);
-        setPhoto({ url: readyUrl, name: file.name });
+        setPhoto({ url: readyUrl, name: file.name, blob });
       } catch {
         URL.revokeObjectURL(url);
         setPhotoError("readError");
@@ -426,10 +473,11 @@ export function DeckblattGenerator() {
     // 2b. Real step: encode the prepared photo as the provider's image
     //     input (identity-preserving portrait; the exact text fields
     //     `email/phone/address/firstName/lastName` are NOT sent — the
-    //     local renderer composites them afterwards).
+    //     local renderer composites them afterwards). The bytes come from
+    //     the stored Blob, and the data URL is verified before the request.
     let photoDataUrl: string;
     try {
-      photoDataUrl = await photoUrlToDataUrl(photo.url);
+      photoDataUrl = await photoBlobToDataUrl(photo.blob);
     } catch {
       setPhotoError("readError");
       setError("photo");

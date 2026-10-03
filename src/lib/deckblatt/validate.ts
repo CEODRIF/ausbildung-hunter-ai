@@ -162,3 +162,70 @@ export function validateDeckblattPhotoDimensions(
   if (Math.min(width, height) < DECKBLATT_PHOTO_MIN_EDGE) return "tooSmall";
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Photo CONTENT verification (isomorphic — used by the client + tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect the ACTUAL image format from the file's magic bytes.
+ *
+ * `File.type` (and the file extension) are NOT trustworthy: an OS or export
+ * tool can deliver PNG bytes inside a file named "…jpg", and `File.type`
+ * then reports `image/jpeg` — a data URL labelled `data:image/jpeg` with PNG
+ * bytes inside is a MIME/content mismatch that the provider rejects. The
+ * magic signature is the only authoritative answer for the label we send.
+ *
+ * Returns null when the bytes do not start with a known PNG / JPEG / WEBP
+ * signature (= corrupted content, truncated header, or an unsupported
+ * format) — callers must reject, never guess.
+ */
+export function detectDeckblattPhotoMime(bytes: Uint8Array): DeckblattPhotoMime | null {
+  // PNG: 89 50 4E 47 0D 0A 1A 0A ("…N…L…" + the fixed line endings)
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  // JPEG: FF D8 FF (JFIF / Exif / progressive all share the start code)
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  // WEBP: RIFF container with the WEBP marker at offset 8
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  return null;
+}
+
+/** Standard base64 of raw bytes — isomorphic (Buffer in Node, btoa in
+ *  browsers, chunked so multi-MB photos never hit argument limits). */
+export function bytesToBase64(bytes: Uint8Array): string {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("base64");
+  }
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
