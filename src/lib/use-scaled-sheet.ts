@@ -9,6 +9,11 @@
  * around the sheet is sized to the SCALED dimensions, so the preview
  * never exceeds the available width (fit-to-width on phones).
  *
+ * The scale is derived from the AVAILABLE CONTENT width — `clientWidth`
+ * minus the container's own horizontal padding (see availableSheetWidth).
+ * Using the raw clientWidth over-sized the frame by the padding and clipped
+ * the sheet on both sides (the Deckblatt preview bug).
+ *
  * Note: this hook is responsible for SCALE only (fit-to-width). The
  * POSITION of the sheet is owned by the markup: the frame (containing
  * block) must be `direction: ltr` — in an RTL app an oversized block
@@ -29,6 +34,32 @@ import { useEffect, useState, type RefObject } from "react";
 
 /** +28px of breathing room so the scaled sheet never touches the edges. */
 export const SHEET_PREVIEW_PADDING = 28;
+
+/**
+ * The width the scaled sheet may actually occupy.
+ *
+ * `clientWidth` INCLUDES the element's own horizontal padding, but padding
+ * is not usable space: a padded container (the Deckblatt preview uses
+ * `p-4 sm:p-6`) sized its frame from the padded width, so the frame came
+ * out wider than the content box and the A4 sheet was clipped on BOTH
+ * sides at every viewport width (headless-Chrome measurement: ~12px left +
+ * ~12px right on 320–1280px, the sheet never fully visible).
+ *
+ * Subtracting the padding makes the frame fit the real content box. For
+ * padding-free containers (the CV / cover-letter preview) the result is
+ * byte-identical to the raw clientWidth, so their behaviour is unchanged.
+ */
+export function availableSheetWidth(clientWidth: number, paddingInline: number): number {
+  if (!Number.isFinite(clientWidth) || clientWidth <= 0) return clientWidth;
+  const padding = Number.isFinite(paddingInline) && paddingInline > 0 ? paddingInline : 0;
+  return Math.max(0, clientWidth - padding);
+}
+
+/** Horizontal padding of an element, from its computed style. */
+function horizontalPadding(element: HTMLElement): number {
+  const styles = getComputedStyle(element);
+  return (parseFloat(styles.paddingLeft) || 0) + (parseFloat(styles.paddingRight) || 0);
+}
 
 /** Pure scale computation — unit-testable without a DOM.
  *  Returns the previous scale when no width is measurable (hidden /
@@ -67,7 +98,11 @@ export function useScaledSheet(
 
     const update = () => {
       setScale((prev) =>
-        computePreviewScale(outer.clientWidth, sheetWidth, prev),
+        computePreviewScale(
+          availableSheetWidth(outer.clientWidth, horizontalPadding(outer)),
+          sheetWidth,
+          prev,
+        ),
       );
       setSheetHeight((prev) =>
         Math.max(sheet.offsetHeight || prev, sheetMinHeight),

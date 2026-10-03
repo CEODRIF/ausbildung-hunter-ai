@@ -825,14 +825,22 @@ describe("responsive layout", () => {
     expect(genIdx).toBeLessThan(previewIdx);
   });
 
-  it("mobile: nothing overflows 320px (min-w-0 columns, scaled preview, hidden overflow)", () => {
+  it("mobile: nothing overflows 320px (min-w-0 columns, scaled preview, clipped frame)", () => {
     expect(generator).toContain("mx-auto w-full max-w-6xl");
     expect(generator).toContain('className="min-w-0 space-y-6"');
-    expect(generator).toContain('className="min-w-0" dir="ltr"');
+    // Preview column: min-w-0 (grid items may shrink) + phone-only bottom
+    // clearance so the fixed bottom nav never covers the sheet's bottom.
+    expect(generator).toContain('className="min-w-0 pb-24 lg:pb-0" dir="ltr"');
     // The A4 preview scales to fit the available width (never overflows).
     expect(generator).toContain("useScaledSheet(previewOuterRef, previewSheetRef");
     expect(generator).toContain("sheetWidth: DECKBLATT_WIDTH");
     expect(generator).toContain("transform: `scale(${preview.scale})`");
+    // The SCALED frame reserves the layout box and clips the scaled sheet —
+    // a transform shrinks the paint only, so without this the 1240px sheet
+    // would push past the container (the mobile clipping bug).
+    expect(generator).toContain("overflow-x-clip");
+    expect(generator).toContain("width: Math.round(DECKBLATT_WIDTH * preview.scale),");
+    expect(generator).toContain("height: Math.round(DECKBLATT_HEIGHT * preview.scale),");
     // The placeholder keeps the A4 ratio on any width.
     expect(generator).toContain("aspect-[210/297]");
   });

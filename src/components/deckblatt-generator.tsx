@@ -989,25 +989,38 @@ export function DeckblattGenerator() {
         </form>
 
         {/* ----------------------------- Preview column ----------------------------- */}
-        <div className="min-w-0" dir="ltr">
+        {/* pb-24 keeps the bottom of the A4 sheet clear of the fixed mobile
+            bottom nav (lg: the nav does not exist, so no padding). */}
+        <div className="min-w-0 pb-24 lg:pb-0" dir="ltr">
           <GlassCard variant="surface-elevated" className="overflow-hidden p-0">
             {generating ? (
               <GenerationOverlay phase={phase} />
             ) : result && photo ? (
+              /* Measured container: its own padding is SUBTRACTED from the
+                 available width by useScaledSheet, so the frame below always
+                 fits the content box (no side clipping). */
               <div
                 ref={previewOuterRef}
-                className="flex justify-center overflow-hidden p-4 sm:p-6"
+                className="flex w-full justify-center overflow-x-clip p-4 sm:p-6"
               >
+                {/* Tight FRAME: exactly the scaled dimensions, clipping, and
+                    direction-pinned. `overflow-hidden` also makes its
+                    automatic flex minimum size 0 — a browser can never clamp
+                    it back to the sheet's 1240px min-content width (which is
+                    what pushed a scaled sheet off-screen to one side). */}
                 <div
-                  className="relative"
+                  className="relative overflow-hidden rounded-lg shadow-[var(--shadow-float)]"
                   style={{
+                    direction: "ltr",
                     width: Math.round(DECKBLATT_WIDTH * preview.scale),
                     height: Math.round(DECKBLATT_HEIGHT * preview.scale),
                   }}
                 >
+                  {/* The sheet keeps its TRUE 1240px layout width; the uniform
+                      transform only scales the paint, so the A4 ratio and all
+                      render coordinates stay untouched. */}
                   <div
                     ref={previewSheetRef}
-                    className="overflow-hidden rounded-lg shadow-[var(--shadow-float)]"
                     style={{
                       width: DECKBLATT_WIDTH,
                       transform: `scale(${preview.scale})`,
