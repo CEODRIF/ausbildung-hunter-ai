@@ -32,6 +32,7 @@ export type RateLimitScope =
   | "opportunity_search"
   | "opportunity_save"
   | "company_discovery"
+  | "deckblatt_generate"
   | "email_oauth"
   | "account_export"
   | "account_delete"
@@ -47,9 +48,13 @@ export type RateLimitScope =
  * - opportunity_save: each save re-resolves the offer from the source.
  * - ai_search: one run = an AI planning call + a bounded batch of upstream
  *   search + per-result detail fetches (export re-runs the batch without AI).
- *   4/min caps the heavy batch work per user; it shares no budget with the
- *   per-page opportunity_search limiter.
- * - email_oauth: OAuth initiations are cheap but a proxying vector; 5/min.
+  *   4/min caps the heavy batch work per user; it shares no budget with the
+  *   per-page opportunity_search limiter.
+  * - deckblatt_generate: one request = a slow (10–90 s) diffusion-model
+  *   image generation. The 2/day quota is the real gate (DB-side, atomic);
+  *   3/min only stops burst spam while the provider is failing (each failed
+  *   attempt refunds the quota).
+  * - email_oauth: OAuth initiations are cheap but a proxying vector; 5/min.
  * - account_export / account_delete: sensitive GDPR operations, 1 h window.
  * - admin_actions: plan/admin mutations; 30/min is generous for humans.
  */
@@ -65,6 +70,7 @@ export const RATE_LIMITS: Record<
   // per-company page fetches + bounded Tavily); 4/min stops run spam while
   // allowing legitimate re-runs with adjusted parameters.
   company_discovery: { max: 4, windowSeconds: 60 },
+  deckblatt_generate: { max: 3, windowSeconds: 60 },
   email_oauth: { max: 5, windowSeconds: 60 },
   account_export: { max: 2, windowSeconds: 3600 },
   account_delete: { max: 5, windowSeconds: 3600 },

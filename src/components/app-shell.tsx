@@ -130,6 +130,7 @@ const NAV_SECTIONS: NavSection[] = [
       { labelKey: "nav.emailAssistant", href: "/settings/email", icon: "mail" },
       { labelKey: "nav.templates", href: "/dashboard/templates", icon: "file" },
       { labelKey: "nav.coverLetter", href: "/dashboard/cover-letter", icon: "send" },
+      { labelKey: "nav.deckblatt", href: "/deckblatt", icon: "image" },
     ],
   },
   {
@@ -222,6 +223,10 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
   {
     match: (p) => p === "/dashboard/cover-letter",
     heading: { titleKey: "pages.coverLetter.title", subtitleKey: "pages.coverLetter.subtitle" },
+  },
+  {
+    match: (p) => p === "/deckblatt" || p.startsWith("/deckblatt/"),
+    heading: { titleKey: "pages.deckblatt.title", subtitleKey: "pages.deckblatt.subtitle" },
   },
   {
     match: (p) => p === "/dashboard/faq",

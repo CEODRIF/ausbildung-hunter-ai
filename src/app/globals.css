@@ -608,3 +608,73 @@ textarea:focus-visible,
     widows: 2;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Deckblatt print export (AI Deckblatt Generator)                     */
+/* ------------------------------------------------------------------ */
+/* Same philosophy as the CV/letter builders: the printable sheet lives
+   in a portal on <body> (.deckblatt-print-root), hidden on screen.
+   Printing with the generator active (body.deckblatt-print-active)
+   suppresses the app shell so the A4 Deckblatt is the whole document.
+
+   The sheet is designed at 1240×1754 px (A4 @ ~150dpi). 1240px =
+   1240/96in = 328.1mm, so the inner content is scaled by
+   210/328.1 ≈ 0.640 to land on exactly 210mm × 297mm when printed. */
+.deckblatt-print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+  body.deckblatt-print-active {
+    background: #ffffff !important;
+  }
+  body.deckblatt-print-active .app-shell-root {
+    display: none !important;
+  }
+  body.deckblatt-print-active .deckblatt-print-root {
+    display: block !important;
+  }
+  .deckblatt-print-root .deckblatt-sheet {
+    width: 210mm !important;
+    height: 297mm !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+  .deckblatt-print-root .deckblatt-sheet-content {
+    transform: scale(0.64) !important;
+    transform-origin: top left !important;
+  }
+  /* Color fidelity: the AI background + accent colors must survive print. */
+  .deckblatt-print-root,
+  .deckblatt-print-root * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
+/* Deckblatt generation shimmer — a real "work in flight" indicator for the
+   slow provider round trip (no fake progress: a light sweep, theme-aware). */
+.deckblatt-shimmer {
+  background: linear-gradient(
+    100deg,
+    transparent 35%,
+    rgba(var(--glow-accent-rgb), 0.16) 50%,
+    transparent 65%
+  );
+  background-size: 250% 100%;
+  animation: deckblatt-shimmer 1.8s linear infinite;
+}
+
+@keyframes deckblatt-shimmer {
+  from {
+    background-position: 220% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
