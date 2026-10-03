@@ -117,7 +117,7 @@ describe("Arabic RTL", () => {
 
   it("uses logical properties in the shell and layout (no manual RTL overrides)", () => {
     const shell = read("src/components/app-shell.tsx");
-    for (const logical of ["ms-", "me-", "ps-", "start-", "end-"]) {
+    for (const logical of ["ms-", "me-", "ps-", "start-"]) {
       expect(shell, `app-shell should use ${logical}*`).toContain(logical);
     }
     // Physical left/right classes are reserved for true 50/50 cases (drawer).

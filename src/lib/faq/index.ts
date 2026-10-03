@@ -13,7 +13,6 @@ import { coverLetterItems } from "./items/cover-letter";
 import { deckblattItems } from "./items/deckblatt";
 import { applicationsItems } from "./items/applications";
 import { emailSendingItems } from "./items/email-sending";
-import { notificationsItems } from "./items/notifications";
 import { privacyItems } from "./items/privacy";
 import { billingItems } from "./items/billing";
 import { technicalItems } from "./items/technical";
@@ -42,7 +41,6 @@ export const ALL_ITEMS: FaqItem[] = [
   ...deckblattItems,
   ...applicationsItems,
   ...emailSendingItems,
-  ...notificationsItems,
   ...privacyItems,
   ...billingItems,
   ...technicalItems,

@@ -3,8 +3,6 @@ import type { LegalDoc } from "./types";
 /**
  * Contact page content.
  * CONTACT_EMAIL is the dedicated support address shown on /contact.
- * (Note: it differs intentionally from PLATFORM_OWNER_EMAIL in
- * src/lib/notifications/admin.ts, which identifies the platform owner.)
  */
 export const CONTACT_EMAIL = "drif@berlin.com";
 

@@ -108,7 +108,7 @@ const ARABIC_TERMS = new Set([
 const PLATFORM_TERMS = new Set([
   // platform features (all languages, normalized)
   "scanner", "dashboard", "profil", "profile", "saved", "opportunities",
-  "opportunity", "notifications", "تنبيهات", "تنبيه", "لوحة", "التحكم",
+  "opportunity", "لوحة", "التحكم",
   "الملف", "الشخصي", "بوينج",
 ]);
 

@@ -122,23 +122,6 @@ export const privacyItems: FaqItem[] = [
     keywords: ["other user", "access", "no"],
   },
   {
-    id: "pv-notif-private",
-    category: "privacy",
-    question: {
-      de: "Können private Benachrichtigungen einen anderen Nutzer erreichen?",
-      en: "Can private notifications reach another user?",
-      fr: "Des notifications privées peuvent-elles atteindre un autre utilisateur ?",
-      ar: "هل يمكن أن تصل إشعارات خاصة إلى مستخدم آخر؟",
-    },
-    answer: {
-      de: "Nein. Eine an Sie gerichtete Benachrichtigung ist nur für Sie sichtbar und wird nicht an andere Nutzer ausgeliefert.",
-      en: "No. A notification addressed to you is visible only to you and is not delivered to other users.",
-      fr: "Non. Une notification qui vous est adressée n'est visible que par vous et n'est pas livrée à d'autres utilisateurs.",
-      ar: "لا. الإشعار الموجّه إليك لا يراه إلا أنت ولا يُسلَّم إلى مستخدمين آخرين.",
-    },
-    keywords: ["notifications", "private", "no"],
-  },
-  {
     id: "pv-contact-invent",
     category: "privacy",
     question: {

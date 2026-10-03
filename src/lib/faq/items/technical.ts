@@ -156,23 +156,6 @@ export const technicalItems: FaqItem[] = [
     keywords: ["emails", "shown", "campaign"],
   },
   {
-    id: "tp-notifications",
-    category: "technical",
-    question: {
-      de: "Warum erscheint keine Benachrichtigung?",
-      en: "Why doesn't a notification appear?",
-      fr: "Pourquoi aucune notification n'apparaît ?",
-      ar: "لماذا لا يظهر الإشعار؟",
-    },
-    answer: {
-      de: "Benachrichtigungen erscheinen nur, wenn die Plattform sie für Sie (oder alle) versendet hat. Aktualisieren Sie die Seite, um neue Einträge zu laden – es gibt keine E-Mail- oder Push-Zustellung.",
-      en: "Notifications only appear when the platform has sent them to you (or everyone). Reload the page to load new entries – there is no email or push delivery.",
-      fr: "Les notifications n'apparaissent que lorsque la plateforme vous les a envoyées (ou à tous). Rechargez la page pour charger de nouvelles entrées – il n'y a pas de livraison par e-mail ou push.",
-      ar: "لا تظهر الإشعارات إلا عندما ترسلها المنصّة إليك (أو إلى الجميع). أعد تحميل الصفحة لجلب إدخالات جديدة — ولا يوجد إرسال عبر البريد أو الدفع.",
-    },
-    keywords: ["notifications", "appear", "reload"],
-  },
-  {
     id: "tp-save-job",
     category: "technical",
     question: {

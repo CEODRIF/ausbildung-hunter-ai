@@ -71,8 +71,6 @@ import {
 } from "lucide-react";
 import type { Profile } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
-import { relativeTime } from "@/lib/relative-time";
-import { useDismiss } from "@/lib/use-dismiss";
 import { Icon, type IconName } from "@/components/icon";
 import { BrandLogo } from "@/components/brand-logo";
 import { GradientMesh } from "@/components/ui/surfaces";
@@ -393,241 +391,20 @@ function NavSectionList({
 }
 
 // ---------------------------------------------------------------------------
-// Notifications (in-app: global platform updates + targeted owner messages)
-// ---------------------------------------------------------------------------
-
-interface ShellNotification {
-  id: string;
-  title: string;
-  content: string;
-  type: "info" | "important" | "maintenance" | "improvement";
-  created_at: string;
-  read: boolean;
-  read_at: string | null;
-}
-
-const NOTIF_TYPE_KEYS = {
-  info: "admin.notifTypeInfo",
-  important: "admin.notifTypeImportant",
-  maintenance: "admin.notifTypeMaintenance",
-  improvement: "admin.notifTypeImprovement",
-} as const;
-
-// Short module-level TTL cache: AppShell remounts on every section
-// navigation, so a fresh /api/notifications fetch per remount would be pure
-// duplicate traffic. 30 s is comfortably fresh for an unread badge; the
-// cache is invalidated when the user marks a notification read. All mutation
-// happens in these plain module-level accessors (not in component code).
-const notificationCache: {
-  at: number;
-  items: ShellNotification[] | null;
-} = { at: 0, items: null };
-const NOTIFICATION_TTL_MS = 30_000;
-
-function readNotificationCache(): ShellNotification[] | null {
-  if (notificationCache.items && Date.now() - notificationCache.at < NOTIFICATION_TTL_MS)
-    return notificationCache.items;
-  return null;
-}
-function writeNotificationCache(items: ShellNotification[]) {
-  notificationCache.at = Date.now();
-  notificationCache.items = items;
-}
-function invalidateNotificationCache() {
-  notificationCache.at = 0;
-  notificationCache.items = null;
-}
-
-function NotificationsBell() {
-  const { t, lang } = useI18n();
-  const locale =
-    lang === "de" ? "de-DE" : lang === "fr" ? "fr-FR" : lang === "ar" ? "ar" : "en-US";
-  const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<ShellNotification[] | null>(null);
-  const rootRef = useDismiss<HTMLDivElement>(open, useCallback(() => setOpen(false), []));
-
-  const refresh = useCallback(async () => {
-    const cached = readNotificationCache();
-    if (cached) {
-      setItems(cached);
-      return;
-    }
-    try {
-      const response = await fetch("/api/notifications", { cache: "no-store" });
-      if (!response.ok) return;
-      const data = (await response.json()) as { items: ShellNotification[] };
-      writeNotificationCache(data.items);
-      setItems(data.items);
-    } catch {
-      // Keep whatever we already show; the bell is non-critical chrome.
-    }
-  }, []);
-
-  useEffect(() => {
-    // Initial notification list load: fetch → setState after await (async,
-    // not a synchronous cascading update).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void refresh();
-  }, [refresh]);
-  // Refresh when the tab becomes visible again + a slow 60 s poll.
-  useEffect(() => {
-    const onVisible = () => {
-      if (!document.hidden) void refresh();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    // Poll only while the tab is visible — a background tab needs no polls
-    // (visibilitychange already refreshes on return).
-    const interval = setInterval(() => {
-      if (document.hidden) return;
-      void refresh();
-    }, 60_000);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      clearInterval(interval);
-    };
-  }, [refresh]);
-
-  const unread = (items ?? []).filter((item) => !item.read).length;
-
-  const markRead = async (item: ShellNotification) => {
-    if (item.read) return;
-    // Optimistic: the read state is per-user and idempotent server-side.
-    // Invalidate the shared cache so a remount re-reads the fresh state
-    // instead of resurrecting the stale unread flag.
-    invalidateNotificationCache();
-    setItems((current) =>
-      (current ?? []).map((row) =>
-        row.id === item.id
-          ? { ...row, read: true, read_at: new Date().toISOString() }
-          : row,
-      ),
-    );
-    try {
-      await fetch("/api/notifications/read", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ notification_id: item.id }),
-      });
-    } catch {
-      // Next refresh reconciles.
-    }
-  };
-
-  return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-label={t("header.notifications")}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="relative flex h-10 w-10 items-center justify-center rounded-2xl text-muted transition-colors hover:bg-surface-2 hover:text-ink"
-      >
-        <Bell size={18} strokeWidth={1.8} />
-        {unread > 0 && (
-          <span className="absolute top-0.5 end-0.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
-            {unread > 9 ? "9+" : unread}
-          </span>
-        )}
-      </button>
-      {open && (
-        <div
-          role="menu"
-          aria-label={t("header.notifications")}
-          className="glass absolute top-12 end-0 z-50 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-3xl"
-        >
-          <div className="border-b border-line px-4 py-3 text-sm font-bold text-ink">
-            {t("header.notifications")}
-          </div>
-          {items === null || items.length === 0 ? (
-            <div className="flex flex-col items-center gap-2.5 px-5 py-7 text-center">
-              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent-soft text-accent">
-                <Bell size={18} strokeWidth={1.8} />
-              </span>
-              <p className="text-sm font-bold text-ink">{t("header.noNotifications")}</p>
-              <p className="text-xs leading-5 text-muted">
-                {t("header.noNotificationsHint")}
-              </p>
-            </div>
-          ) : (
-            <ul className="max-h-96 divide-y divide-line overflow-y-auto">
-              {items.map((item) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => void markRead(item)}
-                    className={`block w-full px-4 py-3 text-start transition-colors hover:bg-surface-2 ${
-                      item.read ? "" : "bg-surface-2/50"
-                    }`}
-                  >
-                    <span className="flex items-start gap-2">
-                      <span
-                        className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                          item.read ? "bg-transparent" : "bg-accent"
-                        }`}
-                      />
-                      <span className="min-w-0">
-                        <span className="flex items-baseline gap-2">
-                          <span className="truncate text-sm font-semibold text-ink">
-                            {item.title}
-                          </span>
-                          <span className="shrink-0 rounded bg-surface-2 px-1 py-px text-[9px] font-bold tracking-wide text-faint uppercase">
-                            {t(NOTIF_TYPE_KEYS[item.type])}
-                          </span>
-                        </span>
-                        <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-muted">
-                          {item.content}
-                        </span>
-                        <span className="mt-1 block text-[10px] font-semibold tracking-wide text-faint uppercase">
-                          {relativeTime(item.created_at, t, locale)}
-                        </span>
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------
 
 export function AppShell({
   children,
   profile,
-  isPlatformOwner,
 }: {
   children: React.ReactNode;
   profile?: Profile | null;
-  /** Server-computed (layout) by comparing the AUTHENTICATED session UID
-   *  against the platform-owner constant — never client-supplied. Controls
-   *  ONLY the secondary entry; /admin and every admin API re-verify
-   *  server-side (requireAdmin + requirePlatformOwner). */
-  isPlatformOwner?: boolean;
 }) {
   const pathname = usePathname();
   const { t } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
-  // The Platform section (→ /admin, where Platform Updates lives) is offered
-  // ONLY to the platform owner — regular users never see the admin entry
-  // point at all. Visibility is decided server-side (layout); /admin and
-  // every admin API re-verify the UID server-side regardless.
-  const sections: NavSection[] = isPlatformOwner
-    ? [
-        ...NAV_SECTIONS,
-        {
-          titleKey: "nav.platform",
-          items: [{ labelKey: "nav.platformUpdates", href: "/admin", icon: "bell" }],
-        },
-      ]
-    : NAV_SECTIONS;
+  const sections: NavSection[] = NAV_SECTIONS;
   const closeMobile = useCallback(() => setMobileOpen(false), []);
 
   // Top-nav compact mode: icon-only links (labels hidden, tooltips on).
@@ -777,7 +554,6 @@ export function AppShell({
               <span className="hidden sm:block lg:hidden">
                 <ThemeSwitcher />
               </span>
-              <NotificationsBell />
               {profile ? (
                 <span className="ms-0.5">
                   <ProfileMenu profile={profile} />

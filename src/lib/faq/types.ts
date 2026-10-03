@@ -25,7 +25,6 @@ export type CategoryId =
   | "deckblatt"
   | "applications"
   | "email-sending"
-  | "notifications"
   | "privacy"
   | "billing"
   | "technical";

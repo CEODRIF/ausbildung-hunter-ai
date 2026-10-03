@@ -1,7 +1,7 @@
 import type { FaqCategory } from "./types";
 
 /**
- * The 18 FAQ categories in display order. Labels are localized in all four
+ * The 17 FAQ categories in display order. Labels are localized in all four
  * languages; icons come from the canonical app icon set.
  */
 export const CATEGORIES: FaqCategory[] = [
@@ -133,16 +133,6 @@ export const CATEGORIES: FaqCategory[] = [
       en: "Email Sending",
       fr: "Envoi d'e-mails",
       ar: "إرسال البريد",
-    },
-  },
-  {
-    id: "notifications",
-    icon: "bell",
-    label: {
-      de: "Benachrichtigungen",
-      en: "Notifications",
-      fr: "Notifications",
-      ar: "الإشعارات",
     },
   },
   {
