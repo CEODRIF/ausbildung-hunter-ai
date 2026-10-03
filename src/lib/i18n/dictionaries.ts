@@ -91,7 +91,10 @@ const de = {
     companyDiscovery: "Unternehmens-Suche",
     emailAssistant: "E-Mail-Assistent",
     savedFiles: "Gespeicherte Dateien",
-    templates: "Vorlagen",
+    // Sidebar label only: the CV/templates feature is now shown as
+    // "Lebenslauf". The key keeps its name (it is wired to the nav item) and
+    // `pages.templates.*` (the on-page heading) is deliberately untouched.
+    templates: "Lebenslauf",
     coverLetter: "Anschreiben",
     deckblatt: "Deckblatt AI",
     settings: "Einstellungen",
@@ -1647,7 +1650,8 @@ const en: Dict = {
     companyDiscovery: "Company Discovery",
     emailAssistant: "Email Assistant",
     savedFiles: "Saved Files",
-    templates: "Templates",
+    // Sidebar label only (see the de locale note).
+    templates: "Resume",
     coverLetter: "Cover Letter",
     deckblatt: "Deckblatt AI",
     settings: "Settings",
@@ -3147,7 +3151,8 @@ const fr: Dict = {
     companyDiscovery: "Recherche d'entreprises",
     emailAssistant: "Assistant e-mail",
     savedFiles: "Fichiers enregistrés",
-    templates: "Modèles",
+    // Sidebar label only (see the de locale note).
+    templates: "CV",
     coverLetter: "Lettre de motivation",
     deckblatt: "Deckblatt IA",
     settings: "Réglages",
@@ -4652,7 +4657,8 @@ const ar: Dict = {
     companyDiscovery: "اكتشاف الشركات",
     emailAssistant: "مساعد البريد",
     savedFiles: "الملفات المحفوظة",
-    templates: "القوالب",
+    // Sidebar label only (see the de locale note).
+    templates: "السيرة الذاتية",
     coverLetter: "خطاب تقديم الطلب",
     deckblatt: "صفحة الغلاف AI",
     settings: "الإعدادات",
