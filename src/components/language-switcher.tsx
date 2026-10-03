@@ -12,7 +12,18 @@ import { useDismiss } from "@/lib/use-dismiss";
 import { LANGUAGE_META, type Language } from "@/lib/i18n/dictionaries";
 import { Icon } from "@/components/icon";
 
-export function LanguageSwitcher({ dropUp = false }: { dropUp?: boolean }) {
+/**
+ * `dropUp`  — anchor the menu ABOVE the button (controls at the bottom of
+ *            a full-height rail: mobile drawer footer, collapsed sidebar).
+ * `compact` — icon-only trigger for very narrow rails (collapsed sidebar).
+ */
+export function LanguageSwitcher({
+  dropUp = false,
+  compact = false,
+}: {
+  dropUp?: boolean;
+  compact?: boolean;
+}) {
   const { lang, setLang, supportedLanguages, t } = useI18n();
   const [open, setOpen] = useState(false);
   const rootRef = useDismiss(open, useCallback(() => setOpen(false), []));
@@ -25,10 +36,12 @@ export function LanguageSwitcher({ dropUp = false }: { dropUp?: boolean }) {
         aria-label={t("lang.label")}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex h-9 items-center gap-1.5 rounded-xl border border-line-strong px-2.5 text-sm font-semibold text-muted transition-colors hover:bg-surface-2 hover:text-ink"
+        className={`flex h-9 items-center gap-1.5 rounded-xl border border-line-strong text-sm font-semibold text-muted transition-colors hover:bg-surface-2 hover:text-ink ${
+          compact ? "w-9 justify-center" : "px-2.5"
+        }`}
       >
         <Icon name="globe" size={17} />
-        <span className="uppercase">{lang}</span>
+        {!compact && <span className="uppercase">{lang}</span>}
       </button>
       {open && (
         <div

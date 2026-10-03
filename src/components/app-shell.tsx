@@ -3,14 +3,19 @@
 /**
  * Global authenticated shell — Premium 2026 layout:
  *
- *  - Desktop: floating glass top navigation (brand, primary items, a
- *    "More" menu for the secondary sections, language/theme/notifications/
- *    profile) inside a sticky header bar.
- *  - Mobile: compact floating bottom navigation (Dashboard, Discover,
- *    Applications, AI, More) + the full off-canvas drawer for everything.
+ *  - Desktop (lg+): fixed full-height SIDEBAR on the logical start edge
+ *    (brand, ALL navigation sections, language/theme switchers) + a slim
+ *    sticky utility bar in the content area (page title, sidebar collapse
+ *    toggle, notifications, profile). The content column offsets with a
+ *    matching logical margin, so Arabic mirrors the whole layout.
+ *  - Mobile / tablet (<lg): compact floating bottom navigation (Dashboard,
+ *    Discover, Applications, AI, More) + the full off-canvas drawer for
+ *    everything + the floating glass top bar with brand and switchers.
  *
- *  All colors come from the design tokens; layout uses logical properties
- *  (start/end, ps/pe, ms/me) so Arabic (dir=rtl) mirrors automatically.
+ *  One navigation model (NAV_SECTIONS + NavSectionList) is shared by the
+ *  sidebar and the drawer — no duplicated item lists. All colors come from
+ *  the design tokens; layout uses logical properties (start/end, ps/pe,
+ *  ms/me) so Arabic (dir=rtl) mirrors automatically.
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -188,19 +193,6 @@ const LUCIDE: Record<IconName, LucideIcon> = {
   chart: BarChart3,
 };
 
-/** Primary items in the floating top bar (Desktop). */
-const PRIMARY_NAV: NavItem[] = [
-  { labelKey: "nav.dashboard", href: "/dashboard", icon: "grid" },
-  {
-    labelKey: "nav.companyDiscovery",
-    href: "/company-discovery",
-    icon: "globe",
-  },
-  { labelKey: "nav.aiAssistant", href: "/ai", icon: "spark" },
-  { labelKey: "nav.bewerbungen", href: "/applications", icon: "briefcase" },
-  { labelKey: "nav.emailAssistant", href: "/settings/email", icon: "mail" },
-];
-
 /** Mobile floating bottom bar: the four most-used destinations + More. */
 const MOBILE_NAV: NavItem[] = [
   { labelKey: "nav.dashboard", href: "/dashboard", icon: "grid" },
@@ -312,24 +304,37 @@ function isActive(pathname: string, href: string): boolean {
 
 const NAV_COLLAPSED_KEY = "aha:navCollapsed";
 
+/**
+ * Shared section list — rendered by BOTH the mobile drawer and the desktop
+ * sidebar (one navigation model, two surfaces). `collapsed` switches to the
+ * icon-only rail (labels become tooltips) for the narrow desktop sidebar.
+ */
 function NavSectionList({
   sections,
   pathname,
   onNavigate,
+  collapsed = false,
 }: {
   sections: NavSection[];
   pathname: string;
   onNavigate: () => void;
+  collapsed?: boolean;
 }) {
   const { t } = useI18n();
   return (
-    <div className="flex-1 space-y-6 overflow-y-auto px-3 py-4">
+    <div
+      className={`flex-1 space-y-6 overflow-y-auto ${collapsed ? "px-2" : "px-3"} py-4`}
+    >
       {sections.map((section, index) => (
         <div key={section.titleKey}>
-          {index > 0 && <div className="mb-4 ms-1.5 me-4 border-t border-line" />}
-          <p className="mb-2 px-3 text-[10px] font-bold tracking-[0.16em] text-faint uppercase">
-            {t(section.titleKey)}
-          </p>
+          {index > 0 && (
+            <div className={`mb-4 border-t border-line ${collapsed ? "mx-2" : "ms-1.5 me-4"}`} />
+          )}
+          {!collapsed && (
+            <p className="mb-2 px-3 text-[10px] font-bold tracking-[0.16em] text-faint uppercase">
+              {t(section.titleKey)}
+            </p>
+          )}
           <nav aria-label={t(section.titleKey)} className="space-y-0.5">
             {section.items.map((item) => {
               const label = t(item.labelKey);
@@ -340,13 +345,18 @@ function NavSectionList({
                   <div
                     key={item.labelKey}
                     aria-disabled="true"
-                    className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-faint"
+                    title={collapsed ? label : undefined}
+                    className={`flex items-center gap-3 rounded-xl py-2.5 text-sm font-semibold text-faint ${
+                      collapsed ? "justify-center px-0" : "px-3"
+                    }`}
                   >
                     <IconCmp size={18} strokeWidth={1.8} className="shrink-0" />
-                    <span className="flex-1">{label}</span>
-                    <span className="text-[9px] font-bold tracking-[0.08em] uppercase">
-                      {t("nav.soon")}
-                    </span>
+                    {!collapsed && <span className="flex-1">{label}</span>}
+                    {!collapsed && (
+                      <span className="text-[9px] font-bold tracking-[0.08em] uppercase">
+                        {t("nav.soon")}
+                      </span>
+                    )}
                   </div>
                 );
               }
@@ -356,14 +366,17 @@ function NavSectionList({
                   href={item.href}
                   onClick={onNavigate}
                   aria-current={active ? "page" : undefined}
-                  className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
+                  title={collapsed ? label : undefined}
+                  className={`flex items-center gap-3 rounded-xl py-2.5 text-sm font-semibold transition-colors ${
+                    collapsed ? "justify-center px-0" : "px-3"
+                  } ${
                     active
                       ? "bg-accent-soft text-accent"
                       : "text-muted hover:bg-surface-2 hover:text-ink"
                   }`}
                 >
                   <IconCmp size={18} strokeWidth={1.8} className="shrink-0" />
-                  <span className="truncate flex-1">{label}</span>
+                  {!collapsed && <span className="truncate flex-1">{label}</span>}
                 </Link>
               );
             })}
@@ -651,12 +664,64 @@ export function AppShell({
   return (
     <div className="app-shell-root min-h-screen bg-background">
       <GradientMesh />
-      <div className="relative z-10 flex min-h-screen flex-col">
+      {/* ------------------------------------------------ desktop sidebar -- */}
+      {/* lg+ only: fixed full-height rail on the logical start edge (left
+          in LTR, right in RTL — `start-0` mirrors automatically). The
+          content column offsets with a matching logical margin below.
+          Same NavSectionList + switchers as the mobile drawer — one nav
+          model, no duplicate items. z-30: above page content and the
+          sticky header (z-20), below the mobile drawer (z-40) and modals
+          (z-50). Hidden from print by the cv/cl-builder-active rules. */}
+      <aside
+        aria-label={t("nav.workspace")}
+        className={`fixed inset-y-0 start-0 z-30 hidden flex-col border-e border-line bg-surface/85 backdrop-blur-xl transition-[width] duration-200 lg:flex ${
+          collapsed ? "w-[84px]" : "w-[272px]"
+        }`}
+      >
+        <div
+          className={`flex h-16 shrink-0 items-center border-b border-line ${
+            collapsed ? "justify-center px-2" : "gap-2 px-4"
+          }`}
+        >
+          <BrandLogo
+            variant={collapsed ? "mark" : "full"}
+            size={30}
+            href="/dashboard"
+            wordmarkClassName="truncate"
+          />
+        </div>
+        <NavSectionList
+          sections={sections}
+          pathname={pathname}
+          onNavigate={() => {}}
+          collapsed={collapsed}
+        />
+        {/* Same functional switchers as the drawer footer; dropUp because
+            they sit at the bottom of a full-height rail. */}
+        <div className="shrink-0 border-t border-line p-3">
+          <div className={`flex items-center gap-1 ${collapsed ? "flex-col" : ""}`}>
+            <span className={collapsed ? "flex" : "flex-1"}>
+              <LanguageSwitcher dropUp compact={collapsed} />
+            </span>
+            <span>
+              <ThemeSwitcher dropUp />
+            </span>
+          </div>
+        </div>
+      </aside>
+
+      {/* Logical margin-inline-start mirrors for RTL automatically. */}
+      <div
+        className={`relative z-10 flex min-h-screen flex-col transition-[margin] duration-200 ${
+          collapsed ? "lg:ms-[84px]" : "lg:ms-[272px]"
+        }`}
+      >
         {/* ------------------------------------------------ top bar -------- */}
         <header className="sticky top-0 z-20 flex h-16 items-center px-3 sm:px-6">
           <div className="glass mx-auto flex h-14 w-full max-w-7xl items-center justify-between gap-2 rounded-3xl ps-3 pe-2">
-            {/* brand + mobile drawer trigger */}
-            <div className="flex min-w-0 items-center gap-2">
+            {/* brand + mobile drawer trigger (desktop shows the brand in
+                the sidebar instead — the top bar is a slim utility bar) */}
+            <div className="flex min-w-0 items-center gap-2 lg:hidden">
               <button
                 className="flex h-10 w-10 items-center justify-center rounded-2xl text-muted transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
                 onClick={() => setMobileOpen(true)}
@@ -671,36 +736,6 @@ export function AppShell({
                 wordmarkClassName="hidden sm:inline"
               />
             </div>
-
-            {/* primary items (desktop) */}
-            <nav
-              aria-label={t("nav.workspace")}
-              className="hidden items-center gap-1 lg:flex"
-            >
-              {PRIMARY_NAV.map((item) => {
-                const label = t(item.labelKey);
-                const active = isActive(pathname, item.href);
-                const IconCmp = LUCIDE[item.icon];
-                return (
-                  <Link
-                    key={`${item.href}-top`}
-                    href={item.href}
-                    aria-current={active ? "page" : undefined}
-                    title={collapsed ? label : undefined}
-                    className={`flex h-10 items-center gap-2 rounded-2xl px-3.5 text-sm font-semibold transition-all ${
-                      active
-                        ? "bg-accent-soft text-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]"
-                        : "text-muted hover:bg-surface-2 hover:text-ink"
-                    } ${collapsed ? "justify-center px-3" : ""}`}
-                  >
-                    <IconCmp size={17} strokeWidth={1.8} />
-                    <span className={collapsed ? "hidden" : "hidden xl:inline"}>
-                      {label}
-                    </span>
-                  </Link>
-                );
-              })}
-            </nav>
 
             {/* right cluster */}
             <div className="flex shrink-0 items-center gap-0.5 sm:gap-1.5">
@@ -726,12 +761,15 @@ export function AppShell({
                   <PanelLeftClose size={18} strokeWidth={1.8} />
                 )}
               </button>
-              <SecondaryMenu sections={sections} pathname={pathname} />
+              {/* Secondary sections live in the desktop sidebar now —
+                  no "More" dropdown on lg+ (no duplicate navigation). */}
               <span className="ms-1 hidden h-7 w-px bg-line sm:block" />
-              <span className="hidden sm:block">
+              {/* Language/theme: in the header for mobile/tablet, in the
+                  sidebar footer for desktop. */}
+              <span className="hidden sm:block lg:hidden">
                 <LanguageSwitcher />
               </span>
-              <span className="hidden sm:block">
+              <span className="hidden sm:block lg:hidden">
                 <ThemeSwitcher />
               </span>
               <NotificationsBell />
@@ -843,110 +881,6 @@ export function AppShell({
           <span className="text-[10px] font-semibold">{t("premium.nav.more")}</span>
         </button>
       </nav>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// "More" menu (desktop) — the secondary sections in one floating panel
-// ---------------------------------------------------------------------------
-
-function SecondaryMenu({
-  sections,
-  pathname,
-}: {
-  sections: NavSection[];
-  pathname: string;
-}) {
-  const { t } = useI18n();
-  const [open, setOpen] = useState(false);
-  const rootRef = useDismiss<HTMLDivElement>(open, useCallback(() => setOpen(false), []));
-  // Secondary = everything that is not in the primary top bar.
-  const primaryHrefs = new Set(PRIMARY_NAV.map((item) => item.href));
-  return (
-    <div ref={rootRef} className="relative hidden lg:block">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-label={t("premium.nav.more")}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="flex h-10 items-center gap-1.5 rounded-2xl px-3 text-sm font-semibold text-muted transition-colors hover:bg-surface-2 hover:text-ink"
-      >
-        <MoreHorizontal size={17} strokeWidth={1.8} />
-        <span className="hidden xl:inline">{t("premium.nav.more")}</span>
-      </button>
-      {open && (
-        <div
-          role="menu"
-          aria-label={t("premium.nav.more")}
-          className="glass absolute top-12 end-0 z-50 w-72 rounded-3xl p-2"
-        >
-          {sections.map((section) => {
-            const items = section.items.filter(
-              (item) => !primaryHrefs.has(item.href),
-            );
-            if (items.length === 0) return null;
-            return (
-              <div key={section.titleKey} className="mb-1">
-                <p className="px-3 pt-2 pb-1 text-[10px] font-bold tracking-[0.16em] text-faint uppercase">
-                  {t(section.titleKey)}
-                </p>
-                {items.map((item) => {
-                  const label = t(item.labelKey);
-                  const active = !item.soon && isActive(pathname, item.href);
-                  const IconCmp = LUCIDE[item.icon];
-                  const row = (
-                    <>
-                      <span
-                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
-                          active ? "bg-accent-soft text-accent" : "bg-surface-2 text-muted"
-                        }`}
-                      >
-                        <IconCmp size={16} strokeWidth={1.8} />
-                      </span>
-                      <span
-                        className={`min-w-0 flex-1 truncate text-sm font-semibold ${
-                          item.soon ? "text-faint" : "text-ink"
-                        }`}
-                      >
-                        {label}
-                      </span>
-                      {item.soon && (
-                        <span className="text-[9px] font-bold tracking-[0.08em] text-faint uppercase">
-                          {t("nav.soon")}
-                        </span>
-                      )}
-                    </>
-                  );
-                  return item.soon ? (
-                    <div
-                      key={item.labelKey}
-                      role="menuitem"
-                      aria-disabled="true"
-                      className="flex items-center gap-3 rounded-2xl px-3 py-1.5"
-                    >
-                      {row}
-                    </div>
-                  ) : (
-                    <Link
-                      key={item.labelKey}
-                      role="menuitem"
-                      href={item.href}
-                      onClick={() => setOpen(false)}
-                      className={`flex items-center gap-3 rounded-2xl px-3 py-1.5 transition-colors hover:bg-surface-2 ${
-                        active ? "bg-accent-soft/60" : ""
-                      }`}
-                    >
-                      {row}
-                    </Link>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

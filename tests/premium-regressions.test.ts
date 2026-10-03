@@ -247,6 +247,69 @@ describe("mobile shell: drawer, bottom nav, header fit", () => {
   });
 });
 
+describe("desktop sidebar (lg+): fixed start-edge rail, content beside it", () => {
+  const shell = read("src/components/app-shell.tsx");
+
+  it("sidebar is lg-only, fixed, full-height, on the LOGICAL start edge", () => {
+    // start-0 => left in LTR, right in Arabic; border-e mirrors too.
+    expect(shell).toContain("fixed inset-y-0 start-0 z-30 hidden flex-col border-e border-line");
+    expect(shell).toContain("lg:flex");
+    // 272px expanded / 84px icon rail (inside the required 240–280px band).
+    expect(shell).toContain('collapsed ? "w-[84px]" : "w-[272px]"');
+  });
+
+  it("the content column offsets with a matching logical margin (RTL-safe)", () => {
+    // margin-inline-start, not physical left — Arabic mirrors the layout.
+    expect(shell).toContain('collapsed ? "lg:ms-[84px]" : "lg:ms-[272px]"');
+  });
+
+  it("reuses the SAME navigation model as the drawer (no duplicate nav)", () => {
+    // One NAV_SECTIONS model, rendered by NavSectionList in BOTH surfaces.
+    expect(shell).toContain("const NAV_SECTIONS: NavSection[]");
+    expect(shell).not.toContain("PRIMARY_NAV");
+    expect(shell).not.toContain("SecondaryMenu");
+    // The sidebar's nav list is the shared component (icon-rail mode).
+    const sidebarStart = shell.indexOf('aria-label={t("nav.workspace")}\n        className={`fixed inset-y-0');
+    expect(sidebarStart).toBeGreaterThan(-1);
+    const sidebarBlock = shell.slice(sidebarStart, shell.indexOf("</aside>", sidebarStart));
+    expect(sidebarBlock).toContain("<NavSectionList");
+    expect(sidebarBlock).toContain("collapsed={collapsed}");
+  });
+
+  it("sidebar footer hosts the REAL language/theme switchers (functional, dropUp)", () => {
+    const sidebarStart = shell.indexOf('aria-label={t("nav.workspace")}\n        className={`fixed inset-y-0');
+    const sidebarBlock = shell.slice(sidebarStart, shell.indexOf("</aside>", sidebarStart));
+    // compact = icon-only trigger inside the 84px collapsed rail.
+    expect(sidebarBlock).toContain("<LanguageSwitcher dropUp compact={collapsed} />");
+    expect(sidebarBlock).toContain("<ThemeSwitcher dropUp />");
+    // The compact prop is additive and defaults OFF (no behavior change
+    // elsewhere); the menu itself is unchanged.
+    const lang = read("src/components/language-switcher.tsx");
+    expect(lang).toContain("compact = false");
+    expect(lang).toContain("{!compact && <span className=\"uppercase\">{lang}</span>}");
+  });
+
+  it("the top header no longer carries desktop navigation (no duplication)", () => {
+    // Mobile brand/trigger stays; desktop primary links + "More" are gone.
+    expect(shell).toContain('wordmarkClassName="hidden sm:inline"');
+    expect(shell).not.toContain("hidden items-center gap-1 lg:flex");
+    // The collapse toggle still exists and drives the sidebar width.
+    expect(shell).toContain("PanelLeftClose");
+    expect(shell).toContain("PanelLeftOpen");
+    expect(shell).toContain("toggleCollapsed");
+    // Header switchers hand over to the sidebar at lg.
+    expect(shell).toContain("hidden sm:block lg:hidden");
+  });
+
+  it("layering: sidebar above content/header, below drawer and modals", () => {
+    // z ladder: content(auto) < header(20) < sidebar(30) < scrim/bottom-nav(30, mobile-only)
+    // < drawer(40) < dropdowns/modals(50).
+    expect(shell).toContain("fixed inset-y-0 start-0 z-30 hidden flex-col");
+    expect(shell).toContain("sticky top-0 z-20");
+    expect(shell).toContain("fixed inset-y-0 start-0 z-40 hidden max-lg:flex");
+  });
+});
+
 describe("drawer language/theme controls: the menu must be ON-SCREEN (iPhone fix)", () => {
   const lang = read("src/components/language-switcher.tsx");
   const theme = read("src/components/theme-switcher.tsx");
@@ -266,7 +329,10 @@ describe("drawer language/theme controls: the menu must be ON-SCREEN (iPhone fix
   it("the drawer (bottom of the viewport) uses dropUp so taps produce a visible menu", () => {
     // The drawer footer is the full-height drawer's bottom edge: a
     // top-11 menu would render below the screen. dropUp puts it above.
-    const drawerStart = shell.indexOf("<aside");
+    // (Located via the drawer's unique viewport-cap class — the desktop
+    // sidebar is a second <aside> and appears earlier in the file.)
+    const capIdx = shell.indexOf("max-w-[calc(100vw-1.5rem)]");
+    const drawerStart = shell.lastIndexOf("<aside", capIdx);
     const drawerBlock = shell.slice(drawerStart, shell.indexOf("</aside>", drawerStart));
     expect(drawerBlock).toContain("<LanguageSwitcher dropUp />");
     expect(drawerBlock).toContain("<ThemeSwitcher dropUp />");
