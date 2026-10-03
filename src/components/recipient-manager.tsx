@@ -2,31 +2,57 @@
 
 import { useRef, useState } from "react";
 import type { RecipientStatus } from "@/lib/application-drafts";
+import {
+  normalizeRecipientEmail,
+  parseRecipientInput,
+} from "@/lib/email-recipients";
 
 type Recipient = {
   email: string;
   companyName?: string;
   status: RecipientStatus;
 };
-const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 
+/** Longest echo kept for a line that contained no address at all. */
+const MAX_INVALID_ECHO = 64;
+
+/**
+ * Pasted list → clean addresses.
+ *
+ * Delegates to the shared recipient layer, so the paste path behaves exactly
+ * like the file import and the server validator: a line such as
+ * "melvin.loinette@windstream.net:Lake2018" yields
+ * "melvin.loinette@windstream.net" and the trailing secret is dropped.
+ */
 export function normalizeEmails(value: string) {
-  return value
-    .split(/[\s,;]+/)
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
+  return parseRecipientInput(value).emails;
 }
+
 export function validateRecipients(
   rawEmails: string[],
   existing: Recipient[] = [],
 ) {
   const seen = new Set(existing.map((item) => item.email));
-  return rawEmails.map((email) => {
-    if (!emailPattern.test(email)) return { email, status: "invalid" as const };
-    if (seen.has(email)) return { email, status: "duplicate" as const };
+  const out: Recipient[] = [];
+  for (const raw of rawEmails) {
+    // Re-normalize: a value can still carry a suffix when this is called
+    // directly (CSV path, send payload).
+    const email = normalizeRecipientEmail(raw);
+    if (!email) {
+      // Nothing address-like on this line: keep a short echo so the user can
+      // see which entry failed (it is never sent — the sender only queues
+      // "valid" recipients — and it is never logged).
+      out.push({ email: (raw ?? "").trim().slice(0, MAX_INVALID_ECHO), status: "invalid" });
+      continue;
+    }
+    if (seen.has(email)) {
+      out.push({ email, status: "duplicate" });
+      continue;
+    }
     seen.add(email);
-    return { email, status: "valid" as const };
-  });
+    out.push({ email, status: "valid" });
+  }
+  return out;
 }
 
 export function RecipientManager({
@@ -55,7 +81,10 @@ export function RecipientManager({
       -1;
     const dataRows = emailIndex >= 0 ? rows.slice(1) : rows;
     const imported = dataRows.flatMap((row) => {
-      const email = row[emailIndex >= 0 ? emailIndex : 0];
+      // Shared normalization: an "email:password" cell (or a TXT line) keeps
+      // only the address; a cell without an address is skipped entirely.
+      const cell = row[emailIndex >= 0 ? emailIndex : 0] ?? "";
+      const email = normalizeRecipientEmail(cell);
       const companyName = emailIndex > 0 ? row[0] : undefined;
       return email ? [{ email, companyName }] : [];
     });

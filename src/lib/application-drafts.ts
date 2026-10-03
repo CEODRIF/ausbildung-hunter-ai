@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { listEmailAccounts, type SafeEmailAccount } from "@/lib/email-oauth";
+import { normalizeRecipientEmail } from "@/lib/email-recipients";
 import type { Profile } from "@/lib/auth";
 
 export type ApplicationGoal = "ausbildung" | "arbeit";
@@ -287,6 +288,18 @@ export function safeAccountList(accounts: SafeEmailAccount[]) {
     }),
   );
 }
+/**
+ * Server-side recipient validation — the single gate every path goes through
+ * (draft save, opportunity prefill and the campaign sender).
+ *
+ * The old check used /^[^\s@]+@[^\s@]+\.[^\s@]+$/, whose classes accept ':',
+ * ';', ',' and '|': "melvin.loinette@windstream.net:Lake2018" validated as one
+ * address and was persisted — password included. Values are now normalized
+ * through the shared recipient layer, so only the address is kept and any
+ * trailing secret is discarded before it can reach storage. An entry with no
+ * address at all is still stored as "invalid" (it is never queued for sending)
+ * with a short echo so the user can see what failed.
+ */
 export function validateRecipientList(
   recipients: Array<{ email: string; companyName?: string | null }>,
 ) {
@@ -294,15 +307,16 @@ export function validateRecipientList(
   return recipients
     .filter((recipient) => recipient.email.trim())
     .map((recipient) => {
-      const email = recipient.email.trim().toLowerCase();
-      const status: RecipientStatus = !/^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(email)
+      const email = normalizeRecipientEmail(recipient.email);
+      const status: RecipientStatus = !email
         ? "invalid"
         : seen.has(email)
           ? "duplicate"
           : "valid";
-      if (status !== "invalid") seen.add(email);
+      // Guard on the address itself (TS cannot narrow through `status`).
+      if (email) seen.add(email);
       return {
-        email,
+        email: email ?? recipient.email.trim().slice(0, 64),
         company_name: recipient.companyName?.trim().slice(0, 160) || null,
         validation_status: status,
       };
