@@ -183,7 +183,7 @@ describe("pollinations integration (route + provider)", () => {
     expect(provider).toContain("https://gen.pollinations.ai/v1/images/edits");
     expect(provider).toContain('const POLLINATIONS_MODEL = "openai/gpt-image-2"');
     expect(provider).not.toContain('"flux"');
-    expect(route).toContain("generateDeckblattDesign(prompt, photo)");
+    expect(route).toContain("generateDeckblattDesign(prompt, buildDeckblattBaseImage(style))");
     // OpenAI-compatible request/response contract.
     expect(provider).toContain('method: "POST"');
     expect(provider).toContain('response_format: "b64_json"');
@@ -199,7 +199,7 @@ describe("pollinations integration (route + provider)", () => {
       "validateDeckblattForm(form)",
       "validateDeckblattPhotoDataUrl(photo)",
       "reserveDeckblattGeneration(runId)",
-      "generateDeckblattDesign(prompt, photo)",
+      "generateDeckblattDesign(prompt, buildDeckblattBaseImage(style))",
       "completeDeckblattGeneration(runId)",
       "releaseDeckblattGeneration(runId)",
     ];
@@ -241,19 +241,22 @@ describe("pollinations integration (route + provider)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4b. Photo as AI image input — GPT Image 2 portrait integration
+// 4b. Photo stays local — the model receives a neutral base (no people)
 // ---------------------------------------------------------------------------
 
-describe("photo as AI image input", () => {
+describe("photo stays local (the model never sees the applicant)", () => {
   const route = read("src/app/api/deckblatt/generate/route.ts");
   const provider = read("src/lib/deckblatt/pollinations.ts");
   const generator = read("src/components/deckblatt-generator.tsx");
 
-  it("the portrait travels to the model as image_url (data URI) in the edits body", () => {
-    expect(provider).toContain("image: [{ image_url: portraitDataUrl }]");
-    expect(route).toContain("generateDeckblattDesign(prompt, photo)");
-    // The client encodes the prepared photo's stored Blob into a data URL
-    // for the request (never by fetching the object URL).
+  it("the model's image input is the deterministic neutral base — never the portrait", () => {
+    expect(provider).toContain("image: [{ image_url: baseImage }]");
+    expect(provider).not.toContain("portraitDataUrl");
+    expect(route).toContain("generateDeckblattDesign(prompt, buildDeckblattBaseImage(style))");
+    expect(route).not.toContain("generateDeckblattDesign(prompt, photo)");
+    // The client contract is UNCHANGED: the prepared photo's stored Blob is
+    // encoded into a data URL for the request (never by fetching the object
+    // URL) — the server validates it, the local renderer composites it.
     expect(generator).toContain("photoBlobToDataUrl(photo.blob)");
     expect(generator).toContain("photo: photoDataUrl");
   });
@@ -275,15 +278,21 @@ describe("photo as AI image input", () => {
     ).toBe("tooLarge");
   });
 
-  it("the prompt binds the model to the SAME person, identity-preserving", () => {
-    const provider2 = provider;
-    expect(provider2).toContain("portraitDataUrl");
+  it("the prompt forbids ANY person and demands a full-bleed A4 background", () => {
     const prompt = buildDeckblattPrompt(DECKBLATT_STYLES.modern, "Kaufmann im E-Commerce");
-    expect(prompt).toContain("SAME person");
-    expect(prompt).toContain("Do not transform the person's identity.");
-    expect(prompt).toContain("Do not create a different person.");
-    expect(prompt).toContain("Do not add unrelated people.");
-    expect(prompt).toContain("recognizable and natural");
+    // The hard no-people contract (the applicant's photo is composited
+    // locally afterwards — the model must never draw a person).
+    expect(prompt).toContain("CRITICAL — ABSOLUTELY NO PEOPLE IN THE IMAGE (hard requirement):");
+    expect(prompt).toContain("Do not include any person, human figure, face, head, body, hand or silhouette.");
+    expect(prompt).toContain("Do not include the person from any reference image. Do not depict anyone at all.");
+    expect(prompt).toContain("The image must contain zero humans.");
+    // The full-bleed contract (the "left panel + white right half" bug).
+    expect(prompt).toContain("100% of the width and 100% of the height");
+    expect(prompt).toContain("No white margins, no borders around the design, no empty panels, no letterboxing, no cut-out rectangles, no sub-image inside the canvas.");
+    // The reserved areas the local composition actually uses.
+    expect(prompt).toContain("Portrait area (");
+    expect(prompt).toContain("Title area (");
+    expect(prompt).toContain("Contact area (");
   });
 });
 
@@ -655,10 +664,19 @@ describe("pdf export (print portal)", () => {
     const printBlock = globals.slice(globals.indexOf(".deckblatt-print-root {"));
     expect(printBlock).toContain("size: A4;");
     expect(printBlock).toContain("body.deckblatt-print-active .app-shell-root {\n    display: none !important;\n  }");
-    expect(printBlock).toContain("body.deckblatt-print-active .deckblatt-print-root {\n    display: block !important;\n  }");
-    // 1240px design width → 210mm print width (scale ≈ 0.64).
-    expect(printBlock).toContain(".deckblatt-print-root .deckblatt-sheet {\n    width: 210mm !important;\n    height: 297mm !important;");
+    expect(printBlock).toContain(
+      "body.deckblatt-print-active .deckblatt-print-root {\n    display: block !important;\n    width: 793px !important;\n    height: 1122px !important;\n    margin: 0 !important;\n    padding: 0 !important;\n    overflow: hidden !important;\n  }",
+    );
+    // 1240px design width → 793px printable width (scale 0.64). The box is
+    // 793×1122px — strictly BELOW the physical A4 page (793.7×1122.5px):
+    // an exactly-297mm-tall box sat on the page boundary and WebKit (iOS)
+    // rounded it onto a second, completely blank A4 page.
+    expect(printBlock).toContain(".deckblatt-print-root .deckblatt-sheet {\n    width: 793px !important;\n    height: 1122px !important;");
     expect(printBlock).toContain("transform: scale(0.64) !important;");
+    // The print root pins the document box (nothing adds height around it).
+    expect(printBlock).toContain(
+      "body.deckblatt-print-active .deckblatt-print-root {\n    display: block !important;\n    width: 793px !important;\n    height: 1122px !important;\n    margin: 0 !important;\n    padding: 0 !important;\n    overflow: hidden !important;\n  }",
+    );
     // The AI background colors must survive the browser's print filters.
     expect(printBlock).toContain("print-color-adjust: exact !important;");
   });
@@ -712,14 +730,18 @@ describe("png export (canvas renderer)", () => {
     expect(fit.sy).toBeCloseTo(0, 5);
     expect(fit.sw).toBeCloseTo(1240 / (1754 / 300), 5);
     expect(fit.sx).toBeGreaterThan(0);
-    // 4:3 photo into the 224×296 photo frame → full height kept, centered
-    // horizontal crop.
-    const fit2 = coverFit(1200, 900, 224, 296);
+    // 4:3 photo into the 456×608 PORTRAIT_ZONE (modern) → full source
+    // height kept, centered horizontal crop (the face stays uncropped).
+    const fit2 = coverFit(1200, 900, 456, 608);
     expect(fit2.sh).toBeCloseTo(900, 5);
     expect(fit2.sy).toBeCloseTo(0, 5);
-    expect(fit2.sx).toBeGreaterThan(0);
-    // Name breaks are character-count based (same in canvas + HTML).
+    expect(fit2.sw).toBeCloseTo(675, 1);
+    expect(fit2.sx).toBeCloseTo(262.5, 1);
+    // Name breaks are character-count based (same in canvas + HTML);
+    // > 16 combined characters → the two-line hero keeps each line large.
     expect(nameDisplayLines({ ...dataFixture(), firstName: "Max", lastName: "Mustermann" })).toEqual(["Max Mustermann"]);
+    expect(nameDisplayLines({ ...dataFixture(), firstName: "Marie", lastName: "Curie" })).toEqual(["Marie Curie"]);
+    expect(nameDisplayLines({ ...dataFixture(), firstName: "Maximilian", lastName: "Berger" })).toEqual(["Maximilian", "Berger"]);
     expect(
       nameDisplayLines({ ...dataFixture(), firstName: "Maximilian-Alexander", lastName: "Mustermann-von-Berg" }),
     ).toHaveLength(2);
@@ -768,20 +790,20 @@ describe("security: no sensitive logging, no personal data in the prompt", () =>
     for (const token of ["Max", "Mustermann", "max@beispiel.de", "+49", "Musterstraße"]) {
       expect(prompt).not.toContain(token);
     }
-    // The profession enters as context; the exact applicant text is
-    // explicitly carved out to the local renderer.
-    expect(prompt).toContain("Profession:");
+    // The profession enters as ABSTRACT context; the exact applicant text
+    // and photo are explicitly carved out to the local renderer.
+    expect(prompt).toContain("Profession context (abstract inspiration only — never a literal depiction):");
     expect(prompt).toContain("Kaufmann im E-Commerce");
-    expect(prompt).toContain("The exact applicant text will be rendered separately by the application.");
+    expect(prompt).toContain("The exact applicant text and the applicant's own photograph are rendered separately by the application.");
     // Hard "no invented / no readable text" constraints are always present.
-    expect(prompt).toContain("CRITICAL:");
     expect(prompt).toContain("Do not invent contact information.");
     expect(prompt).toContain("Do not invent phone numbers.");
     expect(prompt).toContain("Do not invent email addresses.");
     expect(prompt).toContain("Do not render any readable text, letters, words, numbers or contact details anywhere in the image.");
-    // Identity preservation (the portrait is the model's image input).
-    expect(prompt).toContain("SAME person");
-    expect(prompt).toContain("Do not transform the person's identity.");
+    // The hard no-people contract (CRITICAL section).
+    expect(prompt).toContain("CRITICAL — ABSOLUTELY NO PEOPLE IN THE IMAGE (hard requirement):");
+    expect(prompt).toContain("Do not include any person, human figure, face, head, body, hand or silhouette.");
+    expect(prompt).toContain("Do not include workers, candidates, students, models, mannequins, cartoon or robotic people.");
     // A4 + printing context.
     expect(prompt).toContain("A4 portrait composition");
     expect(prompt).toContain("suitable for printing");
@@ -792,10 +814,10 @@ describe("security: no sensitive logging, no personal data in the prompt", () =>
     expect(sanitized.replace(/\s+/g, " ")).toContain("Entwickler IT & Co");
   });
 
-  it("all six style prompts are text-free composition directions (portrait + A4)", () => {
+  it("all six style prompts are full-bleed, text-free background directions (A4 portrait)", () => {
     for (const style of Object.values(DECKBLATT_STYLES)) {
       expect(style.designPrompt.toLowerCase()).toContain("a4 portrait");
-      expect(style.designPrompt.toLowerCase()).toContain("portrait");
+      expect(style.designPrompt.toLowerCase()).toContain("full-bleed");
       // The style direction is embedded verbatim into the final prompt.
       expect(buildDeckblattPrompt(style, "Auszubildender")).toContain(style.designPrompt);
     }

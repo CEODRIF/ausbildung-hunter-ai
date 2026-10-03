@@ -7,8 +7,12 @@
  * Geometry comes from the same layout constants and pure helpers as the
  * canvas PNG renderer (src/lib/deckblatt/render.ts), so the preview, the
  * PDF and the PNG stay visually identical:
- *  - name lines: nameDisplayLines() + nameLineSizes()
+ *  - name/profession/divider: heroBaselines() + nameLineSizes()/professionFontSize()
  *  - contact:    contactDisplayLines() + contactFontSize()
+ *
+ * The composition is a "designed page": a full-bleed AI background over
+ * the style's neutral base gradient, a MAJOR portrait element (the
+ * style's PORTRAIT_ZONE) and a deliberate, high-contrast contact card.
  *
  * `dir="ltr"` is FORCED: the sheet is a German Bewerbung document and must
  * stay left-to-right even when the app UI is Arabic (RTL).
@@ -22,16 +26,16 @@ import {
 import {
   contactDisplayLines,
   contactFontSize,
-  fitFontSize,
+  heroBaselines,
   nameDisplayLines,
   nameLineSizes,
+  professionFontSize,
   type DeckblattData,
 } from "@/lib/deckblatt/render";
 
 /** Canvas textBaseline "alphabetic" ≈ baseline; the line box top sits one
  *  ascent (~0.8 em) above it. Shared by name + profession + contact. */
 const ASCENT = 0.8;
-const LINE_STRIDE = 1.12; // matches the canvas advance (size * 1.12)
 
 export function DeckblattSheet({
   style,
@@ -48,30 +52,32 @@ export function DeckblattSheet({
 
   const nameLines = nameDisplayLines(data);
   const nameSizes = nameLineSizes(data, style);
-  // Precompute each name line's baseline BEFORE the JSX (mirrors the canvas
-  // advance: baseline_i = L.name.y + Σ_{j<i} size_j * LINE_STRIDE).
-  const namePositions = nameLines.map((line, i) => {
-    const size = nameSizes[i];
-    const strideBefore = nameSizes
-      .slice(0, i)
-      .reduce((sum, s) => sum + s * LINE_STRIDE, 0);
-    return {
-      key: String(i),
-      line,
-      size,
-      top: L.name.y + strideBefore - size * ASCENT,
-    };
-  });
+  const hero = heroBaselines(style, data);
+  // Convert each name baseline to a CSS top (the line box top sits one
+  // ascent above the baseline).
+  const namePositions = nameLines.map((line, i) => ({
+    key: String(i),
+    line,
+    size: nameSizes[i],
+    top: hero.name[i] - nameSizes[i] * ASCENT,
+  }));
 
-  // Same fit clamp as the canvas renderer (render.ts): shrink the
-  // profession to the name zone width, never below 28 design px.
-  const professionSize = Math.max(
-    28,
-    fitFontSize(data.profession, 640, L.profession.size, false),
-  );
-
+  const professionSize = professionFontSize(data, style);
   const contactLines = contactDisplayLines(data);
   const contactSize = contactFontSize(data, style);
+
+  const card = L.contactCard;
+  const cardStyle: CSSProperties = {
+    position: "absolute",
+    left: card.x,
+    top: card.y,
+    width: card.w,
+    height: card.h,
+    background: card.background,
+    border: `${card.borderWidth}px solid ${card.border}`,
+    borderRadius: card.radius,
+    overflow: "hidden",
+  };
 
   const photoStyle: CSSProperties = {
     position: "absolute",
@@ -81,17 +87,23 @@ export function DeckblattSheet({
     height: L.photo.h,
     objectFit: "cover",
     borderRadius: L.photo.shape === "circle" ? "50%" : L.photo.radius,
-    boxShadow: "0 0 0 6px rgba(255,255,255,0.55)",
+    boxShadow: `0 ${L.photoShadow.offsetY}px ${L.photoShadow.blur}px ${L.photoShadow.color}, 0 0 0 ${L.ring.width}px ${L.ring.color}`,
   };
 
   return (
     <div
-      className="deckblatt-sheet relative overflow-hidden bg-white"
+      className="deckblatt-sheet relative overflow-hidden"
       dir="ltr"
-      style={{ width: DECKBLATT_WIDTH, height: DECKBLATT_HEIGHT }}
+      style={{
+        width: DECKBLATT_WIDTH,
+        height: DECKBLATT_HEIGHT,
+        // Neutral base under the AI background (the sheet never shows raw
+        // white if the design image fails to load).
+        background: `linear-gradient(180deg, ${L.base.top} 0%, ${L.base.bottom} 100%)`,
+      }}
     >
       <div className="deckblatt-sheet-content absolute inset-0">
-        {/* AI design background (cover-fit — the provider size may vary). */}
+        {/* AI design background — full-bleed, edge to edge. */}
         {/* eslint-disable-next-line @next/next/no-img-element -- generated data URL, fixed A4 frame */}
         <img
           src={backgroundImage}
@@ -112,21 +124,36 @@ export function DeckblattSheet({
             }}
           />
         )}
-        {/* Divider. */}
+        {/* Divider (a full-width rule passes behind the portrait). */}
         <div
           style={{
             position: "absolute",
             left: L.divider.x,
-            top: L.divider.y,
+            top: hero.divider,
             width: L.divider.w,
             height: L.divider.h,
             background: L.divider.color,
           }}
         />
-        {/* Portrait photo. */}
+        {/* Contact card — the deliberate, high-contrast footer block. */}
+        <div style={cardStyle}>
+          {card.strip && (
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: card.strip.w,
+                background: card.strip.color,
+              }}
+            />
+          )}
+        </div>
+        {/* Portrait photo — a major element in the style's PORTRAIT_ZONE. */}
         {/* eslint-disable-next-line @next/next/no-img-element -- user-uploaded photo, fixed frame */}
         <img src={photoUrl} alt="" draggable={false} style={photoStyle} />
-        {/* Name (explicit lines — identical breaks as the PNG). */}
+        {/* Name (explicit lines — identical breaks and baselines as the PNG). */}
         {namePositions.map((block) => (
           <div
             key={block.key}
@@ -134,7 +161,7 @@ export function DeckblattSheet({
               position: "absolute",
               left: L.name.x,
               top: block.top,
-              maxWidth: DECKBLATT_WIDTH - L.name.x * 2,
+              maxWidth: L.name.w,
               fontSize: block.size,
               fontWeight: L.name.weight,
               fontFamily: L.nameFont,
@@ -151,8 +178,8 @@ export function DeckblattSheet({
           style={{
             position: "absolute",
             left: L.profession.x,
-            top: L.profession.y - professionSize * ASCENT,
-            maxWidth: DECKBLATT_WIDTH - L.profession.x * 2,
+            top: hero.profession - professionSize * ASCENT,
+            maxWidth: L.profession.w,
             fontSize: professionSize,
             fontWeight: L.profession.weight,
             fontFamily: L.bodyFont,
@@ -163,7 +190,7 @@ export function DeckblattSheet({
         >
           {data.profession}
         </div>
-        {/* Contact block. */}
+        {/* Contact block — inside the card. */}
         {contactLines.map((line, i) => (
           <div
             key={`${line}-${i}`}
@@ -171,7 +198,7 @@ export function DeckblattSheet({
               position: "absolute",
               left: L.contact.x,
               top: L.contact.y + i * L.contact.lineGap - contactSize * ASCENT,
-              maxWidth: DECKBLATT_WIDTH - L.contact.x * 2,
+              maxWidth: L.contact.w,
               fontSize: contactSize,
               fontWeight: 400,
               fontFamily: L.bodyFont,

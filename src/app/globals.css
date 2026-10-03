@@ -619,7 +619,18 @@ textarea:focus-visible,
 
    The sheet is designed at 1240×1754 px (A4 @ ~150dpi). 1240px =
    1240/96in = 328.1mm, so the inner content is scaled by
-   210/328.1 ≈ 0.640 to land on exactly 210mm × 297mm when printed. */
+   210/328.1 ≈ 0.640 (793.6×1122.6px) when printed.
+
+   EXACTLY-ONE-PAGE GUARANTEE (the second-blank-page fix): the printable
+   box is 793×1122 px — STRICTLY BELOW the physical A4 page box
+   (210mm = 793.7px, 297mm = 1122.5px at 96dpi) in every engine's mm→px
+   rounding. The old rule used exactly `height: 297mm`: the content box
+   sat exactly on the page boundary, and WebKit (iOS Safari) rounds
+   297mm up past the page height, emitting a second, completely blank
+   A4 page (the observed production bug). The scaled design content
+   (793.6×1122.6px) still OVERFILLS the 793×1122 box on all sides and
+   overflow: hidden clips < 0.6px of the design edge — the design
+   touches every page edge, no white sliver, no second page. */
 .deckblatt-print-root {
   display: none;
 }
@@ -631,16 +642,25 @@ textarea:focus-visible,
   }
   body.deckblatt-print-active {
     background: #ffffff !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
   body.deckblatt-print-active .app-shell-root {
     display: none !important;
   }
+  /* The printable document is exactly the sheet box — pin its dimensions
+     and strip any surrounding contribution so nothing can add height. */
   body.deckblatt-print-active .deckblatt-print-root {
     display: block !important;
+    width: 793px !important;
+    height: 1122px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
   }
   .deckblatt-print-root .deckblatt-sheet {
-    width: 210mm !important;
-    height: 297mm !important;
+    width: 793px !important;
+    height: 1122px !important;
     margin: 0 !important;
     border-radius: 0 !important;
     box-shadow: none !important;

@@ -6,7 +6,11 @@ import {
   selectDeckblattStyle,
   type DeckblattStyleId,
 } from "@/lib/deckblatt/styles";
-import { PollinationsError, generateDeckblattDesign } from "@/lib/deckblatt/pollinations";
+import {
+  PollinationsError,
+  buildDeckblattBaseImage,
+  generateDeckblattDesign,
+} from "@/lib/deckblatt/pollinations";
 import {
   completeDeckblattGeneration,
   releaseDeckblattGeneration,
@@ -32,15 +36,18 @@ export const maxDuration = 180;
  * Flow: auth → burst rate limit → validate (form + photo payload) →
  * QUOTA RESERVE (atomic, idempotent per run_id) → prompt build
  * (profession + style only) → Pollinations openai/gpt-image-2 via
- * /v1/images/edits (server-side key, portrait as image input) →
- * COMPLETE / RELEASE (refund on failure) → respond.
+ * /v1/images/edits (server-side key, deterministic NEUTRAL base image as
+ * the model's image input) → COMPLETE / RELEASE (refund on failure) →
+ * respond.
  *
  * The browser never talks to Pollinations directly, and the response
- * contains only the generated composition (base64), the style id and the
+ * contains only the generated background (base64), the style id and the
  * fresh quota state — never the API key, never the raw prompt. The
- * portrait leaves the browser ONLY to the provider as image input
- * (identity-preserving); name, email, phone and address never leave it.
- * The exact personal text is composited client-side afterwards.
+ * applicant's photo never leaves the browser + this API: it is validated
+ * here (contract) and then composited locally by the client renderer —
+ * the model receives only an abstract style base, so a generated person
+ * is structurally impossible. Name, email, phone and address never
+ * leave the browser at all.
  *
  * Response contract (the client maps `code` → translated message):
  *  200 { runId, styleId, design, usage }
@@ -109,9 +116,12 @@ export async function POST(request: Request) {
       : selectDeckblattStyle(form.profession).id;
   const style = DECKBLATT_STYLES[styleId];
 
-  // 3b. Photo payload — the portrait becomes the model's image input
-  //     (identity-preserving composition). Strict shape + size bounds keep
-  //     the JSON body predictable; the client already downscales.
+  // 3b. Photo payload — validated here (API contract unchanged), then used
+  //     ONLY for the local client-side composite afterwards. The portrait
+  //     is deliberately NOT forwarded to the provider: the model edits a
+  //     neutral style base instead, so it can never draw/duplicate/alter
+  //     the applicant. Strict shape + size bounds keep the JSON body
+  //     predictable; the client already downscales.
   const photo = typeof rawBody.photo === "string" ? rawBody.photo : "";
   const photoError = validateDeckblattPhotoDataUrl(photo);
   if (photoError) {
@@ -146,12 +156,13 @@ export async function POST(request: Request) {
   }
 
   // 5. Provider — GPT Image 2 via /v1/images/edits. The prompt contains
-  //    the style direction + profession context only; the portrait is the
-  //    model's image input (same person, no transformation). Name, email,
+  //    the style direction + profession context + reserved zones only;
+  //    the model's image input is a deterministic NEUTRAL base image in
+  //    the style's palette (never the applicant's photo). Name, email,
   //    phone and address NEVER enter the request at all.
   const prompt = buildDeckblattPrompt(style, form.profession);
   try {
-    const designBase64 = await generateDeckblattDesign(prompt, photo);
+    const designBase64 = await generateDeckblattDesign(prompt, buildDeckblattBaseImage(style));
 
     // 6. Ledger — mark the run succeeded (best effort: the design is
     //    already generated; a ledger hiccup must not fail the response).

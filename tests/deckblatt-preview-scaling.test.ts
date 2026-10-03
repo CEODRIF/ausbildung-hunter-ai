@@ -256,11 +256,14 @@ describe("mobile bottom navigation — the sheet's bottom stays reachable", () =
     expect(shell).toContain("lg:hidden");
   });
 
-  it("the print/PDF path is not touched by the preview changes", () => {
+  it("the print/PDF path keeps the one-page geometry (793×1122px < A4 px)", () => {
     const globals = read("../src/app/globals.css");
     expect(globals).toContain(".deckblatt-print-root .deckblatt-sheet {");
-    expect(globals).toContain("width: 210mm !important;");
-    expect(globals).toContain("height: 297mm !important;");
+    // 210mm = 793.7px / 297mm = 1122.5px at 96dpi — the printable box must
+    // stay strictly below the physical page (exactly-297mm used to emit a
+    // second blank page in WebKit).
+    expect(globals).toContain("width: 793px !important;");
+    expect(globals).toContain("height: 1122px !important;");
     expect(globals).toContain("transform: scale(0.64) !important;");
   });
 });
