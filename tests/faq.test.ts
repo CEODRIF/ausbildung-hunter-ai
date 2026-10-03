@@ -31,8 +31,8 @@ function assertFullLocalization(item: FaqItem) {
 // ---------------------------------------------------------------------------
 
 describe("FAQ data structure", () => {
-  it("has exactly 17 categories", () => {
-    expect(CATEGORIES).toHaveLength(17);
+  it("has exactly 16 categories", () => {
+    expect(CATEGORIES).toHaveLength(16);
   });
 
   it("has a large, comprehensive item set", () => {

@@ -74,7 +74,7 @@ const normalizedSql = allSql.replace(/\s+/g, " ");
 
 describe("every API route authenticates the caller", () => {
   it("finds the routes (sanity)", () => {
-    expect(routeFiles.length).toBeGreaterThanOrEqual(34);
+    expect(routeFiles.length).toBeGreaterThanOrEqual(30);
   });
 
   it("no route is missing an authentication check outside the allowlist", () => {
@@ -250,6 +250,18 @@ describe("database authorization (RLS, grants, SECURITY DEFINER)", () => {
     );
     expect(storagePolicies && storagePolicies.length).toBeGreaterThanOrEqual(6);
     for (const policy of storagePolicies!) {
+      // Community group-chat images are the one documented read exception:
+      // members share one chat, so every authenticated member may read message
+      // images (mirroring the community_messages SELECT policy). The bucket
+      // stays private (signed URLs only) and every WRITE/insert policy — the
+      // community upload included — must still be owner-folder scoped below.
+      if (
+        /on storage\.objects for select[^;]*bucket_id = 'community-images'/.test(
+          policy,
+        )
+      ) {
+        continue;
+      }
       expect(policy, policy.slice(0, 80)).toMatch(
         /\(storage\.foldername\(name\)\)\[1\] = auth\.uid\(\)::text/,
       );

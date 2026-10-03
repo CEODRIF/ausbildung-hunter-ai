@@ -75,7 +75,7 @@ describe("auth", () => {
   });
 
   it("reuses the global AppShell (no new header/nav system)", () => {
-    expect(layout).toContain("<AppShell profile={profile} isPlatformOwner={isPlatformOwner}>");
+    expect(layout).toContain("<AppShell profile={profile} communityUnread={communityUnread}>");
     expect(layout).toContain('export const dynamic = "force-dynamic"');
   });
 });
