@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import {
-  createScan,
-  runScan,
-  type ScanGoal,
-  type ScanFile,
-} from "@/lib/bewerbung-scanner";
+import { checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { scanRequestBodySchema } from "@/lib/bewerbung-schema";
+import { createScan, runScan } from "@/lib/bewerbung-scanner";
 
 export const runtime = "nodejs";
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const {
@@ -15,26 +13,20 @@ export async function POST(request: Request) {
   } = await supabase.auth.getUser();
   if (!user)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const body = (await request.json().catch(() => ({}))) as {
-    goal?: ScanGoal;
-    files?: ScanFile[];
-  };
-  if (body.goal !== "ausbildung" && body.goal !== "arbeit")
+  // One scan = up to 10 documents analysed by the vision model in a single
+  // synchronous run. The daily AI quota is the primary gate; this caps bursts.
+  const limited = await checkRateLimit("scanner_scan", user.id);
+  if (!limited.allowed) return tooManyRequests(limited);
+  const parsed = scanRequestBodySchema.safeParse(
+    await request.json().catch(() => ({})),
+  );
+  if (!parsed.success)
     return NextResponse.json(
-      { error: "Choose Ausbildung or Arbeit." },
-      { status: 400 },
-    );
-  if (
-    !Array.isArray(body.files) ||
-    !body.files.length ||
-    body.files.length > 10
-  )
-    return NextResponse.json(
-      { error: "Upload between 1 and 10 files." },
+      { error: "Upload between 1 and 10 supported files." },
       { status: 400 },
     );
   try {
-    const scanId = await createScan(body.goal, body.files);
+    const scanId = await createScan(parsed.data.goal, parsed.data.files);
     await runScan(scanId);
     return NextResponse.json({ scanId });
   } catch (error) {

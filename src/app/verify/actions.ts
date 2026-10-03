@@ -2,6 +2,11 @@
 
 import { z } from "zod";
 import { getAuthCallbackUrl } from "@/lib/auth";
+import {
+  AUTH_RATE_LIMIT_MESSAGE,
+  checkRateLimit,
+  clientIpKey,
+} from "@/lib/rate-limit";
 import { createClient } from "@/lib/supabase/server";
 
 const schema = z.object({
@@ -30,6 +35,13 @@ export async function resendVerificationEmail(
   const result =
     "If that email address is registered, a new verification link is on its way.";
   try {
+    // Resend spam protection (per client IP). Supabase Auth rate-limits
+    // auth.resend itself; this keeps a single origin from hammering it.
+    const ipKey = await clientIpKey("verify_resend");
+    if (ipKey) {
+      const limited = await checkRateLimit("verify_resend", ipKey);
+      if (!limited.allowed) return { error: AUTH_RATE_LIMIT_MESSAGE };
+    }
     const supabase = await createClient();
     const { error } = await supabase.auth.resend({
       type: "signup",

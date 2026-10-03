@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
+import { checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { AIFileInUseError, deleteAIFile, uploadAIFile } from "@/lib/ai-service";
 
 const deleteFileBody = z.object({ fileId: z.string().uuid() }).strict();
@@ -13,6 +14,10 @@ export async function POST(request: Request) {
   } = await supabase.auth.getUser();
   if (!user)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Burst protection for an authenticated upload flood (each body is padded to
+  // 10 MB and buffered in memory before it is content-sniffed).
+  const limited = await checkRateLimit("ai_upload", user.id);
+  if (!limited.allowed) return tooManyRequests(limited);
   const formData = await request.formData();
   const file = formData.get("file");
   if (!(file instanceof File))

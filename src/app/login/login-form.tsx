@@ -7,11 +7,15 @@ import { Button, Input } from "@/components/ui";
 import { login } from "@/app/login/actions";
 import { useI18n } from "@/lib/i18n";
 
-const initialState = { error: "" };
-
-export function LoginForm() {
+/**
+ * @param initialError Server-rendered notice (e.g. the `?error=suspended`
+ *   bounce from the protected layouts) shown before the user submits anything.
+ */
+export function LoginForm({ initialError }: { initialError?: string }) {
   const { t } = useI18n();
-  const [state, formAction, pending] = useActionState(login, initialState);
+  const [state, formAction, pending] = useActionState(login, {
+    error: initialError ?? "",
+  });
   const [showPassword, setShowPassword] = useState(false);
 
   return (
@@ -63,6 +67,16 @@ export function LoginForm() {
           </div>
         </div>
         <AuthFeedback state={state} />
+        {state.needsVerification && (
+          <p className="text-center text-sm text-muted">
+            <Link
+              href="/verify"
+              className="font-semibold text-accent hover:text-accent-deep"
+            >
+              {t("auth.form.checkEmailLink")}
+            </Link>
+          </p>
+        )}
         <Button type="submit" className="w-full" disabled={pending}>
           {pending ? (
             t("auth.form.signingIn")

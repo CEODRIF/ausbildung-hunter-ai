@@ -2,6 +2,11 @@
 
 import { z } from "zod";
 import { getAuthCallbackUrl, validateInvitationCode } from "@/lib/auth";
+import {
+  AUTH_RATE_LIMIT_MESSAGE,
+  checkRateLimit,
+  clientIpKey,
+} from "@/lib/rate-limit";
 import { createClient } from "@/lib/supabase/server";
 
 const schema = z.object({
@@ -16,7 +21,36 @@ const schema = z.object({
     .string()
     .trim()
     .regex(/^[A-Za-z0-9]{6,32}$/, "Enter a valid invitation code."),
+  // The Terms/Privacy checkbox is `required` in the form, but that is only a
+  // browser hint: the acceptance is re-validated here so a direct POST cannot
+  // create an account without it.
+  terms: z
+    .string()
+    .refine(
+      (value) => value === "on" || value === "true" || value === "1",
+      "Please accept the Terms of Service and Privacy Policy to continue.",
+    ),
 });
+
+/** Message for both the pre-check and the database-level rejection of a code
+ *  that is unknown, inactive or already used up. */
+const INVITATION_REJECTED =
+  "That invitation code is invalid or no longer active.";
+
+/**
+ * Supabase Auth surfaces ANY exception raised inside the
+ * on_auth_user_created trigger as this opaque message (the real reason —
+ * `invitation_code_required` / `invitation_code_invalid_or_exhausted` — is
+ * only visible in the Postgres log). Since this action always sends a code,
+ * that error means the code lost the race for its last remaining use.
+ */
+function isInvitationRejection(message: string): boolean {
+  return (
+    message.includes("Database error saving new user") ||
+    message.includes("invitation_code") ||
+    message.includes("invitation code")
+  );
+}
 
 /**
  * Safe server-side diagnostic logging for the registration flow.
@@ -50,6 +84,7 @@ export async function register(
     email: formData.get("email"),
     password: formData.get("password"),
     invitationCode: formData.get("invitationCode"),
+    terms: formData.get("terms") ?? "",
   });
   if (!parsed.success)
     return {
@@ -57,28 +92,50 @@ export async function register(
         parsed.error.issues[0]?.message ?? "Check your details and try again.",
     };
 
-  let step = "validate_invitation_code";
+  let step = "rate_limit";
   try {
+    // Abuse protection for the unauthenticated flow: caps invitation-code
+    // guessing and signup spam per client IP. Fail-open when no IP header is
+    // available (see clientIpKey) — Supabase Auth's own limits still apply.
+    // The limiter is protection, never a gate: a limiter outage must not stop
+    // a legitimate sign-up, so its own errors are swallowed here.
+    try {
+      const ipKey = await clientIpKey("register");
+      if (ipKey) {
+        const limited = await checkRateLimit("register", ipKey);
+        if (!limited.allowed) return { error: AUTH_RATE_LIMIT_MESSAGE };
+      }
+    } catch {
+      // Fail open (documented limiter policy).
+    }
+
+    step = "validate_invitation_code";
     if (
       !(await validateInvitationCode(
         parsed.data.invitationCode,
         "registration",
       ))
     )
-      return { error: "That invitation code is invalid or no longer active." };
+      return { error: INVITATION_REJECTED };
 
     step = "sign_up";
     const supabase = await createClient();
     // Standard Supabase Auth sign-up (anon key): creates the user, and Supabase
     // itself sends the confirmation email — no external email service, no
     // service-role user creation, no manual verification codes.
+    //
+    // The invitation code is consumed ATOMICALLY by the on_auth_user_created
+    // trigger, in the same transaction as the user insert (migration
+    // 20261021000000): the pre-check above is UX only. A race for the last
+    // remaining use of a one-use code therefore fails here instead of creating
+    // a second account.
     const { data, error } = await supabase.auth.signUp({
       email: parsed.data.email,
       password: parsed.data.password,
       options: {
-        // handle_new_user() creates the profile from `full_name`; the
-        // on_auth_user_email_confirmed trigger consumes `invitation_code`
-        // exactly once, when the email is verified.
+        // handle_new_user() creates the profile from `full_name` and consumes
+        // `invitation_code` atomically; the confirmation trigger only activates
+        // the profile.
         data: {
           full_name: parsed.data.fullName,
           invitation_code: parsed.data.invitationCode,
@@ -89,6 +146,10 @@ export async function register(
     if (error) {
       if (error.message.includes("already registered"))
         return { error: "An account with this email already exists." };
+      if (isInvitationRejection(error.message)) {
+        logRegistrationError(step, error);
+        return { error: INVITATION_REJECTED };
+      }
       return { error: error.message };
     }
     if (!data.user)
@@ -100,6 +161,10 @@ export async function register(
   } catch (error) {
     if (error instanceof Error && error.message.includes("already registered"))
       return { error: "An account with this email already exists." };
+    if (error instanceof Error && isInvitationRejection(error.message)) {
+      logRegistrationError(step, error);
+      return { error: INVITATION_REJECTED };
+    }
     // Record the real, non-sensitive error server-side so a production failure
     // is diagnosable, while keeping the user-facing message safe and generic.
     logRegistrationError(step, error);

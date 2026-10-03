@@ -22,10 +22,26 @@ vi.mock("@/lib/auth", () => ({
   },
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+// The limiter is infrastructure (it needs a live Postgres); its own contract is
+// covered by rate-limit.test.ts. Here it is stubbed ALLOWED by default so the
+// register contract is what is under test — and stubbed DENIED in the dedicated
+// abuse test below.
+vi.mock("@/lib/rate-limit", () => ({
+  AUTH_RATE_LIMIT_MESSAGE:
+    "Too many attempts from this device. Please wait a few minutes and try again.",
+  clientIpKey: vi.fn(async () => "hashed-ip"),
+  checkRateLimit: vi.fn(async () => ({
+    allowed: true,
+    count: 1,
+    limit: 8,
+    retryAfterSeconds: 0,
+  })),
+}));
 
 const { register } = await import("@/app/register/actions");
 const { validateInvitationCode } = await import("@/lib/auth");
 const { createClient } = await import("@/lib/supabase/server");
+const { checkRateLimit, clientIpKey } = await import("@/lib/rate-limit");
 
 const signUp = vi.fn();
 
@@ -48,6 +64,7 @@ function makeFormData(overrides: Record<string, string> = {}): FormData {
   body.set("email", "jane@example.com");
   body.set("password", "password123");
   body.set("invitationCode", "DRIF26");
+  body.set("terms", "on");
   for (const [key, value] of Object.entries(overrides)) {
     if (value === "") body.delete(key);
     else body.set(key, value);
@@ -163,6 +180,74 @@ describe("register (Supabase Auth email confirmation)", () => {
     expect(logged).toContain("fetch failed");
     expect(logged).not.toContain(
       "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.aaaa1111bbbb",
+    );
+  });
+
+  it("rejects a submission without the Terms acceptance (server-side, not just the checkbox)", async () => {
+    mockSignUp({});
+    const res = await register({ error: "" }, makeFormData({ terms: "" }));
+    expect(res).toEqual({
+      error: "Please accept the Terms of Service and Privacy Policy to continue.",
+    });
+    expect(signUp).not.toHaveBeenCalled();
+    expect(validateInvitationCode).not.toHaveBeenCalled();
+  });
+
+  it("caps signup spam / invitation-code guessing per client IP before touching Supabase", async () => {
+    mockSignUp({});
+    vi.mocked(checkRateLimit).mockResolvedValueOnce({
+      allowed: false,
+      count: 9,
+      limit: 8,
+      retryAfterSeconds: 420,
+    });
+
+    const res = await register({ error: "" }, makeFormData());
+
+    expect(res).toEqual({
+      error:
+        "Too many attempts from this device. Please wait a few minutes and try again.",
+    });
+    // The limiter is consulted with the HASHED client IP (never a raw address),
+    // and nothing downstream runs.
+    expect(clientIpKey).toHaveBeenCalledWith("register");
+    expect(checkRateLimit).toHaveBeenCalledWith("register", "hashed-ip");
+    expect(validateInvitationCode).not.toHaveBeenCalled();
+    expect(signUp).not.toHaveBeenCalled();
+  });
+
+  it("still registers when the limiter itself throws (fail open)", async () => {
+    mockSignUp({ data: { user: { id: "u1" }, session: null }, error: null });
+    vi.mocked(validateInvitationCode).mockResolvedValue(true);
+    vi.mocked(checkRateLimit).mockRejectedValueOnce(new Error("limiter down"));
+
+    const res = await register({ error: "" }, makeFormData());
+
+    expect(res).toEqual({
+      success:
+        "Check your email and click the verification link to activate your account.",
+    });
+    expect(signUp).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps a database-level invitation rejection (race for the last use) to the invitation error", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Supabase Auth returns this opaque message when the on_auth_user_created
+    // trigger raises — the real reason is only in the Postgres log.
+    mockSignUp({
+      data: null,
+      error: { message: "Database error saving new user" },
+    });
+    vi.mocked(validateInvitationCode).mockResolvedValue(true);
+
+    const res = await register({ error: "" }, makeFormData());
+
+    expect(res).toEqual({
+      error: "That invitation code is invalid or no longer active.",
+    });
+    // Diagnosable server-side, opaque to the client.
+    expect(spy.mock.calls.map((c) => c.join(" ")).join("\n")).toContain(
+      "[register]",
     );
   });
 });

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
+import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -36,7 +38,17 @@ export type RateLimitScope =
   | "email_oauth"
   | "account_export"
   | "account_delete"
-  | "admin_actions";
+  | "admin_actions"
+  // Expensive AI / upload endpoints that previously had no burst protection
+  // (their daily quota is a separate, DB-side gate; this only caps bursts).
+  | "ai_upload"
+  | "ai_generate_file"
+  | "scanner_scan"
+  // Unauthenticated auth flows — keyed by a hashed client IP, never a user id
+  // (there is no session yet). See clientIpKey().
+  | "register"
+  | "login"
+  | "verify_resend";
 
 /**
  * Per-scope budgets. Rationale:
@@ -75,11 +87,56 @@ export const RATE_LIMITS: Record<
   account_export: { max: 2, windowSeconds: 3600 },
   account_delete: { max: 5, windowSeconds: 3600 },
   admin_actions: { max: 30, windowSeconds: 60 },
+  // ai_upload: each upload is buffered in memory and content-sniffed, then
+  // stored. 30 per 10 min is far above interactive use while capping an
+  // authenticated flood of 10 MB bodies.
+  ai_upload: { max: 30, windowSeconds: 600 },
+  // ai_generate_file: one request = a paid AI file generation + a storage
+  // write. 15 per 10 min.
+  ai_generate_file: { max: 15, windowSeconds: 600 },
+  // scanner_scan: one request = up to 10 documents analysed by the vision
+  // model in a single synchronous run. 6 per 10 min.
+  scanner_scan: { max: 6, windowSeconds: 600 },
+  // Unauthenticated auth flows (per client IP, 10-minute window). These are a
+  // thin app-level layer on top of Supabase Auth's own built-in limits — they
+  // stop invitation-code brute force and signup/login/resend spam from a
+  // single origin without getting in the way of legitimate humans (8 signups,
+  // 15 sign-ins or 5 resends per 10 minutes is far above normal use).
+  register: { max: 8, windowSeconds: 600 },
+  login: { max: 15, windowSeconds: 600 },
+  verify_resend: { max: 5, windowSeconds: 600 },
 };
 
 export function rateLimitKey(scope: RateLimitScope, userId: string): string {
   return `${scope}:${userId}`;
 }
+
+/**
+ * Key for the UNAUTHENTICATED auth flows (register / login / verify resend),
+ * where no session exists yet.
+ *
+ * The caller's IP is read from the proxy headers and hashed (sha256, scoped)
+ * before it is used as a limiter key: the limiter table then holds no raw IP
+ * address, which keeps it free of personal data. Returns null when the
+ * deployment provides no usable IP header (e.g. local `next dev`) — callers
+ * must then FAIL OPEN rather than lump every visitor into one shared bucket.
+ */
+export async function clientIpKey(
+  scope: RateLimitScope,
+): Promise<string | null> {
+  const headerStore = await headers();
+  const forwarded = headerStore.get("x-forwarded-for");
+  const raw =
+    forwarded?.split(",")[0]?.trim() ||
+    headerStore.get("x-real-ip")?.trim() ||
+    "";
+  if (!raw) return null;
+  return createHash("sha256").update(`rwl:${scope}:${raw}`).digest("hex").slice(0, 40);
+}
+
+/** User-facing message for every unauthenticated-flow limiter denial. */
+export const AUTH_RATE_LIMIT_MESSAGE =
+  "Too many attempts from this device. Please wait a few minutes and try again.";
 
 export async function checkRateLimit(
   scope: RateLimitScope,

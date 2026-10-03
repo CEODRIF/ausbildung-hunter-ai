@@ -12,12 +12,20 @@ type OAuthState = {
   createdAt: number;
 };
 
-function stateSecret() {
-  return (
+function stateSecret(): string {
+  const configured =
     process.env.EMAIL_TOKEN_ENCRYPTION_KEY ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    "local-development-state-secret"
-  );
+    process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (configured) return configured;
+  // A constant that is committed to the repository is not a secret: in
+  // production it would let anyone forge a signed state value. Fail closed
+  // there (consumeOAuthState turns the throw into "invalid state") and keep the
+  // convenience fallback for local development only.
+  if (process.env.NODE_ENV === "production")
+    throw new Error(
+      "Missing EMAIL_TOKEN_ENCRYPTION_KEY: cannot sign the OAuth state.",
+    );
+  return "local-development-state-secret";
 }
 
 function sign(value: string) {

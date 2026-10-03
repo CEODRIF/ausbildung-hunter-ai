@@ -210,6 +210,12 @@ export async function loadOwnedDraft(
   ]);
   return {
     ...data,
+    // Defence in depth for the ONE place stored HTML is handed back to the
+    // browser: the composer mounts it with `innerHTML` (RichEmailEditor).
+    // Every write path already sanitizes, but sanitizing again on read means a
+    // future write that forgets to cannot become stored XSS — and rows written
+    // before the sanitizer existed are covered too.
+    body_html: sanitizeEmailHtml(data.body_html ?? ""),
     recipients: (recipients ?? []) as DraftRecipient[],
     attachments: (attachments ?? []) as DraftAttachment[],
   };

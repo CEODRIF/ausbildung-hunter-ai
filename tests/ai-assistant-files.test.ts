@@ -32,6 +32,22 @@ vi.mock("@/lib/ai-provider", () => ({
     analyzeImage: vi.fn(async () => "image-analysis"),
   })),
 }));
+// The upload route now applies its per-user burst limit (ai_upload) before the
+// body is buffered. The limiter library has its own suite; here it must simply
+// ALLOW, so these tests keep describing the upload contract.
+vi.mock("@/lib/rate-limit", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/rate-limit")>("@/lib/rate-limit");
+  return {
+    ...actual,
+    checkRateLimit: vi.fn(async () => ({
+      allowed: true,
+      count: 1,
+      limit: 30,
+      retryAfterSeconds: 0,
+    })),
+  };
+});
 
 const { createAdminClient } = await import("@/lib/supabase/admin");
 const { createClient } = await import("@/lib/supabase/server");

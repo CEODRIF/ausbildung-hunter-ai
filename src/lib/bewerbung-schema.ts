@@ -140,3 +140,63 @@ export const candidateProfileSchema = z.object({
 });
 
 export type CandidateProfile = z.infer<typeof candidateProfileSchema>;
+
+/**
+ * Request payload of POST /api/bewerbung-scanner/scan.
+ *
+ * The request is untrusted: only the three fields the scan API actually needs
+ * are accepted (`storage_path` / `size_bytes` / `user_id` are NOT part of the
+ * contract — runScan() re-reads the uploads scoped to the session user), every
+ * string is bounded, and `.strict()` rejects unknown keys instead of silently
+ * ignoring them.
+ */
+export const scanFileReferenceSchema = z
+  .object({
+    id: z.string().uuid(),
+    filename: z.string().trim().min(1).max(255),
+    mime_type: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+export const scanRequestBodySchema = z
+  .object({
+    goal: z.enum(["ausbildung", "arbeit"]),
+    files: z.array(scanFileReferenceSchema).min(1).max(10),
+  })
+  .strict();
+
+export type ScanFileReference = z.infer<typeof scanFileReferenceSchema>;
+export type ScanRequestBody = z.infer<typeof scanRequestBodySchema>;
+
+/**
+ * Request payload of POST /api/ai/generate-file.
+ *
+ * `mimeType` is an allowlist matching the `ai-files` bucket's
+ * allowed_mime_types: a value outside it would make storage reject the object
+ * AFTER the paid AI call had already run. `filename` may not contain path
+ * separators or traversal segments (it is echoed into the storage object key).
+ */
+export const GENERATED_FILE_MIME_TYPES = [
+  "text/plain",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+] as const;
+
+export const generateFileRequestSchema = z
+  .object({
+    conversationId: z.string().uuid(),
+    filename: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .refine((value) => !/[/\\]/.test(value) && !value.includes(".."), {
+        message: "Invalid filename.",
+      }),
+    mimeType: z.enum(GENERATED_FILE_MIME_TYPES),
+    prompt: z.string().trim().min(1).max(4000),
+  })
+  .strict();
+
+export type GenerateFileRequest = z.infer<typeof generateFileRequestSchema>;

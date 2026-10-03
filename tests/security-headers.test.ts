@@ -53,12 +53,28 @@ describe("CSP core strictness", () => {
     }
   });
 
-  it("img-src allows only self + inert data:/blob: (no network exfil via images)", () => {
+  it("img-src falls back to self + inert data:/blob: when no Supabase URL is configured", () => {
     expect(directive(value, "img-src").split(/\s+/)).toEqual([
       "'self'",
       "data:",
       "blob:",
     ]);
+  });
+
+  it("img-src never uses a wildcard or an http: source", () => {
+    const parts = directive(value, "img-src").split(/\s+/);
+    expect(parts).not.toContain("*");
+    expect(parts.some((part) => part.startsWith("http:"))).toBe(false);
+  });
+
+  it("allows the Supabase storage origin in img-src (public avatars)", () => {
+    // profiles.avatar_url is a storage.getPublicUrl() value on the Supabase
+    // origin; without it in img-src the browser blocks every avatar.
+    const parts = directive(csp("https://abcxyzcompany.supabase.co"), "img-src").split(
+      /\s+/,
+    );
+    expect(parts).toContain("https://abcxyzcompany.supabase.co");
+    expect(parts.slice(0, 3)).toEqual(["'self'", "data:", "blob:"]);
   });
 });
 
@@ -109,14 +125,22 @@ describe("companion headers (Phase 12 baseline preserved)", () => {
     expect(byKey["permissions-policy"]).toContain("geolocation=()");
   });
 
-  it("emits exactly five headers", () => {
+  it("emits exactly the six hardened headers", () => {
     expect(Object.keys(byKey).sort()).toEqual([
       "content-security-policy",
       "permissions-policy",
       "referrer-policy",
+      "strict-transport-security",
       "x-content-type-options",
       "x-frame-options",
     ]);
+  });
+
+  it("enforces HSTS without commit-to-preload", () => {
+    const hsts = byKey["strict-transport-security"];
+    expect(hsts).toContain("max-age=63072000");
+    expect(hsts).toContain("includeSubDomains");
+    expect(hsts).not.toContain("preload");
   });
 });
 

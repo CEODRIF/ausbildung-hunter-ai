@@ -83,7 +83,16 @@ async function activeUser() {
     throw new Error("Not authorized.");
   return current.user;
 }
-export async function createScan(goal: ScanGoal, files: ScanFile[]) {
+/**
+ * The subset of an upload a scan actually needs. `storage_path` and
+ * `size_bytes` are deliberately NOT part of the input: the request is
+ * untrusted, and runScan() re-reads the uploads from `ai_file_uploads`
+ * scoped to the session user (`.eq("user_id", user.id)`), so a foreign or
+ * invented file id can never be scanned.
+ */
+export type ScanFileInput = Pick<ScanFile, "id" | "filename" | "mime_type">;
+
+export async function createScan(goal: ScanGoal, files: ScanFileInput[]) {
   const user = await activeUser();
   if (!files.length || files.length > 10)
     throw new Error("Upload between 1 and 10 supported files.");
