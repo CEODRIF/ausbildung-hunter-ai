@@ -24,6 +24,7 @@ import {
 } from "@/lib/deckblatt/validate";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { checkRateLimit, rateLimitHeaders, tooManyRequests } from "@/lib/rate-limit";
+import { DECKBLATT_COMING_SOON } from "@/lib/deckblatt/availability";
 
 export const runtime = "nodejs";
 /**
@@ -71,6 +72,7 @@ export const maxDuration = 259;
  *  409 { code: "already_running", usage }
  *  429 { code: "rate_limited" }
  *  502 { code: "provider_error" | "provider_rate_limited" | "provider_unauthorized" | "provider_content_blocked" }
+ *  503 { code: "coming_soon" }        ← feature parked (DECKBLATT_COMING_SOON)
  *  503 { code: "usage_unavailable" }
  */
 
@@ -119,6 +121,15 @@ export async function POST(request: Request) {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active") {
     return json({ code: "unauthorized" }, { status: 401 });
+  }
+
+  // 1b. Availability. The server-side half of the same switch the page uses: a
+  //     replayed or hand-made request cannot start a run while the generator is
+  //     parked. Nothing below is reached, so no quota is reserved, no rate-limit
+  //     budget is spent and the provider is never called. Auth still runs first,
+  //     so the route's authorization behaviour is unchanged.
+  if (DECKBLATT_COMING_SOON) {
+    return json({ code: "coming_soon" }, { status: 503 });
   }
 
   // 2. Burst protection (the 2/day quota is enforced atomically in the DB
