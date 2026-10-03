@@ -793,13 +793,16 @@ export function AppShell({
           pathname={pathname}
           onNavigate={closeMobile}
         />
-        <div className="border-t border-line p-3">
+        {/* Language + theme at the bottom of a FULL-HEIGHT drawer: the
+            menus must open UPWARD (dropUp), otherwise they render below
+            the viewport bottom and the tap looks dead on iPhone. */}
+        <div className="shrink-0 border-t border-line p-3">
           <div className="flex items-center gap-1">
             <span className="flex-1">
-              <LanguageSwitcher />
+              <LanguageSwitcher dropUp />
             </span>
             <span>
-              <ThemeSwitcher />
+              <ThemeSwitcher dropUp />
             </span>
           </div>
         </div>

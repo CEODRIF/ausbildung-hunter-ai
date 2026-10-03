@@ -12,7 +12,7 @@ import { useDismiss } from "@/lib/use-dismiss";
 import { LANGUAGE_META, type Language } from "@/lib/i18n/dictionaries";
 import { Icon } from "@/components/icon";
 
-export function LanguageSwitcher() {
+export function LanguageSwitcher({ dropUp = false }: { dropUp?: boolean }) {
   const { lang, setLang, supportedLanguages, t } = useI18n();
   const [open, setOpen] = useState(false);
   const rootRef = useDismiss(open, useCallback(() => setOpen(false), []));
@@ -34,7 +34,9 @@ export function LanguageSwitcher() {
         <div
           role="menu"
           aria-label={t("lang.label")}
-          className="absolute end-0 top-11 z-50 w-48 overflow-hidden rounded-xl border border-line bg-surface p-1 card-shadow"
+          className={`absolute end-0 z-50 w-48 overflow-hidden rounded-xl border border-line bg-surface p-1 card-shadow ${
+            dropUp ? "bottom-11" : "top-11"
+          }`}
         >
           {supportedLanguages.map((value: Language) => {
             const active = value === lang;

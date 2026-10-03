@@ -696,7 +696,14 @@ export function CvBuilder({
 
   return (
     <div>
-      {/* ============================== Top bar ============================== */}
+      {/* ============================== Top bar ==============================
+          Mobile (320–430px): strict single-column flow —
+          row 1 title+badge, row 2 subtitle, row 3 [Inhalt|Gestalten],
+          row 4 [Bearbeiten|Vorschau], row 5 full-width PDF button.
+          The control cluster is w-full on phones so each control group
+          gets its own row (no compressed side-by-side row, no wrapped
+          button labels); from sm up the groups sit side-by-side and on
+          desktop (lg) everything returns to the original single row. */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2.5">
@@ -711,7 +718,7 @@ export function CvBuilder({
             {t("templates.builderSubtitle")}
           </p>
         </div>
-        <div className="flex items-center gap-2.5">
+        <div className="flex w-full flex-wrap items-center gap-2.5 sm:w-auto sm:justify-end">
           {saveState !== "idle" && started && (
             <span
               role="status"
@@ -724,12 +731,12 @@ export function CvBuilder({
             </span>
           )}
           {started && (
-          <div className="flex rounded-xl border border-line-strong bg-surface p-1">
+          <div className="flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto">
             <button
               type="button"
               aria-pressed={view === "content"}
               onClick={() => setView("content")}
-              className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
                 view === "content"
                   ? "bg-accent text-white"
                   : "text-muted hover:text-ink"
@@ -742,7 +749,7 @@ export function CvBuilder({
               type="button"
               aria-pressed={view === "customize"}
               onClick={() => setView("customize")}
-              className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
                 view === "customize"
                   ? "bg-accent text-white"
                   : "text-muted hover:text-ink"
@@ -754,12 +761,12 @@ export function CvBuilder({
           </div>
           )}
           {started && (
-          <div className="flex rounded-xl border border-line-strong bg-surface p-1 lg:hidden">
+          <div className="flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto lg:hidden">
             <button
               type="button"
               aria-pressed={mobileView === "edit"}
               onClick={() => setMobileView("edit")}
-              className={`rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+              className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
                 mobileView === "edit"
                   ? "bg-accent text-white"
                   : "text-muted hover:text-ink"
@@ -771,7 +778,7 @@ export function CvBuilder({
               type="button"
               aria-pressed={mobileView === "preview"}
               onClick={() => setMobileView("preview")}
-              className={`rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+              className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
                 mobileView === "preview"
                   ? "bg-accent text-white"
                   : "text-muted hover:text-ink"
@@ -781,7 +788,12 @@ export function CvBuilder({
             </button>
           </div>
           )}
-          <Button variant="dark" onClick={handlePrint} disabled={!hasContent}>
+          <Button
+            variant="dark"
+            onClick={handlePrint}
+            disabled={!hasContent}
+            className="w-full whitespace-nowrap sm:w-auto"
+          >
             <Icon name="download" size={15} />
             {t("templates.downloadPdf")}
           </Button>
@@ -826,9 +838,12 @@ export function CvBuilder({
         </Card>
       ) : (
         /* ============================ Workspace ============================ */
-        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
+        <div className="mt-6 grid w-full grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
           {/* ------------------------------ Editor ----------------------------- */}
-          <div className={`min-w-0 ${mobileView === "edit" ? "" : "hidden lg:block"}`}>
+          {/* w-full min-w-0: the editor column is EXACTLY the viewport
+              content width on phones (single column), and can shrink
+              inside the 2/3fr desktop grid. No fixed widths in between. */}
+          <div className={`min-w-0 w-full ${mobileView === "edit" ? "" : "hidden lg:block"}`}>
             {view === "content" ? (
             <Fragment>
             <Button

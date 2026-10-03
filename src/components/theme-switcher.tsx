@@ -29,7 +29,7 @@ const MODE_ICONS: Record<ThemeMode, IconName> = {
 
 const MODES: readonly ThemeMode[] = ["light", "dark", "system"];
 
-export function ThemeSwitcher() {
+export function ThemeSwitcher({ dropUp = false }: { dropUp?: boolean }) {
   const { t } = useI18n();
   // Server + first client render use the default mode; the persisted mode is
   // restored in an effect (no hydration mismatch).
@@ -110,7 +110,9 @@ export function ThemeSwitcher() {
         <div
           role="menu"
           aria-label={t("theme.label")}
-          className="absolute end-0 top-11 z-50 w-44 overflow-hidden rounded-xl border border-line bg-surface p-1 card-shadow"
+          className={`absolute end-0 z-50 w-44 overflow-hidden rounded-xl border border-line bg-surface p-1 card-shadow ${
+            dropUp ? "bottom-11" : "top-11"
+          }`}
         >
           {MODES.map((value) => {
             const active = value === mode;

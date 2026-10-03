@@ -246,3 +246,85 @@ describe("mobile shell: drawer, bottom nav, header fit", () => {
     expect(page).toContain("hero-orb pointer-events-none");
   });
 });
+
+describe("drawer language/theme controls: the menu must be ON-SCREEN (iPhone fix)", () => {
+  const lang = read("src/components/language-switcher.tsx");
+  const theme = read("src/components/theme-switcher.tsx");
+  const shell = read("src/components/app-shell.tsx");
+
+  it("both switchers support a dropUp anchor (menu above the button)", () => {
+    for (const [name, src] of [
+      ["LanguageSwitcher", lang],
+      ["ThemeSwitcher", theme],
+    ] as const) {
+      expect(src, name).toContain("dropUp = false");
+      // The menu position is the ONLY thing that flips — one menu, two anchors.
+      expect(src, name).toContain('dropUp ? "bottom-11" : "top-11"');
+    }
+  });
+
+  it("the drawer (bottom of the viewport) uses dropUp so taps produce a visible menu", () => {
+    // The drawer footer is the full-height drawer's bottom edge: a
+    // top-11 menu would render below the screen. dropUp puts it above.
+    const drawerStart = shell.indexOf("<aside");
+    const drawerBlock = shell.slice(drawerStart, shell.indexOf("</aside>", drawerStart));
+    expect(drawerBlock).toContain("<LanguageSwitcher dropUp />");
+    expect(drawerBlock).toContain("<ThemeSwitcher dropUp />");
+  });
+
+  it("tapping an item still routes through the existing context (no parallel state)", () => {
+    // Language: item -> setLang(value) from the provider (state + storage +
+    // cookie action + <html lang/dir> effect all in that one path).
+    expect(lang).toMatch(/onClick=\{\(\) => \{\s*setLang\(value\);\s*setOpen\(false\);/);
+    // Theme: item -> choose(value) which persists AND applies the .dark class.
+    expect(theme).toMatch(/onClick=\{\(\) => choose\(value\)\}/);
+    // The toggle button itself must flip the open state (real pointer target).
+    expect(lang).toContain("onClick={() => setOpen((value) => !value)}");
+    expect(theme).toContain("onClick={() => setOpen((value) => !value)}");
+    // Menus are conditionally rendered by the open state (tap -> UI change).
+    expect(lang).toContain("{open && (");
+    expect(theme).toContain("{open && (");
+  });
+});
+
+describe("CV / cover-letter builders: mobile is a full-width single column", () => {
+  const cv = read("src/components/cv-builder.tsx");
+  const cl = read("src/components/cover-letter-builder.tsx");
+
+  for (const [name, src] of [
+    ["CV", cv],
+    ["Cover Letter", cl],
+  ] as const) {
+    it(`${name}: control groups get their own full row on phones`, () => {
+      // The cluster spans the full content width below sm (one control per
+      // row); from sm up the groups sit side-by-side as before.
+      expect(src).toContain(
+        "flex w-full flex-wrap items-center gap-2.5 sm:w-auto sm:justify-end",
+      );
+      expect(src).toContain(
+        "flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto",
+      );
+    });
+
+    it(`${name}: PDF button is full-width, never wraps its label, on phones`, () => {
+      expect(src).toContain('className="w-full whitespace-nowrap sm:w-auto"');
+    });
+
+    it(`${name}: the editor column is explicitly full-width (no half-screen)`, () => {
+      expect(src).toContain(
+        'min-w-0 w-full ${mobileView === "edit" ? "" : "hidden lg:block"}',
+      );
+      // The workspace grid stays single-column until lg.
+      expect(src).toContain(
+        "grid w-full grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start",
+      );
+    });
+  }
+
+  it("CV inner form fields stay 100% wide until sm (no desktop 2-col leak)", () => {
+    expect(cv).toContain("grid gap-3.5 sm:grid-cols-2");
+    // Inputs are w-full by the shared Input primitive (audit the primitive).
+    const ui = read("src/components/ui.tsx");
+    expect(ui).toContain("h-12 w-full rounded-2xl");
+  });
+});

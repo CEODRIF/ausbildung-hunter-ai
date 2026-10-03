@@ -654,7 +654,7 @@ export function CoverLetterBuilder({ userId }: CoverLetterBuilderProps) {
             {t("coverLetter.builderSubtitle")}
           </p>
         </div>
-        <div className="flex items-center gap-2.5">
+        <div className="flex w-full flex-wrap items-center gap-2.5 sm:w-auto sm:justify-end">
           {saveState !== "idle" && started && (
             <span
               role="status"
@@ -667,12 +667,12 @@ export function CoverLetterBuilder({ userId }: CoverLetterBuilderProps) {
             </span>
           )}
           {started && (
-            <div className="flex rounded-xl border border-line-strong bg-surface p-1 lg:hidden">
+            <div className="flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto lg:hidden">
               <button
                 type="button"
                 aria-pressed={mobileView === "edit"}
                 onClick={() => setMobileView("edit")}
-                className={`rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
                   mobileView === "edit"
                     ? "bg-accent text-white"
                     : "text-muted hover:text-ink"
@@ -684,7 +684,7 @@ export function CoverLetterBuilder({ userId }: CoverLetterBuilderProps) {
                 type="button"
                 aria-pressed={mobileView === "preview"}
                 onClick={() => setMobileView("preview")}
-                className={`rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
                   mobileView === "preview"
                     ? "bg-accent text-white"
                     : "text-muted hover:text-ink"
@@ -694,7 +694,12 @@ export function CoverLetterBuilder({ userId }: CoverLetterBuilderProps) {
               </button>
             </div>
           )}
-          <Button variant="dark" onClick={handlePrint} disabled={!hasContent}>
+          <Button
+            variant="dark"
+            onClick={handlePrint}
+            disabled={!hasContent}
+            className="w-full whitespace-nowrap sm:w-auto"
+          >
             <Icon name="download" size={15} />
             {t("coverLetter.downloadPdf")}
           </Button>
@@ -739,9 +744,9 @@ export function CoverLetterBuilder({ userId }: CoverLetterBuilderProps) {
         </Card>
       ) : (
         /* ============================ Workspace ============================ */
-        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
+        <div className="mt-6 grid w-full grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
           {/* ------------------------------ Editor ----------------------------- */}
-          <div className={`min-w-0 ${mobileView === "edit" ? "" : "hidden lg:block"}`}>
+          <div className={`min-w-0 w-full ${mobileView === "edit" ? "" : "hidden lg:block"}`}>
             <div className="space-y-3.5">
               {/* Absender */}
               <ClSection
