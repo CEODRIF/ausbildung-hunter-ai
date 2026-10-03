@@ -19,7 +19,7 @@
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -67,6 +67,7 @@ import {
   Trash2,
   Upload,
   User,
+  Users,
   X,
 } from "lucide-react";
 import type { Profile } from "@/lib/auth";
@@ -90,6 +91,8 @@ interface NavItem {
   href: string;
   icon: IconName;
   soon?: boolean;
+  /** Unread counter (Community). Rendered only when > 0. */
+  badge?: number;
 }
 
 interface NavSection {
@@ -120,6 +123,7 @@ const NAV_SECTIONS: NavSection[] = [
         href: "/opportunities/saved",
         icon: "bookmark",
       },
+      { labelKey: "nav.community", href: "/community", icon: "users" },
     ],
   },
   {
@@ -158,6 +162,7 @@ const LUCIDE: Record<IconName, LucideIcon> = {
   mail: Mail,
   spark: Sparkles,
   user: User,
+  users: Users,
   scan: ScanLine,
   edit: PenLine,
   send: Send,
@@ -271,6 +276,10 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
     heading: { titleKey: "pages.scanner.title", subtitleKey: "pages.scanner.subtitle" },
   },
   {
+    match: (p) => p === "/community" || p.startsWith("/community/"),
+    heading: { titleKey: "pages.community.title", subtitleKey: "pages.community.subtitle" },
+  },
+  {
     match: (p) => p === "/settings/email" || p.startsWith("/settings/email/"),
     heading: { titleKey: "pages.settingsEmail.title", subtitleKey: "pages.settingsEmail.subtitle" },
   },
@@ -363,6 +372,7 @@ function NavSectionList({
                   </div>
                 );
               }
+              const hasBadge = typeof item.badge === "number" && item.badge > 0;
               return (
                 <Link
                   key={item.labelKey}
@@ -378,8 +388,24 @@ function NavSectionList({
                       : "text-muted hover:bg-surface-2 hover:text-ink"
                   }`}
                 >
-                  <IconCmp size={18} strokeWidth={1.8} className="shrink-0" />
+                  <span className="relative shrink-0">
+                    <IconCmp size={18} strokeWidth={1.8} />
+                    {collapsed && hasBadge && (
+                      <span
+                        aria-hidden
+                        className="absolute -end-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-surface"
+                      />
+                    )}
+                  </span>
                   {!collapsed && <span className="truncate flex-1">{label}</span>}
+                  {!collapsed && hasBadge && (
+                    <span
+                      className="ms-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-bold text-white"
+                      aria-label={`${item.badge}`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
                 </Link>
               );
             })}
@@ -397,14 +423,29 @@ function NavSectionList({
 export function AppShell({
   children,
   profile,
+  communityUnread,
 }: {
   children: React.ReactNode;
   profile?: Profile | null;
+  /** Unread community messages for the sidebar badge (server-computed per
+   *  section layout; rendered only when > 0). */
+  communityUnread?: number;
 }) {
   const pathname = usePathname();
   const { t } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const sections: NavSection[] = NAV_SECTIONS;
+  // The Community entry carries the unread counter (server-computed per
+  // section layout); every other item is passed through untouched.
+  const sections = useMemo(
+    () =>
+      NAV_SECTIONS.map((section) => ({
+        ...section,
+        items: section.items.map((item) =>
+          item.href === "/community" ? { ...item, badge: communityUnread } : item,
+        ),
+      })),
+    [communityUnread],
+  );
   const closeMobile = useCallback(() => setMobileOpen(false), []);
 
   // Top-nav compact mode: icon-only links (labels hidden, tooltips on).

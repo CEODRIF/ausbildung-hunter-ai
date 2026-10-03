@@ -5,7 +5,7 @@ import { getCommunityUnreadCount } from "@/lib/community/server";
 
 export const dynamic = "force-dynamic";
 
-export default async function OpportunitiesLayout({
+export default async function CommunityLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const { user, profile } = await getCurrentUserAndProfile();

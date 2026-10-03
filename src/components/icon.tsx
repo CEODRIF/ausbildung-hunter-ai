@@ -23,6 +23,7 @@ export type IconName =
   | "mail"
   | "spark"
   | "user"
+  | "users"
   | "scan"
   | "edit"
   | "send"
@@ -122,6 +123,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <circle cx="12" cy="8" r="3.5" />
       <path d="M5 20c.7-3.4 3-5 7-5s6.3 1.6 7 5" />
+    </>
+  ),
+  users: (
+    <>
+      <circle cx="9.5" cy="8" r="3.3" />
+      <path d="M3.2 19.8c.8-3.3 3.1-4.9 6.3-4.9s5.5 1.6 6.3 4.9" />
+      <path d="M15.8 5.1a3.3 3.3 0 0 1 0 5.9M18.6 15.4c1.5.7 2.4 2 2.8 4.4" />
     </>
   ),
   scan: (

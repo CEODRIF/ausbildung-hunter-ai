@@ -50,7 +50,11 @@ export type RateLimitScope =
   // (there is no session yet). See clientIpKey().
   | "register"
   | "login"
-  | "verify_resend";
+  | "verify_resend"
+  // Community group chat (per session user).
+  | "community_message"
+  | "community_history"
+  | "community_onboarding";
 
 /**
  * Per-scope budgets. Rationale:
@@ -71,6 +75,11 @@ export type RateLimitScope =
   * - email_oauth: OAuth initiations are cheap but a proxying vector; 5/min.
  * - account_export / account_delete: sensitive GDPR operations, 1 h window.
  * - admin_actions: plan/admin mutations; 30/min is generous for humans.
+ * - community_message: 20/min per user — comfortably above normal human
+ *   typing in a group chat, far below a flooding rate (also caps the
+ *   downstream realtime fan-out and storage writes per user).
+ * - community_history: "load older" pagination fetches; 30/min.
+ * - community_onboarding: one-time profile completion upserts; 5/min.
  */
 export const RATE_LIMITS: Record<
   RateLimitScope,
@@ -110,6 +119,13 @@ export const RATE_LIMITS: Record<
   register: { max: 8, windowSeconds: 600 },
   login: { max: 15, windowSeconds: 600 },
   verify_resend: { max: 5, windowSeconds: 600 },
+  // Community group chat (per session user): 20 messages/min is comfortably
+  // above normal human typing in a group chat and far below a flooding rate
+  // (it also caps the realtime fan-out and storage writes per user); 30/min
+  // for "load older" pagination; 5/min for the one-time onboarding upsert.
+  community_message: { max: 20, windowSeconds: 60 },
+  community_history: { max: 30, windowSeconds: 60 },
+  community_onboarding: { max: 5, windowSeconds: 60 },
 };
 
 export function rateLimitKey(scope: RateLimitScope, userId: string): string {
