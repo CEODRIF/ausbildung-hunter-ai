@@ -12,6 +12,8 @@ import {
   detectUILanguage,
   SCOPE_REDIRECTS,
 } from "@/lib/ai-scope";
+import { buildSearchContextBlock } from "@/lib/germany-knowledge";
+import { researchGermany } from "@/lib/germany-research";
 import {
   checkRateLimit,
   rateLimitHeaders,
@@ -19,6 +21,21 @@ import {
 } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
+
+/**
+ * Live search is an EXTRA paid third-party call per question, so it has its own
+ * per-user budget. When the budget cannot be confirmed (limiter error) the
+ * lookup is skipped — the user still gets a complete answer from the model, so
+ * this is "fail safe for cost" rather than a blocked request.
+ */
+async function searchBudgetAvailable(userId: string): Promise<boolean> {
+  try {
+    const limited = await checkRateLimit("web_search", userId);
+    return limited.allowed;
+  } catch {
+    return false;
+  }
+}
 
 /** Wrap a plain string as a small text stream (2 chunks for progressive UI). */
 function textStream(text: string) {
@@ -68,7 +85,30 @@ export async function POST(request: Request) {
     let stream: ReadableStream<Uint8Array>;
     if (scope.inScope) {
       const context = await getAIContext(user.id, body.conversationId);
-      stream = await provider().streamText(context.messages);
+      // Germany copilot pipeline: does this question depend on information that
+      // changes (fees, deadlines, thresholds, the law in force)? If so, look it
+      // up — official sources ranked first — and hand the extracts to the model
+      // as untrusted REFERENCE data. Any failure degrades to "no search": the
+      // answer is never blocked, the model just states it cannot verify and
+      // points at the competent authority.
+      const research = (await searchBudgetAvailable(user.id))
+        ? await researchGermany(body.content || "")
+        : { searched: false, reason: "failed" as const, query: "", results: [] };
+      if (research.searched) {
+        console.info(
+          "[ai-chat] germany research",
+          JSON.stringify({
+            conversationId: body.conversationId,
+            results: research.results.length,
+          }),
+        );
+      }
+      stream = await provider().streamText(
+        context.messages,
+        research.results.length
+          ? buildSearchContextBlock(body.content || "", research.results)
+          : undefined,
+      );
     } else {
       console.info(
         "[ai-chat] out-of-scope request redirected",

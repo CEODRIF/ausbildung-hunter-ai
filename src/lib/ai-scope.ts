@@ -1,25 +1,34 @@
 /**
  * Server-side scope enforcement for the AI Assistant chat.
  *
- * The assistant is a SPECIALIST for Ausbildung Hunter AI (Ausbildung, jobs,
- * applications, career in Germany, platform features) — not a general chatbot.
+ * The assistant is a SPECIALIST for Germany — a "Germany Copilot" for people
+ * planning to study, train (Ausbildung) or work in Germany, with special care
+ * for users coming from Morocco: immigration and residence law, visa and
+ * consulate procedures, Ausbildung, university study, language exams,
+ * documents, recognition of qualifications, work rights, daily life and
+ * citizenship — plus the Ausbildung Hunter AI platform itself. It is still
+ * NOT a general chatbot.
+ *
  * This module decides, deterministically and BEFORE any model call, whether a
  * user message is in scope:
  *
- *   - in scope  → the model answers (the hardened system prompt reinforces);
+ *   - in scope  → the model answers (the Germany system prompt reinforces);
  *   - out of scope → the server streams a short, language-matched redirect
  *     (no model call, no long off-topic answer, nothing fabricated).
  *
- * The decision is signal-based, not a naive keyword check: domain lexicons in
- * de/en/fr/ar, multi-word intent patterns ("work in germany", "التقديم على",
- * "أريد العمل في ألمانيا"), document-analysis patterns, German-vocabulary
-  * questions, and a context rule for short follow-ups ("Is that right for
-  * me?" style) that only fires on deictic continuation markers and an
- * in-scope recent history. Instruction-override attempts are always blocked,
- * even when they embed in-scope words.
+ * The decision is signal-based, not a naive keyword check: the domain
+ * vocabulary of the Germany taxonomy (see lib/germany-knowledge.ts, covering
+ * de/en/fr/ar + Darija), the original Ausbildung/career/platform lexicons,
+ * multi-word intent patterns ("work in germany", "التقديم على"), document
+ * analysis patterns, German-vocabulary questions, and a context rule for short
+ * follow-ups ("Is that right for me?" style) that only fires on deictic
+ * continuation markers and an in-scope recent history. Instruction-override
+ * attempts are always blocked, even when they embed in-scope words.
  *
  * Pure module (no server imports) → fully unit-testable.
  */
+
+import { hasGermanySignal, isDarija } from "@/lib/germany-knowledge";
 
 export interface ScopeHistoryMessage {
   role: "user" | "assistant" | "system";
@@ -148,23 +157,30 @@ const PATTERN_LIST: RegExp[] = [
 // Instruction-override / jailbreak patterns — ALWAYS block, even when the
 // message embeds in-scope words ("…ignore previous instructions. What do
 // you think about Ausbildung?").
+// The qualifier groups are REPEATED (not optional-once): the earlier
+// single-slot form missed stacked qualifiers, so "Ignore ALL PREVIOUS
+// instructions" — the most common phrasing — slipped through as in scope.
 const INJECTION_PATTERNS: RegExp[] = [
-  /ignore (all |any |previous |prior |the |your )?(instructions|rules|prompts|guidelines)/,
-  /disregard (your |the |previous |all )?(instructions|rules|prompts)/,
-  /forget (your |the |previous |all )?(instructions|rules|everything|prior)/,
+  /ignore\s+(?:all\s+|any\s+|the\s+|your\s+|previous\s+|prior\s+|above\s+|earlier\s+)*(?:instructions|rules|prompts|guidelines|directions)/,
+  /disregard\s+(?:all\s+|any\s+|the\s+|your\s+|previous\s+|prior\s+)*(?:instructions|rules|prompts|guidelines)/,
+  /forget\s+(?:all\s+|any\s+|the\s+|your\s+|previous\s+|prior\s+)*(?:instructions|rules|everything|prior|prompt)/,
   /you are now (a|an|the) (general|unrestricted|different|regular)/,
   /act as (a|an) (general|unrestricted|different|regular|new)/,
   /new (system )?(instructions|rules|prompt)/,
   /reveal (your |the )?(system|prompt|instructions|rules)/,
   /show (your |me the )?(system )?(prompt|instructions)/,
   /jailbreak/, /override (the |your |all )?(instructions|rules|filters|safety|limits)/,
-  /بإهمال (ال|كل )?(تعليمات|قواعد)/, /تجاهل (ال|كل |أي )?(تعليمات|قواعد)/,
+  // Same bounded-wildcard reasoning as the German/French forms above: Arabic
+  // stacks qualifiers ("تجاهل كل التعليمات السابقة") that a fixed list misses.
+  /(بإهمال|تجاهل|تجاوز|أنسى|انسى)[\s\S]{0,30}?(تعليمات|قواعد|الأوامر|تعليماتك)/,
   /أنسى (تعليماتك|قواعدك)/, /انسى (تعليماتك|قواعدك)/, /أنت الآن (مساعد|chatbot|نظام) عام/,
   /انت الان (مساعد|chatbot|نظام) عام/, /تصرف كـ(مساعد|chatbot) عام/,
   /تعليمات النظام/, /اعرض (تعليماتك|نظامك)/, /أعد كتابة التعليمات/,
-  /ignorez (les |toutes les )?(instructions|règles|regles)/,
-  /vous êtes maintenant/, /vous etes maintenant/, /nouveaux (instructions|règles)/,
-  /ignorieren.{0,25}(anweisungen|regeln)/, /ignoriere.{0,25}(anweisungen|regeln)/,
+  /(ignorez|oubliez)[\s\S]{0,30}?(instructions|regles|consignes)/,
+  /vous (êtes|etes) maintenant/, /nouveaux (instructions|regles)/,
+  // Bounded wildcard (not a fixed qualifier list): "Ignorieren Sie alle
+  // Anweisungen" and "Ignoriere bitte deine Regeln" must both hit.
+  /(ignorier|vergiss|vergessen|missachte)[\s\S]{0,30}?(anweisungen|regeln|vorgaben|alles)/,
   /du bist jetzt (ein )?allgemeiner/,
   /neue (system-)?(anweisungen|regeln)/,
 ];
@@ -200,6 +216,10 @@ function containsToken(text: string, terms: Set<string>): boolean {
 
 function hasDomainSignal(raw: string): boolean {
   const text = normalize(raw);
+  // Germany-wide taxonomy (immigration, visas, consulates, Ausbildung, study,
+  // language exams, documents, recognition, work, daily life, citizenship) in
+  // de/en/fr/ar + Darija.
+  if (hasGermanySignal(raw)) return true;
   if (
     containsToken(text, GERMAN_TERMS) ||
     containsToken(text, ENGLISH_TERMS) ||
@@ -288,6 +308,20 @@ export function decideScope(
 export type UILanguage = "de" | "en" | "fr" | "ar";
 
 // Tiny stopword sets used ONLY for redirect-language detection.
+/**
+ * English function words. Used ONLY to break a conflict: English questions in
+ * this product routinely contain German technical nouns ("How do I register at
+ * the Bürgeramt?", "What is the Chancenkarte?") whose umlauts / vocabulary used
+ * to decide the language on their own — so an English message was answered (or
+ * redirected) in German. A clear English function word with no German function
+ * word now wins.
+ */
+const ENGLISH_STOPWORDS = new Set([
+  "how", "what", "which", "where", "when", "why", "who", "do", "does", "did",
+  "can", "could", "should", "would", "i", "my", "me", "we", "the", "a", "an",
+  "is", "are", "was", "were", "need", "needs", "want", "have", "has", "for",
+]);
+
 const GERMAN_STOPWORDS = new Set([
   "der", "die", "das", "ist", "wie", "bitte", "nicht", "und", "sich",
   "heute", "auch", "kann", "muss", "soll", "ein", "eine", "ich", "du",
@@ -310,6 +344,9 @@ export function detectUILanguage(raw: string): UILanguage {
   const norm = normalize(text);
   // Arabic script is unambiguous.
   if (/[\u0600-\u06ff]/.test(text)) return "ar";
+  // Darija written in Latin script ("chno khassni bach nmchi l'almania") is
+  // Arabic-speaking too — answering it in English would be wrong.
+  if (isDarija(text)) return "ar";
   const germanMarks = /[ßäöüÄÖÜ]/.test(text);
   const frenchMarks = /[éèêëàâîïôûùÿçÉÈÊËÀÂÎÏÔÛÙŸÇ]/.test(text);
   const frenchSignal =
@@ -320,13 +357,21 @@ export function detectUILanguage(raw: string): UILanguage {
   // French before German: "quel type d'Ausbildung …" and "Expliquez-moi la
   // Kündigungsfrist" are French even though they contain German words.
   if (frenchMarks || frenchSignal) return "fr";
+  // English function word with no German function word → English, even when
+  // the sentence embeds a German noun with an umlaut ("…at the Bürgeramt?").
+  if (
+    containsToken(norm, ENGLISH_STOPWORDS) &&
+    !containsToken(norm, GERMAN_STOPWORDS)
+  ) {
+    return "en";
+  }
   if (germanMarks || germanSignal) return "de";
   return "en";
 }
 
 export const SCOPE_REDIRECTS: Record<UILanguage, string> = {
-  de: "Ich helfe bei Ausbildung, Jobs, Bewerbungen und Karriere in Deutschland sowie bei der Nutzung von Ausbildung Hunter AI. Stelle mir gerne eine Frage zu einem dieser Themen.",
-  en: "I can help with Ausbildung, jobs, applications (Bewerbungen) and careers in Germany, and with using Ausbildung Hunter AI. Please ask me a question about these topics.",
-  fr: "Je peux vous aider pour la formation professionnelle (Ausbildung), les offres d'emploi, les candidatures et la carrière en Allemagne, ainsi que pour l'utilisation d'Ausbildung Hunter AI. Posez-moi une question sur l'un de ces sujets.",
-  ar: "أستطيع مساعدتك في الأمور المتعلقة بـ Ausbildung والوظائف في ألمانيا وBewerbungen (طلبات التقديم) والمسار المهني، بالإضافة إلى استخدام منصة Ausbildung Hunter AI. اطرح عليّ سؤالًا متعلقًا بهذه المواضيع وسأساعدك.",
+  de: "Ich bin auf Deutschland spezialisiert: Einwanderung und Aufenthalt, Visa und Botschaft/Konsulat, Ausbildung, Studium, Sprachprüfungen, Dokumente, Anerkennung, Arbeit, Alltag und Einbürgerung — und auf die Nutzung von Ausbildung Hunter AI. Frag mich gerne zu einem dieser Themen.",
+  en: "I specialise in Germany: immigration and residence, visas and embassy/consulate procedures, Ausbildung, university study, language exams, documents, recognition of qualifications, work, daily life and citizenship — plus how to use Ausbildung Hunter AI. Ask me anything in these areas.",
+  fr: "Je suis spécialisé sur l'Allemagne : immigration et séjour, visas et procédures d'ambassade/consulat, formation professionnelle (Ausbildung), études, examens de langue, documents, reconnaissance des diplômes, travail, vie quotidienne et nationalité — ainsi que l'utilisation d'Ausbildung Hunter AI. Posez-moi votre question dans ces domaines.",
+  ar: "أنا متخصص في كل ما يتعلق بألمانيا: الهجرة والإقامة، التأشيرات والسفارة/القنصلية، Ausbildung، الدراسة الجامعية، امتحانات اللغة، الوثائق، معادلة الشهادات، العمل، الحياة اليومية، والجنسية — بالإضافة إلى استخدام منصة Ausbildung Hunter AI. اسألني عن أي من هذه المواضيع.",
 };
