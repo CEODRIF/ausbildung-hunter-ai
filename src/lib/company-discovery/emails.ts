@@ -3,12 +3,14 @@ import "server-only";
 import {
   acceptEmailsFromContent,
   mergeAcceptedEmails,
+  textNamesCompany,
   type AcceptedEmail,
   type MergedAcceptedEmail,
 } from "./accept";
 import type { BlockedReason } from "./classify";
 import { guardedFetch, type FetchContext } from "./fetch-guard";
 import { isFreeMailDomain } from "@/lib/opportunities/company-contact";
+import { isPortalHost } from "./sources";
 import type { DiscoveryEmailSource, SourceAttempt } from "./types";
 
 /**
@@ -327,6 +329,122 @@ export function createGuardedSiteFetcher(ctx: FetchContext): CompanySiteFetcher 
   };
 }
 
+// ---------------------------------------------------------------------------
+// Official-domain resolution (agentic engine): Job portal → employer identity
+// → official website. A company the source never gave a website for is
+// resolved by FETCHING the provider's own search results for the company —
+// never by turning a name into a domain.
+// ---------------------------------------------------------------------------
+
+/**
+ * Result URLs fetched per company during domain resolution. Small on purpose:
+ * the company's Impressum/own page is what names the operator, and the fixed
+ * site pass (below) opens the standard pages once a domain is verified.
+ * Clamped into [0, 3].
+ */
+export function siteResolutionPageLimit(): number {
+  const raw = process.env.DISCOVERY_MAX_SITE_RESOLUTION_PAGES?.trim();
+  if (raw !== undefined && raw !== "") {
+    const value = Number.parseInt(raw, 10);
+    if (Number.isInteger(value) && value >= 0) {
+      return Math.min(value, 3);
+    }
+  }
+  return 2;
+}
+
+export interface OfficialSiteResolution {
+  /**
+   * The VERIFIED official origin — set only when a fetched page on that host
+   * literally names the company (the same binding rule email acceptance
+   * uses). A name never becomes a domain; an unverified host stays null.
+   */
+  websiteUrl: string | null;
+  /** The verified-domain page(s) actually fetched this run (extraction + evidence). */
+  pages: CompanySiteTextPage[];
+  /** Guarded-fetch attempts this resolution added to the shared context. */
+  attempts: SourceAttempt[];
+}
+
+/**
+ * Resolve the company's official website from the provider's search results
+ * for that company. For each candidate URL (bounded, de-duped per host,
+ * portal/search-engine hosts excluded) the page is fetched through the ONE
+ * guarded fetcher (SSRF / robots / pacing / circuit breaker) and counts as
+ * the OFFICIAL domain only when its text literally names the company.
+ *
+ * Never throws: an unreachable or non-naming page simply does not prove the
+ * domain — the honest answer is `websiteUrl: null`, and the caller then falls
+ * back to the snippet-only search step exactly as before.
+ */
+export async function resolveOfficialSite(input: {
+  companyName: string;
+  /** The provider's result URLs for the company (in relevance order). */
+  urls: string[];
+  ctx: FetchContext;
+  /** Max candidate pages to fetch (default {@link siteResolutionPageLimit}). */
+  limit?: number;
+}): Promise<OfficialSiteResolution> {
+  const limit = input.limit ?? siteResolutionPageLimit();
+  const attemptsBefore = input.ctx.attempts.length;
+  const attemptsOf = (): SourceAttempt[] =>
+    input.ctx.attempts.slice(attemptsBefore);
+  const empty: OfficialSiteResolution = {
+    websiteUrl: null,
+    pages: [],
+    attempts: attemptsOf(),
+  };
+  if (limit <= 0 || input.urls.length === 0) return empty;
+
+  /** Hosts that deliberately refused (breaker open for the rest of the run). */
+  const deadHosts = new Set<string>();
+  /** Candidate pages actually requested (robots probes and refusals cost nothing). */
+  let fetched = 0;
+  for (const url of input.urls) {
+    if (fetched >= limit) break;
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      continue;
+    }
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") continue;
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    if (!host) continue;
+    // A portal or search-engine host is never the company's own site — even
+    // when its page names the company (it does, in a listing context).
+    if (isPortalHost(host)) continue;
+    if (deadHosts.has(host)) continue; // the breaker is open: not asked again
+
+    // Several candidates may share the company's own host (impressum,
+    // kontakt, karriere …) — the top results for a contact query usually do.
+    fetched += 1;
+    const result = await guardedFetch(input.ctx, url, { textBudget: 20_000 });
+    if (!result.ok) {
+      if (result.kind === "blocked") {
+        // A deliberate refusal (401/403/429/consent/robots) opens the host's
+        // circuit breaker for the run — no further candidate can succeed
+        // there, so the host is dropped; the NEXT host's candidates still run.
+        deadHosts.add(host);
+      }
+      continue; // blocked / error / 404: that page proves nothing
+    }
+    // THE verification: the host's own page literally states the company's
+    // name (an Impressum legally names its operator; a career page names it
+    // in its heading/footer). Without this, the domain is just a guess.
+    if (!textNamesCompany(result.page.text, input.companyName)) continue;
+
+    const path = parsed.pathname.replace(/\/+$/, "");
+    const kind = discoveredPathKind(path) ?? "other";
+    return {
+      websiteUrl: parsed.origin,
+      pages: [{ url: result.page.finalUrl, kind, text: result.page.text }],
+      attempts: attemptsOf(),
+    };
+  }
+  return empty;
+}
+
 /**
  * An address printed in an ENABLED portal's listing (§4.1 step 1). The literal
  * presence is re-checked against the listing evidence; the attribution was
@@ -418,6 +536,13 @@ export interface CompanyEmailInput {
   trustedPages: Array<{ content: string; sourceUrl: string }>;
   /** The guarded site pass, or null when the run's page budget is exhausted. */
   fetchSite: CompanySiteFetcher | null;
+  /**
+   * Official-site pages that were ALREADY fetched this run (domain
+   * resolution): their text is extracted like any site page (same binding
+   * rules, real provenance URLs) and they join `inspectedPages`. They are
+   * facts — fetched, read, and on the verified domain — never guesses.
+   */
+  prefetchedPages?: CompanySiteTextPage[];
 }
 
 export interface CompanyEmailOutcome {
@@ -499,6 +624,19 @@ export async function resolveCompanyEmails(
   const inspectedPages: Array<{ url: string; kind: string }> = [];
 
   if (website) {
+    // Pages already fetched this run on the verified domain (domain
+    // resolution): extracted with the same binding rules, and listed as
+    // inspected — they are real evidence, not a second fetch's promise.
+    for (const page of input.prefetchedPages ?? []) {
+      inspectedPages.push({ url: page.url, kind: page.kind });
+      collected.push(
+        ...sitePageEmails({
+          page,
+          companyName: input.companyName,
+          companyDomain,
+        }),
+      );
+    }
     if (!input.fetchSite) {
       // The page budget is exhausted: the required source was NOT inspected,
       // so the outcome is inconclusive rather than "no public email".

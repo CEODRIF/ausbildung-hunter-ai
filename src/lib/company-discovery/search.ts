@@ -34,9 +34,11 @@ import {
 import { createFetchContext, type FetchContext } from "./fetch-guard";
 import {
   applicationUrlOf,
-  createGuardedSiteFetcher,
   countsAsResult,
+  createGuardedSiteFetcher,
   resolveCompanyEmails,
+  resolveOfficialSite,
+  type OfficialSiteResolution,
 } from "./emails";
 import {
   ResearchPlanner,
@@ -617,18 +619,27 @@ export async function runDiscoveryPipeline(
     return collected;
   };
 
-  /** The permitted public-search step for ONE company (§4.1 step 3). */
+  /**
+   * The permitted public-search step for ONE company (§4.1 step 3). The
+   * result CONTENT feeds the snippet-level address scan; the result URLs feed
+   * official-domain resolution (fetch + name-verification) — both stay
+   * within the ONE provider request.
+   */
   const searchForCompany = async (
     companyName: string,
-  ): Promise<{ ran: boolean; results: Array<{ content: string; sourceUrl: string }> }> => {
-    if (!searchClient) return { ran: false, results: [] };
+  ): Promise<{
+    ran: boolean;
+    results: Array<{ content: string; sourceUrl: string }>;
+    urls: string[];
+  }> => {
+    if (!searchClient) return { ran: false, results: [], urls: [] };
     // The provider caps its own requests per run; an attempt beyond that cap
     // would silently return [] and must never be mistaken for "nothing found".
     if (searchAttempts >= MAX_TAVILY_REQUESTS_PER_RUN) {
-      return { ran: false, results: [] };
+      return { ran: false, results: [], urls: [] };
     }
     if (searchAttempts >= limits.maxTavilyQueries) {
-      return { ran: false, results: [] };
+      return { ran: false, results: [], urls: [] };
     }
     searchAttempts += 1;
     // The contact query covers the pages §4.1 step 3 expects an address on:
@@ -645,10 +656,11 @@ export async function runDiscoveryPipeline(
           content: `${entry.title}\n${entry.snippet}`,
           sourceUrl: entry.url,
         })),
+        urls: results.map((entry) => entry.url),
       };
     } catch {
       // The provider refused or failed: the step did NOT run successfully.
-      return { ran: false, results: [] };
+      return { ran: false, results: [], urls: [] };
     }
   };
 
@@ -656,6 +668,26 @@ export async function runDiscoveryPipeline(
     offers: DiscoveryOffer[],
     passGoal: "ausbildung" | "arbeit",
   ): Promise<void> => {
+    /**
+     * The per-offer fate trace — one structured, FACT-ONLY line per offer so
+     * that every offer which never became a company has a clear REJECTION
+     * REASON, and every accepted one shows its evidence path. It logs, it
+     * never counts: every number stays where the §4.8 invariant owns it.
+     */
+    const traceOffer = (
+      outcome: string,
+      offer: Pick<DiscoveryOffer, "title" | "companyName" | "goal" | "url"> | null,
+      detail: Record<string, string | number | boolean | null> = {},
+    ): void => {
+      console.info(
+        `[company-discovery] offer run="${runId}" outcome="${outcome}" ` +
+          `company=${JSON.stringify(offer?.companyName ?? null)} ` +
+          `title=${JSON.stringify(offer?.title ?? null)} ` +
+          `offerGoal=${offer?.goal ?? null} passGoal=${passGoal} ` +
+          `offerUrl=${JSON.stringify(offer?.url ?? null)} ${JSON.stringify(detail)}`,
+      );
+    };
+
     let sinceProgress = 0;
     for (const offer of offers) {
       if (
@@ -686,16 +718,38 @@ export async function runDiscoveryPipeline(
       });
       if (candidateBuffer.length >= CANDIDATE_FLUSH_EVERY) await flushCandidates();
 
-      if (offer.goal !== passGoal) continue;
-      if (!isUsableCompanyName(offer.companyName)) continue;
+      if (offer.goal !== passGoal) {
+        // The offer's documented type is outside THIS pass's scope (a regular
+        // job in an Ausbildung run, …). Never a silent drop: the reason is
+        // traced so a lost offer is never a mystery.
+        traceOffer("goal_out_of_scope", offer, {
+          offerGoal: offer.goal,
+          reason: "offer type is not the pass's goal",
+        });
+        continue;
+      }
+      if (!isUsableCompanyName(offer.companyName)) {
+        // A name that cannot identify an employer ("AG", a number, …) never
+        // becomes a company — traced, and never invented.
+        traceOffer("unusable_company_name", offer, {
+          companyName: offer.companyName,
+          reason: "name does not identify a real employer",
+        });
+        continue;
+      }
 
       const key = companyKeyOf(offer.companyName);
       // STRONG dedupe, before the expensive email pass: the normalized name
       // key OR the company's official domain. A company found earlier under a
       // slightly different name (same website) is a duplicate — and never
       // spends a search request or a page fetch for a second time.
-      if (identity.check(key, offer.companyWebsite) !== "new") {
+      const identityMatch = identity.check(key, offer.companyWebsite);
+      if (identityMatch !== "new") {
         counters.duplicatesRemoved += 1;
+        traceOffer("duplicate", offer, {
+          matchedIdentity: identityMatch,
+          reason: "company already resolved in this run",
+        });
         continue;
       }
       if (!discoveryBeginnGate({ valid_from: offer.beginn }, params.beginn)) {
@@ -703,6 +757,11 @@ export async function runDiscoveryPipeline(
           counters.companiesRejected += 1;
           rejectedKeys.add(key);
         }
+        traceOffer("beginn_mismatch", offer, {
+          validFrom: offer.beginn,
+          beginnMode: params.beginn.mode,
+          reason: "documented start does not satisfy the run's beginn filter",
+        });
         continue;
       }
       rejectedKeys.delete(key);
@@ -712,22 +771,44 @@ export async function runDiscoveryPipeline(
       // pages + the permitted public search for companies without a website).
       live.currentSource = "company verification (website + public search)";
       flushLiveState();
+      /** The verified official site when the source gave none (null otherwise). */
+      let resolvedWebsite: OfficialSiteResolution | null = null;
       let resolution: Awaited<ReturnType<typeof resolveCompanyEmails>>;
       try {
         const search = offer.companyWebsite
-          ? { ran: false, results: [] }
+          ? { ran: false as const, results: [] as Array<{ content: string; sourceUrl: string }>, urls: [] as string[] }
           : await searchForCompany(offer.companyName ?? "");
+        // OFFICIAL-DOMAIN RESOLUTION — Job portal → employer identity →
+        // official website → contact evidence. A company the source never
+        // attached a website for is resolved by FETCHING the provider's own
+        // result pages for the company; a host counts as official only when
+        // its page literally names the company (no name → domain guessing).
+        if (!offer.companyWebsite && search.ran && search.urls.length > 0) {
+          resolvedWebsite = await resolveOfficialSite({
+            companyName: offer.companyName ?? "",
+            urls: search.urls,
+            ctx: fetchContext,
+          });
+        }
+        const websiteUrl =
+          offer.companyWebsite ?? resolvedWebsite?.websiteUrl ?? null;
         const siteBudgetAvailable = emailSiteBudget > 0;
         resolution = await resolveCompanyEmails({
           companyName: offer.companyName ?? "",
           listingEmail: offer.listingEmail,
-          websiteUrl: offer.companyWebsite,
+          websiteUrl,
           search,
           trustedPages: [],
           fetchSite: siteBudgetAvailable ? siteFetcher : null,
+          // The verified-domain page already fetched during resolution is
+          // real evidence — extracted like any site page, never re-guessed.
+          prefetchedPages: offer.companyWebsite
+            ? []
+            : (resolvedWebsite?.pages ?? []),
         });
-        // Only a company that actually had a website checked spends a slot.
-        if (offer.companyWebsite && siteBudgetAvailable) emailSiteBudget -= 1;
+        // Only a company that actually had a website checked spends a slot —
+        // whether the source stated it or the resolution verified it.
+        if (websiteUrl && siteBudgetAvailable) emailSiteBudget -= 1;
       } catch (error) {
         // Per-company isolation: an unexpected failure is INCONCLUSIVE, never
         // "no public email" and never an address.
@@ -747,12 +828,28 @@ export async function runDiscoveryPipeline(
         };
       }
 
+      // The company's VERIFIED website: the one the source stated, or the
+      // one domain resolution proved (a fetched page on it literally names
+      // the company). Stored, evidenced and confidence-rated as such — and
+      // it is what feeds the company-websites layer for follow-up offers.
+      const websiteUrl =
+        offer.companyWebsite ?? resolvedWebsite?.websiteUrl ?? null;
+      const websiteSourceUrl = offer.companyWebsite
+        ? offer.companyWebsiteSourceUrl
+        : (resolvedWebsite?.pages[0]?.url ?? null);
+
       counters.companiesProcessed += 1;
       const outcome = resolution.reasonCode;
       if (outcome === "email_found") counters.emailsFound += 1;
       else if (outcome === "source_blocked" || outcome === "no_website_found")
         counters.sourcesBlocked += 1;
       else counters.noPublicEmail += 1;
+      traceOffer(outcome, offer, {
+        website: websiteUrl,
+        pagesInspected: resolution.inspectedPages.length,
+        email: resolution.primary?.email ?? null,
+        blockedReason: resolution.blockedReason,
+      });
 
       // The audit label of a rejected company. `no_website_found` is its own
       // reason (the required search step could not run); it is still an
@@ -772,7 +869,7 @@ export async function runDiscoveryPipeline(
       // second is a duplicate. (Its outcome above stays honestly counted:
       // the §4.8 invariant `found + noEmail + blocked === processed` holds.)
       if (
-        identity.check(key, offer.companyWebsite, resolution.primary?.email ?? null) !==
+        identity.check(key, websiteUrl, resolution.primary?.email ?? null) !==
         "new"
       ) {
         counters.duplicatesRemoved += 1;
@@ -797,8 +894,8 @@ export async function runDiscoveryPipeline(
         city: offer.city,
         state: offer.state,
         beginn: offer.beginn,
-        websiteUrl: offer.companyWebsite,
-        websiteSourceUrl: offer.companyWebsiteSourceUrl,
+        websiteUrl,
+        websiteSourceUrl,
         email: resolution.primary?.email ?? null,
         emailSourceUrls,
         applicationUrl,
@@ -806,7 +903,7 @@ export async function runDiscoveryPipeline(
       };
       const evidence = buildCompanyEvidence(companyFacts);
       const confidence = companyConfidence({
-        officialDomain: offer.companyWebsite !== null,
+        officialDomain: websiteUrl !== null,
         training: true, // the counted offer IS the documented placement
         role: (offer.title ?? "").length > 0,
         location: offer.city !== null || offer.state !== null,
@@ -832,8 +929,8 @@ export async function runDiscoveryPipeline(
         }
         await recordCompany(runId, {
           ...companyFactsFromOffer(offer, params, key),
-          websiteUrl: offer.companyWebsite,
-          websiteSourceUrl: offer.companyWebsiteSourceUrl,
+          websiteUrl,
+          websiteSourceUrl,
           status: "rejected",
           rejectReason: label,
           emailStatus: outcome === "no_website_found" ? "source_blocked" : outcome,
@@ -847,14 +944,15 @@ export async function runDiscoveryPipeline(
           confidenceReasons: confidence.reasons,
           conflict: confidence.conflict,
         });
+        traceOffer("rejected", offer, { rejectReason: label, onlyPublicEmail: params.onlyPublicEmail });
         await flushProgress();
         continue;
       }
 
       const { companyId } = await recordCompany(runId, {
         ...companyFactsFromOffer(offer, params, key),
-        websiteUrl: offer.companyWebsite,
-        websiteSourceUrl: offer.companyWebsiteSourceUrl,
+        websiteUrl,
+        websiteSourceUrl,
         status: "accepted",
         emailStatus: outcome === "no_website_found" ? "source_blocked" : outcome,
         // Verification facts the pass measured (never guessed):
@@ -881,16 +979,23 @@ export async function runDiscoveryPipeline(
       // Register the company's FULL identity (name + domain + verified
       // email) so a later batch — same run or a continue-batch — never
       // processes it again.
-      identity.mark(key, offer.companyWebsite, resolution.primary?.email ?? null);
+      identity.mark(key, websiteUrl, resolution.primary?.email ?? null);
       counters.uniqueCompanies += 1;
       counters.foundCompanies += 1;
-      if (offer.companyWebsite) {
+      // A VERIFIED official site (stated or resolved) feeds the
+      // company-websites layer: its own career/offer pages are scanned next.
+      if (websiteUrl) {
         acceptedSites.push({
-          websiteUrl: offer.companyWebsite,
+          websiteUrl,
           goal: offer.goal,
           field: params.field,
         });
       }
+      traceOffer("accepted", offer, {
+        email: resolution.primary?.email ?? null,
+        website: websiteUrl,
+        confidence: confidence.score,
+      });
       sinceProgress = 0;
       await flushProgress();
     }

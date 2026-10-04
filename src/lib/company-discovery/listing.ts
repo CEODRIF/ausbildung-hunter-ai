@@ -208,6 +208,36 @@ function salaryLabelOf(value: unknown): string | null {
   return parts.length > 0 ? parts.join(" ") : null;
 }
 
+/**
+ * Documented apprenticeship markers in a listing TITLE ("Ausbildung …",
+ * "… (Azubi)"). schema.org's `employmentType` has NO apprenticeship value —
+ * portals therefore mark genuine Ausbildung postings as `FULL_TIME`. The title
+ * is the page's own documented text: when it literally states an
+ * apprenticeship, that statement outranks the portal's coarse taxonomy. This
+ * is a documented fact on the fetched page — not an inference about the
+ * company, which keeps the "no guessing" rule intact.
+ */
+const APPRENTICESHIP_TITLE_RE =
+  /\b(ausbildung|ausbildungsplatz|azubi|azubis|lehrstelle)\b/i;
+
+/**
+ * The offer's effective type: the stated `employmentType` wins, except when
+ * the page's own title literally documents an apprenticeship and the portal
+ * merely classified the posting as regular work (`FULL_TIME` et al.).
+ * Nothing stated → the pass's own goal (the scope of the query).
+ */
+export function effectiveOfferType(
+  stated: "ausbildung" | "arbeit" | null,
+  title: string | null,
+  fallback: "ausbildung" | "arbeit",
+): "ausbildung" | "arbeit" {
+  if (stated === "ausbildung") return "ausbildung";
+  if (stated === "arbeit" && title && APPRENTICESHIP_TITLE_RE.test(title)) {
+    return "ausbildung";
+  }
+  return stated ?? fallback;
+}
+
 /** The employmentType → offer type mapping (stated values only). */
 function offerTypeOf(value: unknown): "ausbildung" | "arbeit" | null {
   const values = Array.isArray(value) ? value : [value];
@@ -305,9 +335,11 @@ export function parseListingPage(input: ListingPageInput): NormalizedOffer[] {
     if (!companyName) continue; // no stated employer → not a usable offer
 
     const statedType = offerTypeOf(posting["employmentType"]);
-    const offerType = statedType ?? input.goal;
-
     const role = stringOf(posting["title"]);
+    // A title that literally states "Ausbildung/Azubi" is the documented
+    // apprenticeship signal — it outranks the portal's coarse FULL_TIME
+    // classification (schema.org has no apprenticeship employmentType).
+    const offerType = effectiveOfferType(statedType, role, input.goal);
     const offerUrl = stringOf(posting["url"]) ?? input.pageUrl;
     const website = companyWebsiteOf(organization?.["sameAs"] ?? organization?.["url"]);
     const address = addressPartsOf(posting["jobLocation"]);
