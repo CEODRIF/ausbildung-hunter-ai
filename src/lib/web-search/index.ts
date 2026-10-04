@@ -13,11 +13,13 @@ import "server-only";
  * Configuration (server-only — the key NEVER reaches the browser):
  *   TAVILY_API_KEY   required. This is the ONLY key this provider reads.
  *
- * Request budget: at most MAX_TAVILY_REQUESTS_PER_RUN Tavily requests per
- * search operation. The counter lives on the client instance, and each
- * search run creates exactly one client — so the cap is per search
- * operation. Once spent, `search()` returns [] WITHOUT any network call:
- * no open loop, no unbounded retry, no per-company request.
+ * Request budget: at most `DEFAULT_TAVILY_REQUESTS_PER_RUN` (30, env-tunable
+ * via TAVILY_MAX_REQUESTS_PER_RUN) Tavily requests per search operation, and
+ * NEVER more than `MAX_TAVILY_REQUESTS_HARD_CAP` (60) — the cost ceiling.
+ * The counter lives on the client instance, and each search run creates
+ * exactly one client — so the cap is per search operation. Once spent,
+ * `search()` returns [] WITHOUT any network call: no open loop, no unbounded
+ * retry, no per-company request storm.
  *
  * Gemini Google Search Grounding was REMOVED from this provider (AI Search
  * 2.4). Other Gemini services are untouched — this module never reads
@@ -28,8 +30,25 @@ export type WebSearchProviderName = "tavily";
 
 /** Official endpoint (documented above). */
 export const TAVILY_SEARCH_URL = "https://api.tavily.com/search";
-/** Hard cap of Tavily requests per search operation. */
-export const MAX_TAVILY_REQUESTS_PER_RUN = 3;
+/**
+ * Hard COST cap of Tavily requests per search operation. No client instance
+ * may ever exceed it, whatever the environment or the caller asks for — this
+ * is the cost-protection bound (the "safety ceiling").
+ */
+export const MAX_TAVILY_REQUESTS_HARD_CAP = 60;
+/**
+ * Default per-search-operation budget. Raised from the historical 3 so a
+ * multi-query research run can execute many sequential provider queries
+ * before degrading; the hard cap above still bounds the cost. Tunable via
+ * `TAVILY_MAX_REQUESTS_PER_RUN` (clamped into `[1, HARD_CAP]`).
+ */
+export const DEFAULT_TAVILY_REQUESTS_PER_RUN = 30;
+/**
+ * Kept for API compatibility (tests + the pipeline import this name). It is
+ * the DEFAULT budget, NOT a hard floor of 3 anymore — the hard bound is
+ * {@link MAX_TAVILY_REQUESTS_HARD_CAP}.
+ */
+export const MAX_TAVILY_REQUESTS_PER_RUN = DEFAULT_TAVILY_REQUESTS_PER_RUN;
 
 const TAVILY_TIMEOUT_MS = 20_000;
 const MAX_RESULTS_HARD_CAP = 20;
@@ -132,6 +151,8 @@ function scrubSecrets(value: string): string {
 
 interface TavilyDiagnostic {
   requestNo: number;
+  /** The client instance's own budget (the honest denominator). */
+  budget?: number;
   httpStatus: number | null;
   code: number | null;
   providerStatus: string | null;
@@ -151,7 +172,7 @@ function logTavily(kind: "ok" | "warn", d: TavilyDiagnostic): void {
     return;
   }
   const line =
-    `[TAVILY] ${kind} request=${d.requestNo}/${MAX_TAVILY_REQUESTS_PER_RUN} ` +
+    `[TAVILY] ${kind} request=${d.requestNo}/${d.budget ?? MAX_TAVILY_REQUESTS_PER_RUN} ` +
     `key=present http=${d.httpStatus ?? "n/a"} ` +
     `code=${d.code ?? "n/a"}/${d.providerStatus ?? "n/a"}` +
     (d.durationMs !== null ? ` durationMs=${d.durationMs}` : "") +
@@ -191,6 +212,22 @@ export function resolveTavilyKey(): string | null {
   const key = process.env.TAVILY_API_KEY?.trim();
   if (!key || isPlaceholder(key)) return null;
   return key;
+}
+
+/**
+ * The default per-client request budget: `TAVILY_MAX_REQUESTS_PER_RUN` when
+ * set to a positive integer (clamped into [1, HARD_CAP]), otherwise the
+ * safe default of 30. The hard cost cap can never be exceeded.
+ */
+export function defaultTavilyBudget(): number {
+  const raw = process.env.TAVILY_MAX_REQUESTS_PER_RUN?.trim();
+  if (raw !== undefined && raw !== "") {
+    const value = Number.parseInt(raw, 10);
+    if (Number.isInteger(value) && value > 0) {
+      return Math.min(value, MAX_TAVILY_REQUESTS_HARD_CAP);
+    }
+  }
+  return DEFAULT_TAVILY_REQUESTS_PER_RUN;
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +375,7 @@ async function tavilySearch(
   maxResults: number,
   key: string,
   requestNo: number,
+  budget: number,
 ): Promise<WebSearchResult[]> {
   const startedAt = Date.now();
   const body = {
@@ -364,6 +402,7 @@ async function tavilySearch(
   } catch (error) {
     logTavily("warn", {
       requestNo,
+      budget,
       httpStatus: null,
       code: null,
       providerStatus: null,
@@ -380,6 +419,7 @@ async function tavilySearch(
     const controlled = controlledMessage(response.status, info);
     logTavily("warn", {
       requestNo,
+      budget,
       httpStatus: response.status,
       code: info.code,
       providerStatus: controlled.status,
@@ -400,6 +440,7 @@ async function tavilySearch(
   );
   logTavily(results.length > 0 ? "ok" : "warn", {
     requestNo,
+    budget,
     httpStatus: 200,
     code: 200,
     providerStatus: "OK",
@@ -456,9 +497,10 @@ function cacheSet(key: string, results: WebSearchResult[]): void {
  * layers that consume it).
  *
  * `options.maxRequests` lets one layer (the bounded offer-discovery fan-out)
- * run its own, independently validated budget; the DEFAULT stays the
- * historical 3, so the email-lookup client and every other caller keep their
- * existing safety limit unchanged.
+ * run its own, independently validated budget; the DEFAULT is
+ * {@link defaultTavilyBudget} (30, env-tunable, never above the hard cap),
+ * so the email-lookup client and every other caller get the same raised,
+ * cost-bounded limit.
  */
 export function getWebSearchClient(
   options: { maxRequests?: number } = {},
@@ -470,8 +512,8 @@ export function getWebSearchClient(
     typeof requested === "number" &&
     Number.isInteger(requested) &&
     requested > 0
-      ? Math.min(requested, MAX_RESULTS_HARD_CAP)
-      : MAX_TAVILY_REQUESTS_PER_RUN;
+      ? Math.min(requested, MAX_TAVILY_REQUESTS_HARD_CAP)
+      : defaultTavilyBudget();
   let requestsUsed = 0;
   return {
     name: "tavily",
@@ -483,6 +525,7 @@ export function getWebSearchClient(
         // Hard cap: no network call, no retry loop.
         logTavily("warn", {
           requestNo: requestsUsed,
+          budget: maxRequests,
           httpStatus: null,
           code: null,
           providerStatus: null,
@@ -494,7 +537,13 @@ export function getWebSearchClient(
         return [];
       }
       requestsUsed += 1;
-      const results = await tavilySearch(query, maxResults, key, requestsUsed);
+      const results = await tavilySearch(
+        query,
+        maxResults,
+        key,
+        requestsUsed,
+        maxRequests,
+      );
       cacheSet(cacheKey, results);
       return results;
     },

@@ -68,47 +68,64 @@
   --radius-3xl: 2rem;
 }
 
+/* Neutral dark / charcoal scope (OpenRouter-style). Purple is an ACCENT
+ * ONLY here — CTAs, active nav, focus rings, links, small highlights —
+ * never a page background or a haze. The surfaces form a neutral ladder:
+ *   --background #050708 (page) → --navy #0a0d0f → --surface #0d1012
+ *   (cards) → --surface-floating #111416 (elevated) → --surface-2 #15191b
+ *   (hover/fills). Thin borders carry the structure; shadows stay subtle. */
 .dark {
-  --background: #0b0b14;
-  --foreground: #f2f2f9;
-  --surface: #14141f;
-  --surface-2: #1b1b29;
-  --surface-floating: #191927;
-  --glass: rgba(24, 24, 38, 0.6);
-  --glass-strong: rgba(24, 24, 38, 0.88);
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --ink: #f2f2f9;
-  --ink-soft: #d4d5ea;
-  --muted: #9ba0c2;
-  --faint: #6a6f97;
-  --line: #26263a;
-  --line-strong: #34344e;
-  --navy: #0d0d18;
-  --navy-soft: #16162a;
-  --blue: #8b7bff;
-  --blue-deep: #7a63ff;
-  --blue-soft: rgba(139, 123, 255, 0.14);
+  --background: #050708;
+  --foreground: #f5f5f5;
+  --surface: #0d1012;
+  --surface-2: #15191b;
+  --surface-floating: #111416;
+  --glass: rgba(17, 20, 22, 0.66);
+  --glass-strong: rgba(17, 20, 22, 0.9);
+  --glass-border: rgba(255, 255, 255, 0.07);
+  --ink: #f5f5f5;
+  --ink-soft: #a1a1aa;
+  --muted: #71717a;
+  --faint: #55555e;
+  --line: #202427;
+  --line-strong: #292d30;
+  --navy: #0a0d0f;
+  --navy-soft: #111416;
+  /* Accent (used sparingly): */
+  --blue: #8b7cff;
+  --blue-deep: #7567f5;
+  --blue-soft: rgba(139, 124, 255, 0.12);
   --cyan: #6f9dff;
-  --cyan-soft: rgba(111, 157, 255, 0.14);
-  --ai: #b08cff;
-  --ai-deep: #9d6bff;
-  --ai-soft: rgba(176, 140, 255, 0.16);
+  --cyan-soft: rgba(111, 157, 255, 0.12);
+  --ai: #9b8cff;
+  --ai-deep: #8574f0;
+  --ai-soft: rgba(155, 140, 255, 0.12);
   --success: #2fd6a5;
   --success-soft: rgba(47, 214, 165, 0.13);
   --warning: #f2b04c;
   --warning-soft: rgba(242, 176, 76, 0.13);
   --danger: #ff5c7a;
   --danger-soft: rgba(255, 92, 122, 0.13);
-  --focus-ring: rgba(139, 123, 255, 0.45);
-  --selection: rgba(139, 123, 255, 0.4);
+  --focus-ring: rgba(139, 124, 255, 0.45);
+  --selection: rgba(139, 124, 255, 0.35);
   --shadow-color: 0, 0, 0;
-  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-float: 0 24px 48px rgba(0, 0, 0, 0.5);
-  --shadow-pop: 0 16px 30px -10px rgba(0, 0, 0, 0.6);
-  --glow-accent-rgb: 139, 123, 255;
+  /* Subtle neutral depth — the 1px border, not a big shadow, defines cards. */
+  --shadow-card:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 12px 32px -20px rgba(0, 0, 0, 0.55);
+  --shadow-float:
+    0 2px 8px rgba(0, 0, 0, 0.35),
+    0 28px 56px -24px rgba(0, 0, 0, 0.5);
+  /* Primary CTA: a contained violet lift — the one place shadow glows. */
+  --shadow-pop: 0 10px 24px -12px rgba(117, 103, 245, 0.5);
+  --glow-accent-rgb: 139, 124, 255;
   --glow-navy-rgb: 0, 0, 0;
-  --gradient-neon: linear-gradient(120deg, #8b7bff 0%, #6f9dff 55%, #b08cff 100%);
-  --gradient-headline: linear-gradient(120deg, #8b7bff 0%, #6f9dff 55%, #b08cff 100%);
+  /* CTA gradient: tight two-stop violet (no blue/violet spread). */
+  --gradient-neon: linear-gradient(120deg, #7567f5 0%, #8b7cff 100%);
+  /* Headlines: white-dominant with a faint lavender tail — brand whisper,
+   * not a purple headline. */
+  --gradient-headline: linear-gradient(120deg, #f5f5f5 0%, #e7e5ff 55%, #b9aeff 100%);
+  --blur-glass: 14px;
 }
 
 @theme inline {
@@ -247,21 +264,18 @@ textarea:focus-visible,
 }
 
 .dark .app-mesh {
+  /* No purple haze: one faint brand whisper top-left + a neutral slate
+     top-right. The page reads as flat charcoal-black, OpenRouter-style. */
   background:
     radial-gradient(
       52rem 34rem at 12% -6%,
-      rgba(139, 123, 255, 0.12) 0%,
-      rgba(139, 123, 255, 0) 65%
+      rgba(139, 124, 255, 0.05) 0%,
+      rgba(139, 124, 255, 0) 65%
     ),
     radial-gradient(
       46rem 30rem at 96% -10%,
-      rgba(111, 157, 255, 0.1) 0%,
-      rgba(111, 157, 255, 0) 65%
-    ),
-    radial-gradient(
-      40rem 30rem at 78% 108%,
-      rgba(255, 92, 160, 0.05) 0%,
-      rgba(255, 92, 160, 0) 70%
+      rgba(148, 163, 184, 0.04) 0%,
+      rgba(148, 163, 184, 0) 65%
     );
 }
 
@@ -273,8 +287,8 @@ textarea:focus-visible,
 
 .dark .grid-fade {
   background-image:
-    linear-gradient(rgba(111, 157, 255, 0.075) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(111, 157, 255, 0.075) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
 }
 
 .hero-orb {
@@ -289,11 +303,11 @@ textarea:focus-visible,
 
 .dark .hero-orb {
   background:
-    radial-gradient(circle, rgba(139, 123, 255, 0.16) 0%, rgba(139, 123, 255, 0) 65%),
+    radial-gradient(circle, rgba(139, 124, 255, 0.09) 0%, rgba(139, 124, 255, 0) 65%),
     radial-gradient(
       circle at 70% 70%,
-      rgba(111, 157, 255, 0.13) 0%,
-      rgba(111, 157, 255, 0) 60%
+      rgba(148, 163, 184, 0.07) 0%,
+      rgba(148, 163, 184, 0) 60%
     );
 }
 

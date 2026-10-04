@@ -17,6 +17,7 @@ import {
 } from "@/lib/web-search";
 import { enabledAdapters } from "./adapters";
 import type { NormalizedOffer, OfferSourceAdapter } from "./adapter";
+import { emailConfidenceOf } from "./accept";
 import {
   candidateFromOffer,
   companyFactsFromOffer,
@@ -25,13 +26,23 @@ import {
   mapToSearchParams,
   type DiscoveryOffer,
 } from "./normalize";
-import { companyKeyOf, isUsableCompanyName } from "./dedupe";
+import {
+  companyKeyOf,
+  CompanyIdentityIndex,
+  isUsableCompanyName,
+} from "./dedupe";
 import { createFetchContext, type FetchContext } from "./fetch-guard";
 import {
+  applicationUrlOf,
   createGuardedSiteFetcher,
   countsAsResult,
   resolveCompanyEmails,
 } from "./emails";
+import {
+  ResearchPlanner,
+  type ResearchMemoryStore,
+} from "./planner";
+import { buildCompanyEvidence, companyConfidence } from "./confidence";
 import { discoverCompanySiteOffers } from "./company-site";
 import {
   COMPANY_WEBSITES_LAYER,
@@ -45,12 +56,15 @@ import {
   discoveryLimits,
   type DiscoveryCandidate,
   type DiscoveryRun,
+  type DiscoveryRunParams,
   type DiscoverySourceStatus,
   type SourceReportEntry,
 } from "./types";
 import {
   finishDiscoveryRun,
   getDiscoveryRun,
+  getResearchMemory,
+  listRunCompaniesWithEmails,
   recordCandidates,
   recordCompany,
   recordCompanyEmail,
@@ -102,6 +116,14 @@ const CANDIDATE_FLUSH_EVERY = 50;
 /** Hard cap on upstream pagination pages per pass (10 × 50 = 500). */
 const MAX_UPSTREAM_PAGES = 10;
 
+/**
+ * Provider queries per agentic batch. Small enough that a batch finishes
+ * quickly (each batch = one checkpoint + one verification round), large
+ * enough that the planner's feedback loop stays meaningful (a batch that
+ * measures one query is noise, not a strategy).
+ */
+const AGENTIC_BATCH_SIZE = 4;
+
 /** Audit reasons recorded with a rejected company. */
 const REJECT_NO_PUBLIC_EMAIL = "no_public_email";
 const REJECT_SOURCE_BLOCKED = "source_blocked";
@@ -126,6 +148,18 @@ export interface DiscoveryPipelineDeps {
   offerSearchClient?: WebSearchClient | null;
   /** Test seam: does this fresh context's SSRF guard consider a host public? */
   isPublicHost?: (hostname: string) => Promise<boolean>;
+  /** Test seam: the run clock (runtime budget). Default: Date.now. */
+  now?: () => number;
+}
+
+/** The host of a URL, lowercased (www stripped), or "" when unparseable. */
+function hostOfUrl(url: string | null): string {
+  if (!url) return "";
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
 }
 
 export async function runDiscoveryPipeline(
@@ -155,21 +189,91 @@ export async function runDiscoveryPipeline(
   const target = Math.min(params.targetCompanies, limits.maxCandidates);
   const maxCompanies = limits.maxCompaniesToResolve;
 
-  const counters = {
-    foundCompanies: 0,
-    offersAnalyzed: 0,
-    uniqueCompanies: 0,
-    duplicatesRemoved: 0,
-    companiesRejected: 0,
-    emailsFound: 0,
-    noPublicEmail: 0,
-    sourcesBlocked: 0,
-    companiesProcessed: 0,
-  };
-  /** Company keys already counted in this run (the dedupe set). */
-  const countedKeys = new Set<string>();
+  // ---- the checkpoint (agentic engine: continue = new batch, same run) ----
+  // A fresh run starts from zero; a CONTINUE batch (POST /[runId]/continue)
+  // starts from the persisted counters and rebuilds the dedupe state from the
+  // companies the previous batches already stored — so an already-verified
+  // company is never processed again, and the counters keep counting instead
+  // of resetting. Everything read here is a real persisted row, never an
+  // estimate.
+  const prior = run0.progress;
+  const hasCheckpoint =
+    prior.foundCompanies > 0 ||
+    prior.uniqueCompanies > 0 ||
+    prior.companiesProcessed > 0;
+  const identity = new CompanyIdentityIndex();
   /** Company keys that failed a gate so far (event counting, no rows). */
   const rejectedKeys = new Set<string>();
+  /**
+   * The run's RESEARCH MEMORY (agentic engine): the strategy space the
+   * previous batches already built (issued queries, discovered entities,
+   * per-goal planner state). A continue batch restores its planners from it —
+   * it does not start the research over.
+   */
+  const priorMemories: ResearchMemoryStore | null = hasCheckpoint
+    ? await getResearchMemory(runId, userId).catch(() => null)
+    : null;
+  if (hasCheckpoint) {
+    const stored = await listRunCompaniesWithEmails(runId, userId);
+    for (const company of stored) {
+      if (company.status === "accepted") {
+        identity.mark(
+          company.companyKey,
+          company.websiteUrl,
+          company.emails[0]?.email ?? null,
+        );
+      } else {
+        rejectedKeys.add(company.companyKey);
+      }
+    }
+  }
+
+  // ---- the runtime budget (a loop guard that also stops HONEST runs) ----
+  // MAX_RUNTIME is enforced at the checkpoint boundaries: when it elapses the
+  // remaining work stops and the run finishes from its measured counters
+  // (partial). It can never produce a loop — the planner's honest exhaustion,
+  // the budget gates and this clock are three independent stop conditions.
+  const now = deps.now ?? Date.now;
+  const runStartedAt = now();
+  let runtimeExceeded = false;
+  const runtimeBudgetExceeded = (): boolean => {
+    if (runtimeExceeded) return true;
+    if (now() - runStartedAt >= limits.maxRuntimeMs) {
+      runtimeExceeded = true;
+      live.currentSource = "runtime budget reached — stopping the remaining work";
+      return true;
+    }
+    return false;
+  };
+
+  const counters = {
+    foundCompanies: prior.foundCompanies,
+    offersAnalyzed: prior.offersAnalyzed,
+    uniqueCompanies: prior.uniqueCompanies,
+    duplicatesRemoved: prior.duplicatesRemoved,
+    companiesRejected: prior.companiesRejected,
+    emailsFound: prior.emailsFound,
+    noPublicEmail: prior.noPublicEmail,
+    sourcesBlocked: prior.sourcesBlocked,
+    companiesProcessed: prior.companiesProcessed,
+  };
+
+  // ---- live research state (the "Current query / Current source" UI) ----
+  // Only the orchestrator writes it, always with the value of the step that is
+  // ACTUALLY running; the UI renders it verbatim (nothing is simulated).
+  const live = {
+    currentQuery: null as string | null,
+    currentSource: null as string | null,
+    currentStrategy: null as string | null,
+  };
+
+  /**
+   * The live research memory: one planner snapshot per goal pass, written on
+   * every batch checkpoint. On a continue batch it is rehydrated from the
+   * persisted store above (`priorMemories`) — and only ever REPLACED by a
+   * newer snapshot of the same goal.
+   */
+  const memories: ResearchMemoryStore = { ...(priorMemories ?? {}) };
 
   // ---- the source report ------------------------------------------------
   const sourceStatus = new Map<string, DiscoverySourceStatus>();
@@ -230,6 +334,13 @@ export async function runDiscoveryPipeline(
     deps.offerSearchClient === undefined
       ? getWebSearchClient({ maxRequests: limits.maxSearchQueries })
       : deps.offerSearchClient;
+  // The agentic loop's per-pass state: the budget callbacks below read these
+  // at CALL time, so one budget serves every goal pass — each pass installs
+  // its own planner before its search phase (see phase (a)).
+  const plannerRef: { current: ResearchPlanner | null } = { current: null };
+  const passRef: { current: "ausbildung" | "arbeit" } = { current: "ausbildung" };
+  /** Offers the agentic loop already extracted this pass (candidate count). */
+  let agenticExtracted = 0;
   const adapters =
     deps.adapters ??
     enabledAdapters({
@@ -239,6 +350,94 @@ export async function runDiscoveryPipeline(
         maxResultsPerQuery: limits.maxSearchResultsPerQuery,
         maxPagesPerQuery: limits.maxSearchPagesPerQuery,
         maxPagesToFetch: limits.maxSearchPagesToFetch,
+        // Live research: every provider query becomes the run's "current
+        // query" the moment it is issued — a real, measured value.
+        // (In-memory only: the per-batch checkpoint persists it, so a
+        // checkpoint can never precede the provider call that measured it.)
+        onQuery: ({ query, source }) => {
+          live.currentQuery = query;
+          live.currentSource = sourceById(source)?.displayName ?? source;
+        },
+        // Research memory for the search phase: what THIS goal pass already
+        // issued/visited (fresh run: nothing; continue batch: the persisted
+        // snapshot of this goal — never re-paid, never re-fetched).
+        getPriorState: () => {
+          const snap = memories[passRef.current];
+          if (!snap) return null;
+          return {
+            issuedQueries: snap.issuedQueries,
+            visitedUrls: snap.visitedUrls,
+          };
+        },
+        // THE AGENTIC LOOP — plan: the Research Planner hands out the next
+        // query batch (strategies refine as the run discovers roles/regions);
+        // null closes the phase honestly (target reached, budget spent, the
+        // runtime budget elapsed, or no unused structured combination left).
+        queryProvider: () => {
+          const planner = plannerRef.current;
+          if (!planner) return null;
+          if (counters.foundCompanies >= target) return null;
+          if (identity.nameCount >= maxCompanies) return null;
+          if (counters.offersAnalyzed >= limits.maxCandidates) return null;
+          if (runtimeBudgetExceeded()) return null;
+          return planner.nextBatch(AGENTIC_BATCH_SIZE).queries;
+        },
+        // THE AGENTIC LOOP — verify: each batch's freshly extracted offers
+        // are verified NOW (email pass → dedupe → save) before the planner
+        // plans the next batch, and the run's discoveries (role/city/state —
+        // and the companies themselves) are fed back into the strategy space.
+        onOffers: async (batchOffers) => {
+          const before = counters.foundCompanies;
+          const planner = plannerRef.current;
+          const offers = batchOffers.map((offer) =>
+            discoveryOfferFromListing(offer, "search-api"),
+          );
+          for (const offer of offers) {
+            // The offer's title IS the discovered role ("Mechatroniker (Azubi)"
+            // → "Mechatroniker"); city/state are the discovered geography.
+            planner?.noteDiscovery({
+              role: offer.title,
+              city: offer.city,
+              state: offer.state,
+            });
+            // A discovered company is a RESEARCH SUBJECT: its name + official
+            // domain drive targeted follow-up queries (bounded in the planner).
+            if (offer.companyName) {
+              planner?.noteCompanyDiscovered({
+                name: offer.companyName,
+                domain: hostOfUrl(offer.companyWebsite),
+              });
+            }
+          }
+          await processOffers(offers, passRef.current);
+          agenticExtracted += batchOffers.length;
+          return Math.max(0, counters.foundCompanies - before);
+        },
+        // THE AGENTIC LOOP — evaluate + persist: one measured report per
+        // completed batch (the planner's coverage signal, per query), the
+        // research memory is checkpointed, and the run survives a kill.
+        onBatch: (report) => {
+          const planner = plannerRef.current;
+          if (planner) {
+            planner.noteVisitedUrls(report.visitedUrls);
+            planner.observe(
+              report.queries,
+              {
+                resultsSeen: report.resultsSeen,
+                offersExtracted: report.offersExtracted,
+                newCompanies: report.newCompanies,
+              },
+              report.perQuery,
+            );
+            live.currentSource = `Search API (Tavily) · ${
+              planner.lastNote ?? ""
+            }`.trim();
+            live.currentStrategy = planner.lastNote;
+            // The memory snapshot of THIS pass is the checkpoint.
+            memories[passRef.current] = planner.snapshot();
+          }
+          void flushProgress().catch(() => undefined);
+        },
       },
       searchMeta: { beginnYear, beginnMonth },
     });
@@ -282,12 +481,35 @@ export async function runDiscoveryPipeline(
         upsertSource(BA_SOURCE_ID, { status: "ok", candidates: delivered });
       }
     }
-    await setRunCounters(runId, userId, { ...counters }, [...sourceStatus.values()]);
+    await setRunCounters(runId, userId, {
+      ...counters,
+      currentQuery: live.currentQuery,
+      currentSource: live.currentSource,
+      currentStrategy: live.currentStrategy,
+      // The research memory is checkpointed with the batch it belongs to —
+      // a kill between batches never loses more than one unobserved batch.
+      researchMemory:
+        Object.keys(memories).length > 0 ? { ...memories } : null,
+    }, [...sourceStatus.values()]);
+  };
+  /** Persist ONLY the live research state (called per provider query; a
+   *  failed live-state write must never kill the run). */
+  const flushLiveState = (): void => {
+    setRunCounters(runId, userId, {
+      currentQuery: live.currentQuery,
+      currentSource: live.currentSource,
+      currentStrategy: live.currentStrategy,
+    }).catch(() => undefined);
   };
 
   const collectOffers = async (
     passGoal: "ausbildung" | "arbeit",
   ): Promise<OpportunityWindow & { offers: Opportunity[] }> => {
+    // Live research: the BA window is a government source, not a provider
+    // query — the "current query" goes back to null while it is collected.
+    live.currentSource = "Bundesagentur für Arbeit";
+    live.currentQuery = null;
+    flushLiveState();
     const sp = mapToSearchParams(params, passGoal);
     const collected: Opportunity[] = [];
     let window: OpportunityWindow;
@@ -321,6 +543,12 @@ export async function runDiscoveryPipeline(
       if (select !== undefined && !select(adapter)) continue;
       const source = sourceById(adapter.id);
       if (!source) continue;
+      // Live research: the source currently running is this adapter.
+      // The search layer persists per QUERY (its onQuery hook) — a write
+      // BEFORE its first provider call would checkpoint results that do not
+      // exist yet, which the ordering contract forbids.
+      live.currentSource = adapter.displayName;
+      if (adapter.id !== "search-api") flushLiveState();
       try {
         const result = await adapter.searchOffers(sp, fetchContext);
         if (result.status === "ok") {
@@ -403,11 +631,14 @@ export async function runDiscoveryPipeline(
       return { ran: false, results: [] };
     }
     searchAttempts += 1;
+    // The contact query covers the pages §4.1 step 3 expects an address on:
+    // Kontakt / Impressum / Bewerbung / Karriere — one request, more surface.
+    const query = `"${companyName}" Kontakt Impressum E-Mail Bewerbung`;
+    live.currentQuery = query;
+    live.currentSource = "public search (company email lookup)";
+    flushLiveState();
     try {
-      const results = await searchClient.search(
-        `"${companyName}" Impressum E-Mail Kontakt`,
-        3,
-      );
+      const results = await searchClient.search(query, 5);
       return {
         ran: true,
         results: results.map((entry) => ({
@@ -428,9 +659,14 @@ export async function runDiscoveryPipeline(
     let sinceProgress = 0;
     for (const offer of offers) {
       if (
+        // Consult the clock DIRECTLY (not the sticky flag alone): a long
+        // single phase (dozens of company email passes) can outlive the
+        // budget without any pass-loop boundary in between — MAX_RUNTIME
+        // must stop the work, not only the planning.
+        runtimeBudgetExceeded() ||
         counters.foundCompanies >= target ||
         counters.offersAnalyzed >= limits.maxCandidates ||
-        countedKeys.size >= maxCompanies
+        identity.nameCount >= maxCompanies
       ) {
         return;
       }
@@ -454,7 +690,11 @@ export async function runDiscoveryPipeline(
       if (!isUsableCompanyName(offer.companyName)) continue;
 
       const key = companyKeyOf(offer.companyName);
-      if (countedKeys.has(key)) {
+      // STRONG dedupe, before the expensive email pass: the normalized name
+      // key OR the company's official domain. A company found earlier under a
+      // slightly different name (same website) is a duplicate — and never
+      // spends a search request or a page fetch for a second time.
+      if (identity.check(key, offer.companyWebsite) !== "new") {
         counters.duplicatesRemoved += 1;
         continue;
       }
@@ -468,6 +708,10 @@ export async function runDiscoveryPipeline(
       rejectedKeys.delete(key);
 
       // ---- the email pass, inside its own error boundary ------------------
+      // Live research: the verification phase of this company (official site
+      // pages + the permitted public search for companies without a website).
+      live.currentSource = "company verification (website + public search)";
+      flushLiveState();
       let resolution: Awaited<ReturnType<typeof resolveCompanyEmails>>;
       try {
         const search = offer.companyWebsite
@@ -494,6 +738,7 @@ export async function runDiscoveryPipeline(
         resolution = {
           emails: [],
           attempts: [],
+          inspectedPages: [],
           requiredInspected: false,
           blocked: true,
           blockedReason: "unreachable",
@@ -521,6 +766,58 @@ export async function runDiscoveryPipeline(
               ? REJECT_NO_PUBLIC_EMAIL
               : "email_found";
 
+      // STRONG dedupe, part two: the VERIFIED public email is part of the
+      // company's identity. Two listings under different names that publish
+      // the same address are ONE company — the first counted one wins, the
+      // second is a duplicate. (Its outcome above stays honestly counted:
+      // the §4.8 invariant `found + noEmail + blocked === processed` holds.)
+      if (
+        identity.check(key, offer.companyWebsite, resolution.primary?.email ?? null) !==
+        "new"
+      ) {
+        counters.duplicatesRemoved += 1;
+        await flushProgress();
+        continue;
+      }
+
+      // ---- the company's research record (evidence ledger + confidence) ----
+      // Everything below is a stored FACT: a page that was actually opened,
+      // an address that was literally read, a URL that was actually
+      // inspected. Nothing is derived from a name or a domain pattern.
+      const applicationUrl = applicationUrlOf(resolution, null);
+      const beginnYearConfirmed = beginnYearConfirmedOf(offer, params);
+      const emailSourceUrls = resolution.primary
+        ? [resolution.primary.sourceUrl, ...resolution.primary.sourceUrls]
+            .filter((url): url is string => Boolean(url))
+            .filter((url, index, all) => all.indexOf(url) === index)
+        : [];
+      const companyFacts = {
+        offerUrl: offer.url,
+        role: offer.title,
+        city: offer.city,
+        state: offer.state,
+        beginn: offer.beginn,
+        websiteUrl: offer.companyWebsite,
+        websiteSourceUrl: offer.companyWebsiteSourceUrl,
+        email: resolution.primary?.email ?? null,
+        emailSourceUrls,
+        applicationUrl,
+        checkedAt: new Date(now()).toISOString(),
+      };
+      const evidence = buildCompanyEvidence(companyFacts);
+      const confidence = companyConfidence({
+        officialDomain: offer.companyWebsite !== null,
+        training: true, // the counted offer IS the documented placement
+        role: (offer.title ?? "").length > 0,
+        location: offer.city !== null || offer.state !== null,
+        email: resolution.primary !== null,
+        application: applicationUrl !== null,
+        secondSource: emailSourceUrls.length >= 2,
+        // A documented start year that CONTRADICTS the run's year is a
+        // conflict — recorded, and it lowers the score (never dropped).
+        conflict: beginnYearConfirmed === false,
+      });
+
       if (
         !countsAsResult({
           onlyPublicEmail: params.onlyPublicEmail,
@@ -540,6 +837,15 @@ export async function runDiscoveryPipeline(
           status: "rejected",
           rejectReason: label,
           emailStatus: outcome === "no_website_found" ? "source_blocked" : outcome,
+          // Verification facts the pass measured (never guessed):
+          applicationUrl,
+          beginnYearConfirmed,
+          // Rejected = insufficient evidence → the score is the measured
+          // (low) one, with its readable reasons.
+          confidenceScore: confidence.score,
+          evidence,
+          confidenceReasons: confidence.reasons,
+          conflict: confidence.conflict,
         });
         await flushProgress();
         continue;
@@ -551,10 +857,20 @@ export async function runDiscoveryPipeline(
         websiteSourceUrl: offer.companyWebsiteSourceUrl,
         status: "accepted",
         emailStatus: outcome === "no_website_found" ? "source_blocked" : outcome,
+        // Verification facts the pass measured (never guessed):
+        applicationUrl,
+        beginnYearConfirmed,
+        confidenceScore: confidence.score,
+        evidence,
+        confidenceReasons: confidence.reasons,
+        conflict: confidence.conflict,
       });
       if (resolution.primary) {
         try {
-          await recordCompanyEmail(companyId, resolution.primary);
+          await recordCompanyEmail(companyId, {
+            ...resolution.primary,
+            confidence: emailConfidenceOf(resolution.primary),
+          });
         } catch (error) {
           console.error(
             `[company-discovery] storing a public email failed run="${runId}" company="${companyId}"`,
@@ -562,7 +878,10 @@ export async function runDiscoveryPipeline(
           );
         }
       }
-      countedKeys.add(key);
+      // Register the company's FULL identity (name + domain + verified
+      // email) so a later batch — same run or a continue-batch — never
+      // processes it again.
+      identity.mark(key, offer.companyWebsite, resolution.primary?.email ?? null);
       counters.uniqueCompanies += 1;
       counters.foundCompanies += 1;
       if (offer.companyWebsite) {
@@ -581,23 +900,110 @@ export async function runDiscoveryPipeline(
   try {
     const passes = goalPasses(params.goal);
     for (const passGoal of passes) {
-      if (counters.foundCompanies >= target || countedKeys.size >= maxCompanies) break;
+      if (counters.foundCompanies >= target || identity.nameCount >= maxCompanies) break;
+      if (runtimeBudgetExceeded()) break;
       if (await isCancelled(runId, userId)) {
         aborted = true;
         break;
       }
 
-      // (a) Internet Discovery — the search layer FIRST, checkpointed on its
-      //     own. On a serverless host the run shares the route's invocation
-      //     budget (Vercel `maxDuration`) and can be killed at any instant;
-      //     the highest-value, network-heaviest source is therefore
-      //     collected and persisted BEFORE any other discovery work, so a
-      //     kill can no longer erase its execution.
-      const searchOffers = await collectAdapterOffers(
-        passGoal,
-        (adapter) => adapter.id === "search-api",
-      );
+      // (a) AGENTIC Internet Discovery — the research loop:
+      //     Plan → Search → Inspect → Extract → Verify → Dedupe → Save →
+      //     Evaluate coverage → Refine → Search again.
+      //     When the run built the adapters itself (the production path),
+      //     the search adapter runs the loop internally: the planner hands
+      //     out query batches, each batch's offers are verified BEFORE the
+      //     next batch is planned (discoveries feed the strategy), and every
+      //     batch is checkpointed — a kill between batches loses nothing
+      //     already verified. Injected adapters (tests, custom wiring) run
+      //     their legacy single pass, and their offers are processed in (d)
+      //     exactly as before.
+      const agentic = deps.adapters === undefined;
+      const passSeed = {
+        role: params.role,
+        field: params.field,
+        beginnYear: beginnYear ?? null,
+        goal: passGoal,
+      };
+      // A continue batch RESTORES this goal's planner from the run's persisted
+      // research memory (same strategy space, no re-issued queries); a fresh
+      // run — or a goal with no stored memory — plans from the seed.
+      const planner = agentic
+        ? ResearchPlanner.restore(passSeed, priorMemories?.[passGoal] ?? null)
+        : null;
+      plannerRef.current = planner;
+      passRef.current = passGoal;
+      agenticExtracted = 0;
+      const searchAdapter = adapters.find((adapter) => adapter.id === "search-api");
+      const searchOffers: DiscoveryOffer[] = [];
+      if (searchAdapter) {
+        const source = sourceById("search-api");
+        if (source) {
+          upsertSource("search-api", {
+            displayName: source.displayName,
+            policy: source.policy,
+            category: source.category,
+            status: "running",
+            candidates: 0,
+          });
+          live.currentSource = source.displayName;
+        }
+        const sp = mapToSearchParams(params, passGoal);
+        try {
+          const result = await searchAdapter.searchOffers(sp, fetchContext);
+          if (result.status === "ok") {
+            for (const offer of result.offers) {
+              searchOffers.push(discoveryOfferFromListing(offer, "search-api"));
+            }
+            upsertSource("search-api", {
+              displayName: source?.displayName ?? "Search API (Tavily)",
+              policy: source?.policy ?? "enabled_official_api",
+              category: source?.category ?? "search",
+              status: "ok",
+              candidates: agentic ? agenticExtracted : searchOffers.length,
+              stats: {
+                queriesExecuted: result.stats?.queriesExecuted ?? 0,
+                resultsInspected: result.stats?.resultsInspected ?? 0,
+              },
+            });
+          } else if (result.status === "blocked") {
+            upsertSource("search-api", {
+              displayName: source?.displayName ?? "Search API (Tavily)",
+              status: "blocked",
+              reason: result.reason,
+              candidates: agentic ? agenticExtracted : 0,
+            });
+          } else if (result.status === "error") {
+            upsertSource("search-api", {
+              displayName: source?.displayName ?? "Search API (Tavily)",
+              status: "error",
+              reason: result.message,
+              candidates: agentic ? agenticExtracted : 0,
+            });
+          } else {
+            // `skipped`: the provider is not configured — honest, not an error.
+            upsertSource("search-api", {
+              displayName: source?.displayName ?? "Search API (Tavily)",
+              status: "skipped",
+              reason: result.reason,
+              candidates: 0,
+            });
+          }
+        } catch (error) {
+          // The adapter must never throw — but a run must never die if one does.
+          upsertSource("search-api", {
+            displayName: source?.displayName ?? "Search API (Tavily)",
+            status: "error",
+            reason: error instanceof Error ? error.name : "adapter_failed",
+            candidates: agentic ? agenticExtracted : 0,
+          });
+        }
+      }
+      plannerRef.current = null;
       await flushProgress();
+      // The runtime budget elapsed mid-pass: the remaining phases of this
+      // run stop now (the finish below reports the measured counters).
+      if (runtimeBudgetExceeded()) break;
       if (await isCancelled(runId, userId)) {
         aborted = true;
         break;
@@ -644,13 +1050,19 @@ export async function runDiscoveryPipeline(
         break;
       }
 
-      // (d) Per-company email resolution — processing order unchanged (BA
-      //     offers first, then the adapter offers in registry order) through
-      //     the same funnel and dedupe set; its existing per-company flushes
-      //     persist the partial progress.
+      // (d) Per-company email resolution — BA offers first, then the portal
+      //     offers, through the same funnel and dedupe set; its existing
+      //     per-company flushes persist the partial progress. In agentic mode
+      //     the search offers were ALREADY verified inside the loop (phase a)
+      //     and must not be re-processed (the identity index would drop them
+      //     as duplicates, but re-running their email pass would waste the
+      //     bounded provider budget for nothing).
       await processOffers(baOffers, passGoal);
       if (aborted) break;
-      await processOffers([...portalOffers, ...searchOffers], passGoal);
+      await processOffers(
+        [...portalOffers, ...(agentic ? [] : searchOffers)],
+        passGoal,
+      );
       if (aborted) break;
     }
 
@@ -661,6 +1073,10 @@ export async function runDiscoveryPipeline(
     //     duplicate, and the §4.8 outcome invariant is preserved.
     if (!aborted && acceptedSites.length > 0 && counters.foundCompanies < target) {
       const sites = acceptedSites.slice(0, limits.maxCompanySiteOfferCompanies);
+      // Live research: the company-websites discovery pass is running.
+      live.currentSource = COMPANY_WEBSITES_LAYER.displayName;
+      live.currentQuery = null;
+      flushLiveState();
       upsertSource(COMPANY_WEBSITES_LAYER.id, {
         displayName: COMPANY_WEBSITES_LAYER.displayName,
         policy: COMPANY_WEBSITES_LAYER.policy,
@@ -674,7 +1090,13 @@ export async function runDiscoveryPipeline(
         arbeit: [],
       };
       for (const site of sites) {
-        if (counters.foundCompanies >= target || countedKeys.size >= maxCompanies) break;
+        if (
+          runtimeBudgetExceeded() ||
+          counters.foundCompanies >= target ||
+          identity.nameCount >= maxCompanies
+        ) {
+          break;
+        }
         if (await isCancelled(runId, userId)) {
           aborted = true;
           break;
@@ -709,15 +1131,12 @@ export async function runDiscoveryPipeline(
     }
 
     const found = counters.foundCompanies;
-    const allPassesFailed = failedPasses === passes.length;
-    const status: "completed" | "partial" | "failed" =
-      found >= target
-        ? "completed"
-        : found > 0 || counters.companiesProcessed > 0
-          ? "partial"
-          : allPassesFailed
-            ? "failed"
-            : "partial";
+    const status = runTerminalStatus({
+      found,
+      target,
+      companiesProcessed: counters.companiesProcessed,
+      allPassesFailed: failedPasses === passes.length,
+    });
     return await finishDiscoveryRun(runId, userId, {
       status,
       foundCompanies: found,
@@ -813,6 +1232,33 @@ function discoveryOfferFromOpportunity(opp: Opportunity): DiscoveryOffer {
   };
 }
 
+/**
+ * The 2027 (beginn-year) confirmation of a counted offer — three honest
+ * states, never a guess:
+ *   true   the run has a CONCRETE beginn (year/month/date) and the offer's
+ *          DOCUMENTED start is in that same year;
+ *   false  the offer documents a start, but in a different year;
+ *   null   the offer documents no start, or the run's constraint is
+ *          `from_now` (there is no concrete year to confirm).
+ */
+export function beginnYearConfirmedOf(
+  offer: Pick<DiscoveryOffer, "beginn">,
+  params: Pick<DiscoveryRunParams, "beginn">,
+): boolean | null {
+  const documentedYear = offer.beginn ? offer.beginn.slice(0, 4) : null;
+  if (!/^\d{4}$/.test(documentedYear ?? "")) return null; // not documented
+  const runYear =
+    params.beginn.mode === "year"
+      ? String(params.beginn.year)
+      : params.beginn.mode === "month"
+        ? params.beginn.month.slice(0, 4)
+        : params.beginn.mode === "date"
+          ? params.beginn.date.slice(0, 4)
+          : null; // from_now: no concrete year to confirm
+  if (!runYear) return null;
+  return documentedYear === runYear;
+}
+
 /** Exported for tests: the outcome counters must always add up. */
 export function outcomeSum(input: {
   emailsFound: number;
@@ -820,6 +1266,24 @@ export function outcomeSum(input: {
   sourcesBlocked: number;
 }): number {
   return input.emailsFound + input.noPublicEmail + input.sourcesBlocked;
+}
+
+/**
+ * The run's terminal state, decided from MEASURED counters only (exported for
+ * tests): reaching the target — the number of UNIQUE companies with a
+ * published email — stops the run as `completed`; anything short of it is an
+ * honest `partial` (or `failed` when every pass was unavailable). A continue
+ * batch uses the SAME decision on the accumulated counters.
+ */
+export function runTerminalStatus(input: {
+  found: number;
+  target: number;
+  companiesProcessed: number;
+  allPassesFailed: boolean;
+}): "completed" | "partial" | "failed" {
+  if (input.found >= input.target) return "completed";
+  if (input.found > 0 || input.companiesProcessed > 0) return "partial";
+  return input.allPassesFailed ? "failed" : "partial";
 }
 
 /** Exported for tests/UI: the source report of a run, policy entries included. */

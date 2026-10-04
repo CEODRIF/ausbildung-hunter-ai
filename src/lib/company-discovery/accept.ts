@@ -409,6 +409,65 @@ export function sourceRank(sourceType: DiscoveryEmailSource): number {
   return SOURCE_RANK[sourceType] ?? 0;
 }
 
+/**
+ * The deterministic evidence grade of an ACCEPTED address (never a guess —
+ * the address is already literal-presence verified; this only grades WHERE
+ * it was published):
+ *   high   the address' domain is the company's own website domain, or it was
+ *          read on the company's official Impressum / Kontakt page;
+ *   medium read on another official-site career page, or printed in an
+ *          enabled portal's listing (attribution established by the adapter);
+ *   low    read on a third-party page or a search-result snippet only.
+ */
+export function emailConfidenceOf(
+  email: Pick<AcceptedEmail, "sourceType" | "domainMatch">,
+): "high" | "medium" | "low" {
+  if (email.domainMatch) return "high";
+  switch (email.sourceType) {
+    case "official_site_impressum":
+    case "official_site_contact":
+    case "impressum":
+    case "kontakt":
+      return "high";
+    case "official_site_career":
+    case "official_site_jobs":
+    case "official_site_ausbildung":
+    case "official_site_contact_person":
+    case "job_listing":
+    case "karriere":
+    case "ausbildung":
+    case "bewerbungen":
+      return "medium";
+    default:
+      return "low";
+  }
+}
+
+/**
+ * The 0–100 confidence SCORE exported with a verified email, derived ONLY
+ * from stored evidence:
+ *   base 75 (high) / 55 (medium) / 35 (low)
+ *  +15   the address' domain matches the company's official website domain
+ *  +5    per independent extra public page that also publishes the address
+ *        (max +10 — corroboration, capped)
+ *   clamped into [0, 100]. Null input (no verified email) → null.
+ */
+export function confidenceScoreOf(
+  email:
+    | (Pick<AcceptedEmail, "sourceType" | "domainMatch"> & {
+        sourceUrls: readonly string[];
+      })
+    | null,
+): number | null {
+  if (!email) return null;
+  const grade = emailConfidenceOf(email);
+  let score = grade === "high" ? 75 : grade === "medium" ? 55 : 35;
+  if (email.domainMatch) score += 15;
+  const corroboration = Math.max(0, email.sourceUrls.length - 1);
+  score += Math.min(corroboration, 2) * 5;
+  return Math.max(0, Math.min(score, 100));
+}
+
 /** Deterministic order: priority, then source rank, then document order. */
 function orderAccepted(emails: AcceptedEmail[]): AcceptedEmail[] {
   return emails

@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   createRun: vi.fn(),
   getRunStrict: vi.fn(),
   cancelRun: vi.fn(),
+  continueRun: vi.fn(),
   pipeline: vi.fn(),
   checkRateLimit: vi.fn(),
   scheduled: [] as Array<() => Promise<void>>,
@@ -65,6 +66,7 @@ vi.mock("@/lib/company-discovery/runs", () => ({
   createDiscoveryRun: (...args: unknown[]) => mocks.createRun(...args),
   getDiscoveryRunStrict: (...args: unknown[]) => mocks.getRunStrict(...args),
   cancelDiscoveryRun: (...args: unknown[]) => mocks.cancelRun(...args),
+  continueDiscoveryRun: (...args: unknown[]) => mocks.continueRun(...args),
 }));
 
 vi.mock("@/lib/company-discovery/search", () => ({
@@ -81,6 +83,7 @@ vi.mock("@/lib/company-discovery/schedule", () => ({
 import { POST as startRoute } from "@/app/api/company-discovery/start/route";
 import { GET as runRoute } from "@/app/api/company-discovery/[runId]/route";
 import { POST as cancelRoute } from "@/app/api/company-discovery/[runId]/cancel/route";
+import { POST as continueRoute } from "@/app/api/company-discovery/[runId]/continue/route";
 
 // ---------------------------------------------------------------------------
 
@@ -112,6 +115,10 @@ const PENDING_RUN = {
     emailsFound: 0,
     noPublicEmail: 0,
     sourcesBlocked: 0,
+    companiesProcessed: 0,
+    currentQuery: null,
+    currentSource: null,
+    currentStrategy: null,
     sources: [],
   },
   creditsCharged: 0,
@@ -119,6 +126,23 @@ const PENDING_RUN = {
   createdAt: "2026-10-03T10:00:00.000Z",
   startedAt: null,
   finishedAt: null,
+};
+
+/** The checkpoint state: a batch that ended before its target. */
+const PARTIAL_RUN = {
+  ...PENDING_RUN,
+  status: "partial",
+  progress: {
+    ...PENDING_RUN.progress,
+    status: "partial",
+    foundCompanies: 4,
+    offersAnalyzed: 12,
+    uniqueCompanies: 4,
+    companiesProcessed: 10,
+    currentQuery: null,
+    currentSource: null,
+  },
+  finishedAt: "2026-10-03T10:00:20.000Z",
 };
 
 function startRequest(body: unknown, raw?: string) {
@@ -146,6 +170,11 @@ beforeEach(() => {
   mocks.cancelRun.mockReset().mockResolvedValue({
     ...PENDING_RUN,
     status: "cancelled",
+  });
+  mocks.continueRun.mockReset().mockResolvedValue({
+    ...PARTIAL_RUN,
+    status: "running",
+    finishedAt: null,
   });
   mocks.pipeline.mockReset().mockResolvedValue(undefined);
   mocks.checkRateLimit.mockReset();
@@ -340,6 +369,30 @@ describe("GET [runId] — live progress", () => {
     expect(response.status).toBe(401);
     expect((await response.json()).code).toBe("unauthorized");
   });
+
+  it("serves the live research state (current query/source) verbatim — the panel updates without a refresh", async () => {
+    mocks.getRunStrict.mockResolvedValueOnce({
+      ...PENDING_RUN,
+      status: "running",
+      progress: {
+        ...PENDING_RUN.progress,
+        status: "running",
+        currentQuery: `"Kaufmann im E-Commerce" Ausbildung 2027`,
+        currentSource: "Search API (Tavily)",
+      },
+    });
+    const response = await runRoute(new Request("http://localhost/x"), runContext());
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    // The panel polls THIS endpoint: whatever the engine measured is served
+    // through unchanged — no interpolation, no second source of truth.
+    expect(body.run.status).toBe("running");
+    expect(body.run.progress.currentQuery).toBe(
+      `"Kaufmann im E-Commerce" Ausbildung 2027`,
+    );
+    expect(body.run.progress.currentSource).toBe("Search API (Tavily)");
+    expect(body.run.progress.companiesProcessed).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -391,5 +444,83 @@ describe("POST [runId]/cancel — Stop Search", () => {
       runContext(),
     );
     expect(mocks.checkRateLimit).toHaveBeenCalledWith("company_discovery", USER_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Continue Research — a partial run below its target
+// ---------------------------------------------------------------------------
+
+describe("POST [runId]/continue — Continue Research", () => {
+  it("reopens the SAME run (no new run) and schedules the continuation batch", async () => {
+    const response = await continueRoute(
+      new Request("http://localhost/x", { method: "POST" }),
+      runContext(),
+    );
+    expect(response.status).toBe(202);
+    const body = await response.json();
+    // The checkpoint run: same id, counters intact, reopened to running.
+    expect(body.runId).toBe(RUN_ID);
+    expect(body.run.runId).toBe(RUN_ID);
+    expect(body.run.status).toBe("running");
+    expect(body.run.progress.foundCompanies).toBe(4);
+    expect(mocks.continueRun).toHaveBeenCalledWith(RUN_ID, USER_ID);
+    // A NEW batch runs the SAME runId — never a fresh run, never createRun.
+    expect(mocks.createRun).not.toHaveBeenCalled();
+    expect(mocks.scheduled).toHaveLength(1);
+    await mocks.scheduled[0]();
+    expect(mocks.pipeline).toHaveBeenCalledWith(RUN_ID, USER_ID);
+  });
+
+  it("works only from a partial run: the store refusal reads as a 400", async () => {
+    mocks.continueRun.mockRejectedValueOnce(
+      new Error("Only a run that ended before its target can be continued."),
+    );
+    const response = await continueRoute(
+      new Request("http://localhost/x", { method: "POST" }),
+      runContext(),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).code).toBe("invalid_params");
+    expect(mocks.scheduled).toHaveLength(0);
+  });
+
+  it("requires an active session", async () => {
+    mocks.auth.user = null;
+    const response = await continueRoute(
+      new Request("http://localhost/x", { method: "POST" }),
+      runContext(),
+    );
+    expect(response.status).toBe(401);
+    expect(mocks.continueRun).not.toHaveBeenCalled();
+  });
+
+  it("an unknown run → 404 not_found", async () => {
+    mocks.continueRun.mockRejectedValueOnce(new Error("Discovery run not found."));
+    const response = await continueRoute(
+      new Request("http://localhost/x", { method: "POST" }),
+      runContext(),
+    );
+    expect(response.status).toBe(404);
+    expect((await response.json()).code).toBe("not_found");
+  });
+
+  it("is rate-limited like the other mutations", async () => {
+    await continueRoute(
+      new Request("http://localhost/x", { method: "POST" }),
+      runContext(),
+    );
+    expect(mocks.checkRateLimit).toHaveBeenCalledWith("company_discovery", USER_ID);
+  });
+
+  it("a failing continuation engine is logged, never returned", async () => {
+    mocks.pipeline.mockRejectedValueOnce(new Error("Tavily down"));
+    const response = await continueRoute(
+      new Request("http://localhost/x", { method: "POST" }),
+      runContext(),
+    );
+    expect(response.status).toBe(202);
+    await expect(mocks.scheduled[0]()).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalled();
   });
 });

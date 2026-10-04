@@ -17,6 +17,11 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 vi.mock("@/lib/supabase/client", () => ({ createClient: vi.fn(() => ({})) }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+// The chat is currently parked behind the Coming Soon gate
+// (src/lib/community/availability). This suite exercises the PRESERVED chat
+// path, so the flag is pinned to false here — flipping the constant in
+// production code does not change what this suite covers.
+vi.mock("@/lib/community/availability", () => ({ COMMUNITY_COMING_SOON: false }));
 
 const { getCurrentUserAndProfile } = await import("@/lib/auth");
 const { createClient } = await import("@/lib/supabase/server");

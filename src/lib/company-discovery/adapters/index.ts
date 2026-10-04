@@ -196,6 +196,35 @@ function createPortalAdapter(config: PortalAdapterConfig): OfferSourceAdapter {
  * independent page bounds: one PER QUERY (so no single family can eat the
  * radius) and one for the WHOLE RUN (the global safety bound).
  */
+/** What one issued query MEASURED (the planner's per-query feedback). */
+export interface SearchQueryReport {
+  query: string;
+  /** Provider results returned for this query (0 when it failed). */
+  resultsSeen: number;
+  /** Offer pages actually fetched for this query. */
+  pagesFetched: number;
+  /** Offers extracted from this query's pages. */
+  offersExtracted: number;
+}
+
+/** What one completed query batch MEASURED (the planner's feedback input). */
+export interface SearchBatchReport {
+  /** The exact queries the provider was asked (in order). */
+  queries: string[];
+  /** Provider results returned by the batch (before any filtering). */
+  resultsSeen: number;
+  /** Offer pages the batch actually fetched. */
+  pagesFetched: number;
+  /** JobPosting offers the batch extracted. */
+  offersExtracted: number;
+  /** Unique companies the orchestrator counted for this batch (0 or more). */
+  newCompanies: number;
+  /** The per-query measurements (same order as `queries`). */
+  perQuery: SearchQueryReport[];
+  /** Every result URL visited so far (the research memory's URL state). */
+  visitedUrls: string[];
+}
+
 export interface SearchAdapterBudget {
   maxQueries: number;
   maxResultsPerQuery: number;
@@ -203,6 +232,40 @@ export interface SearchAdapterBudget {
   maxPagesPerQuery: number;
   /** Total offer pages fetched across all queries. */
   maxPagesToFetch: number;
+  /**
+   * Live-research hook (agentic engine): called BEFORE each provider query is
+   * issued, with the exact query text. The orchestrator reports it as the run's
+   * "current query" — a real, measured value; the adapter never fakes progress.
+   */
+  onQuery?: (info: { query: string; source: string }) => void;
+  /**
+   * The agentic loop (optional): the Research Planner hands out the next
+   * query batch; `null` ends the search phase. WITHOUT this provider the
+   * legacy single fixed batch runs (generateSearchQueries) — the pre-agentic
+   * behavior, kept for backwards compatibility and the existing tests.
+   */
+  queryProvider?: () => string[] | null;
+  /**
+   * Interleaved verification (agentic engine): each batch's freshly extracted
+   * offers are handed to the orchestrator BEFORE the next batch is planned.
+   * The returned value is the number of unique companies the batch added to
+   * the run — the planner's coverage signal. When provided, offers are NOT
+   * repeated in the final result (they were already consumed per batch).
+   */
+  onOffers?: (offers: NormalizedOffer[]) => number | Promise<number>;
+  /** One measurement report per completed batch (planner feedback). */
+  onBatch?: (report: SearchBatchReport) => void;
+  /**
+   * Research memory (agentic engine), read ONCE when the search phase starts:
+   * the queries this run already issued (never re-issued — the strategy space
+   * continues) and the result URLs already visited (never re-fetched). Called
+   * as a provider because the memory is live per goal pass. Absent / null on
+   * a fresh run.
+   */
+  getPriorState?: () => {
+    issuedQueries: string[];
+    visitedUrls: string[];
+  } | null;
 }
 
 const DEFAULT_SEARCH_BUDGET: SearchAdapterBudget = {
@@ -250,65 +313,152 @@ export function createSearchAdapter(
         return { status: "skipped", reason: "search_provider_not_configured" };
       }
       const fetchContext = ctx as FetchContext;
-      const queries = generateSearchQueries(criteria, meta, budget.maxQueries);
-      if (queries.length === 0) {
+      const goal = targetGoal(criteria);
+
+      const offers: NormalizedOffer[] = [];
+      // Research memory: a continue batch inherits the previous batches'
+      // visited URLs (never re-fetched) and issued queries (never re-paid).
+      const prior = budget.getPriorState?.() ?? null;
+      const seenUrls = new Set<string>(prior?.visitedUrls ?? []);
+      /** Every query text already issued this phase (planner fail-safe). */
+      const issuedQueries = new Set<string>(
+        (prior?.issuedQueries ?? []).map((query) => query.toLowerCase()),
+      );
+      let pagesFetched = 0; // across ALL queries (the global bound)
+      let queriesExecuted = 0; // provider queries actually issued
+
+      // ---- the agentic loop ------------------------------------------------
+      // With a `queryProvider`, the Research Planner drives the search phase:
+      // it hands out one batch at a time, the batch is searched, its offers
+      // are handed to the orchestrator for IMMEDIATE verification (interleaved
+      // pipeline), and the measured report feeds the planner BEFORE the next
+      // batch is planned. Without one, the legacy single fixed batch runs.
+      let legacyQueries = budget.queryProvider
+        ? null
+        : generateSearchQueries(criteria, meta, budget.maxQueries);
+      if (!budget.queryProvider && (legacyQueries?.length ?? 0) === 0) {
         return {
           status: "ok",
           offers: [],
           stats: { queriesExecuted: 0, resultsInspected: 0 },
         };
       }
-      const goal = targetGoal(criteria);
 
-      const offers: NormalizedOffer[] = [];
-      const seenUrls = new Set<string>();
-      let pagesFetched = 0; // across ALL queries (the global bound)
-      let queriesExecuted = 0; // provider queries actually issued
-
-      for (const query of queries) {
+      for (;;) {
         if (pagesFetched >= budget.maxPagesToFetch) break;
-        let results: WebSearchResult[];
-        queriesExecuted += 1; // the query WAS issued, whatever the provider says
-        try {
-          results = await client.search(query, budget.maxResultsPerQuery);
-        } catch {
-          // The provider refused/failed this one query — the step did not run;
-          // the remaining queries still do. Never a run-ending error.
-          continue;
-        }
-        let pagesThisQuery = 0;
-        for (const result of results) {
-          if (pagesFetched >= budget.maxPagesToFetch) break;
-          if (pagesThisQuery >= budget.maxPagesPerQuery) break;
-          const host = hostOf(result.url);
-          if (!host) continue;
-          // Portals have their own policy-gated adapters; the provider's own
-          // host is never content. Both are left out of this layer.
-          if (isPortalHost(host)) continue;
-          if (host === "api.tavily.com" || host.endsWith(".tavily.com")) continue;
-          if (seenUrls.has(result.url)) continue;
-          seenUrls.add(result.url);
+        if (queriesExecuted >= budget.maxQueries) break;
 
-          const page = await guardedFetch(fetchContext, result.url, {
-            textBudget: 20_000,
-          });
-          if (page.ok) {
-            pagesFetched += 1;
-            pagesThisQuery += 1;
-            offers.push(
-              ...parseListingPage({
-                html: page.page.html,
-                pageUrl: page.page.finalUrl,
-                offerSource: "Search API (Tavily)",
-                sourceId: "search-api",
-                field: criteria.keyword ?? null,
-                goal,
-              }),
-            );
+        let batch: string[] | null;
+        if (budget.queryProvider) {
+          try {
+            batch = budget.queryProvider();
+          } catch {
+            batch = null; // a planner fault ends the phase, never the run
           }
-          // `blocked` → guardedFetch already opened that host's breaker; the
-          // other results continue. `error`/`unsafe` → not an offer, move on.
+        } else {
+          batch = legacyQueries;
+          legacyQueries = null; // the legacy mode runs exactly one batch
         }
+        if (!batch) break;
+        batch = batch.slice(0, budget.maxQueries - queriesExecuted);
+        if (batch.length === 0) break;
+        // Never re-pay for a query this run already issued — in THIS batch or
+        // in a previous one (research memory of a continue batch). A batch
+        // with nothing left means the strategy space is exhausted — end the
+        // phase instead of re-fetching the same results.
+        const fresh = batch.filter((query) => !issuedQueries.has(query.toLowerCase()));
+        if (fresh.length === 0) break;
+        batch = fresh;
+
+        let resultsSeen = 0;
+        const pagesBeforeBatch = pagesFetched;
+        const offersBefore = offers.length;
+        /** The batch's per-query measurements (planner family feedback). */
+        const perQuery: SearchQueryReport[] = [];
+        for (const query of batch) {
+          if (pagesFetched >= budget.maxPagesToFetch) break;
+          let results: WebSearchResult[];
+          queriesExecuted += 1; // the query WAS issued, whatever the provider says
+          issuedQueries.add(query.toLowerCase());
+          // Live research: the run's "current query" is this exact text,
+          // reported before the provider call (never after, never invented).
+          budget.onQuery?.({ query, source: "search-api" });
+          try {
+            results = await client.search(query, budget.maxResultsPerQuery);
+          } catch {
+            // The provider refused/failed this one query — the step did not
+            // run; the remaining queries still do. Never a run-ending error.
+            // The failure is MEASURED as an empty query (honest zero).
+            perQuery.push({ query, resultsSeen: 0, pagesFetched: 0, offersExtracted: 0 });
+            continue;
+          }
+          resultsSeen += results.length;
+          const pagesBeforeQuery = pagesFetched;
+          const offersBeforeQuery = offers.length;
+          let pagesThisQuery = 0;
+          for (const result of results) {
+            if (pagesFetched >= budget.maxPagesToFetch) break;
+            if (pagesThisQuery >= budget.maxPagesPerQuery) break;
+            const host = hostOf(result.url);
+            if (!host) continue;
+            // Portals have their own policy-gated adapters; the provider's own
+            // host is never content. Both are left out of this layer.
+            if (isPortalHost(host)) continue;
+            if (host === "api.tavily.com" || host.endsWith(".tavily.com")) continue;
+            if (seenUrls.has(result.url)) continue;
+            seenUrls.add(result.url);
+
+            const page = await guardedFetch(fetchContext, result.url, {
+              textBudget: 20_000,
+            });
+            if (page.ok) {
+              pagesFetched += 1;
+              pagesThisQuery += 1;
+              offers.push(
+                ...parseListingPage({
+                  html: page.page.html,
+                  pageUrl: page.page.finalUrl,
+                  offerSource: "Search API (Tavily)",
+                  sourceId: "search-api",
+                  field: criteria.keyword ?? null,
+                  goal,
+                }),
+              );
+            }
+            // `blocked` → guardedFetch already opened that host's breaker; the
+            // other results continue. `error`/`unsafe` → not an offer, move on.
+          }
+          perQuery.push({
+            query,
+            resultsSeen: results.length,
+            pagesFetched: pagesFetched - pagesBeforeQuery,
+            offersExtracted: offers.length - offersBeforeQuery,
+          });
+        }
+        const batchOffers = offers.slice(offersBefore);
+
+        // Interleaved verification (agentic mode ONLY): the orchestrator
+        // verifies these offers NOW (email pass, dedupe, save) and reports
+        // how many unique companies the batch contributed — the planner's
+        // coverage signal. The offers are consumed here and not repeated in
+        // the final result. Legacy mode: the offers stay in `offers` and are
+        // returned once at the end, exactly as before.
+        let newCompanies = 0;
+        if (batchOffers.length > 0) {
+          if (budget.queryProvider) {
+            offers.length = offersBefore;
+            newCompanies = (await budget.onOffers?.(batchOffers)) ?? 0;
+          }
+        }
+        budget.onBatch?.({
+          queries: batch,
+          resultsSeen,
+          pagesFetched: pagesFetched - pagesBeforeBatch,
+          offersExtracted: batchOffers.length,
+          newCompanies: Math.max(0, newCompanies),
+          perQuery,
+          visitedUrls: [...seenUrls].slice(-500),
+        });
       }
       return {
         status: "ok",

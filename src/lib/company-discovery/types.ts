@@ -231,6 +231,26 @@ export interface DiscoveryProgress {
   /** Companies whose email outcome was resolved in the run (§4.8). Exposed
    *  read-only (the column is migration-dependent → 0 on older rows). */
   companiesProcessed: number;
+  /**
+   * Live research state (agentic engine): the provider query currently being
+   * executed by the search layer, or the last one it executed (null before
+   * the first query / on a database without the column). The UI shows it as
+   * "Current query" — a real measured value, never a simulated one.
+   */
+  currentQuery: string | null;
+  /**
+   * Live research state (agentic engine): the source currently running (the
+   * search layer while it issues queries, "arbeitsagentur" while the BA
+   * window is collected, …) — null when nothing is running or on an older
+   * row.
+   */
+  currentSource: string | null;
+  /**
+   * Live research state (agentic engine): the strategy the planner is
+   * currently executing (its rendered note — a real measured decision, never
+   * invented) — null before the first batch or on an older row.
+   */
+  currentStrategy: string | null;
 }
 
 /**

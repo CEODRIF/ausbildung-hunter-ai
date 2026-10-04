@@ -20,14 +20,26 @@ import { translate } from "@/lib/i18n/core";
  * Content is EXACTLY what the run stored: companies, their published address
  * with the page it was read from, the offer facts and the run id.
  *
- * Column contract (§4.10): the owner's list and order —
- *   Company Name · Website · Public Email · Email Source · Email Source URL ·
- *   Role · Field · City · State · Offer Type · Beginn · Salary ·
- *   Offer Source · Offer URL · Discovery Run ID
- * — plus a final `Email Status` column ONLY when the workbook contains
- * companies without an address (`onlyPublicEmail=false`), so a blank email is
- * explainable. Every column of the previous release is still present and still
- * means the same thing.
+  * Column contract (§4.10): the owner's list and order —
+  *   Company Name · Website · Public Email · Email Source · Email Source URL ·
+  *   Role · Field · City · State · Offer Type · Beginn · Salary ·
+  *   Offer Source · Offer URL · Discovery Run ID
+  * — plus a final `Email Status` column ONLY when the workbook contains
+  * companies without an address (`onlyPublicEmail=false`), so a blank email is
+  * explainable. Every column of the previous release is still present and still
+  * means the same thing.
+  *
+  * Agentic-research columns (20261024000000), appended AFTER everything above:
+  *   Application URL · 2027 Confirmed · Confidence Score
+  * All three carry ONLY stored values from the verification pass:
+  *   Application URL  the application/career page that was actually fetched
+  *                    and read (or blank) — never derived from the domain;
+  *   2027 Confirmed   yes/no — the documented start matched the run's
+  *                    concrete beginn year; blank when it cannot be verified;
+  *   Confidence Score 0–100 evidence-derived score of the verified email,
+  *                    blank when the company has no public email.
+  * Pre-migration rows simply read blank in these columns (backwards
+  * compatible, nothing is guessed).
  *
  * Injection safety: a cell whose text starts with `=`, `+`, `-`, `@`, TAB or CR
  * is written as plain text (prefixed with an apostrophe) so a scraped value can
@@ -110,12 +122,16 @@ export async function GET(
       { header: "Beginn", key: "beginn", width: 14 },
       { header: "Salary", key: "salaryLabel", width: 20 },
       { header: "Offer Source", key: "offerSource", width: 18 },
-      { header: "Offer URL", key: "offerUrl", width: 40 },
-      { header: "Discovery Run ID", key: "runId", width: 38 },
-      ...(includeEmailStatus
-        ? [{ header: "Email Status", key: "emailStatus", width: 18 }]
-        : []),
-    ];
+       { header: "Offer URL", key: "offerUrl", width: 40 },
+       { header: "Discovery Run ID", key: "runId", width: 38 },
+       ...(includeEmailStatus
+         ? [{ header: "Email Status", key: "emailStatus", width: 18 }]
+         : []),
+       // Agentic-research columns (stored verification facts, null-safe):
+       { header: "Application URL", key: "applicationUrl", width: 40 },
+       { header: "2027 Confirmed", key: "beginnConfirmed", width: 16 },
+       { header: "Confidence Score", key: "confidenceScore", width: 17 },
+     ];
     sheet.getRow(1).font = { bold: true };
 
     for (const company of exportable) {
@@ -153,6 +169,19 @@ export async function GET(
                   (address ? "email_found" : company.rejectReason ?? "no_public_email")),
             }
           : {}),
+        // Stored verification facts only — null/absent stays a blank cell;
+        // nothing is derived, guessed or back-filled.
+        applicationUrl: safeCell(company.applicationUrl),
+        beginnConfirmed:
+          company.beginnYearConfirmed === true
+            ? "yes"
+            : company.beginnYearConfirmed === false
+              ? "no"
+              : "",
+        confidenceScore:
+          company.confidenceScore === null || company.confidenceScore === undefined
+            ? ""
+            : String(company.confidenceScore),
       });
     }
 

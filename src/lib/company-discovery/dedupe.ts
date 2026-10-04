@@ -76,3 +76,82 @@ export function isUsableCompanyName(name: string | null): boolean {
   if (GENERIC_COMPANY_NAMES.has(normalized)) return false;
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// Run-level identity index (name + domain + email)
+// ---------------------------------------------------------------------------
+
+/**
+ * The host of a website URL as a dedupe key: lower-cased, `www.` stripped.
+ * A NAME alone can collide ("Siemens" at two locations) or miss a duplicate
+ * ("Siemens AG" vs "siemens.de"); the official domain is independent evidence
+ * of the same employer. An empty/invalid input yields "" (never a key).
+ */
+export function hostKeyOf(websiteUrl: string | null | undefined): string {
+  if (!websiteUrl) return "";
+  try {
+    return new URL(websiteUrl).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+/** The e-mail address as a dedupe key (lower-cased, trimmed). "" when absent. */
+export function emailKeyOf(email: string | null | undefined): string {
+  return (email ?? "").trim().toLowerCase();
+}
+
+/** Which existing identity a newcomer would collide with — or `new`. */
+export type DuplicateMatch = "new" | "name" | "domain" | "email";
+
+/**
+ * The run-level dedupe set with STRONG identity: a company is a duplicate
+ * when ANY of its name key, official domain, or verified public email was
+ * already seen in the run (§ dedupe: name + domain + email).
+ *
+ * The index is deliberately plain data (three Sets) so a continue-batch can
+ * rebuild it from the persisted rows of the previous batch — the same
+ * company is never processed twice, in a single batch or across them.
+ */
+export class CompanyIdentityIndex {
+  private readonly nameKeys = new Set<string>();
+  private readonly domainKeys = new Set<string>();
+  private readonly emailKeys = new Set<string>();
+
+  /**
+   * Check a newcomer WITHOUT registering it. `name` is required (the key);
+   * `domain`/`email` are only consulted when non-empty, so a company whose
+   * domain/email are not yet known can still be caught by name — and, later,
+   * registered with its full identity via {@link mark}.
+   */
+  check(
+    name: string,
+    domain: string | null | undefined = null,
+    email: string | null | undefined = null,
+  ): DuplicateMatch {
+    if (name && this.nameKeys.has(name)) return "name";
+    const host = hostKeyOf(domain ?? null);
+    if (host && this.domainKeys.has(host)) return "domain";
+    const address = emailKeyOf(email ?? null);
+    if (address && this.emailKeys.has(address)) return "email";
+    return "new";
+  }
+
+  /** Register a processed company's full identity. Empty parts are skipped. */
+  mark(
+    name: string,
+    domain: string | null | undefined = null,
+    email: string | null | undefined = null,
+  ): void {
+    if (name) this.nameKeys.add(name);
+    const host = hostKeyOf(domain ?? null);
+    if (host) this.domainKeys.add(host);
+    const address = emailKeyOf(email ?? null);
+    if (address) this.emailKeys.add(address);
+  }
+
+  /** How many distinct names the index holds (the dedupe set size). */
+  get nameCount(): number {
+    return this.nameKeys.size;
+  }
+}

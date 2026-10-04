@@ -34,10 +34,12 @@ import {
   Activity,
   Ban,
   Building2,
+  CheckCircle2,
   CopyX,
   Download,
   FileText,
   Mail,
+  Play,
   RefreshCw,
   Search,
   Square,
@@ -359,14 +361,62 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
           label={t("companyDiscovery.runCreated.sourcesBlocked")}
           tone={run.progress.sourcesBlocked > 0 ? "warning" : "default"}
         />
+        <CounterTile
+          icon={<CheckCircle2 size={16} strokeWidth={1.8} />}
+          value={run.progress.companiesProcessed}
+          label={t("companyDiscovery.runCreated.verified")}
+          tone="success"
+        />
       </div>
-      {/* The current source status line (the first source in the report). */}
-      <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-line bg-surface px-4 py-3">
-        <Activity size={15} strokeWidth={1.8} className="shrink-0 text-muted" />
-        <span className="text-xs font-semibold text-muted">
-          {t("companyDiscovery.runCreated.source")}:
-        </span>
-        <span className="text-sm font-bold text-ink">{sourceLabel}</span>
+      {/* Live research state — the real current source and the exact
+          provider query, both measured server-side and persisted on the run
+          row. Null-safe: a pre-migration run simply shows the derived label
+          and the idle line. Nothing here is animated or interpolated. */}
+      <div className="mt-3 rounded-2xl border border-line bg-surface px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Activity size={15} strokeWidth={1.8} className="shrink-0 text-accent" />
+          <span className="text-xs font-semibold text-muted">
+            {t("companyDiscovery.runCreated.liveSource")}:
+          </span>
+          <span className="min-w-0 text-sm font-bold text-ink">
+            {run.progress.currentSource ?? sourceLabel}
+          </span>
+        </div>
+        <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-2 ps-6">
+          <span className="shrink-0 text-xs font-semibold text-muted">
+            {t("companyDiscovery.runCreated.liveQuery")}:
+          </span>
+          {run.progress.currentQuery ? (
+            <span
+              dir="ltr"
+              title={run.progress.currentQuery}
+              className="min-w-0 max-w-full flex-1 truncate font-mono text-[11px] text-ink-soft"
+            >
+              {run.progress.currentQuery}
+            </span>
+          ) : (
+            <span className="text-xs text-faint">
+              {t("companyDiscovery.runCreated.liveIdle")}
+            </span>
+          )}
+        </div>
+        {/* Current strategy — the planner's real, measured decision (which
+            family of queries it is executing and why). Shown only when the
+            engine reported one; null (older run / before the first batch)
+            hides the line entirely — nothing is faked. */}
+        {run.progress.currentStrategy ? (
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-2 ps-6">
+            <span className="shrink-0 text-xs font-semibold text-muted">
+              {t("companyDiscovery.runCreated.liveStrategy")}:
+            </span>
+            <span
+              title={run.progress.currentStrategy}
+              className="min-w-0 max-w-full flex-1 truncate text-[11px] font-medium text-ink-soft"
+            >
+              {run.progress.currentStrategy}
+            </span>
+          </div>
+        ) : null}
       </div>
 
       {/* ---- The source report: every registered source, honestly ---------- */}
@@ -641,6 +691,8 @@ export function CompanyDiscovery({
   >(null);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
+  const [continuing, setContinuing] = useState(false);
+  const [continueError, setContinueError] = useState<string | null>(null);
   const [pollExpired, setPollExpired] = useState(false);
   const [pollNonce, setPollNonce] = useState(0);
 
@@ -823,6 +875,50 @@ export function CompanyDiscovery({
       setStopError(t(DISCOVERY_STOP_FAILED_KEY));
     } finally {
       setStopping(false);
+    }
+  }
+
+  // ---- continue research (a partial run ends before its target) ------------
+  // The SAME run is reopened server-side (partial → running); its persisted
+  // companies are the checkpoint, so no company or email can be counted twice.
+  // The live view + polling simply resume on the same runId.
+  async function onContinue() {
+    if (!runId || continuing) return;
+    setContinuing(true);
+    setContinueError(null);
+    try {
+      const response = await fetch(
+        `/api/company-discovery/${runId}/continue`,
+        { method: "POST" },
+      );
+      const body = (await response.json().catch(() => null)) as
+        | (DiscoveryErrorBody & { run?: DiscoveryRun })
+        | null;
+      if (!response.ok || !body?.run) {
+        if (body?.code === "rate_limited") {
+          const seconds = retryAfterSeconds(
+            body,
+            response.headers?.get("retry-after") ?? null,
+          );
+          setContinueError(
+            seconds
+              ? t("companyDiscovery.error.rateLimited", { seconds })
+              : t("companyDiscovery.continue.failed"),
+          );
+        } else {
+          setContinueError(t("companyDiscovery.continue.failed"));
+        }
+        return;
+      }
+      // The reopened run is the same run (same id, counters intact) — the
+      // live panel resumes on it immediately.
+      setRun(body.run);
+      setPollExpired(false);
+      setPhase("running");
+    } catch {
+      setContinueError(t("companyDiscovery.continue.failed"));
+    } finally {
+      setContinuing(false);
     }
   }
 
@@ -1122,6 +1218,38 @@ export function CompanyDiscovery({
                 {t("companyDiscovery.progress.stopNote")}
               </p>
             )}
+
+            {/* Continue Research — ONLY a partial run below its target. A
+                completed run reached the goal (no button), and the button
+                reopens THE SAME run: the server-side checkpoint keeps every
+                stored company, and dedupe runs across the whole run. */}
+            {run.status === "partial" &&
+              run.progress.foundCompanies < run.progress.targetCompanies && (
+                <div className="mt-4 rounded-2xl border border-accent/30 bg-accent-soft/60 p-4">
+                  <p className="text-xs leading-5 text-ink-soft">
+                    {t("companyDiscovery.continue.note", {
+                      found: run.progress.foundCompanies,
+                      target: run.progress.targetCompanies,
+                    })}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onContinue}
+                    disabled={continuing}
+                    className="btn-neon mt-3 inline-flex h-10 items-center gap-2 rounded-2xl px-5 text-sm font-semibold text-white transition disabled:cursor-wait disabled:opacity-60"
+                  >
+                    <Play size={15} strokeWidth={1.8} />
+                    {continuing
+                      ? t("companyDiscovery.continue.continuing")
+                      : t("companyDiscovery.continue.button")}
+                  </button>
+                  {continueError && (
+                    <p className="mt-3 rounded-2xl bg-danger-soft px-4 py-2.5 text-sm font-semibold text-danger">
+                      {continueError}
+                    </p>
+                  )}
+                </div>
+              )}
 
             <p className="mt-4 rounded-2xl bg-surface-2 px-4 py-3 text-xs leading-5 text-ink-soft">
               {t("companyDiscovery.runCreated.resultsNote")}

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearTavilyMemoryCache,
+  defaultTavilyBudget,
+  DEFAULT_TAVILY_REQUESTS_PER_RUN,
   getWebSearchClient,
+  MAX_TAVILY_REQUESTS_HARD_CAP,
   MAX_TAVILY_REQUESTS_PER_RUN,
   resetTavilyDiagnostics,
   resolveTavilyKey,
@@ -15,8 +18,9 @@ import {
  * Selection logic uses the real module (env manipulated per test); the HTTP
  * layer is mocked. Requirements covered here: Tavily is called on search,
  * TAVILY_API_KEY is required, the key never leaks, Gemini grounding is never
- * called, at most 3 requests per search operation, duplicates are removed,
- * provider errors are handled and reported safely.
+ * called, at most DEFAULT_TAVILY_REQUESTS_PER_RUN (30) requests per search
+ * operation — never more than the hard cost cap (60) — duplicates are
+ * removed, provider errors are handled and reported safely.
  */
 
 const ORIGINAL_ENV = { ...process.env };
@@ -24,6 +28,7 @@ const ORIGINAL_ENV = { ...process.env };
 function resetEnv() {
   process.env = { ...ORIGINAL_ENV };
   delete process.env.TAVILY_API_KEY;
+  delete process.env.TAVILY_MAX_REQUESTS_PER_RUN;
   delete process.env.GEMINI_API_KEY;
   delete process.env.GEMINI_GROUNDING_API_KEY;
   delete process.env.AI_API_KEY;
@@ -165,15 +170,52 @@ describe("tavily search (mocked fetch)", () => {
     }
   });
 
-  it("caps requests at MAX_TAVILY_REQUESTS_PER_RUN per search operation", async () => {
+  it("caps requests at the per-search-operation budget", async () => {
     fetchMock.mockImplementation(async () => tavilyResponse([]));
     const client = clientWithKey();
     for (let i = 0; i < MAX_TAVILY_REQUESTS_PER_RUN + 3; i += 1) {
       await client.search(`query-${i}`, 5);
     }
-    // Hard cap: no network call after the budget is spent, no retry loop.
+    // Budget exhausted: no network call after it is spent, no retry loop.
     expect(fetchMock).toHaveBeenCalledTimes(MAX_TAVILY_REQUESTS_PER_RUN);
-    expect(MAX_TAVILY_REQUESTS_PER_RUN).toBe(3);
+  });
+
+  it("raises the default budget to 30, keeping a higher cost-protection cap", () => {
+    expect(DEFAULT_TAVILY_REQUESTS_PER_RUN).toBe(30);
+    // The compatibility name is the DEFAULT, not the old floor of 3.
+    expect(MAX_TAVILY_REQUESTS_PER_RUN).toBe(30);
+    // The hard cap is strictly higher: deployments can raise the default
+    // without ever exceeding the cost ceiling.
+    expect(MAX_TAVILY_REQUESTS_HARD_CAP).toBeGreaterThanOrEqual(60);
+  });
+
+  it("clamps an explicit maxRequests into the hard cost cap", async () => {
+    process.env.TAVILY_API_KEY = KEY;
+    fetchMock.mockImplementation(async () => tavilyResponse([]));
+    const client = getWebSearchClient({ maxRequests: 9_999 });
+    if (!client) throw new Error("expected a client");
+    for (let i = 0; i < MAX_TAVILY_REQUESTS_HARD_CAP + 5; i += 1) {
+      await client.search(`query-${i}`, 5);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_TAVILY_REQUESTS_HARD_CAP);
+  });
+
+  it("honours TAVILY_MAX_REQUESTS_PER_RUN (env-tunable, clamped)", async () => {
+    process.env.TAVILY_API_KEY = KEY;
+    process.env.TAVILY_MAX_REQUESTS_PER_RUN = "5";
+    fetchMock.mockImplementation(async () => tavilyResponse([]));
+    const client = getWebSearchClient();
+    if (!client) throw new Error("expected a client");
+    for (let i = 0; i < 8; i += 1) await client.search(`q-${i}`, 5);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+
+    // Invalid → the safe default; above the cap → the cap.
+    process.env.TAVILY_MAX_REQUESTS_PER_RUN = "abc";
+    expect(defaultTavilyBudget()).toBe(DEFAULT_TAVILY_REQUESTS_PER_RUN);
+    process.env.TAVILY_MAX_REQUESTS_PER_RUN = "9999";
+    expect(defaultTavilyBudget()).toBe(MAX_TAVILY_REQUESTS_HARD_CAP);
+    delete process.env.TAVILY_MAX_REQUESTS_PER_RUN;
+    expect(defaultTavilyBudget()).toBe(DEFAULT_TAVILY_REQUESTS_PER_RUN);
   });
 
   it("removes duplicate URLs and duplicate (domain, title) pairs", async () => {

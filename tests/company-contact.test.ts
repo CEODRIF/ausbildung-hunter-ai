@@ -200,8 +200,8 @@ describe("discovery queries + provider budget", () => {
     expect(new Set(queries.map((entry) => entry.query)).size).toBe(3);
     for (const entry of queries)
       expect(entry.query).toContain("Kaufmann im E-Commerce");
-    // The provider budget is untouched.
-    expect(MAX_TAVILY_REQUESTS_PER_RUN).toBe(3);
+    // The raised default provider budget (cost cap stays at 60).
+    expect(MAX_TAVILY_REQUESTS_PER_RUN).toBe(30);
   });
 
   it("never produces more queries than the cap", () => {

@@ -69,6 +69,7 @@ const SOURCE_BY_PAGE_KIND: Record<string, DiscoveryEmailSource> = {
   career: "official_site_career",
   jobs: "official_site_jobs",
   stellenangebote: "official_site_jobs",
+  bewerbung: "official_site_jobs",
   ausbildung: "official_site_ausbildung",
   azubi: "official_site_ausbildung",
   team: "official_site_contact_person",
@@ -86,6 +87,119 @@ export const SITE_PAGE_PATHS: ReadonlyArray<{ path: string; kind: string }> = [
   { path: "/ausbildung", kind: "ausbildung" },
   { path: "/team", kind: "team" },
 ];
+
+// ---------------------------------------------------------------------------
+// In-site discovery (agentic engine): the site's own links, allow-listed
+// ---------------------------------------------------------------------------
+
+/**
+ * The only in-site path SEGMENTS a discovered link may open. Everything else
+ * (marketing pages, shop, blog, external links) is NEVER fetched — the pass
+ * follows the site's own contact/career structure, and nothing more.
+ * A link qualifies when ANY of its path segments is listed; the DEEPEST
+ * matching segment wins (`/karriere/ausbildung` is an Ausbildung page, not a
+ * generic career page).
+ */
+const DISCOVERED_SEGMENT_KINDS: ReadonlyArray<{ segment: RegExp; kind: string }> = [
+  { segment: /^impressum$/i, kind: "impressum" },
+  { segment: /^kontakt(?:en)?$/i, kind: "kontakt" },
+  { segment: /^contact$/i, kind: "contact" },
+  { segment: /^karriere$/i, kind: "karriere" },
+  { segment: /^careers?$/i, kind: "karriere" },
+  { segment: /^jobs$/i, kind: "jobs" },
+  { segment: /^stellenangebote$/i, kind: "jobs" },
+  { segment: /^stellen$/i, kind: "jobs" },
+  { segment: /^ausbildung$/i, kind: "ausbildung" },
+  { segment: /^azubis?$/i, kind: "ausbildung" },
+  { segment: /^bewerbung(?:en)?$/i, kind: "bewerbung" },
+  { segment: /^team$/i, kind: "team" },
+  { segment: /^ansprechpartner$/i, kind: "ansprechpartner" },
+];
+
+/** The kind of a discovered path — the deepest matching segment, or null. */
+function discoveredPathKind(path: string): string | null {
+  const segments = path.split("/").filter(Boolean).map((segment) => segment.toLowerCase());
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    const entry = DISCOVERED_SEGMENT_KINDS.find(({ segment }) =>
+      segment.test(segments[i]),
+    );
+    if (entry) return entry.kind;
+  }
+  return null;
+}
+
+/**
+ * The hard cap for DISCOVERED (link-followed) pages per company. The fixed
+ * §4.1 targets (MAX_EMAIL_PAGES_PER_COMPANY) always keep their priority; this
+ * only bounds the extra pages the site itself pointed to. `0` disables the
+ * discovery step entirely. Clamped into [0, 5].
+ */
+export function discoveredPageLimit(): number {
+  const raw = process.env.DISCOVERY_MAX_DISCOVERED_PAGES?.trim();
+  if (raw !== undefined && raw !== "") {
+    const value = Number.parseInt(raw, 10);
+    if (Number.isInteger(value) && value >= 0) {
+      return Math.min(value, 5);
+    }
+  }
+  return 3;
+}
+
+/**
+ * Read the company's own links from pages it ALREADY fetched this pass and
+ * return the additional contact/career pages worth opening:
+ *   - SAME ORIGIN ONLY (relative paths; absolute foreign URLs are dropped);
+ *   - ALLOW-LISTED path families only (Kontakt / Impressum / Karriere / Jobs /
+ *     Ausbildung / Bewerbung / Team / Ansprechpartner);
+ *   - never a page already visited (by pathname, trailing slash irrelevant);
+ *   - deterministic first-seen order, hard-capped at `limit`.
+ * A link the site does not publish is simply not discovered — nothing is
+ * guessed, so an empty result is a real answer, not a failure.
+ */
+export function discoverSitePaths(input: {
+  /** The HTML of one already-fetched page of the company's site. */
+  html: string;
+  /** The site's origin, e.g. `https://firma.de`. */
+  origin: string;
+  /** Every URL already visited in this pass (fixed + discovered). */
+  visitedUrls: Iterable<string>;
+  /** How many additional pages to return at most. */
+  limit: number;
+}): Array<{ url: string; path: string; kind: string }> {
+  const visited = new Set<string>();
+  for (const url of input.visitedUrls) {
+    visited.add(url.toLowerCase());
+    try {
+      visited.add(
+        new URL(url).pathname.replace(/\/+$/, "").toLowerCase(),
+      );
+    } catch {
+      // not a URL; the raw value above is still compared
+    }
+  }
+  const found: Array<{ url: string; path: string; kind: string }> = [];
+  const seenPaths = new Set<string>();
+  const re = /href\s*=\s*["']([/^][^"']*)["']/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(input.html)) !== null && found.length < input.limit) {
+    if (input.limit <= 0) break;
+    let href = match[1];
+    // Same origin by construction: relative paths only, never `//host`.
+    if (!href.startsWith("/") || href.startsWith("//")) continue;
+    const cut = href.search(/[?#]/);
+    if (cut !== -1) href = href.slice(0, cut);
+    const path =
+      href.length > 1 && href.endsWith("/") ? href.slice(0, -1) : href;
+    if (path.length < 3 || path.length > 120) continue;
+    const normalized = path.toLowerCase();
+    if (seenPaths.has(normalized) || visited.has(normalized)) continue;
+    const kind = discoveredPathKind(normalized);
+    if (!kind) continue;
+    seenPaths.add(normalized);
+    found.push({ url: `${input.origin}${path}`, path, kind });
+  }
+  return found;
+}
 
 /** Every address of a fetched page that passes the acceptance rules. */
 export function sitePageEmails(input: {
@@ -131,11 +245,14 @@ export function createGuardedSiteFetcher(ctx: FetchContext): CompanySiteFetcher 
     /** Required pages that were actually inspected (reachable, not blocked). */
     const inspected = new Set<string>();
     const REQUIRED_KINDS = ["impressum", "kontakt"];
+    /** HTML of every page already read — the in-site discovery input. */
+    const readHtml: string[] = [];
 
     for (const target of targets) {
       const result = await guardedFetch(ctx, target.url, { textBudget: 20_000 });
       if (result.ok) {
         pages.push({ url: result.page.finalUrl, kind: target.kind, text: result.page.text });
+        readHtml.push(result.page.html);
         inspected.add(target.kind);
         continue;
       }
@@ -158,6 +275,47 @@ export function createGuardedSiteFetcher(ctx: FetchContext): CompanySiteFetcher 
       }
       // A 404 on an optional page is a real answer ("that page does not
       // exist") — keep going, and it does not block the outcome.
+    }
+
+    // ---- in-site discovery (agentic engine) --------------------------------
+    // The pages the site ALREADY told us about: contact/career links the
+    // fetched pages publish (Kontakt-Unterseite, /karriere/ausbildung, …).
+    // Allow-listed, same-origin, visited-deduped, hard-capped — and only
+    // after the fixed targets, so the §4.4 required pages keep priority.
+    if (!blocked) {
+      const limit = discoveredPageLimit();
+      if (limit > 0 && readHtml.length > 0) {
+        let discoveredFetched = 0;
+        outer: for (const html of readHtml) {
+          if (discoveredFetched >= limit) break;
+          const discovered = discoverSitePaths({
+            html,
+            origin,
+            visitedUrls: pages.map((page) => page.url),
+            limit: limit - discoveredFetched,
+          });
+          for (const entry of discovered) {
+            if (discoveredFetched >= limit) break outer;
+            if (pages.some((page) => page.kind === entry.kind)) {
+              // A page of this kind was already read — the extra link adds
+              // no evidence class; keep the pass tight.
+              continue;
+            }
+            discoveredFetched += 1;
+            const result = await guardedFetch(ctx, entry.url, { textBudget: 20_000 });
+            if (result.ok) {
+              pages.push({ url: result.page.finalUrl, kind: entry.kind, text: result.page.text });
+            } else if (result.kind === "blocked") {
+              // The host's breaker is open: further discovered pages would
+              // hit it too. A block on a DISCOVERED page never downgrades an
+              // email already found, and (unlike a required page) does not
+              // turn the whole pass inconclusive.
+              break outer;
+            }
+            // 404 / technical failure: that link is dead — skip, keep going.
+          }
+        }
+      }
     }
 
     return {
@@ -267,6 +425,10 @@ export interface CompanyEmailOutcome {
   emails: MergedAcceptedEmail[];
   /** Real access attempts (allowed sources only). */
   attempts: SourceAttempt[];
+  /** The official-site pages that were actually fetched AND readable. A
+   *  page listed here exists and was read during this run — the only URLs
+   *  that may be exported as a verified application page. */
+  inspectedPages: Array<{ url: string; kind: string }>;
   /** True when every REQUIRED source was inspected successfully. */
   requiredInspected: boolean;
   /** True when a required source was blocked or stayed inconclusive. */
@@ -334,6 +496,7 @@ export async function resolveCompanyEmails(
   let blocked = false;
   let blockedReason: BlockedReason | null = null;
   let requiredInspected = false;
+  const inspectedPages: Array<{ url: string; kind: string }> = [];
 
   if (website) {
     if (!input.fetchSite) {
@@ -345,6 +508,7 @@ export async function resolveCompanyEmails(
       const outcome = await input.fetchSite(website);
       attempts.push(...outcome.attempts);
       for (const page of outcome.pages) {
+        inspectedPages.push({ url: page.url, kind: page.kind });
         collected.push(
           ...sitePageEmails({
             page,
@@ -378,6 +542,7 @@ export async function resolveCompanyEmails(
     return {
       emails,
       attempts,
+      inspectedPages,
       requiredInspected,
       blocked: false,
       blockedReason: null,
@@ -390,6 +555,7 @@ export async function resolveCompanyEmails(
     return {
       emails,
       attempts,
+      inspectedPages,
       requiredInspected: false,
       blocked: true,
       blockedReason: "unreachable",
@@ -402,6 +568,7 @@ export async function resolveCompanyEmails(
     return {
       emails,
       attempts,
+      inspectedPages,
       requiredInspected: false,
       blocked: true,
       blockedReason,
@@ -413,12 +580,44 @@ export async function resolveCompanyEmails(
   return {
     emails,
     attempts,
+    inspectedPages,
     requiredInspected,
     blocked: false,
     blockedReason: null,
     reasonCode: "no_public_email",
     primary: null,
   };
+}
+
+/**
+ * The kinds of inspected page that count as an application/career entry point.
+ * Only a page that was ACTUALLY fetched and read this run qualifies — a URL
+ * guessed from the domain is never an application URL.
+ */
+const APPLICATION_PAGE_KINDS = new Set([
+  "karriere",
+  "career",
+  "jobs",
+  "stellenangebote",
+  "ausbildung",
+  "azubi",
+  "bewerbung",
+]);
+
+/**
+ * The verified application URL of a company: the first application/career
+ * page that was actually inspected during the email pass (in the fixed
+ * page-order, so Karriere wins over Jobs), else `fallback` (the source offer
+ * page), else null.
+ */
+export function applicationUrlOf(
+  outcome: Pick<CompanyEmailOutcome, "inspectedPages">,
+  fallback: string | null | undefined,
+): string | null {
+  const hit = outcome.inspectedPages.find((page) =>
+    APPLICATION_PAGE_KINDS.has(page.kind),
+  );
+  return hit?.url ?? (fallback && fallback.length > 0 ? fallback : null);
 }
 
 function safeHost(url: string): string | null {

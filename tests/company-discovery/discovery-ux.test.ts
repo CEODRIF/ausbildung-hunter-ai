@@ -138,6 +138,14 @@ describe("i18n coverage of the discovery states", () => {
     "companyDiscovery.progress.refresh",
     "companyDiscovery.progress.stopNote",
     "companyDiscovery.runCreated.sourceSearching",
+    "companyDiscovery.runCreated.verified",
+    "companyDiscovery.runCreated.liveQuery",
+    "companyDiscovery.runCreated.liveSource",
+    "companyDiscovery.runCreated.liveIdle",
+    "companyDiscovery.continue.note",
+    "companyDiscovery.continue.button",
+    "companyDiscovery.continue.continuing",
+    "companyDiscovery.continue.failed",
     "companyDiscovery.status.pending",
     "companyDiscovery.status.running",
     "companyDiscovery.status.completed",
@@ -222,10 +230,30 @@ describe("live search state", () => {
   });
 
   it("treats a partial result as a state, not as an error", () => {
-    // The only place `partial` is special-cased is the status label; there is
-    // no branch that turns "found < target" into a failure message.
-    expect(component).not.toMatch(/foundCompanies\s*[<>]\s*targetCompanies/);
+    // The ONLY place found-vs-target is compared is the Continue Research
+    // branch, guarded by the real terminal status `partial` — there is no
+    // branch that turns a partial result into a failure message.
+    expect(component).toMatch(
+      /run\.status === "partial" &&[\s\S]{0,80}foundCompanies < run\.progress\.targetCompanies/,
+    );
+    const comparisons =
+      component.split("foundCompanies < run.progress.targetCompanies").length - 1;
+    expect(comparisons).toBe(1);
     expect(component).toContain('t("companyDiscovery.progress.note")');
+  });
+
+  it("shows the live query/source the engine measured (no simulated values)", () => {
+    expect(component).toContain("run.progress.currentQuery");
+    expect(component).toContain("run.progress.currentSource");
+    expect(component).toContain('t("companyDiscovery.runCreated.liveQuery")');
+    expect(component).toContain('t("companyDiscovery.runCreated.liveSource")');
+    expect(component).toContain('t("companyDiscovery.runCreated.liveIdle")');
+    expect(component).toContain('t("companyDiscovery.runCreated.verified")');
+  });
+
+  it("contains no simulated progress (no random, no timer-driven number math)", () => {
+    expect(component).not.toMatch(/Math\.random/);
+    expect(component).not.toMatch(/setInterval/);
   });
 
   it("keeps the search button disabled while the request is in flight", () => {
@@ -249,6 +277,32 @@ describe("Stop Search", () => {
   it("shows the cancelled state without overwriting it with a success story", () => {
     expect(component).toContain('run.status === "cancelled"');
     expect(component).toContain('t("companyDiscovery.progress.stopNote")');
+  });
+});
+
+describe("Continue Research", () => {
+  it("offers the button only on the real `partial` status below the target", () => {
+    expect(component).toContain('run.status === "partial"');
+    expect(component).toContain('t("companyDiscovery.continue.button")');
+    expect(component).toContain('t("companyDiscovery.continue.note", {');
+  });
+
+  it("reopens the SAME run via its continue endpoint — never /start", () => {
+    const handler = component.slice(component.indexOf("function onContinue"));
+    expect(handler.slice(0, 700)).toContain("/api/company-discovery/${runId}/continue");
+    expect(handler.slice(0, 700)).not.toContain("/start");
+  });
+
+  it("resumes the live view on the same runId after the server reopens it", () => {
+    const handler = component.slice(component.indexOf("function onContinue"));
+    const block = handler.slice(0, 1200);
+    expect(block).toContain("setRun(body.run)");
+    expect(block).toContain('setPhase("running")');
+  });
+
+  it("surfaces a failed continuation with its own translated message", () => {
+    expect(component).toContain('t("companyDiscovery.continue.failed")');
+    expect(component).toContain("continueError");
   });
 });
 

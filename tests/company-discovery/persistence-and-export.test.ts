@@ -43,7 +43,7 @@ function makeClient() {
       const nullFilters: Array<[string]> = [];
       let limit: number | null = null;
       let payload: Row[] | null = null;
-      let op: "select" | "insert" | "upsert" = "select";
+      let op: "select" | "insert" | "upsert" | "update" = "select";
       let touchesLinkColumn = false;
       const rows = () => (state.db[table] ??= []);
       const exec = () => {
@@ -56,6 +56,15 @@ function makeClient() {
         }
         if (state.missingLinkColumn && touchesLinkColumn) {
           return { data: null, error: UNKNOWN_COLUMN_ERROR };
+        }
+        if (op === "update") {
+          // PostgREST .update(patch) + eq filters: the patch is applied to the
+          // matching rows in place and the touched rows are returned.
+          const patch = (payload ?? [])[0] ?? {};
+          const updated = rows()
+            .filter((row) => matches(row, filters, sets))
+            .map((row) => Object.assign(row, patch));
+          return { data: updated, error: null };
         }
         if (op !== "select") {
           // PostgREST returns the STORED row (defaults included) — the fake
@@ -103,6 +112,11 @@ function makeClient() {
           if (payload.some((row) => "discovery_run_id" in row)) touchesLinkColumn = true;
           return api;
         },
+        update: (values: Row) => {
+          op = "update";
+          payload = [values];
+          return api;
+        },
         upsert: (values: Row | Row[], options?: unknown) => {
           op = "upsert";
           payload = Array.isArray(values) ? values : [values];
@@ -146,6 +160,7 @@ import {
   listRecentDiscoveryCampaigns,
 } from "@/lib/company-discovery/campaigns";
 import {
+  continueDiscoveryRun,
   getDiscoveryRunStrict,
   listRunCompaniesWithEmails,
   recordCompanyEmail,
@@ -453,7 +468,8 @@ describe("Excel export", () => {
     expect(sheet).toBeDefined();
     const headers = (sheet!.getRow(1).values as unknown[]).slice(1);
     // §4.10: the owner's column list and order, plus `Email Status` because
-    // this workbook contains a company without an address.
+    // this workbook contains a company without an address, plus the
+    // agentic-research columns (stored verification facts).
     expect(headers).toEqual([
       "Company Name",
       "Website",
@@ -471,6 +487,9 @@ describe("Excel export", () => {
       "Offer URL",
       "Discovery Run ID",
       "Email Status",
+      "Application URL",
+      "2027 Confirmed",
+      "Confidence Score",
     ]);
     const first = sheet!.getRow(2).values as unknown[];
     expect(first[1]).toBe("Mustermann GmbH");
@@ -522,6 +541,79 @@ describe("Excel export", () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await response.arrayBuffer());
     expect(workbook.getWorksheet("Companies")!.rowCount).toBe(1); // header only
+  });
+
+  it("exports the stored verification facts, one column each, verbatim", async () => {
+    // The run asked for the concrete year 2027; the counted offer documents a
+    // 2027 start → the stored confirmation is `true` (written by the pass,
+    // not computed here). The application URL is a page the pass actually
+    // read; the score is the evidence-derived integer.
+    state.db.discovery_companies = [
+      companyRow({
+        application_url: "https://mustermann-gmbh.de/karriere/ausbildung",
+        beginn_year_confirmed: true,
+        confidence_score: 100,
+      }),
+      companyRow({
+        id: "55555555-5555-4555-8555-555555555555",
+        company_key: "dokufalsch gmbh",
+        company_name: "Dokufalsch GmbH",
+        beginn: "2028-01-15",
+        application_url: null,
+        beginn_year_confirmed: false,
+        confidence_score: 35,
+      }),
+    ];
+    state.db.discovery_company_emails = [];
+
+    const response = await exportRoute(
+      new Request(`http://localhost/api/company-discovery/${RUN_ID}/export`),
+      { params: Promise.resolve({ runId: RUN_ID }) },
+    );
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await response.arrayBuffer());
+    const sheet = workbook.getWorksheet("Companies")!;
+    const headers = (sheet.getRow(1).values as unknown[]).slice(1);
+    const appIndex = headers.indexOf("Application URL");
+    const confirmedIndex = headers.indexOf("2027 Confirmed");
+    const scoreIndex = headers.indexOf("Confidence Score");
+    expect(appIndex).toBeGreaterThan(0);
+    expect(confirmedIndex).toBeGreaterThan(0);
+    expect(scoreIndex).toBeGreaterThan(0);
+
+    // Header is at column 1 → data cells are at index + 1.
+    const first = sheet.getRow(2).values as unknown[];
+    expect(first[appIndex + 1]).toBe("https://mustermann-gmbh.de/karriere/ausbildung");
+    expect(first[confirmedIndex + 1]).toBe("yes");
+    expect(first[scoreIndex + 1]).toBe("100");
+
+    // Documented but a DIFFERENT year → "no", and a stored 35 stays 35.
+    // A stored null is a BLANK cell in the file — nothing is back-filled.
+    const second = sheet.getRow(3).values as unknown[];
+    expect(second[appIndex + 1]).toBe("");
+    expect(second[confirmedIndex + 1]).toBe("no");
+    expect(second[scoreIndex + 1]).toBe("35");
+  });
+
+  it("a run from before the agentic-research migration exports blank facts (no guessing)", async () => {
+    // The rows simply lack the three columns — exactly the state of a
+    // database that has not received 20261024000000 yet.
+    state.db.discovery_companies = [companyRow()];
+    state.db.discovery_company_emails = [];
+    const response = await exportRoute(
+      new Request(`http://localhost/api/company-discovery/${RUN_ID}/export`),
+      { params: Promise.resolve({ runId: RUN_ID }) },
+    );
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await response.arrayBuffer());
+    const sheet = workbook.getWorksheet("Companies")!;
+    const headers = (sheet.getRow(1).values as unknown[]).slice(1);
+    const row = sheet.getRow(2).values as unknown[];
+    expect(row[headers.indexOf("Application URL") + 1]).toBe("");
+    expect(row[headers.indexOf("2027 Confirmed") + 1]).toBe("");
+    expect(row[headers.indexOf("Confidence Score") + 1]).toBe("");
+    // The rest of the workbook is untouched by the missing columns.
+    expect(row[1]).toBe("Mustermann GmbH");
   });
 
   it("requires a session and refuses an unknown run", async () => {
@@ -655,5 +747,67 @@ describe("the created campaign is visible immediately and exactly once", () => {
       draftRow({ id: "88888888-8888-4888-8888-888888888888", discovery_run_id: null }),
     ];
     expect(await listRecentDiscoveryCampaigns(USER_ID, 5)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Continue Research — the checkpoint transition (partial → running)
+// ---------------------------------------------------------------------------
+
+describe("Continue Research — reopening a partial run", () => {
+  it("reopens a partial run below its target as the SAME run (no second row)", async () => {
+    state.db.discovery_runs = [
+      { ...RUN_ROW, status: "partial", found_companies: 4, target_companies: 10 },
+    ];
+    const run = await continueDiscoveryRun(RUN_ID, USER_ID);
+    expect(run.runId).toBe(RUN_ID);
+    expect(run.status).toBe("running");
+    expect(run.finishedAt).toBeNull();
+    // The checkpoint counters are intact — the next batch builds on them.
+    expect(run.progress.foundCompanies).toBe(4);
+    expect(run.progress.targetCompanies).toBe(10);
+    // Exactly ONE run row: no new run is created, nothing is cloned.
+    expect(state.db.discovery_runs).toHaveLength(1);
+    expect(state.db.discovery_runs[0]).toMatchObject({
+      run_id: RUN_ID,
+      status: "running",
+      finished_at: null,
+      found_companies: 4,
+    });
+  });
+
+  it("is idempotent for a run that is already running", async () => {
+    state.db.discovery_runs = [{ ...RUN_ROW, status: "running", finished_at: null }];
+    const run = await continueDiscoveryRun(RUN_ID, USER_ID);
+    expect(run.status).toBe("running");
+    expect(state.db.discovery_runs).toHaveLength(1);
+  });
+
+  it("refuses a completed run — it reached its target (nothing to continue)", async () => {
+    state.db.discovery_runs = [
+      { ...RUN_ROW, status: "completed", found_companies: 10 },
+    ];
+    await expect(continueDiscoveryRun(RUN_ID, USER_ID)).rejects.toThrow();
+    expect(state.db.discovery_runs[0]).toMatchObject({ status: "completed" });
+  });
+
+  it("refuses a cancelled run — stopping was a deliberate decision", async () => {
+    state.db.discovery_runs = [{ ...RUN_ROW, status: "cancelled" }];
+    await expect(continueDiscoveryRun(RUN_ID, USER_ID)).rejects.toThrow();
+    expect(state.db.discovery_runs[0]).toMatchObject({ status: "cancelled" });
+  });
+
+  it("refuses a failed run — the fault is reported, not silently retried", async () => {
+    state.db.discovery_runs = [{ ...RUN_ROW, status: "failed" }];
+    await expect(continueDiscoveryRun(RUN_ID, USER_ID)).rejects.toThrow();
+    expect(state.db.discovery_runs[0]).toMatchObject({ status: "failed" });
+  });
+
+  it("never touches a foreign run", async () => {
+    state.db.discovery_runs = [{ ...RUN_ROW, status: "partial" }];
+    await expect(
+      continueDiscoveryRun(RUN_ID, "99999999-9999-4999-8999-999999999999"),
+    ).rejects.toThrow();
+    expect(state.db.discovery_runs[0]).toMatchObject({ status: "partial" });
   });
 });

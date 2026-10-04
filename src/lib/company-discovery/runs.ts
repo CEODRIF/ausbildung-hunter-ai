@@ -1,6 +1,8 @@
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { CompanyEvidenceItem } from "./confidence";
+import type { ResearchMemoryStore } from "./planner";
 import { isUnknownColumnError, isUnknownTableError } from "./errors";
 import {
   type DiscoveryCandidate,
@@ -55,6 +57,13 @@ interface DiscoveryRunRow {
   no_public_email?: number;
   sources_blocked?: number;
   companies_processed?: number;
+  /** Live research state (agentic-research migration); absent pre-migration. */
+  current_query?: string | null;
+  current_source?: string | null;
+  /** Research memory + live strategy (research-memory migration);
+   *  absent pre-migration. */
+  current_strategy?: string | null;
+  research_memory?: unknown;
   sources: unknown;
   credits_charged: number;
   error: string | null;
@@ -83,6 +92,14 @@ interface DiscoveryCompanyRow {
   reject_reason: string | null;
   /** The three-outcome literal; added by the multi-source migration. */
   email_status?: string | null;
+  /** Verification facts; added by the agentic-research migration. */
+  application_url?: string | null;
+  beginn_year_confirmed?: boolean | null;
+  confidence_score?: number | null;
+  /** Evidence ledger (research-memory migration); absent pre-migration. */
+  evidence?: unknown;
+  confidence_reasons?: unknown;
+  conflict?: boolean | null;
 }
 
 function isSourceStatus(value: unknown): value is DiscoverySourceStatus["status"] {
@@ -132,6 +149,18 @@ const MIGRATION_DEPENDENT_KEYS = [
   "domain_match",
   "evidence_snippet",
   "discovered_at",
+  // 20261024000000_discovery_agentic_research.sql:
+  "current_query",
+  "current_source",
+  "application_url",
+  "beginn_year_confirmed",
+  "confidence_score",
+  // 20261025000000_discovery_research_memory.sql:
+  "current_strategy",
+  "research_memory",
+  "evidence",
+  "confidence_reasons",
+  "conflict",
 ] as const;
 
 /** The patch without the migration-dependent keys. */
@@ -188,6 +217,40 @@ function parseSources(raw: unknown): DiscoverySourceStatus[] {
   return out;
 }
 
+/** Parse a stored evidence jsonb into the typed ledger (defensive — a bad
+ *  value degrades to an empty ledger, never a crash). */
+function parseEvidence(raw: unknown): CompanyEvidenceItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CompanyEvidenceItem[] = [];
+  for (const entry of raw) {
+    const item = entry as Record<string, unknown> | null;
+    if (!item || typeof item.url !== "string" || item.url.length === 0) continue;
+    if (typeof item.fact !== "string" || typeof item.checkedAt !== "string") continue;
+    const sourceType = item.sourceType;
+    if (
+      typeof sourceType !== "string" ||
+      !/^[a-z_]+$/.test(sourceType)
+    ) continue;
+    out.push({
+      url: item.url,
+      sourceType: sourceType as CompanyEvidenceItem["sourceType"],
+      fact: item.fact,
+      ...(typeof item.quote === "string" ? { quote: item.quote } : {}),
+      checkedAt: item.checkedAt,
+    });
+    if (out.length >= 20) break; // a ledger is an audit trail, not a dump
+  }
+  return out;
+}
+
+/** Parse a stored confidence-reasons jsonb (defensive). */
+function parseStringList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((value): value is string => typeof value === "string")
+    .slice(0, 20);
+}
+
 function rowToRun(row: DiscoveryRunRow): DiscoveryRun {
   const parsed = discoveryRunParamsSchema.parse(row.params);
   const status = row.status as DiscoveryRunStatus;
@@ -204,6 +267,10 @@ function rowToRun(row: DiscoveryRunRow): DiscoveryRun {
     sourcesBlocked: row.sources_blocked ?? 0,
     // Migration-dependent column — older rows simply have no processed count.
     companiesProcessed: row.companies_processed ?? 0,
+    // Live research state — null on a database without the columns.
+    currentQuery: row.current_query ?? null,
+    currentSource: row.current_source ?? null,
+    currentStrategy: row.current_strategy ?? null,
     sources: parseSources(row.sources),
   };
   return {
@@ -333,6 +400,85 @@ export async function cancelDiscoveryRun(
   return final;
 }
 
+/**
+ * Continue Research: the batch-continuation transition.
+ *
+ * A run that reached its invocation limit before the target finishes as
+ * `partial` — its persisted companies and counters are the CHECKPOINT.
+ * Continuing reopens it (`partial → running`, `finished_at` cleared) so a new
+ * batch can process only the companies the checkpoint has not verified yet.
+ *
+ * Rules (mirroring cancel's race posture):
+ *  - idempotent for a `running` run (the client just gets the live row);
+ *  - ONLY `partial` or `pending` may be continued: a `completed` run reached
+ *    its target (nothing to do), `cancelled`/`failed` were terminal by
+ *    decision or fault and are never silently reopened;
+ *  - the update is conditional on the status, so a run that finished
+ *    meanwhile is returned as-is, never overwritten.
+ */
+export async function continueDiscoveryRun(
+  runId: string,
+  userId: string,
+): Promise<DiscoveryRun> {
+  const run = await getDiscoveryRun(runId, userId);
+  if (!run) throw new Error("Discovery run not found.");
+  if (run.status === "running" || run.status === "pending") return run;
+  if (run.status !== "partial") {
+    throw new Error("Only a run that ended before its target can be continued.");
+  }
+
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("discovery_runs")
+    .update({ status: "running", finished_at: null })
+    .eq("run_id", runId)
+    .eq("user_id", userId)
+    .eq("status", "partial")
+    .select("*")
+    .maybeSingle();
+  if (error) throw new Error("Failed to continue the discovery run.");
+  if (data) return rowToRun(data as DiscoveryRunRow);
+  // Lost the race with another continuation/finisher → return the final row.
+  const current = await getDiscoveryRun(runId, userId);
+  if (!current) throw new Error("Discovery run not found.");
+  return current;
+}
+
+/**
+ * The run's persisted research memory (one snapshot per goal pass), or null
+ * when none is stored yet (fresh run / pre-migration database / column
+ * absent). The continue path restores each planner from it — a defensive
+ * parse keeps a malformed value from breaking the run (a bad memory degrades
+ * to a fresh planner).
+ */
+export async function getResearchMemory(
+  runId: string,
+  userId: string,
+): Promise<ResearchMemoryStore | null> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("discovery_runs")
+    .select("research_memory")
+    .eq("run_id", runId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) {
+    if (!isUnknownColumnError(error)) throw error;
+    // Column not deployed yet — no memory, the run continues fresh.
+    return null;
+  }
+  const raw = (data as { research_memory?: unknown } | null)?.research_memory;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const store: ResearchMemoryStore = {};
+  for (const [goal, snap] of Object.entries(raw as Record<string, unknown>)) {
+    if (goal !== "ausbildung" && goal !== "arbeit") continue;
+    if (!snap || typeof snap !== "object") continue;
+    if ((snap as { v?: unknown }).v !== 1) continue;
+    store[goal] = snap as ResearchMemoryStore[typeof goal];
+  }
+  return Object.keys(store).length > 0 ? store : null;
+}
+
 export interface FinishRunOutcome {
   status: "completed" | "partial" | "failed";
   foundCompanies: number;
@@ -421,8 +567,15 @@ export async function setRunCounters(
       | "emailsFound"
       | "noPublicEmail"
       | "sourcesBlocked"
+  | "companiesProcessed"
+  | "currentQuery"
+  | "currentSource"
+  | "currentStrategy"
     >
-  >,
+  > & {
+    /** The run's research memory (persisted on every batch checkpoint). */
+    researchMemory?: ResearchMemoryStore | null;
+  },
   sources?: DiscoverySourceStatus[],
 ): Promise<void> {
   const admin = createAdminClient();
@@ -442,6 +595,18 @@ export async function setRunCounters(
     patch.no_public_email = counters.noPublicEmail;
   if (counters.sourcesBlocked !== undefined)
     patch.sources_blocked = counters.sourcesBlocked;
+  if (counters.companiesProcessed !== undefined)
+    patch.companies_processed = counters.companiesProcessed;
+  // Live research state (the "Current query / Current source" UI).
+  if (counters.currentQuery !== undefined)
+    patch.current_query = counters.currentQuery;
+  if (counters.currentSource !== undefined)
+    patch.current_source = counters.currentSource;
+  if (counters.currentStrategy !== undefined)
+    patch.current_strategy = counters.currentStrategy;
+  // Research memory (Continue never re-issues; survives a kill).
+  if (counters.researchMemory !== undefined)
+    patch.research_memory = counters.researchMemory;
   if (sources !== undefined) patch.sources = sources;
   if (Object.keys(patch).length === 0) return;
   let { error } = await admin
@@ -515,6 +680,24 @@ export interface CompanyRecord {
    * so `source_blocked` can never be misread as `no_public_email`.
    */
   emailStatus?: "email_found" | "no_public_email" | "source_blocked" | null;
+  /** The application/career page actually inspected this run, or null
+   *  (never a URL derived from the domain). */
+  applicationUrl?: string | null;
+  /** The counted offer's documented start matches the run's concrete beginn
+   *  year (true), is documented but different (false), or is not documented
+   *  at all (null — never guessed). */
+  beginnYearConfirmed?: boolean | null;
+  /** 0–100, derived from the stored evidence of the verified email, or null
+   *  when the company has no public email. */
+  confidenceScore?: number | null;
+  /** The company's evidence ledger — the pages actually opened and what each
+   *  documented (stored facts only, never guessed). */
+  evidence?: CompanyEvidenceItem[] | null;
+  /** One human-readable reason per applied confidence weight. */
+  confidenceReasons?: string[] | null;
+  /** True when documented facts contradict each other (never silently
+   *  dropped — it also lowers the score). */
+  conflict?: boolean | null;
 }
 
 /**
@@ -590,6 +773,25 @@ export async function recordCompany(
     status: company.status,
     reject_reason: company.rejectReason ?? null,
     email_status: company.emailStatus ?? null,
+    // Verification facts (agentic-research migration): undefined → omitted,
+    // so a pre-migration database is never asked for columns it lacks.
+    ...(company.applicationUrl !== undefined
+      ? { application_url: company.applicationUrl }
+      : {}),
+    ...(company.beginnYearConfirmed !== undefined
+      ? { beginn_year_confirmed: company.beginnYearConfirmed }
+      : {}),
+    ...(company.confidenceScore !== undefined
+      ? { confidence_score: company.confidenceScore }
+      : {}),
+    // Evidence ledger (research-memory migration): stored facts only.
+    ...(company.evidence !== undefined ? { evidence: company.evidence } : {}),
+    ...(company.confidenceReasons !== undefined
+      ? { confidence_reasons: company.confidenceReasons }
+      : {}),
+    ...(company.conflict !== undefined
+      ? { conflict: company.conflict ?? false }
+      : {}),
   };
   let { data, error } = await admin
     .from("discovery_companies")
@@ -669,6 +871,20 @@ export interface RunCompanyResult {
   rejectReason: string | null;
   /** The company-level outcome (§4.4), or null on a non-migrated database. */
   emailStatus: string | null;
+  /** The application/career page actually inspected, or null. */
+  applicationUrl: string | null;
+  /** Documented start matches the run's beginn year / documented but
+   *  different / not documented at all. */
+  beginnYearConfirmed: boolean | null;
+  /** 0–100 evidence-derived company confidence, or null. */
+  confidenceScore: number | null;
+  /** The evidence ledger (pages actually opened + what they documented);
+   *  empty on a pre-migration row. */
+  evidence: CompanyEvidenceItem[];
+  /** One reason per applied confidence weight (the score is readable). */
+  confidenceReasons: string[];
+  /** Documented facts contradict each other (e.g. start year differs). */
+  conflict: boolean;
   /** Empty when the company published no address — the UI says so explicitly. */
   emails: RunCompanyEmail[];
 }
@@ -809,6 +1025,12 @@ export async function listRunCompaniesWithEmails(
     status: row.status,
     rejectReason: row.reject_reason,
     emailStatus: row.email_status ?? null,
+    applicationUrl: row.application_url ?? null,
+    beginnYearConfirmed: row.beginn_year_confirmed ?? null,
+    confidenceScore: row.confidence_score ?? null,
+    evidence: parseEvidence(row.evidence),
+    confidenceReasons: parseStringList(row.confidence_reasons),
+    conflict: row.conflict ?? false,
     emails: byCompany.get(row.id) ?? [],
   }));
 }
