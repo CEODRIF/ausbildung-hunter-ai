@@ -24,6 +24,21 @@ import {
   type CommunityMessage,
   type CommunityMessageView,
 } from "@/lib/community";
+import {
+  TYPING_BROADCAST_EVENT,
+  applyTypingEvent,
+  buildTypingLabel,
+  createTypingState,
+  parseTypingBroadcast,
+  selectActiveTypers,
+  TypingSender,
+  type TypingBroadcastType,
+  type TypingPeer,
+  type TypingState,
+} from "@/lib/community/typing";
+
+/** How often the local timer re-prunes stale typing peers (no network). */
+const TYPING_PRUNE_INTERVAL_MS = 1000;
 
 interface CommunityChatProps {
   me: { userId: string; displayName: string; avatarId: string };
@@ -112,6 +127,11 @@ export function CommunityChat({
   const restoreScroll = useRef<{ prevHeight: number; prevTop: number } | null>(null);
   const markReadTimer = useRef<number | null>(null);
   const sawDisconnected = useRef(false);
+  // --- Typing indicator (ephemeral presence — in-memory only, no DB) ---
+  const typingStateRef = useRef<TypingState>(createTypingState(me.userId));
+  const channelRef = useRef<ReturnType<RealtimeClient["channel"]> | null>(null);
+  const senderRef = useRef<TypingSender | null>(null);
+  const [typingPeers, setTypingPeers] = useState<TypingPeer[]>([]);
 
   // The public NEXT_PUBLIC_* Supabase values are INLINED into the client bundle
   // at BUILD time, so a deployment can legitimately ship without them while the
@@ -203,6 +223,56 @@ export function CommunityChat({
     }
   }, []);
 
+  // --- Typing indicator (ephemeral presence, over the existing channel) ---
+
+  /** Broadcast OUR typing state. Fire-and-forget: a failed broadcast only
+   *  degrades the indicator for others, never the chat itself. */
+  const broadcastTyping = useCallback(
+    (type: TypingBroadcastType) => {
+      const channel = channelRef.current;
+      if (!channel) return;
+      void channel
+        .send({
+          type: "broadcast",
+          event: TYPING_BROADCAST_EVENT,
+          payload: {
+            type,
+            userId: me.userId,
+            displayName: me.displayName,
+            timestamp: Date.now(),
+          },
+        })
+        .catch(() => undefined);
+    },
+    [me],
+  );
+
+  /** Re-derive the visible typer list (prunes stale peers); skips the
+   *  re-render when nothing changed. Also best-effort upgrades each typer's
+   *  broadcast name to the trusted RLS profile name (same path as messages). */
+  const refreshTyping = useCallback(() => {
+    const active = selectActiveTypers(typingStateRef.current, Date.now());
+    setTypingPeers((prev) =>
+      prev.length === active.length &&
+      prev.every(
+        (p, i) =>
+          p.userId === active[i].userId && p.name === active[i].name && p.at === active[i].at,
+      )
+        ? prev
+        : active,
+    );
+    for (const peer of active) {
+      if (!(peer.userId in authorsRef.current)) void ensureAuthor(peer.userId);
+    }
+  }, [ensureAuthor]);
+
+  /** Wipe all remote typing state — after a reconnect the gap may have
+   *  swallowed stops, so every remaining peer is by definition stale. */
+  const clearTyping = useCallback(() => {
+    typingStateRef.current = createTypingState(typingStateRef.current.selfId);
+    setTypingPeers([]);
+  }, []);
+
   // Realtime subscription (event-driven; no polling).
   useEffect(() => {
     // A missing browser client (public env not inlined) and a failed subscribe
@@ -241,22 +311,38 @@ export function CommunityChat({
              if (!authorOf(incoming)) void ensureAuthor(incoming.user_id);
             // Scrolling follows stickToBottom (updated on scroll) — a user
             // reading history is not yanked to the bottom by new messages.
-            if (!stickToBottom.current) setNewBelow(true);
-            scheduleMarkRead(incoming.id);
-        },
-      )
+             if (!stickToBottom.current) setNewBelow(true);
+             scheduleMarkRead(incoming.id);
+         },
+       )
+       .on("broadcast", { event: TYPING_BROADCAST_EVENT }, (payload) => {
+          const broadcast = parseTypingBroadcast(payload?.payload);
+          if (!broadcast) return;
+          typingStateRef.current = applyTypingEvent(
+            typingStateRef.current,
+            broadcast,
+            Date.now(),
+          );
+          refreshTyping();
+        })
        .subscribe((status) => {
-         if (status === "SUBSCRIBED") {
-           setConnection("connected");
-           if (sawDisconnected.current) void resyncRecent();
-         } else {
-           // TIMED_OUT / CLOSED / CHANNEL_ERROR: the realtime client retries
-           // on its own; the banner ("reconnecting") stays up until the next
-           // SUBSCRIBED, and a resync then covers any missed INSERTs.
-           sawDisconnected.current = true;
-           setConnection("disconnected");
-         }
-       });
+          if (status === "SUBSCRIBED") {
+            setConnection("connected");
+            if (sawDisconnected.current) {
+              void resyncRecent();
+              clearTyping();
+            }
+          } else {
+            // TIMED_OUT / CLOSED / CHANNEL_ERROR: the realtime client retries
+            // on its own; the banner ("reconnecting") stays up until the next
+            // SUBSCRIBED, and a resync then covers any missed INSERTs.
+            sawDisconnected.current = true;
+            setConnection("disconnected");
+            // Don't leave others staring at a stale "… is typing".
+            senderRef.current?.commit();
+          }
+        });
+    channelRef.current = channel;
     } catch (error) {
       // A realtime setup failure must never reach the error boundary (an error
       // thrown inside an effect is caught by it): degrade to the banner instead.
@@ -265,10 +351,37 @@ export function CommunityChat({
     }
     return () => {
       if (degradedTimer) window.clearTimeout(degradedTimer);
+      channelRef.current = null;
       if (channel) void client.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getClient]);
+
+  // Outgoing typing controller. Declared AFTER the realtime effect so that
+  // on unmount its cleanup (dispose → immediate typing_stop) still runs
+  // while the channel exists — no stuck indicator on leave/navigation.
+  useEffect(() => {
+    const sender = new TypingSender({
+      emit: (type) => broadcastTyping(type),
+      scheduler: {
+        schedule: (callback, ms) => window.setTimeout(callback, ms),
+        cancel: (handle) => window.clearTimeout(handle as number),
+      },
+    });
+    senderRef.current = sender;
+    return () => {
+      senderRef.current = null;
+      sender.dispose();
+    };
+  }, [broadcastTyping]);
+
+  // Stale cleanup: a purely LOCAL timer that re-prunes the peer map so a
+  // dead peer (closed browser, lost typing_stop) drops out after the TTL.
+  // In-memory only — no network, no polling.
+  useEffect(() => {
+    const id = window.setInterval(refreshTyping, TYPING_PRUNE_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [refreshTyping]);
 
   // Resolve signed URLs for message images (private bucket). Each path is
   // signed at most once per session (3600 s expiry ≫ page lifetime).
@@ -411,6 +524,8 @@ export function CommunityChat({
   const onPickImage = (file: File | null | undefined) => {
     setImageError(null);
     if (!file) return;
+    // Picking an image is not typing — stop the indicator immediately.
+    senderRef.current?.commit();
     if (!(COMMUNITY_IMAGE_MIMES as readonly string[]).includes(file.type)) {
       setImageError("invalid_image");
       return;
@@ -479,6 +594,10 @@ export function CommunityChat({
         knownIds.current.add(view.id);
         setMessages((prev) => mergeCommunityMessages(prev, [view]));
       }
+      // Successful send: stop the typing indicator IMMEDIATELY (cancels the
+      // debounce, sends typing_stop, clears our state) — before anything
+      // else, and never awaited (it is fire-and-forget).
+      senderRef.current?.commit();
       setText("");
       clearPendingImage();
       stickToBottom.current = true;
@@ -489,6 +608,14 @@ export function CommunityChat({
       setSending(false);
     }
   }, [clearPendingImage, pendingImage, scheduleMarkRead, sending, text, me]);
+
+  const handleTextChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = event.target.value.slice(0, COMMUNITY_MAX_MESSAGE_LENGTH);
+    setText(value);
+    // Drives the typing sender: ONE typing_start per burst (first keystroke
+    // only), re-armed debounce after the last one, immediate stop on empty.
+    senderRef.current?.onInput(value.length > 0);
+  };
 
   const onTextKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -517,6 +644,17 @@ export function CommunityChat({
         return null;
     }
   };
+
+  // The indicator text. Names prefer the trusted RLS profile name and fall
+  // back to the (untrusted) broadcast name only until the profile resolves.
+  const typingLabel = useMemo(
+    () =>
+      buildTypingLabel(
+        typingPeers.map((p) => authors[p.userId]?.display_name ?? p.name),
+        t,
+      ),
+    [typingPeers, authors, t],
+  );
 
   return (
     <div
@@ -675,6 +813,23 @@ export function CommunityChat({
           on iOS via the --kb reservation on the root). */}
       <div className="shrink-0 border-t border-line bg-surface/95 px-4 pb-4 pt-3 sm:px-6">
         <div className="mx-auto w-full max-w-3xl">
+          {/* Typing indicator: appears/disappears above the composer inputs
+              (never over the messages or the keyboard); role="status" gives
+              a polite live region without per-keystroke announcements. */}
+          {typingLabel && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted"
+            >
+              <span className="typing-dots" aria-hidden="true">
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+              </span>
+              <span className="truncate">{typingLabel}</span>
+            </div>
+          )}
           {imageError && (
             <p role="alert" className="mb-2 text-xs font-medium text-danger">
               {errorText(imageError)}
@@ -717,7 +872,7 @@ export function CommunityChat({
             </button>
             <textarea
               value={text}
-              onChange={(event) => setText(event.target.value.slice(0, COMMUNITY_MAX_MESSAGE_LENGTH))}
+              onChange={handleTextChange}
               onKeyDown={onTextKeyDown}
               rows={1}
               placeholder={t("community.placeholder")}

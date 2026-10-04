@@ -41,6 +41,18 @@ const {
   mergeCommunityMessages,
   validateCommunityImage,
 } = await import("@/lib/community");
+const {
+  TYPING_BROADCAST_EVENT,
+  TYPING_STOP_DELAY_MS,
+  TYPING_TTL_MS,
+  TypingSender,
+  applyTypingEvent,
+  buildTypingLabel,
+  createTypingState,
+  parseTypingBroadcast,
+  pruneExpired,
+  selectActiveTypers,
+} = await import("@/lib/community/typing");
 const { getCommunityUnreadCount } = await import("@/lib/community/server");
 const { GET, POST } = await import("@/app/api/community/messages/route");
 const { completeOnboarding, markCommunityRead } = await import(
@@ -50,7 +62,7 @@ const { RATE_LIMITS } = await import("@/lib/rate-limit");
 const { dictionaries, SUPPORTED_LANGUAGES } = await import(
   "@/lib/i18n/dictionaries"
 );
-const { lookup } = await import("@/lib/i18n/core");
+const { lookup, translate } = await import("@/lib/i18n/core");
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const readSrc = (relative: string) =>
@@ -1139,6 +1151,9 @@ describe("community i18n parity", () => {
     "profileRequired",
     "reconnecting",
     "newMessages",
+    "typingOne",
+    "typingTwo",
+    "typingMany",
     "unreadBadge",
   ];
 
@@ -1165,6 +1180,358 @@ describe("community i18n parity", () => {
       "Connect with other Ausbildung Hunter members, share experiences and help each other.",
     );
     expect(lookup(en, "community.emptyCta")).toBe("Be the first to send a message.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Realtime typing indicator (ephemeral presence — in-memory only)
+// ---------------------------------------------------------------------------
+
+const TYPING_SELF_ID = "33333333-3333-4333-8333-333333333333";
+const TYPING_PEER_A = "44444444-4444-4444-8444-444444444444";
+const TYPING_PEER_B = "55555555-5555-4555-8555-555555555555";
+const TYPING_PEER_C = "66666666-6666-4666-8666-666666666666";
+
+/** Deterministic in-memory scheduler for the debounce tests. */
+function fakeScheduler() {
+  let now = 0;
+  let nextId = 1;
+  const timers = new Map<number, { at: number; cb: () => void }>();
+  return {
+    schedule(cb: () => void, ms: number) {
+      const id = nextId++;
+      timers.set(id, { at: now + ms, cb });
+      return id;
+    },
+    cancel(handle: unknown) {
+      timers.delete(handle as number);
+    },
+    /** Fire every timer due within the next `ms` (in deadline order). */
+    advance(ms: number) {
+      const target = now + ms;
+      for (const [id, timer] of [...timers.entries()].sort((a, b) => a[1].at - b[1].at)) {
+        if (timer.at <= target) {
+          timers.delete(id);
+          now = timer.at;
+          timer.cb();
+        }
+      }
+      now = target;
+    },
+    pending: () => timers.size,
+  };
+}
+
+function makeSender(sched = fakeScheduler()) {
+  const events: Array<"typing_start" | "typing_stop"> = [];
+  const sender = new TypingSender({
+    emit: (type) => events.push(type),
+    scheduler: sched,
+  });
+  return { sender, events, sched };
+}
+
+const enT = (path: string, vars?: Record<string, string | number>) =>
+  translate("en", path, vars);
+
+describe("typing state (incoming side)", () => {
+  it("no typers → no active peers (indicator hidden)", () => {
+    const state = createTypingState(TYPING_SELF_ID);
+    expect(selectActiveTypers(state, 0)).toEqual([]);
+  });
+
+  it("adds a peer on typing_start and removes it on typing_stop", () => {
+    let state = createTypingState(TYPING_SELF_ID);
+    state = applyTypingEvent(
+      state,
+      { type: "typing_start", userId: TYPING_PEER_A, displayName: "Taha" },
+      1000,
+    );
+    expect(selectActiveTypers(state, 1100)).toHaveLength(1);
+    state = applyTypingEvent(
+      state,
+      { type: "typing_stop", userId: TYPING_PEER_A, displayName: "Taha" },
+      1500,
+    );
+    expect(selectActiveTypers(state, 1600)).toEqual([]);
+  });
+
+  it("never counts the current user (own events are ignored)", () => {
+    let state = createTypingState(TYPING_SELF_ID);
+    state = applyTypingEvent(
+      state,
+      { type: "typing_start", userId: TYPING_SELF_ID, displayName: "Me" },
+      1000,
+    );
+    state = applyTypingEvent(
+      state,
+      { type: "typing_start", userId: TYPING_PEER_A, displayName: "Taha" },
+      1000,
+    );
+    expect(selectActiveTypers(state, 1100).map((p) => p.userId)).toEqual([
+      TYPING_PEER_A,
+    ]);
+  });
+
+  it("rejects malformed broadcasts (untrusted wire data)", () => {
+    expect(parseTypingBroadcast(null)).toBeNull();
+    expect(parseTypingBroadcast("typing_start")).toBeNull();
+    expect(parseTypingBroadcast({})).toBeNull();
+    expect(parseTypingBroadcast({ type: "typing_start" })).toBeNull();
+    expect(parseTypingBroadcast({ type: "typing_start", userId: "   " })).toBeNull();
+    expect(parseTypingBroadcast({ type: "weird", userId: TYPING_PEER_A })).toBeNull();
+    expect(
+      parseTypingBroadcast({
+        type: "typing_start",
+        userId: TYPING_PEER_A,
+        displayName: "Taha",
+        timestamp: 42,
+      }),
+    ).toEqual({
+      type: "typing_start",
+      userId: TYPING_PEER_A,
+      displayName: "Taha",
+      timestamp: 42,
+    });
+  });
+
+  it("normalizes the untrusted name (trim + 40-char cap, empty fallback)", () => {
+    const parsed = parseTypingBroadcast({
+      type: "typing_start",
+      userId: TYPING_PEER_A,
+      displayName: `  ${"x".repeat(100)}  `,
+    });
+    expect(parsed?.displayName).toBe("x".repeat(COMMUNITY_MAX_NAME_LENGTH));
+    expect(
+      parseTypingBroadcast({ type: "typing_start", userId: TYPING_PEER_A })?.displayName,
+    ).toBe("");
+  });
+
+  it("prunes a stale peer exactly at the TTL (and keeps it just before)", () => {
+    let state = createTypingState(TYPING_SELF_ID);
+    state = applyTypingEvent(
+      state,
+      { type: "typing_start", userId: TYPING_PEER_A, displayName: "Taha" },
+      10_000,
+    );
+    expect(selectActiveTypers(state, 10_000 + TYPING_TTL_MS - 1)).toHaveLength(1);
+    expect(selectActiveTypers(state, 10_000 + TYPING_TTL_MS)).toHaveLength(0);
+    // pruneExpired is pure and idempotent.
+    const pruned = pruneExpired(state, 10_000 + TYPING_TTL_MS);
+    expect(Object.keys(pruned.peers)).toEqual([]);
+    expect(pruneExpired(pruned, 10_000 + TYPING_TTL_MS)).toBe(pruned);
+  });
+
+  it("a fresh typing_start refreshes the expiry (keeps a genuinely active peer)", () => {
+    let state = createTypingState(TYPING_SELF_ID);
+    state = applyTypingEvent(
+      state,
+      { type: "typing_start", userId: TYPING_PEER_A, displayName: "Taha" },
+      0,
+    );
+    const refreshAt = TYPING_TTL_MS - 1000;
+    state = applyTypingEvent(
+      state,
+      { type: "typing_start", userId: TYPING_PEER_A, displayName: "Taha" },
+      refreshAt,
+    );
+    // Long past the FIRST start's expiry — the refresh kept it alive.
+    expect(selectActiveTypers(state, TYPING_TTL_MS + 1000)).toHaveLength(1);
+    // …but it dies TYPING_TTL_MS after the LAST start.
+    expect(selectActiveTypers(state, refreshAt + TYPING_TTL_MS)).toHaveLength(0);
+  });
+
+  it("orders typers deterministically (oldest start first, userId tie-break)", () => {
+    let state = createTypingState(TYPING_SELF_ID);
+    state = applyTypingEvent(state, { type: "typing_start", userId: TYPING_PEER_C, displayName: "C" }, 100);
+    state = applyTypingEvent(state, { type: "typing_start", userId: TYPING_PEER_A, displayName: "A" }, 200);
+    state = applyTypingEvent(state, { type: "typing_start", userId: TYPING_PEER_B, displayName: "B" }, 300);
+    expect(selectActiveTypers(state, 400).map((p) => p.userId)).toEqual([
+      TYPING_PEER_C,
+      TYPING_PEER_A,
+      TYPING_PEER_B,
+    ]);
+  });
+});
+
+describe("typing label (pluralization + i18n)", () => {
+  it("0 → hidden, 1 → name, 2 → both names, 3 → count only", () => {
+    expect(buildTypingLabel([], enT)).toBeNull();
+    expect(buildTypingLabel(["Taha"], enT)).toBe("Taha is typing…");
+    expect(buildTypingLabel(["Taha", "Sara"], enT)).toBe("Taha and Sara are typing…");
+    expect(buildTypingLabel(["Taha", "Sara", "Youssef"], enT)).toBe(
+      "3 people are typing…",
+    );
+  });
+
+  it("10 typers → count only, never a name list", () => {
+    const names = Array.from({ length: 10 }, (_, i) => `User${i}`);
+    expect(buildTypingLabel(names, enT)).toBe("10 people are typing…");
+    for (const name of names) {
+      expect(buildTypingLabel(names, enT)).not.toContain(name);
+    }
+  });
+
+  it("drops empty/whitespace names from the untrusted wire (no '… is typing')", () => {
+    expect(buildTypingLabel(["", "   "], enT)).toBeNull();
+    expect(buildTypingLabel(["  Taha  ", ""], enT)).toBe("Taha is typing…");
+  });
+
+  it("renders correctly in all four languages", () => {
+    const expectations: Record<string, [string, string, string]> = {
+      de: ["Taha schreibt…", "Taha und Sara schreiben…", "3 Personen schreiben…"],
+      en: ["Taha is typing…", "Taha and Sara are typing…", "3 people are typing…"],
+      fr: ["Taha écrit…", "Taha et Sara écrivent…", "3 personnes écrivent…"],
+      ar: ["Taha يكتب…", "Taha و Sara يكتبان…", "3 أشخاص يكتبون…"],
+    };
+    for (const lang of SUPPORTED_LANGUAGES) {
+      const [one, two, many] = expectations[lang]!;
+      const t = (path: string, vars?: Record<string, string | number>) =>
+        translate(lang, path, vars);
+      expect(buildTypingLabel(["Taha"], t), `${lang}:one`).toBe(one);
+      expect(buildTypingLabel(["Taha", "Sara"], t), `${lang}:two`).toBe(two);
+      expect(buildTypingLabel(["Taha", "Sara", "Youssef"], t), `${lang}:many`).toBe(many);
+    }
+  });
+});
+
+describe("TypingSender (outgoing side)", () => {
+  it("emits typing_start ONCE per burst — never per keystroke", () => {
+    const { sender, events, sched } = makeSender();
+    sender.onInput(true); // first character
+    expect(events).toEqual(["typing_start"]);
+    for (let i = 0; i < 25; i++) sender.onInput(true); // 25 more keystrokes
+    expect(events).toEqual(["typing_start"]);
+    expect(sender.isTyping).toBe(true);
+    sched.advance(60_000); // any (incorrect) stray timer would fire here
+    expect(events).toEqual(["typing_start", "typing_stop"]);
+    expect(sender.isTyping).toBe(false);
+  });
+
+  it("sends typing_stop after the idle debounce (exactly TYPING_STOP_DELAY_MS)", () => {
+    const { sender, events, sched } = makeSender();
+    sender.onInput(true);
+    sched.advance(TYPING_STOP_DELAY_MS - 1);
+    expect(events).toEqual(["typing_start"]);
+    sched.advance(1);
+    expect(events).toEqual(["typing_start", "typing_stop"]);
+  });
+
+  it("each keystroke re-arms the debounce (no stop mid-burst)", () => {
+    const { sender, events, sched } = makeSender();
+    sender.onInput(true);
+    sched.advance(TYPING_STOP_DELAY_MS - 500);
+    sender.onInput(true); // still typing
+    sched.advance(500); // only half the delay since the last key
+    expect(events).toEqual(["typing_start"]);
+    sched.advance(TYPING_STOP_DELAY_MS - 500);
+    expect(events).toEqual(["typing_start", "typing_stop"]);
+  });
+
+  it("Send → commit() → immediate typing_stop + debounce cancelled", () => {
+    const { sender, events, sched } = makeSender();
+    sender.onInput(true);
+    sender.commit();
+    expect(events).toEqual(["typing_start", "typing_stop"]);
+    expect(sched.pending()).toBe(0);
+  });
+
+  it("empty field → immediate typing_stop", () => {
+    const { sender, events, sched } = makeSender();
+    sender.onInput(true);
+    sender.onInput(false);
+    expect(events).toEqual(["typing_start", "typing_stop"]);
+    expect(sched.pending()).toBe(0);
+  });
+
+  it("commit() while idle sends nothing (no stray stops)", () => {
+    const { sender, events } = makeSender();
+    sender.commit();
+    expect(events).toEqual([]);
+  });
+
+  it("a new burst after a stop starts again", () => {
+    const { sender, events, sched } = makeSender();
+    sender.onInput(true);
+    sched.advance(TYPING_STOP_DELAY_MS);
+    sender.onInput(true);
+    expect(events).toEqual(["typing_start", "typing_stop", "typing_start"]);
+  });
+
+  it("dispose() (unmount) sends the stop, cancels the timer, and goes silent", () => {
+    const { sender, events, sched } = makeSender();
+    sender.onInput(true);
+    sender.dispose();
+    expect(events).toEqual(["typing_start", "typing_stop"]);
+    expect(sched.pending()).toBe(0);
+    sched.advance(60_000); // no zombie event from the cancelled timer
+    sender.onInput(true); // disposed → dead
+    expect(events).toEqual(["typing_start", "typing_stop"]);
+  });
+});
+
+describe("typing indicator (source guard)", () => {
+  const chatSrc = readSrc("src/components/community-chat.tsx");
+  const cssSrc = readSrc("src/app/globals.css");
+  const typingSrc = readSrc("src/lib/community/typing.ts");
+
+  it("rides the EXISTING realtime channel — no new channel, table or polling", () => {
+    expect(TYPING_BROADCAST_EVENT).toBe("community_typing");
+    expect(chatSrc).toContain('.channel("community-messages")');
+    // The listener is wired through the shared constant (single source of truth).
+    expect(chatSrc).toContain('.on("broadcast", { event: TYPING_BROADCAST_EVENT }');
+    // Only the two pre-existing Supabase queries (profiles + image bucket):
+    // typing added no database access at all.
+    expect(chatSrc.match(/\.from\(/g)).toHaveLength(2);
+    // Only the three pre-existing fetches (reconnect resync, load older,
+    // message POST) — typing added no network calls of its own.
+    expect(chatSrc.match(/\bfetch\(/g)).toHaveLength(3);
+  });
+
+  it("stale cleanup is a local timer; reconnect clears stale peers; disconnect stops", () => {
+    expect(chatSrc).toContain("window.setInterval(refreshTyping, TYPING_PRUNE_INTERVAL_MS)");
+    // After a reconnect the (stale) peer list is wiped…
+    expect(chatSrc).toContain("clearTyping()");
+    // …and on disconnect our own indicator stops immediately.
+    expect(chatSrc).toMatch(/senderRef\.current\?\.commit\(\);/);
+  });
+
+  it("the broadcast handler only touches typing state (never messages/read state)", () => {
+    const handler = chatSrc.match(
+      /\.on\("broadcast", \{ event: TYPING_BROADCAST_EVENT \}, \(payload\) => \{[\s\S]*?\}\)/,
+    );
+    expect(handler).not.toBeNull();
+    const body = handler?.[0] ?? "";
+    expect(body).not.toContain("setMessages");
+    expect(body).not.toContain("scheduleMarkRead");
+    expect(body).not.toContain("knownIds");
+    expect(body).not.toContain("markCommunityRead");
+  });
+
+  it("is accessible (role=status, polite live region) and CSS-animated", () => {
+    expect(chatSrc).toContain('role="status"');
+    expect(chatSrc).toContain('aria-live="polite"');
+    expect(cssSrc).toContain("@keyframes typing-bounce");
+    expect(cssSrc).toContain(".typing-dot");
+    expect(cssSrc).toMatch(/animation-delay:\s*150ms/);
+    expect(cssSrc).toMatch(/animation-delay:\s*300ms/);
+  });
+
+  it("reduced-motion: frozen dots stay visible and the label still renders", () => {
+    // The global prefers-reduced-motion rule freezes every animation; the
+    // dots keep their base opacity (static, visible) — the text is never
+    // animated, so it can never be blanked.
+    expect(cssSrc).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(cssSrc).toMatch(/\.typing-dot\s*\{[^}]*opacity:\s*0\.6/);
+    expect(chatSrc).toContain("typingLabel");
+  });
+
+  it("never writes to the database (pure module, untouched migration)", () => {
+    expect(typingSrc).not.toMatch(
+      /supabase|\.from\(|insert|\.rpc\(|localStorage|sessionStorage|fetch\(/,
+    );
+    const sql = readSrc("supabase/migrations/20261014000000_community.sql");
+    expect(sql).not.toMatch(/typing/i);
   });
 });
 

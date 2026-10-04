@@ -97,7 +97,13 @@ describe("Messenger-like scrolling", () => {
 
   it("never reloads the page and never polls as a delivery mechanism", () => {
     expect(chatSrc).not.toMatch(/location\.reload|window\.location\.reload|router\.refresh\(\)/);
-    expect(chatSrc).not.toMatch(/setInterval\(/);
+    // The only timer allowed is the LOCAL (in-memory) typing-state prune —
+    // no interval may ever touch the network (that would be polling).
+    expect(chatSrc.match(/setInterval\(/g)).toHaveLength(1);
+    expect(chatSrc).toContain(
+      "window.setInterval(refreshTyping, TYPING_PRUNE_INTERVAL_MS)",
+    );
+    expect(chatSrc).not.toMatch(/setInterval\([^)]*fetch/);
   });
 });
 
@@ -130,7 +136,10 @@ describe("send + realtime delivery contract", () => {
   });
 
   it("resyncs after a reconnect and when the phone comes back to the foreground", () => {
-    expect(chatSrc).toContain("if (sawDisconnected.current) void resyncRecent();");
+    // (and clears the stale typing state that the gap may have left behind)
+    expect(chatSrc).toMatch(
+      /if \(sawDisconnected\.current\) \{\s*void resyncRecent\(\);\s*clearTyping\(\);/,
+    );
     expect(chatSrc).toContain('document.addEventListener("visibilitychange"');
   });
 });

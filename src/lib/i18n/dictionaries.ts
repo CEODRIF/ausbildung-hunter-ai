@@ -1618,6 +1618,9 @@ const de = {
     historyUnavailable: "Der bisherige Verlauf konnte nicht geladen werden.",
     historyUnavailableRetry: "Erneut versuchen",
     newMessages: "Neue Nachrichten",
+    typingOne: "{name} schreibt…",
+    typingTwo: "{first} und {second} schreiben…",
+    typingMany: "{count} Personen schreiben…",
     unreadBadge: "Neue Community-Nachrichten",
   },
 };
@@ -3175,6 +3178,9 @@ const en: Dict = {
     historyUnavailable: "The earlier history could not be loaded.",
     historyUnavailableRetry: "Try again",
     newMessages: "New messages",
+    typingOne: "{name} is typing…",
+    typingTwo: "{first} and {second} are typing…",
+    typingMany: "{count} people are typing…",
     unreadBadge: "New community messages",
   },
 };
@@ -4736,6 +4742,9 @@ const fr: Dict = {
     historyUnavailable: "L'historique précédent n'a pas pu être chargé.",
     historyUnavailableRetry: "Réessayer",
     newMessages: "Nouveaux messages",
+    typingOne: "{name} écrit…",
+    typingTwo: "{first} et {second} écrivent…",
+    typingMany: "{count} personnes écrivent…",
     unreadBadge: "Nouveaux messages de la communauté",
   },
 };
@@ -6257,6 +6266,9 @@ const ar: Dict = {
     historyUnavailable: "تعذر تحميل السجل السابق.",
     historyUnavailableRetry: "إعادة المحاولة",
     newMessages: "رسائل جديدة",
+    typingOne: "{name} يكتب…",
+    typingTwo: "{first} و {second} يكتبان…",
+    typingMany: "{count} أشخاص يكتبون…",
     unreadBadge: "رسائل جديدة في المجتمع",
   },
 };
