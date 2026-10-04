@@ -36,6 +36,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The deckblatt print test inspects the generated PDF with pdfinfo
+      # (poppler-utils). Recent ubuntu-latest runner images no longer ship
+      # it, so install it explicitly — the test itself must not be weakened.
+      - name: Install poppler-utils (PDF inspection)
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends poppler-utils
+
       - name: Typecheck
         run: npm run typecheck
 
