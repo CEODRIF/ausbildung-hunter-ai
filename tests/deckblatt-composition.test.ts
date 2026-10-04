@@ -429,7 +429,7 @@ describe("exactly one printed A4 page", () => {
     const info = execFileSync("pdfinfo", [pdfPath], { encoding: "utf8", timeout: 30_000 });
     expect(info).toMatch(/Pages:\s+1\b/);
     expect(info).toMatch(/Page size:\s+594\.96 x 841\.92/);
-  });
+  }, 120_000); // spawns a real headless Chrome — must exceed the internal 90 s budget
 });
 
 // ---------------------------------------------------------------------------
