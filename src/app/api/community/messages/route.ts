@@ -126,7 +126,41 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "profile_required" }, { status: 409 });
   }
 
-  const messageId = crypto.randomUUID();
+  // Idempotency: the client MAY supply its own UUID so that a retry after a
+  // lost response reuses the SAME row instead of creating a duplicate. The
+  // id is validated as a UUID and only ever becomes THIS session user's own
+  // row (the RLS insert policy enforces user_id = auth.uid()).
+  const rawId = form.get("id");
+  const clientMessageId =
+    typeof rawId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      rawId,
+    )
+      ? rawId
+      : null;
+
+  if (clientMessageId) {
+    const { data: existing } = await supabase
+      .from("community_messages")
+      .select("id,user_id,message,image_path,created_at,updated_at")
+      .eq("id", clientMessageId)
+      .maybeSingle();
+    if (existing) {
+      // Someone else's row: never claimable — reject without echoing it.
+      if (existing.user_id !== user.id) {
+        return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+      }
+      // This exact message was already persisted (first attempt succeeded,
+      // response lost). Return it — the client flips its optimistic row to
+      // "sent" and nothing is duplicated.
+      return NextResponse.json(
+        { message: existing, duplicate: true },
+        { status: 200, headers: rateLimitHeaders(limited) },
+      );
+    }
+  }
+
+  const messageId = clientMessageId ?? crypto.randomUUID();
   let imagePath: string | null = null;
 
   if (file instanceof File) {
@@ -172,8 +206,25 @@ export async function POST(request: Request) {
     })
     .select("id,user_id,message,image_path,created_at,updated_at")
     .single();
-  if (error)
+  if (error) {
+    // 23505 = primary-key violation: a concurrent retry (two tabs, or the
+    // pre-check raced another request) already created this exact row.
+    // Idempotent success — return it instead of failing the retry.
+    if ((error as { code?: string }).code === "23505") {
+      const { data: existing } = await supabase
+        .from("community_messages")
+        .select("id,user_id,message,image_path,created_at,updated_at")
+        .eq("id", messageId)
+        .maybeSingle();
+      if (existing) {
+        return NextResponse.json(
+          { message: existing, duplicate: true },
+          { status: 200, headers: rateLimitHeaders(limited) },
+        );
+      }
+    }
     return NextResponse.json({ error: "Could not send message." }, { status: 500 });
+  }
 
   return NextResponse.json(
     { message: row },

@@ -84,15 +84,15 @@ describe("iOS keyboard handling", () => {
 });
 
 describe("Messenger-like scrolling", () => {
-  it("offers a 'new messages' pill instead of yanking the reader down", () => {
-    expect(chatSrc).toContain("const [newBelow, setNewBelow] = useState(false)");
-    expect(chatSrc).toContain("if (!stickToBottom.current) setNewBelow(true)");
-    expect(chatSrc).toContain('t("community.newMessages")');
+  it("offers a COUNTED 'new messages' pill instead of yanking the reader down", () => {
+    expect(chatSrc).toContain("const [newCount, setNewCount] = useState(0)");
+    expect(chatSrc).toContain("if (!dup && !stickToBottom.current) setNewCount((c) => c + 1)");
+    expect(chatSrc).toContain('t("community.newMessagesCount", { count: newCount })');
     expect(chatSrc).toContain("jumpToLatest");
   });
 
   it("clears the pill once the reader is back at the bottom", () => {
-    expect(chatSrc).toContain("if (atBottom) setNewBelow(false)");
+    expect(chatSrc).toContain("if (atBottom) setNewCount(0)");
   });
 
   it("never reloads the page and never polls as a delivery mechanism", () => {
@@ -107,32 +107,53 @@ describe("Messenger-like scrolling", () => {
   });
 });
 
-describe("send + realtime delivery contract", () => {
-  it("adds the server row to local state (no refresh needed for the sender)", () => {
-    expect(chatSrc).toContain("mergeCommunityMessages(prev, [view])");
-    expect(chatSrc).toContain("knownIds.current.add(view.id)");
-  });
-
-  it("only adds after a successful response, and reports failures", () => {
-    const sendBlock = chatSrc.slice(
-      chatSrc.indexOf("const send = useCallback"),
-      chatSrc.indexOf("const onTextKeyDown"),
+describe("send + realtime delivery contract (optimistic UI)", () => {
+  it("the optimistic row appears BEFORE the network round-trip", () => {
+    const submitBlock = chatSrc.slice(
+      chatSrc.indexOf("const submit = useCallback"),
+      chatSrc.indexOf("const retryMessage"),
     );
-    expect(sendBlock).toContain("if (!response.ok)");
-    expect(sendBlock).toContain('setSendError("send_failed")');
-    // the local add happens after the ok-check, never before
-    expect(sendBlock.indexOf("if (!response.ok)")).toBeLessThan(
-      sendBlock.indexOf("mergeCommunityMessages(prev, [view])"),
+    expect(submitBlock).toContain("const id = crypto.randomUUID()");
+    expect(submitBlock).toContain("createOptimisticMessage(");
+    expect(submitBlock).toContain("mergeCommunityMessages(prev, [optimistic])");
+    // the UI insert happens strictly before the POST is fired
+    expect(submitBlock.indexOf("mergeCommunityMessages(prev, [optimistic])")).toBeLessThan(
+      submitBlock.indexOf("void postMessage("),
     );
   });
 
-  it("blocks double submits while sending", () => {
-    expect(chatSrc).toContain("if (sending) return;");
-    expect(chatSrc).toContain("disabled={sending ||");
+  it("a failed send flips the row to failed and never loses the user's text", () => {
+    const postBlock = chatSrc.slice(
+      chatSrc.indexOf("const postMessage = useCallback"),
+      chatSrc.indexOf("const submit = useCallback"),
+    );
+    expect(postBlock).toContain("if (!response.ok)");
+    expect(postBlock).toContain('setSendStatus(prev, p.id, "failed")');
+    // the composer text is restored on failure (bubble + composer, never lost)
+    expect(postBlock).toContain("if (p.text) setText(p.text)");
+    // retries reuse the SAME id (server-side idempotency)
+    expect(postBlock).toContain('form.set("id", p.id)');
+    expect(chatSrc).toContain('form.set("message", p.text)');
   });
 
-  it("dedupes realtime echoes through the message id", () => {
-    expect(chatSrc).toContain("if (!incoming?.id || knownIds.current.has(incoming.id)) return;");
+  it("blocks double submits while a POST is in flight", () => {
+    expect(chatSrc).toContain("if (submitting) return;");
+    expect(chatSrc).toContain("disabled={submitting ||");
+    expect(chatSrc).toContain("if (inFlightRef.current.has(m.id)) return;");
+  });
+
+  it("dedupes realtime echoes + POST responses through the stable message id", () => {
+    // The INSERT handler merges with preferIncoming (server row wins on id
+    // collision — a duplicate echo can never create a second row, it only
+    // proves the send persisted: the row flips to "sent").
+    expect(chatSrc).toContain("const dup = knownIds.current.has(incoming.id);");
+    expect(chatSrc).toContain(
+      "mergeCommunityMessages(prev, [{ ...incoming, author: null }], {",
+    );
+    expect(chatSrc).toContain("preferIncoming: true");
+    expect(chatSrc).toContain(
+      "mergeCommunityMessages(prev, [serverRow], { preferIncoming: true }),",
+    );
   });
 
   it("resyncs after a reconnect and when the phone comes back to the foreground", () => {
@@ -144,17 +165,44 @@ describe("send + realtime delivery contract", () => {
   });
 });
 
+describe("realtime session wiring (production root-cause guard)", () => {
+  it("attaches the user JWT to the realtime socket BEFORE joining the channel", () => {
+    // Without auth.initialize() the browser socket has no user JWT and the
+    // RLS-filtered postgres INSERT stream delivers ZERO rows — the message
+    // "only appears after refresh" bug.
+    expect(chatSrc).toContain("await client.auth.initialize()");
+    expect(chatSrc).toContain("client.realtime.setAuth(session.access_token)");
+    // …and the join happens after the token is attached, inside the same
+    // async bootstrap (subscribeChannel is only called after setAuth).
+    const rtEffect = chatSrc.slice(
+      chatSrc.indexOf("const subscribeChannel = () =>"),
+      chatSrc.indexOf("return () => {", chatSrc.indexOf("const subscribeChannel = () =>")),
+    );
+    expect(rtEffect.indexOf("client.realtime.setAuth(session.access_token)")).toBeLessThan(
+      rtEffect.indexOf("subscribeChannel();"),
+    );
+  });
+
+  it("keeps the socket token fresh across refreshes and sign-out", () => {
+    expect(chatSrc).toContain("client.auth.onAuthStateChange");
+    expect(chatSrc).toContain("client.realtime.setAuth();");
+  });
+});
+
 describe("image pipeline and security untouched", () => {
   it("still validates type and size client-side and posts the same form", () => {
     expect(chatSrc).toContain("COMMUNITY_IMAGE_MIMES");
     expect(chatSrc).toContain("COMMUNITY_MAX_IMAGE_BYTES");
-    expect(chatSrc).toContain('form.set("image", pendingImage.file, "image")');
+    expect(chatSrc).toContain('form.set("image", p.file, "image")');
   });
 
-  it("still renders message text as plain text", () => {
+  it("still renders message text as plain text (memoized row component)", () => {
     expect(chatSrc).not.toContain("dangerouslySetInnerHTML");
-    expect(chatSrc).toContain("whitespace-pre-wrap");
-    expect(chatSrc).toContain("break-words");
+    const rowSrc = readSrc("src/components/community-message-row.tsx");
+    expect(rowSrc).not.toContain("dangerouslySetInnerHTML");
+    expect(rowSrc).toContain("whitespace-pre-wrap");
+    expect(rowSrc).toContain("break-words");
+    expect(rowSrc).toContain("memo(");
   });
 });
 

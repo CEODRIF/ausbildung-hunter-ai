@@ -77,18 +77,104 @@ export type CommunityMessageView = CommunityMessage & {
   author: CommunityAuthor | null;
 };
 
+// ---------------------------------------------------------------------------
+// Optimistic send lifecycle (pure — unit-testable without DOM/network)
+// ---------------------------------------------------------------------------
+
+/** Lifecycle of a message THIS client inserted optimistically. */
+export type MessageSendStatus = "sending" | "sent" | "failed";
+
+/**
+ * A message row in the client state. Rows coming from the API/Realtime never
+ * carry `sendStatus`; only the client's own optimistic rows do.
+ */
+export type LocalMessage = CommunityMessageView & {
+  sendStatus?: MessageSendStatus;
+};
+
+/**
+ * Build the optimistic row that appears in the UI the instant Send is
+ * pressed — BEFORE the network round-trip. The client generates the UUID
+ * (`id`), which the API route accepts (idempotency): every retry reuses the
+ * SAME id, so a lost response or a duplicate Realtime INSERT can never
+ * create a second copy.
+ */
+export function createOptimisticMessage(input: {
+  id: string;
+  user: CommunityAuthor;
+  text: string | null;
+  imagePath: string | null;
+  createdAt: string;
+}): LocalMessage {
+  return {
+    id: input.id,
+    user_id: input.user.user_id,
+    message: input.text,
+    image_path: input.imagePath,
+    created_at: input.createdAt,
+    updated_at: input.createdAt,
+    author: input.user,
+    sendStatus: "sending",
+  };
+}
+
+/** Set the send status of one optimistic row (no-op for unknown ids). */
+export function setSendStatus(
+  messages: LocalMessage[],
+  id: string,
+  status: MessageSendStatus,
+): LocalMessage[] {
+  let changed = false;
+  const next = messages.map((m) => {
+    if (m.id !== id) return m;
+    if (m.sendStatus === status) return m;
+    changed = true;
+    return { ...m, sendStatus: status };
+  });
+  return changed ? next : messages;
+}
+
+type MergeableMessage = CommunityMessage & {
+  author?: CommunityAuthor | null;
+  sendStatus?: MessageSendStatus;
+};
+
 /**
  * Merge incoming messages into the current list — dedupe by id (the sender's
  * own POST response, a realtime INSERT, and a post-reconnect resync can all
  * carry the same row) and keep the chronological ascending order.
+ *
+ * Collision policy:
+ *  - default (`preferIncoming: false`): the EXISTING row wins — used for
+ *    "load older" pagination, where the local list is already authoritative.
+ *  - `preferIncoming: true`: the INCOMING (server) row wins — used for the
+ *    sender's POST response and Realtime INSERTs, which carry the DB truth
+ *    (created_at, image_path). The local author is preserved when the
+ *    incoming row has none (Realtime rows are un-enriched), and the send
+ *    status becomes "sent" — a server echo is PROOF the row is persisted,
+ *    even if the POST response itself was lost by the network (the failed
+ *    bubble flips to delivered instead of being resurrected).
  */
-export function mergeCommunityMessages<T extends CommunityMessage>(
+export function mergeCommunityMessages<T extends MergeableMessage>(
   existing: T[],
   incoming: T[],
+  opts: { preferIncoming?: boolean } = {},
 ): T[] {
+  const preferIncoming = opts.preferIncoming === true;
   const byId = new Map<string, T>();
   for (const m of existing) byId.set(m.id, m);
-  for (const m of incoming) if (!byId.has(m.id)) byId.set(m.id, m);
+  for (const m of incoming) {
+    const local = byId.get(m.id);
+    if (local === undefined) {
+      byId.set(m.id, m);
+    } else if (preferIncoming) {
+      byId.set(m.id, {
+        ...m,
+        author: m.author ?? local.author,
+        sendStatus: "sent",
+      } as T);
+    }
+  }
   return [...byId.values()].sort(
     (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
   );

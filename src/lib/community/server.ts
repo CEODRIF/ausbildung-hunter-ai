@@ -54,6 +54,30 @@ async function totalMessageCount(
   return count ?? 0;
 }
 
+/**
+ * Total number of community members (onboarded profiles) for the chat
+ * header. This is a REAL count — not presence: no "online" figure is shown
+ * because there is no presence system (typing stays ephemeral by design).
+ * Non-critical chrome: any failure degrades to 0, never breaks the page.
+ */
+export async function getCommunityMemberCount(
+  supabase: SessionClient,
+): Promise<number> {
+  try {
+    const { count, error } = await supabase
+      .from("community_profiles")
+      .select("id", { count: "exact", head: true });
+    if (error) {
+      console.error("[community] member count failed:", error.message);
+      return 0;
+    }
+    return count ?? 0;
+  } catch (error) {
+    console.error("[community] member count threw:", error);
+    return 0;
+  }
+}
+
 export interface CommunityHistory {
   /** Newest page, ascending. Empty when nothing could be read. */
   messages: CommunityMessageView[];

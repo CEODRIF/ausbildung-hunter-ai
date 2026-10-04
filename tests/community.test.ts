@@ -18,7 +18,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CommunityMessage } from "@/lib/community";
+import type {
+  CommunityMessage,
+  CommunityMessageView,
+  LocalMessage,
+} from "@/lib/community";
 
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
@@ -38,7 +42,9 @@ const {
   buildCommunityImagePath,
   communityAvatarUrl,
   communityProfileSchema,
+  createOptimisticMessage,
   mergeCommunityMessages,
+  setSendStatus,
   validateCommunityImage,
 } = await import("@/lib/community");
 const {
@@ -113,7 +119,18 @@ interface ClientFixture {
   /** community_messages select via thenable (GET: newest first from the DB). */
   messages?: CommunityMessage[];
   /** community_messages insert(...).single() result (POST). */
-  inserted?: { data: Record<string, unknown> | null; error: { message: string } | null };
+  inserted?: {
+    data: Record<string, unknown> | null;
+    error: { message: string; code?: string } | null;
+  };
+  /** community_messages .eq("id", …).maybeSingle() result (POST idempotency). */
+  existing?: Record<string, unknown> | null;
+  /**
+   * Row visible on the SECOND community_messages maybeSingle — simulates the
+   * 23505 race (row did not exist at the pre-check, exists by the time the
+   * insert collides). Falls back to `existing` when unset.
+   */
+  existingAfterInsert?: Record<string, unknown> | null;
   /** storage.upload result (POST with image). */
   uploadError?: { message: string } | null;
 }
@@ -127,6 +144,7 @@ interface RecordedCall {
 /** Supabase user-client mock that branches on table name. */
 function mockCommunityClient(f: ClientFixture = {}) {
   const calls: RecordedCall[] = [];
+  let messagesMaybeSingleCalls = 0;
   vi.mocked(createClient).mockResolvedValue({
     from(table: string) {
       const base: Record<string, unknown> = {};
@@ -141,10 +159,17 @@ function mockCommunityClient(f: ClientFixture = {}) {
       base.in = makeOp("in");
       base.eq = makeOp("eq");
       Object.assign(base, {
-        maybeSingle: async () => ({
-          data: table === "community_profiles" ? (f.profile ?? null) : null,
-          error: null,
-        }),
+        maybeSingle: async () => {
+          if (table !== "community_messages") {
+            return { data: table === "community_profiles" ? (f.profile ?? null) : null, error: null };
+          }
+          messagesMaybeSingleCalls += 1;
+          const row =
+            messagesMaybeSingleCalls === 1
+              ? (f.existing ?? null)
+              : (f.existingAfterInsert ?? f.existing ?? null);
+          return { data: row, error: null };
+        },
         single: async () => {
           if (f.inserted) return f.inserted;
           // Echo the insert payload back with DB-generated timestamps, so
@@ -621,6 +646,262 @@ describe("send/realtime dedupe contract", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Optimistic send lifecycle (pure state machine)
+// ---------------------------------------------------------------------------
+
+const OPT_ID = "90000000-0000-4000-8000-000000000001";
+const ME_AUTHOR = { user_id: USER_ID, display_name: "Taha", avatar_id: "avatar-1" };
+const OTHER_AUTHOR = { user_id: OTHER_USER_ID, display_name: "Sara", avatar_id: "avatar-2" };
+
+function optimisticFixture(id: string, text = "salut"): LocalMessage {
+  return createOptimisticMessage({
+    id,
+    user: ME_AUTHOR,
+    text: text || null,
+    imagePath: null,
+    createdAt: "2026-01-01T10:00:00.000Z",
+  });
+}
+
+describe("optimistic send lifecycle (pure)", () => {
+  it("createOptimisticMessage builds a render-ready row in 'sending' state", () => {
+    const row = optimisticFixture(OPT_ID);
+    expect(row).toMatchObject({
+      id: OPT_ID,
+      user_id: USER_ID,
+      message: "salut",
+      image_path: null,
+      sendStatus: "sending",
+      author: ME_AUTHOR,
+    });
+    expect(row.created_at).toBe("2026-01-01T10:00:00.000Z");
+  });
+
+  it("setSendStatus is id-scoped and returns the SAME array on no-ops", () => {
+    const list = mergeCommunityMessages([], [optimisticFixture("a"), optimisticFixture("b")]);
+    expect(list.every((m) => m.sendStatus === "sending")).toBe(true);
+    const afterFail = setSendStatus(list, "b", "failed");
+    expect(afterFail.find((m) => m.id === "a")?.sendStatus).toBe("sending");
+    expect(afterFail.find((m) => m.id === "b")?.sendStatus).toBe("failed");
+    const afterSent = setSendStatus(afterFail, "a", "sent");
+    expect(afterSent.find((m) => m.id === "a")?.sendStatus).toBe("sent");
+    expect(setSendStatus(afterSent, "a", "sent")).toBe(afterSent); // no re-render
+    expect(setSendStatus(afterSent, "unknown", "sent")).toBe(afterSent);
+  });
+
+  it("preferIncoming: the realtime echo wins the collision (server created_at, local author kept, status → sent)", () => {
+    const local = mergeCommunityMessages([], [optimisticFixture(OPT_ID, "hello")]);
+    const serverRow: LocalMessage = {
+      ...msgFixture(OPT_ID, USER_ID, "2026-01-01T10:00:00.123Z", { message: "hello" }),
+      author: null,
+    };
+    const merged = mergeCommunityMessages(local, [serverRow], { preferIncoming: true });
+    expect(merged).toHaveLength(1);
+    expect(merged[0].created_at).toBe("2026-01-01T10:00:00.123Z");
+    expect(merged[0].author).toEqual(ME_AUTHOR);
+    expect(merged[0].sendStatus).toBe("sent");
+  });
+
+  it("preferIncoming: an enriched API row's author wins over the local one", () => {
+    const local = mergeCommunityMessages([], [optimisticFixture(OPT_ID, "hello")]);
+    const serverRow: LocalMessage = {
+      ...msgFixture(OPT_ID, USER_ID, "2026-01-01T10:00:00.123Z", { message: "hello" }),
+      author: OTHER_AUTHOR,
+    };
+    const merged = mergeCommunityMessages(local, [serverRow], { preferIncoming: true });
+    expect(merged[0].author).toEqual(OTHER_AUTHOR);
+    expect(merged[0].sendStatus).toBe("sent");
+  });
+
+  it("a 'failed' row that the server echoes becomes 'sent' (lost response, not lost message)", () => {
+    let local = mergeCommunityMessages([], [optimisticFixture(OPT_ID, "hello")]);
+    local = setSendStatus(local, OPT_ID, "failed");
+    const serverRow: LocalMessage = {
+      ...msgFixture(OPT_ID, USER_ID, "2026-01-01T10:00:00.123Z", { message: "hello" }),
+      author: null,
+    };
+    const merged = mergeCommunityMessages(local, [serverRow], { preferIncoming: true });
+    expect(merged).toHaveLength(1);
+    expect(merged[0].sendStatus).toBe("sent");
+  });
+
+  it("default merge: the existing row wins (pagination stays authoritative)", () => {
+    const local = mergeCommunityMessages([], [optimisticFixture(OPT_ID, "hello")]);
+    const serverRow = msgFixture(OPT_ID, USER_ID, "2026-01-01T10:00:09.000Z");
+    const merged = mergeCommunityMessages(local, [serverRow]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toBe(local[0]); // same reference — nothing replaced
+  });
+});
+
+describe("optimistic send + realtime flow (two-client simulation)", () => {
+  it("A's optimistic row is visible instantly; B sees it via the realtime echo — both exactly once", () => {
+    // A presses Send: the row exists in A's state BEFORE any network I/O.
+    let a = mergeCommunityMessages([], [optimisticFixture(OPT_ID)]);
+    expect(a).toHaveLength(1);
+    expect(a[0].sendStatus).toBe("sending");
+    expect(a[0].message).toBe("salut");
+    let b: LocalMessage[] = [];
+
+    // The server persists the row and emits the INSERT to every subscriber
+    // (postgres_changes has no self-exemption — A receives its own echo).
+    const echo = (): CommunityMessageView => ({
+      ...msgFixture(OPT_ID, USER_ID, "2026-01-01T10:00:00.123Z", { message: "salut" }),
+      author: null,
+    });
+    a = mergeCommunityMessages(a, [echo()], { preferIncoming: true });
+    b = mergeCommunityMessages(b, [echo()], { preferIncoming: true });
+
+    // A: still ONE row — no duplicate, and the echo proved persistence.
+    expect(a).toHaveLength(1);
+    expect(a[0].id).toBe(OPT_ID);
+    expect(a[0].sendStatus).toBe("sent");
+    // B: the message arrived WITHOUT any refresh (the realtime path).
+    expect(b).toHaveLength(1);
+    expect(b[0].id).toBe(OPT_ID);
+    expect(b[0].message).toBe("salut");
+    expect(b[0].user_id).toBe(USER_ID);
+
+    // A's POST response arrives afterwards → still exactly one row.
+    const postResponse: CommunityMessageView = {
+      ...msgFixture(OPT_ID, USER_ID, "2026-01-01T10:00:00.123Z", { message: "salut" }),
+      author: ME_AUTHOR,
+    };
+    a = mergeCommunityMessages(a, [postResponse], { preferIncoming: true });
+    expect(a).toHaveLength(1);
+    expect(a[0].sendStatus).toBe("sent");
+  });
+
+  it("failed → retry with the SAME id → idempotent duplicate response → sent, still once", () => {
+    let a = mergeCommunityMessages([], [optimisticFixture(OPT_ID)]);
+    a = setSendStatus(a, OPT_ID, "failed"); // first attempt: network error
+    expect(a).toHaveLength(1);
+    expect(a[0].sendStatus).toBe("failed");
+    expect(a[0].message).toBe("salut"); // the user's text is preserved
+
+    // Retry: server recognizes the id (its first attempt actually committed)
+    // and returns the existing row with duplicate: true.
+    const idempotentResponse: CommunityMessageView = {
+      ...msgFixture(OPT_ID, USER_ID, "2026-01-01T10:00:00.123Z", { message: "salut" }),
+      author: null,
+    };
+    a = setSendStatus(a, OPT_ID, "sending"); // retry re-arms the row
+    a = mergeCommunityMessages(a, [idempotentResponse], { preferIncoming: true });
+    expect(a).toHaveLength(1);
+    expect(a[0].sendStatus).toBe("sent");
+  });
+
+  it("two different sends keep two distinct rows (ids never collide)", () => {
+    let a = mergeCommunityMessages([], [optimisticFixture(OPT_ID)]);
+    a = mergeCommunityMessages(a, [optimisticFixture("90000000-0000-4000-8000-000000000002", "again")]);
+    expect(a).toHaveLength(2);
+    expect(a.map((m) => m.id)).toEqual([OPT_ID, "90000000-0000-4000-8000-000000000002"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/community/messages — idempotency (client-supplied id)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/community/messages idempotency (client id)", () => {
+  it("accepts a client UUID: the row is created with exactly that id", async () => {
+    mockAuth(USER_ID);
+    const { calls } = mockCommunityClient({ profile: { id: "p" } });
+    const res = await postForm((fd) => {
+      fd.set("message", "hello");
+      fd.set("id", "77777777-7777-4777-8777-777777777777");
+    });
+    expect(res.status).toBe(201);
+    const insert = calls.find((c) => c.op === "insert");
+    expect((insert?.args[0] as { id: string }).id).toBe("77777777-7777-4777-8777-777777777777");
+    const body = (await res.json()) as { message: { id: string } };
+    expect(body.message.id).toBe("77777777-7777-4777-8777-777777777777");
+  });
+
+  it("ignores a malformed client id (path-traversal string → generated UUID)", async () => {
+    mockAuth(USER_ID);
+    const { calls } = mockCommunityClient({ profile: { id: "p" } });
+    const res = await postForm((fd) => {
+      fd.set("message", "hello");
+      fd.set("id", "../etc/passwd");
+    });
+    expect(res.status).toBe(201);
+    const insert = calls.find((c) => c.op === "insert");
+    const id = (insert?.args[0] as { id: string }).id;
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(id).not.toBe("../etc/passwd");
+  });
+
+  it("duplicate id → 200 + the existing row, and NO second insert (idempotent retry)", async () => {
+    mockAuth(USER_ID);
+    const existingRow = {
+      id: "77777777-7777-4777-8777-777777777777",
+      user_id: USER_ID,
+      message: "hello",
+      image_path: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    const { calls } = mockCommunityClient({ profile: { id: "p" }, existing: existingRow });
+    const res = await postForm((fd) => {
+      fd.set("message", "hello");
+      fd.set("id", existingRow.id as string);
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { message: { id: string }; duplicate: boolean };
+    expect(body.duplicate).toBe(true);
+    expect(body.message.id).toBe(existingRow.id);
+    expect(calls.filter((c) => c.op === "insert")).toHaveLength(0);
+  });
+
+  it("another user's row id → 400, never claimable, row never echoed", async () => {
+    mockAuth(USER_ID);
+    const foreignRow = {
+      id: "88888888-8888-4888-8888-888888888888",
+      user_id: OTHER_USER_ID,
+      message: "foreign",
+      image_path: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    const { calls } = mockCommunityClient({ profile: { id: "p" }, existing: foreignRow });
+    const res = await postForm((fd) => {
+      fd.set("message", "x");
+      fd.set("id", foreignRow.id);
+    });
+    expect(res.status).toBe(400);
+    expect(calls.filter((c) => c.op === "insert")).toHaveLength(0);
+  });
+
+  it("23505 race (pre-check empty, insert collides) → 200 + the existing row", async () => {
+    mockAuth(USER_ID);
+    const racingRow = {
+      id: "77777777-7777-4777-8777-777777777777",
+      user_id: USER_ID,
+      message: "hello",
+      image_path: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    const { calls } = mockCommunityClient({
+      profile: { id: "p" },
+      existing: null, // not visible at the pre-check…
+      existingAfterInsert: racingRow, // …but visible when the insert collides
+      inserted: { data: null, error: { message: "duplicate key value", code: "23505" } },
+    });
+    const res = await postForm((fd) => {
+      fd.set("message", "hello");
+      fd.set("id", racingRow.id as string);
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { message: { id: string }; duplicate: boolean };
+    expect(body.duplicate).toBe(true);
+    expect(body.message.id).toBe(racingRow.id);
+    expect(calls.filter((c) => c.op === "insert")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Rate-limit budgets
 // ---------------------------------------------------------------------------
 
@@ -1045,8 +1326,12 @@ describe("rendering security (source guard)", () => {
   });
 
   it("renders message text as plain text with safe wrapping", () => {
-    expect(chatSrc).toContain("whitespace-pre-wrap");
-    expect(chatSrc).toContain("break-words");
+    // Message text renders in the memoized row component (never as HTML).
+    const rowSrc = readSrc("src/components/community-message-row.tsx");
+    expect(rowSrc).toContain("whitespace-pre-wrap");
+    expect(rowSrc).toContain("break-words");
+    expect(rowSrc).not.toContain("dangerouslySetInnerHTML");
+    expect(chatSrc).not.toContain("dangerouslySetInnerHTML");
   });
 });
 
@@ -1151,6 +1436,13 @@ describe("community i18n parity", () => {
     "profileRequired",
     "reconnecting",
     "newMessages",
+    "newMessagesCount",
+    "membersCount",
+    "retry",
+    "notSent",
+    "sending",
+    "viewImage",
+    "closeImage",
     "typingOne",
     "typingTwo",
     "typingMany",
@@ -1532,6 +1824,46 @@ describe("typing indicator (source guard)", () => {
     );
     const sql = readSrc("supabase/migrations/20261014000000_community.sql");
     expect(sql).not.toMatch(/typing/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Production realtime wiring (source guard)
+// ---------------------------------------------------------------------------
+
+describe("production realtime wiring (source guard)", () => {
+  const chatSrc = readSrc("src/components/community-chat.tsx");
+
+  it("initializes the browser session and attaches the JWT before joining", () => {
+    // The root cause of "messages only appear after refresh": no
+    // auth.initialize() anywhere → the realtime socket joined without a user
+    // JWT → the RLS-filtered postgres INSERT stream delivered zero rows.
+    expect(chatSrc).toContain("await client.auth.initialize()");
+    expect(chatSrc).toContain("client.realtime.setAuth(session.access_token)");
+  });
+
+  it("never treats CONNECTING as a failure (no banner flash on load)", () => {
+    expect(chatSrc).toContain('status === "TIMED_OUT"');
+    expect(chatSrc).toContain('status === "CLOSED"');
+    expect(chatSrc).toContain('status === "CHANNEL_ERROR"');
+  });
+
+  it("resyncs on foreground return ONLY after a real gap (no tab-switch polling)", () => {
+    expect(chatSrc).toContain(
+      "if (sawDisconnected.current || connectionRef.current !== \"connected\")",
+    );
+  });
+
+  it("dev diagnostics are NODE_ENV-gated and never log secrets", () => {
+    expect(chatSrc).toContain('const LOG_DEV = process.env.NODE_ENV === "development"');
+    // The token is only ever logged as a boolean presence, never its value.
+    expect(chatSrc).toContain("hasToken: Boolean(session?.access_token)");
+    expect(chatSrc).not.toMatch(/devLog\([^)]*access_token\b(?!\))/);
+  });
+
+  it("no router.refresh / location.reload / polling of any kind", () => {
+    expect(chatSrc).not.toMatch(/location\.reload|router\.refresh\(\)/);
+    expect(chatSrc).not.toMatch(/setInterval\([^)]*fetch/);
   });
 });
 

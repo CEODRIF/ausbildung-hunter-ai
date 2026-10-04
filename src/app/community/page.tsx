@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
-import { fetchInitialCommunityMessages } from "@/lib/community/server";
+import { fetchInitialCommunityMessages, getCommunityMemberCount } from "@/lib/community/server";
 import { getServerT } from "@/lib/i18n/server";
 import { Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
@@ -55,7 +55,10 @@ export default async function CommunityPage() {
   if (lookupFailed) return <CommunityUnavailable />;
   if (!communityProfile) return <CommunityOnboarding />;
 
-  const history = await fetchInitialCommunityMessages(supabase);
+  const [history, memberCount] = await Promise.all([
+    fetchInitialCommunityMessages(supabase),
+    getCommunityMemberCount(supabase),
+  ]);
   return (
     <CommunityChat
       me={{
@@ -65,6 +68,7 @@ export default async function CommunityPage() {
       }}
       initialMessages={history.messages}
       historyUnavailable={history.unavailable}
+      memberCount={memberCount}
     />
   );
 }
