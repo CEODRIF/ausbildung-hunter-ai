@@ -33,16 +33,24 @@ export function CommunityOnboarding() {
     if (!valid || pending) return;
     setError(null);
     startTransition(async () => {
-      const result = await completeOnboarding({
-        displayName: trimmed,
-        avatarId: avatarId as string,
-      });
-      if (result.ok) {
-        // Re-render the server page: the chat now appears (same URL).
-        router.refresh();
-        return;
+      try {
+        const result = await completeOnboarding({
+          displayName: trimmed,
+          avatarId: avatarId as string,
+        });
+        if (result.ok) {
+          // Re-render the server page: the chat now appears (same URL).
+          router.refresh();
+          return;
+        }
+        setError(result.code);
+      } catch (error) {
+        // A rejected server action (DB/network outage) must surface as an
+        // inline error — never as an unhandled transition error, which would
+        // blank the page through the error boundary.
+        console.error("[community] onboarding request failed:", error);
+        setError("generic");
       }
-      setError(result.code);
     });
   };
 

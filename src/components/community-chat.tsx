@@ -28,6 +28,13 @@ import {
 interface CommunityChatProps {
   me: { userId: string; displayName: string; avatarId: string };
   initialMessages: CommunityMessageView[];
+  /**
+   * The server could not prefetch the history (DB outage / incomplete server
+   * env). The chat still opens, Realtime keeps streaming, and the user gets an
+   * explicit notice with a retry that resyncs through the API route — instead
+   * of the whole page failing.
+   */
+  historyUnavailable?: boolean;
 }
 
 type ConnectionState = "connected" | "disconnected";
@@ -59,7 +66,11 @@ function formatMessageTime(iso: string, locale: string): string {
  *  - Read state: opening the page (and receiving while viewing) advances
  *    the user's read cursor, which drives the sidebar badge.
  */
-export function CommunityChat({ me, initialMessages }: CommunityChatProps) {
+export function CommunityChat({
+  me,
+  initialMessages,
+  historyUnavailable = false,
+}: CommunityChatProps) {
   const { t, lang } = useI18n();
   const locale = useMemo(() => localeFor(lang), [lang]);
   const supabase = useMemo(() => createClient(), []);
@@ -73,6 +84,7 @@ export function CommunityChat({ me, initialMessages }: CommunityChatProps) {
     return seed;
   });
   const [connection, setConnection] = useState<ConnectionState>("connected");
+  const [historyMissing, setHistoryMissing] = useState(historyUnavailable);
   const [olderLoading, setOlderLoading] = useState(false);
   const [hasMoreOlder, setHasMoreOlder] = useState(
     initialMessages.length >= COMMUNITY_PAGE_SIZE,
@@ -150,6 +162,8 @@ export function CommunityChat({ me, initialMessages }: CommunityChatProps) {
       const response = await fetch(`/api/community/messages`, { cache: "no-store" });
       if (!response.ok) return;
       const data = (await response.json()) as { items: CommunityMessageView[] };
+      // A successful (RLS-backed) fetch clears the degraded-history notice.
+      setHistoryMissing(false);
       for (const m of data.items) knownIds.current.add(m.id);
       setMessages((prev) => mergeCommunityMessages(prev, data.items));
       for (const m of data.items) {
@@ -406,6 +420,22 @@ export function CommunityChat({ me, initialMessages }: CommunityChatProps) {
               <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/30 bg-warning-soft px-3 py-1 text-xs font-semibold text-warning">
                 <Icon name="alert" size={12} />
                 {t("community.reconnecting")}
+              </span>
+            </div>
+          )}
+
+          {historyMissing && (
+            <div className="flex justify-center">
+              <span className="inline-flex flex-wrap items-center justify-center gap-1.5 rounded-full border border-warning/30 bg-warning-soft px-3 py-1 text-xs font-semibold text-warning">
+                <Icon name="alert" size={12} />
+                {t("community.historyUnavailable")}
+                <button
+                  type="button"
+                  onClick={() => void resyncRecent()}
+                  className="underline underline-offset-2"
+                >
+                  {t("community.historyUnavailableRetry")}
+                </button>
               </span>
             </div>
           )}

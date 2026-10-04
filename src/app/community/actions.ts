@@ -51,9 +51,9 @@ export async function completeOnboarding(input: {
   const limited = await checkRateLimit("community_onboarding", user.id);
   if (!limited.allowed) return { ok: false, code: "rate_limited" };
 
-  const { error } = await supabase
-    .from("community_profiles")
-    .upsert(
+  let error: { message: string } | null = null;
+  try {
+    const result = await supabase.from("community_profiles").upsert(
       {
         user_id: user.id,
         display_name: parsed.data.displayName,
@@ -61,7 +61,17 @@ export async function completeOnboarding(input: {
       },
       { onConflict: "user_id" },
     );
-  if (error) return { ok: false, code: "generic" };
+    error = result.error;
+  } catch (thrown) {
+    // Never let a transport failure escape as a rejected action: the caller
+    // shows a clear inline error instead of the error boundary.
+    console.error("[community] onboarding write threw:", thrown);
+    return { ok: false, code: "generic" };
+  }
+  if (error) {
+    console.error("[community] onboarding write failed:", error.message);
+    return { ok: false, code: "generic" };
+  }
 
   revalidatePath("/community");
   return { ok: true };
@@ -81,8 +91,14 @@ export async function markCommunityRead(lastMessageId: string): Promise<void> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return;
-  await supabase.from("community_read_state").upsert(
-    { user_id: user.id, last_read_message_id: lastMessageId },
-    { onConflict: "user_id" },
-  );
+  try {
+    const { error } = await supabase.from("community_read_state").upsert(
+      { user_id: user.id, last_read_message_id: lastMessageId },
+      { onConflict: "user_id" },
+    );
+    if (error) console.error("[community] read cursor failed:", error.message);
+  } catch (thrown) {
+    // The badge is chrome: a failed cursor write must never surface anywhere.
+    console.error("[community] read cursor threw:", thrown);
+  }
 }

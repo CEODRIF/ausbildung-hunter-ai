@@ -1615,6 +1615,8 @@ const de = {
     sendFailed: "Die Nachricht konnte nicht gesendet werden. Bitte versuche es erneut.",
     profileRequired: "Bitte vervollständige zuerst dein Community-Profil.",
     reconnecting: "Verbindung wird wiederhergestellt…",
+    historyUnavailable: "Der bisherige Verlauf konnte nicht geladen werden.",
+    historyUnavailableRetry: "Erneut versuchen",
     unreadBadge: "Neue Community-Nachrichten",
   },
 };
@@ -3169,6 +3171,8 @@ const en: Dict = {
     sendFailed: "The message could not be sent. Please try again.",
     profileRequired: "Please complete your community profile first.",
     reconnecting: "Reconnecting…",
+    historyUnavailable: "The earlier history could not be loaded.",
+    historyUnavailableRetry: "Try again",
     unreadBadge: "New community messages",
   },
 };
@@ -4727,6 +4731,8 @@ const fr: Dict = {
     sendFailed: "Le message n'a pas pu être envoyé. Veuillez réessayer.",
     profileRequired: "Veuillez d'abord compléter votre profil communautaire.",
     reconnecting: "Reconnexion…",
+    historyUnavailable: "L'historique précédent n'a pas pu être chargé.",
+    historyUnavailableRetry: "Réessayer",
     unreadBadge: "Nouveaux messages de la communauté",
   },
 };
@@ -6245,6 +6251,8 @@ const ar: Dict = {
     sendFailed: "تعذر إرسال الرسالة. يرجى المحاولة مرة أخرى.",
     profileRequired: "يرجى أولاً إكمال ملفك الشخصي في المجتمع.",
     reconnecting: "جارٍ استعادة الاتصال…",
+    historyUnavailable: "تعذر تحميل السجل السابق.",
+    historyUnavailableRetry: "إعادة المحاولة",
     unreadBadge: "رسائل جديدة في المجتمع",
   },
 };

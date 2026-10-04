@@ -1136,3 +1136,52 @@ describe("community i18n parity", () => {
     expect(lookup(en, "community.emptyCta")).toBe("Be the first to send a message.");
   });
 });
+
+// ---------------------------------------------------------------------------
+// DB-outage behaviour of the Community writes (no white page, ever)
+// ---------------------------------------------------------------------------
+
+describe("community writes during a database outage", () => {
+  it("completeOnboarding resolves with 'generic' when the client itself throws (never rejects)", async () => {
+    vi.mocked(createClient).mockResolvedValue({
+      auth: {
+        getUser: async () => ({ data: { user: { id: USER_ID } } }),
+      },
+      from: () => {
+        throw new Error("connection terminated");
+      },
+    } as never);
+    // A rejected server action here would blow up the onboarding transition
+    // and blank the page through the error boundary.
+    await expect(
+      completeOnboarding({ displayName: "Anna", avatarId: "avatar-1" }),
+    ).resolves.toEqual({ ok: false, code: "generic" });
+  });
+
+  it("markCommunityRead swallows a transport failure (the badge must never break)", async () => {
+    vi.mocked(createClient).mockResolvedValue({
+      auth: {
+        getUser: async () => ({ data: { user: { id: USER_ID } } }),
+      },
+      from: () => {
+        throw new Error("connection terminated");
+      },
+    } as never);
+    await expect(markCommunityRead(OTHER_USER_ID)).resolves.toBeUndefined();
+  });
+
+  it("is idempotent: completing onboarding twice writes the same conflict target", async () => {
+    allowRateLimits(5);
+    const upserts = mockUpsertClient(USER_ID);
+    const input = { displayName: "Anna", avatarId: "avatar-3" };
+    await expect(completeOnboarding(input)).resolves.toEqual({ ok: true });
+    await expect(completeOnboarding(input)).resolves.toEqual({ ok: true });
+    expect(upserts).toHaveLength(2);
+    expect(upserts[0]).toEqual(upserts[1]);
+    expect(upserts[0].payload).toEqual({
+      user_id: USER_ID,
+      display_name: "Anna",
+      avatar_id: "avatar-3",
+    });
+  });
+});
