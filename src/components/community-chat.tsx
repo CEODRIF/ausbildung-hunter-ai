@@ -94,7 +94,11 @@ export function CommunityChat({
   const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  // True when messages arrived while the reader is scrolled up in the history:
+  // the list deliberately does NOT jump, it offers a "new messages" pill.
+  const [newBelow, setNewBelow] = useState(false);
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const knownIds = useRef<Set<string>>(new Set(initialMessages.map((m) => m.id)));
@@ -234,10 +238,11 @@ export function CommunityChat({
            setMessages((prev) =>
              mergeCommunityMessages(prev, [{ ...incoming, author: null }]),
            );
-          if (!authorOf(incoming)) void ensureAuthor(incoming.user_id);
-          // Scrolling follows stickToBottom (updated on scroll) — a user
-          // reading history is not yanked to the bottom by new messages.
-          scheduleMarkRead(incoming.id);
+             if (!authorOf(incoming)) void ensureAuthor(incoming.user_id);
+            // Scrolling follows stickToBottom (updated on scroll) — a user
+            // reading history is not yanked to the bottom by new messages.
+            if (!stickToBottom.current) setNewBelow(true);
+            scheduleMarkRead(incoming.id);
         },
       )
        .subscribe((status) => {
@@ -347,9 +352,61 @@ export function CommunityChat({
   const onScroll = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
-    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickToBottom.current = atBottom;
+    if (atBottom) setNewBelow(false);
     if (el.scrollTop < 60) void loadOlder();
   }, [loadOlder]);
+
+  const jumpToLatest = useCallback(() => {
+    const el = listRef.current;
+    stickToBottom.current = true;
+    setNewBelow(false);
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  // iOS Safari: the keyboard shrinks the VISUAL viewport without resizing the
+  // layout viewport, so 100dvh alone cannot follow it (and the old 100vh hacks
+  // are exactly what breaks). Reserve precisely the covered height on the chat
+  // root — the composer then sits directly above the keyboard while the message
+  // list shrinks, and the page itself never scrolls.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const root = rootRef.current;
+    if (!vv || !root) return;
+    const measure = () => {
+      const covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      root.style.setProperty("--kb", `${Math.round(covered)}px`);
+      return covered;
+    };
+    measure();
+    const onViewportChange = () => {
+      if (measure() <= 0) return;
+      // The keyboard is open: keep the newest message in view while typing.
+      stickToBottom.current = true;
+      setNewBelow(false);
+      const el = listRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    };
+    vv.addEventListener("resize", onViewportChange);
+    vv.addEventListener("scroll", onViewportChange);
+    return () => {
+      vv.removeEventListener("resize", onViewportChange);
+      vv.removeEventListener("scroll", onViewportChange);
+      root.style.removeProperty("--kb");
+    };
+  }, []);
+
+  // Phones suspend the realtime socket while the tab is backgrounded. Coming
+  // back triggers one resync so nothing sent meanwhile is missed (event-driven,
+  // never polling).
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void resyncRecent();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [resyncRecent]);
 
   const onPickImage = (file: File | null | undefined) => {
     setImageError(null);
@@ -462,12 +519,17 @@ export function CommunityChat({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {/* Message list */}
+    <div
+      ref={rootRef}
+      className="flex h-full min-h-0 w-full flex-col"
+      style={{ paddingBottom: "var(--kb, 0px)" }}
+    >
+      {/* Message list — the ONLY scrollable region; the page never scrolls. */}
+      <div className="relative min-h-0 flex-1">
       <div
         ref={listRef}
         onScroll={onScroll}
-        className="flex-1 overflow-y-auto overscroll-contain"
+        className="h-full min-h-0 overflow-y-auto overscroll-contain"
       >
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 py-5 sm:px-6">
           {connection !== "connected" && (
@@ -593,8 +655,25 @@ export function CommunityChat({
         </div>
       </div>
 
-      {/* Composer */}
-      <div className="border-t border-line bg-surface/95 px-4 pb-4 pt-3 sm:px-6">
+        {/* New-messages pill: shown only when the reader is scrolled up in the
+            history, so new arrivals never yank the screen away. */}
+        {newBelow && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+            <button
+              type="button"
+              onClick={jumpToLatest}
+              className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-1.5 text-xs font-semibold text-white shadow-lg transition-opacity hover:opacity-90"
+            >
+              <Icon name="arrowUp" size={12} className="rotate-180" />
+              {t("community.newMessages")}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Composer — pinned above the bottom navigation (and above the keyboard
+          on iOS via the --kb reservation on the root). */}
+      <div className="shrink-0 border-t border-line bg-surface/95 px-4 pb-4 pt-3 sm:px-6">
         <div className="mx-auto w-full max-w-3xl">
           {imageError && (
             <p role="alert" className="mb-2 text-xs font-medium text-danger">

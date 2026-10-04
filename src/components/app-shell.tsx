@@ -424,12 +424,18 @@ export function AppShell({
   children,
   profile,
   communityUnread,
+  fill = false,
 }: {
   children: React.ReactNode;
   profile?: Profile | null;
-  /** Unread community messages for the sidebar badge (server-computed per
-   *  section layout; rendered only when > 0). */
+  /** Server-computed unread count shown as the Community nav badge. */
   communityUnread?: number;
+  /**
+   * Bound the content column to exactly the visible viewport so a page can own
+   * its own internal scrolling (chat). Used by /community only; every other
+   * route keeps the normal, document-scrolling shell.
+   */
+  fill?: boolean;
 }) {
   const pathname = usePathname();
   const { t } = useI18n();
@@ -536,6 +542,8 @@ export function AppShell({
       {/* Logical margin-inline-start mirrors for RTL automatically. */}
       <div
         className={`relative z-10 flex min-h-screen flex-col transition-[margin] duration-200 ${
+          fill ? "h-[100dvh] min-h-0 overflow-hidden" : ""
+        } ${
           collapsed ? "lg:ms-[84px]" : "lg:ms-[272px]"
         }`}
       >
@@ -612,8 +620,14 @@ export function AppShell({
         {/* pb-28 keeps page content clear of the fixed bottom nav on phones;
             the footer wrapper below gets its own spacer because it sits
             after the main element and would otherwise be covered by the nav. */}
-        <main className="flex-1 pb-28 lg:pb-0">{children}</main>
-        <div className="pb-24 lg:pb-0">
+        <main
+          className={`flex-1 pb-28 lg:pb-0 ${fill ? "min-h-0 overflow-hidden" : ""}`}
+        >
+          {children}
+        </main>
+        {/* In full-height mode the phone keeps the space for the chat itself;
+            the legal bar stays on every other route and on desktop. */}
+        <div className={`pb-24 lg:pb-0 ${fill ? "max-lg:hidden" : ""}`}>
           <LegalFooter variant="bar" />
         </div>
       </div>

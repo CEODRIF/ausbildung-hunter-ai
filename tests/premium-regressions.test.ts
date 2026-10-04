@@ -225,8 +225,10 @@ describe("mobile shell: drawer, bottom nav, header fit", () => {
     );
     expect(shell).toContain("fixed inset-x-3 bottom-3 z-30 flex items-center justify-around rounded-3xl px-2 py-2 lg:hidden");
     // main content AND the footer (which sits outside main) clear the nav.
-    expect(shell).toContain('<main className="flex-1 pb-28 lg:pb-0">');
-    expect(shell).toContain('className="pb-24 lg:pb-0"');
+    // Both class strings now live in template literals (so /community can opt
+    // into full-height mode), so match on the tokens.
+    expect(shell).toMatch(/<main[\s\S]{0,200}flex-1 pb-28 lg:pb-0/);
+    expect(shell).toContain("pb-24 lg:pb-0");
   });
 
   it("the mobile header collapses to the mark so nothing overflows", () => {

@@ -13,7 +13,7 @@ export default async function CommunityLayout({
     redirect("/login");
   const communityUnread = await getCommunityUnreadCount(profile.id);
   return (
-    <AppShell profile={profile} communityUnread={communityUnread}>
+    <AppShell profile={profile} communityUnread={communityUnread} fill>
       {children}
     </AppShell>
   );

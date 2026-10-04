@@ -282,7 +282,12 @@ describe("desktop sticky preview (CV builder only)", () => {
     // sticky pane pins against the viewport and is NOT trapped.
     const mainTag = appshell.match(/<main[^>]*>/)?.[0] ?? "";
     expect(mainTag).toContain("flex-1");
-    expect(mainTag).not.toContain("overflow");
+    // `overflow-hidden` is opt-in through the AppShell `fill` prop (used by the
+    // full-height chat route). With that single branch removed, main creates no
+    // scroll container, so the document stays the scroller and sticky is never
+    // trapped — which is what this test protects.
+    const withoutFillBranch = mainTag.replace(/fill \? "min-h-0 overflow-hidden" : ""/, "");
+    expect(withoutFillBranch).not.toContain("overflow");
     // The grid gives the pane a content-height box (items-start) whose
     // containing block is the full row track → sticky releases naturally
     // at the end of the builder container.

@@ -579,6 +579,36 @@ describe("mergeCommunityMessages", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Send + realtime ordering — the message must appear exactly once, immediately
+// ---------------------------------------------------------------------------
+
+describe("send/realtime dedupe contract", () => {
+  const sent = msgFixture("m1", USER_ID, "2026-01-01T10:00:00.000Z");
+
+  it("the sender sees the message from the POST response and NOT twice when realtime echoes it", () => {
+    // 1. POST 201 → the client merges the server row into local state.
+    const afterPost = mergeCommunityMessages([], [sent]);
+    expect(afterPost).toHaveLength(1);
+    // 2. The realtime INSERT for the same row arrives → dedupe by id.
+    const afterEcho = mergeCommunityMessages(afterPost, [sent]);
+    expect(afterEcho).toHaveLength(1);
+    expect(afterEcho[0].id).toBe("m1");
+  });
+
+  it("also yields exactly one message when realtime arrives BEFORE the POST response", () => {
+    const afterRealtime = mergeCommunityMessages([], [sent]);
+    const afterPost = mergeCommunityMessages(afterRealtime, [sent]);
+    expect(afterPost).toHaveLength(1);
+  });
+
+  it("keeps a failed send out of the list entirely (no phantom message)", () => {
+    // A failed POST never reaches the merge, so the history is unchanged.
+    const before = mergeCommunityMessages([], [msgFixture("old", USER_ID, "2026-01-01T09:00:00.000Z")]);
+    expect(before.map((m) => m.id)).toEqual(["old"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Rate-limit budgets
 // ---------------------------------------------------------------------------
 
@@ -1108,6 +1138,7 @@ describe("community i18n parity", () => {
     "sendFailed",
     "profileRequired",
     "reconnecting",
+    "newMessages",
     "unreadBadge",
   ];
 

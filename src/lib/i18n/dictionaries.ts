@@ -1617,6 +1617,7 @@ const de = {
     reconnecting: "Verbindung wird wiederhergestellt…",
     historyUnavailable: "Der bisherige Verlauf konnte nicht geladen werden.",
     historyUnavailableRetry: "Erneut versuchen",
+    newMessages: "Neue Nachrichten",
     unreadBadge: "Neue Community-Nachrichten",
   },
 };
@@ -3173,6 +3174,7 @@ const en: Dict = {
     reconnecting: "Reconnecting…",
     historyUnavailable: "The earlier history could not be loaded.",
     historyUnavailableRetry: "Try again",
+    newMessages: "New messages",
     unreadBadge: "New community messages",
   },
 };
@@ -4733,6 +4735,7 @@ const fr: Dict = {
     reconnecting: "Reconnexion…",
     historyUnavailable: "L'historique précédent n'a pas pu être chargé.",
     historyUnavailableRetry: "Réessayer",
+    newMessages: "Nouveaux messages",
     unreadBadge: "Nouveaux messages de la communauté",
   },
 };
@@ -6253,6 +6256,7 @@ const ar: Dict = {
     reconnecting: "جارٍ استعادة الاتصال…",
     historyUnavailable: "تعذر تحميل السجل السابق.",
     historyUnavailableRetry: "إعادة المحاولة",
+    newMessages: "رسائل جديدة",
     unreadBadge: "رسائل جديدة في المجتمع",
   },
 };
