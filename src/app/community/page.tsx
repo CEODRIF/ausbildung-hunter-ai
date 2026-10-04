@@ -1,13 +1,16 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { fetchInitialCommunityMessages, getCommunityMemberCount } from "@/lib/community/server";
+import { COMMUNITY_COMING_SOON } from "@/lib/community/availability";
 import { getServerT } from "@/lib/i18n/server";
 import { Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { CommunityChat } from "@/components/community-chat";
 import { CommunityOnboarding } from "@/components/community-onboarding";
+import { CommunityComingSoon } from "@/components/community-coming-soon";
 
 export const dynamic = "force-dynamic";
 
@@ -18,11 +21,26 @@ export const dynamic = "force-dynamic";
  * predefined avatars). After that: the real-time chat. Both are rendered
  * inside the standard AppShell (sidebar/header/footer unchanged).
  *
+ * The feature is currently parked (see `@/lib/community/availability`): while
+ * COMMUNITY_COMING_SOON is true this route renders the Coming Soon page and
+ * nothing below runs — no profile lookup, no message fetch, no realtime. No
+ * community code was removed: flipping the constant back to false restores
+ * the original page exactly as it was.
+ *
  * Every data read here is degraded-safe: a database hiccup (or an incomplete
  * server environment) must NEVER escalate into the global error boundary —
  * that is what produced the post-onboarding "This page could not load" screen.
  */
+export function generateMetadata(): Metadata {
+  if (!COMMUNITY_COMING_SOON) return {};
+  // `absolute` so the title is exactly the Coming Soon one; the root layout's
+  // global metadata (and its template for every other page) is untouched.
+  return { title: { absolute: "Community — Coming Soon" } };
+}
+
 export default async function CommunityPage() {
+  if (COMMUNITY_COMING_SOON) return <CommunityComingSoon />;
+
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active")
     redirect("/login");

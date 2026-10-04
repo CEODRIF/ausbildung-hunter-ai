@@ -1584,6 +1584,13 @@ const de = {
   },
 
   community: {
+    // ---- Coming Soon (feature temporarily parked, see availability.ts) ----
+    comingSoonTitle: "Community",
+    comingSoonBadge: "Coming Soon",
+    comingSoonMessage:
+      "Wir arbeiten gerade an unserer Community. Bald kannst du dich hier mit anderen Mitgliedern vernetzen.",
+    comingSoonNote: "Der Community-Chat wird bald verfügbar sein.",
+    comingSoonBackToDashboard: "Zurück zum Dashboard",
     onboardingTitle: "Willkommen in der Community",
     onboardingHint: "Ein paar Angaben und du kannst sofort mitmachen.",
     nameLabel: "Dein Name",
@@ -3151,6 +3158,13 @@ const en: Dict = {
   },
 
   community: {
+    // ---- Coming Soon (feature temporarily parked, see availability.ts) ----
+    comingSoonTitle: "Community",
+    comingSoonBadge: "Coming Soon",
+    comingSoonMessage:
+      "We are currently building our Community. Soon you'll be able to connect with other members here.",
+    comingSoonNote: "The community chat will be available soon.",
+    comingSoonBackToDashboard: "Back to Dashboard",
     onboardingTitle: "Welcome to the Community",
     onboardingHint: "A few details and you can jump right in.",
     nameLabel: "Your name",
@@ -4722,6 +4736,13 @@ const fr: Dict = {
   },
 
   community: {
+    // ---- Coming Soon (feature temporarily parked, see availability.ts) ----
+    comingSoonTitle: "Community",
+    comingSoonBadge: "Coming Soon",
+    comingSoonMessage:
+      "Nous travaillons actuellement sur notre communauté. Bientôt, vous pourrez vous connecter ici avec d'autres membres.",
+    comingSoonNote: "Le chat de la communauté sera bientôt disponible.",
+    comingSoonBackToDashboard: "Retour au tableau de bord",
     onboardingTitle: "Bienvenue dans la communauté",
     onboardingHint: "Quelques détails et vous pouvez directement participer.",
     nameLabel: "Votre nom",
@@ -6253,6 +6274,13 @@ const ar: Dict = {
   },
 
   community: {
+    // ---- Coming Soon (feature temporarily parked, see availability.ts) ----
+    comingSoonTitle: "Community",
+    comingSoonBadge: "Coming Soon",
+    comingSoonMessage:
+      "نعمل حاليًا على تطوير المجتمع. قريبًا ستتمكن من التواصل هنا مع الأعضاء الآخرين.",
+    comingSoonNote: "ستكون دردشة المجتمع متاحة قريبًا.",
+    comingSoonBackToDashboard: "العودة إلى لوحة التحكم",
     onboardingTitle: "مرحبًا بك في المجتمع",
     onboardingHint: "بضع تفاصيل بسيطة وستتمكن من المشاركة مباشرة.",
     nameLabel: "اسمك",
