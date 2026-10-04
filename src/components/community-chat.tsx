@@ -38,6 +38,7 @@ interface CommunityChatProps {
 }
 
 type ConnectionState = "connected" | "disconnected";
+type RealtimeClient = ReturnType<typeof createClient>;
 
 function localeFor(lang: string): string {
   return lang === "de" ? "de-DE" : lang === "fr" ? "fr-FR" : lang === "ar" ? "ar" : "en-US";
@@ -73,8 +74,6 @@ export function CommunityChat({
 }: CommunityChatProps) {
   const { t, lang } = useI18n();
   const locale = useMemo(() => localeFor(lang), [lang]);
-  const supabase = useMemo(() => createClient(), []);
-
   const [messages, setMessages] = useState<CommunityMessageView[]>(initialMessages);
   const [authors, setAuthors] = useState<Record<string, CommunityAuthor>>(() => {
     const seed: Record<string, CommunityAuthor> = {};
@@ -110,6 +109,26 @@ export function CommunityChat({
   const markReadTimer = useRef<number | null>(null);
   const sawDisconnected = useRef(false);
 
+  // The public NEXT_PUBLIC_* Supabase values are INLINED into the client bundle
+  // at BUILD time, so a deployment can legitimately ship without them while the
+  // server (which reads process.env at runtime) keeps working. Building the
+  // browser client would then throw — and this component used to do it during
+  // render, which blanked the whole page through the error boundary. It is now
+  // created lazily, on first use after mount: if that fails, the chat still
+  // loads and sends through the RLS-backed API routes and only realtime plus
+  // image signing are degraded.
+  const clientRef = useRef<RealtimeClient | null>(null);
+  const getClient = useCallback((): RealtimeClient | null => {
+    if (clientRef.current) return clientRef.current;
+    try {
+      clientRef.current = createClient();
+    } catch (error) {
+      console.error("[community] realtime client unavailable:", error);
+      return null;
+    }
+    return clientRef.current;
+  }, []);
+
   const authorOf = useCallback((m: CommunityMessage): CommunityAuthor | null => {
     if (m.user_id === me.userId) {
       return { user_id: me.userId, display_name: me.displayName, avatar_id: me.avatarId };
@@ -119,8 +138,9 @@ export function CommunityChat({
 
   const ensureAuthor = useCallback(
     async (userId: string) => {
-      if (userId in authorsRef.current) return;
-      const { data } = await supabase
+      const client = getClient();
+      if (!client || userId in authorsRef.current) return;
+      const { data } = await client
         .from("community_profiles")
         .select("user_id,display_name,avatar_id")
         .eq("user_id", userId)
@@ -136,7 +156,7 @@ export function CommunityChat({
         }));
       }
     },
-    [supabase],
+    [getClient],
   );
 
   const scheduleMarkRead = useCallback((messageId: string) => {
@@ -181,7 +201,26 @@ export function CommunityChat({
 
   // Realtime subscription (event-driven; no polling).
   useEffect(() => {
-    const channel = supabase
+    // A missing browser client (public env not inlined) and a failed subscribe
+    // both degrade to the banner. The state update is deferred because a
+    // synchronous setState inside an effect body triggers cascading renders.
+    let degradedTimer: number | null = null;
+    const reportDegraded = () => {
+      degradedTimer = window.setTimeout(() => {
+        sawDisconnected.current = true;
+        setConnection("disconnected");
+      }, 0);
+    };
+    const client = getClient();
+    if (!client) {
+      reportDegraded();
+      return () => {
+        if (degradedTimer) window.clearTimeout(degradedTimer);
+      };
+    }
+    let channel: ReturnType<RealtimeClient["channel"]> | null = null;
+    try {
+      channel = client
       .channel("community-messages")
       .on(
         "postgres_changes",
@@ -213,16 +252,25 @@ export function CommunityChat({
            setConnection("disconnected");
          }
        });
+    } catch (error) {
+      // A realtime setup failure must never reach the error boundary (an error
+      // thrown inside an effect is caught by it): degrade to the banner instead.
+      console.error("[community] realtime subscribe failed:", error);
+      reportDegraded();
+    }
     return () => {
-      void supabase.removeChannel(channel);
+      if (degradedTimer) window.clearTimeout(degradedTimer);
+      if (channel) void client.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabase]);
+  }, [getClient]);
 
   // Resolve signed URLs for message images (private bucket). Each path is
   // signed at most once per session (3600 s expiry ≫ page lifetime).
   const signedPaths = useRef<Set<string>>(new Set());
   useEffect(() => {
+    const client = getClient();
+    if (!client) return;
     const toSign = messages.filter(
       (m) => m.image_path && !signedPaths.current.has(m.image_path),
     );
@@ -231,14 +279,21 @@ export function CommunityChat({
     let cancelled = false;
     void (async () => {
       for (const m of toSign) {
-        const { data } = await supabase.storage
-          .from("community-images")
-          .createSignedUrl(m.image_path as string, 3600);
-        if (data?.signedUrl && !cancelled) {
+        let signedUrl: string | null = null;
+        try {
+          const { data } = await client.storage
+            .from("community-images")
+            .createSignedUrl(m.image_path as string, 3600);
+          signedUrl = data?.signedUrl ?? null;
+        } catch (error) {
+          // Best-effort: a failed signature only affects that one image.
+          console.error("[community] image signing failed:", error);
+        }
+        if (signedUrl && !cancelled) {
           setImageUrls((prev) =>
             prev[m.image_path as string]
               ? prev
-              : { ...prev, [m.image_path as string]: data.signedUrl as string },
+              : { ...prev, [m.image_path as string]: signedUrl as string },
           );
         }
       }
@@ -246,7 +301,7 @@ export function CommunityChat({
     return () => {
       cancelled = true;
     };
-  }, [messages, supabase]);
+  }, [messages, getClient]);
 
   const loadOlder = useCallback(async () => {
     const oldest = messages[0];
