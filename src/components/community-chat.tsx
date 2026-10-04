@@ -928,10 +928,18 @@ export function CommunityChat({
     [typingPeers, authors, t],
   );
 
+  // Chat root: fills the shell's content box EXACTLY. In fill mode <main>
+  // is a positioned (relative) box whose height is the viewport minus the
+  // top bar and the bottom-nav spacer, so `absolute inset-0` needs no
+  // percentage-height resolution at all — that resolution is what made iOS
+  // Safari collapse the column and clip the composer below the fold. The
+  // --kb reservation (visualViewport, see above) still pins the composer
+  // directly above the keyboard while the message list shrinks; the page
+  // itself never scrolls.
   return (
     <div
       ref={rootRef}
-      className="flex h-full min-h-0 w-full flex-col"
+      className="absolute inset-0 flex min-h-0 flex-col"
       style={{ paddingBottom: "var(--kb, 0px)" }}
     >
       {/* Header — slim, honest: the real member count, and the realtime

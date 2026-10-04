@@ -617,14 +617,26 @@ export function AppShell({
         </header>
 
         {/* ------------------------------------------------ content -------- */}
-        {/* pb-28 keeps page content clear of the fixed bottom nav on phones;
-            the footer wrapper below gets its own spacer because it sits
-            after the main element and would otherwise be covered by the nav. */}
+        {/* Normal routes: pb-28 keeps page content clear of the fixed bottom
+            nav on phones; the footer wrapper below gets its own spacer
+            because it sits after the main element and would otherwise be
+            covered by the nav.
+            Fill routes (/community): main becomes the EXACT, definite chat
+            box — a positioned (relative) containing block with no padding —
+            and the bottom-nav reservation moves to the flex SIBLING spacer
+            below. The chat root then fills main via `absolute inset-0`:
+            zero percentage-height resolution, so no engine (notably iOS
+            Safari) can collapse or clip it and hide the composer. */}
         <main
-          className={`flex-1 pb-28 lg:pb-0 ${fill ? "min-h-0 overflow-hidden" : ""}`}
+          className={`flex-1 ${fill ? "relative min-h-0 overflow-hidden" : "pb-28 lg:pb-0"}`}
         >
           {children}
         </main>
+        {/* Fill mode, phones only: the fixed bottom nav's reservation
+            (h-28 = the old pb-28 value, which already covered the nav's
+            footprint: bottom-3 + bar height + safe-area inset) as a flex
+            sibling, so main's box ends exactly where the nav begins. */}
+        {fill && <div aria-hidden className="h-28 max-lg:block shrink-0" />}
         {/* In full-height mode the phone keeps the space for the chat itself;
             the legal bar stays on every other route and on desktop. */}
         <div className={`pb-24 lg:pb-0 ${fill ? "max-lg:hidden" : ""}`}>

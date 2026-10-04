@@ -7,10 +7,16 @@
  * Messenger-like behaviour possible, so it is pinned here:
  *
  *   shell column: exactly the viewport (dvh) + min-h-0 + overflow-hidden
- *   main:         min-h-0 + overflow-hidden  → the page itself never scrolls
- *   chat root:    h-full min-h-0 flex column + --kb reservation
+ *   main (fill):  relative + min-h-0 + overflow-hidden (positioned box,
+ *                 NO padding) + a flex-sibling h-28 spacer that reserves
+ *                 the fixed bottom nav → main's box ends where the nav starts
+ *   chat root:    absolute inset-0 flex column (ZERO percentage-height
+ *                 resolution — iOS Safari used to collapse `h-full` against
+ *                 the flex-1 main and clip the composer below the fold)
+ *                 + --kb keyboard reservation
  *   message list: the ONLY scroller (h-full min-h-0 overflow-y-auto)
- *   composer:     shrink-0, sits above the bottom nav / the keyboard
+ *   composer:     shrink-0, always last in the flex column → sits above the
+ *                 bottom nav and, with the keyboard open, above the keyboard
  *
  * Plus the hard product rules: no reload, no polling, and the images/security
  * pipeline untouched.
@@ -31,12 +37,43 @@ const shellSrc = readSrc("src/components/app-shell.tsx");
 const layoutSrc = readSrc("src/app/community/layout.tsx");
 
 describe("chat height chain (only the message list scrolls)", () => {
-  it("bounds the shell column and main to the viewport in fill mode", () => {
+  it("bounds the shell column to the viewport in fill mode", () => {
     expect(shellSrc).toContain("fill?: boolean;");
     expect(shellSrc).toMatch(/fill \? "h-\[100dvh\] min-h-0 overflow-hidden"/);
-    expect(shellSrc).toMatch(/fill \? "min-h-0 overflow-hidden"/);
     // …and the phone reclaims the space the legal footer used to reserve.
     expect(shellSrc).toMatch(/fill \? "max-lg:hidden"/);
+  });
+
+  it("makes main a positioned, padding-free chat box in fill mode", () => {
+    // `relative` is the containing block for the chat root's `absolute
+    // inset-0`; `min-h-0 overflow-hidden` bounds it. NO padding here — the
+    // bottom-nav reservation moved to a sibling spacer (below), so main's
+    // box is EXACTLY the visible zone between the top bar and the nav.
+    expect(shellSrc).toMatch(/fill \? "relative min-h-0 overflow-hidden"/);
+    // Normal routes keep the document-scroll shell untouched.
+    expect(shellSrc).toMatch(/: "pb-28 lg:pb-0"/);
+  });
+
+  it("reserves the fixed bottom nav as a flex sibling so it never covers the composer", () => {
+    // Same 112px (h-28) as the old pb-28, now a real flex item: main's box
+    // ends exactly where the floating nav begins. Phones only (max-lg),
+    // fill routes only.
+    expect(shellSrc).toContain('{fill && <div aria-hidden className="h-28 max-lg:block shrink-0" />}');
+    // The nav stays the same floating glass bar (z-30, bottom-3) — only its
+    // reservation moved.
+    expect(shellSrc).toMatch(/fixed inset-x-3 bottom-3 z-30/);
+  });
+
+  it("fills main with absolute inset-0 — zero percentage-height resolution (iOS fix)", () => {
+    // The composer-disappearing-on-iPhone bug: `h-full` (height:100%)
+    // against the flex-1 <main> collapsed in iOS Safari, so the flex column
+    // grew to content height and the composer was clipped below the fold.
+    // `absolute inset-0` against the positioned main needs no percentage
+    // resolution at all — it fills the definite box on every engine.
+    expect(chatSrc).toContain('className="absolute inset-0 flex min-h-0 flex-col"');
+    expect(chatSrc).not.toContain('className="flex h-full min-h-0 w-full flex-col"');
+    // …and the chat root itself must never become a scroller.
+    expect(chatSrc).not.toMatch(/absolute inset-0[^"]*overflow-y-auto/);
   });
 
   it("the /community layout opts into fill mode", () => {
