@@ -187,6 +187,32 @@ describe("realtime session wiring (production root-cause guard)", () => {
     expect(chatSrc).toContain("client.auth.onAuthStateChange");
     expect(chatSrc).toContain("client.realtime.setAuth();");
   });
+
+  it("NEVER joins a channel without a JWT (RLS-backed realtime would stream zero rows)", () => {
+    // Fast path: the join sits INSIDE the token guard — no token, no join.
+    const rtEffect = chatSrc.slice(
+      chatSrc.indexOf("const subscribeChannel = () =>"),
+      chatSrc.indexOf("return () => {", chatSrc.indexOf("const subscribeChannel = () =>")),
+    );
+    expect(rtEffect).toContain("if (session?.access_token) {");
+    // Slow path: while the session is still restoring, INITIAL_SESSION /
+    // SIGNED_IN attach the token and THEN join (same guarded function).
+    expect(rtEffect).toContain(
+      'if (event === "INITIAL_SESSION" || event === "SIGNED_IN") subscribeChannel();',
+    );
+  });
+
+  it("creates at most ONE channel per mount (idempotent subscribe, single call site)", () => {
+    // The join is id-guarded: a second call (late auth event, StrictMode
+    // double-effect, whatever) is a no-op.
+    expect(chatSrc).toContain("if (disposed || channel) return;");
+    // Exactly one .channel() call site for the message channel — the typing
+    // indicator rides the same channel (broadcast), never a second one.
+    expect(chatSrc.match(/\.channel\(/g)).toHaveLength(1);
+    expect(chatSrc).toContain('.channel("community-messages")');
+    // And unmount tears it down.
+    expect(chatSrc).toContain("if (channel) void client.removeChannel(channel);");
+  });
 });
 
 describe("image pipeline and security untouched", () => {

@@ -799,6 +799,52 @@ describe("optimistic send + realtime flow (two-client simulation)", () => {
   });
 });
 
+describe("multi-client fan-out (3+ members on one channel)", () => {
+  it("A's INSERT is delivered to B and C (and back to A) — each client holds it exactly once", () => {
+    // The server persists ONE row and the publication broadcasts ONE INSERT
+    // to every subscriber of the channel — the sender's own echo included.
+    let a = mergeCommunityMessages([], [optimisticFixture(OPT_ID, "hi all")]);
+    const echo = (): LocalMessage => ({
+      ...msgFixture(OPT_ID, USER_ID, "2026-01-01T10:00:00.123Z", { message: "hi all" }),
+      author: null,
+    });
+    let b: LocalMessage[] = [];
+    let c: LocalMessage[] = [];
+    a = mergeCommunityMessages(a, [echo()], { preferIncoming: true });
+    b = mergeCommunityMessages(b, [echo()], { preferIncoming: true });
+    c = mergeCommunityMessages(c, [echo()], { preferIncoming: true });
+
+    // Every client (no Refresh anywhere) ends up with exactly ONE row…
+    for (const list of [a, b, c]) {
+      expect(list).toHaveLength(1);
+      expect(list[0].id).toBe(OPT_ID);
+      expect(list[0].message).toBe("hi all");
+    }
+    // …all three converge on the identical id set (same row, same order)…
+    expect(a.map((m) => m.id)).toEqual(b.map((m) => m.id));
+    expect(b.map((m) => m.id)).toEqual(c.map((m) => m.id));
+    // …and the sender's row is PROVEN persisted (status sent).
+    expect(a[0].sendStatus).toBe("sent");
+  });
+
+  it("a second, different message fans out alongside the first (ordering stable for all)", () => {
+    const id2 = "90000000-0000-4000-8000-000000000009";
+    const mk = (id: string, at: string, text: string): LocalMessage => ({
+      ...msgFixture(id, USER_ID, at, { message: text }),
+      author: null,
+    });
+    let b: LocalMessage[] = [];
+    let c: LocalMessage[] = [];
+    // INSERT 1 then INSERT 2 arrive in order on every subscriber.
+    b = mergeCommunityMessages(b, [mk(OPT_ID, "2026-01-01T10:00:00.100Z", "one")]);
+    c = mergeCommunityMessages(c, [mk(OPT_ID, "2026-01-01T10:00:00.100Z", "one")]);
+    b = mergeCommunityMessages(b, [mk(id2, "2026-01-01T10:00:05.100Z", "two")]);
+    c = mergeCommunityMessages(c, [mk(id2, "2026-01-01T10:00:05.100Z", "two")]);
+    expect(b.map((m) => m.id)).toEqual([OPT_ID, id2]);
+    expect(c.map((m) => m.id)).toEqual(b.map((m) => m.id));
+  });
+});
+
 // ---------------------------------------------------------------------------
 // POST /api/community/messages — idempotency (client-supplied id)
 // ---------------------------------------------------------------------------

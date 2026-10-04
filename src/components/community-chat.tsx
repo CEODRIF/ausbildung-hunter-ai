@@ -451,14 +451,36 @@ export function CommunityChat({
       // Attach the user JWT to the realtime socket BEFORE the phx_join:
       // postgres events are RLS-filtered by the socket token.
       devLog("auth", "realtime token", { hasToken: Boolean(session?.access_token) });
-      if (session?.access_token) client.realtime.setAuth(session.access_token);
-      subscribeChannel();
+      if (session?.access_token) {
+        // Awaited on purpose: in supabase-js 2.117 setAuth is async and the
+        // join payload must carry the JWT from its first byte — a token-less
+        // join would stream zero RLS rows until a post-join re-auth landed.
+        await client.realtime.setAuth(session.access_token).catch((error) =>
+          devLog("auth", "realtime setAuth failed", { error: String(error) }),
+        );
+        if (!disposed) subscribeChannel();
+      }
+      // No session (yet): NEVER join without a JWT — with RLS-backed realtime
+      // a token-less channel receives zero rows. If auth.initialize() is
+      // still restoring the session, the INITIAL_SESSION event below attaches
+      // the token and does the join instead.
     })();
 
-    // Keep the socket token fresh (token refresh, sign-out).
+    // Keep the socket token fresh (TOKEN_REFRESHED, sign-out) and cover the
+    // slow start (INITIAL_SESSION / SIGNED_IN). Every path is guarded
+    // (subscribeChannel() only ever creates ONE channel), so a late event can
+    // never produce a duplicate subscription.
     const sub = client.auth.onAuthStateChange((event, session) => {
-      if (session?.access_token) client.realtime.setAuth(session.access_token);
-      else if (event === "SIGNED_OUT") client.realtime.setAuth();
+      if (session?.access_token) {
+        void client.realtime
+          .setAuth(session.access_token)
+          .then(() => {
+            if (event === "INITIAL_SESSION" || event === "SIGNED_IN") subscribeChannel();
+          })
+          .catch((error) =>
+            devLog("auth", "realtime setAuth failed", { error: String(error) }),
+          );
+      } else if (event === "SIGNED_OUT") client.realtime.setAuth();
     });
 
     return () => {
