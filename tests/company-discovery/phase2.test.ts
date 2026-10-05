@@ -279,19 +279,26 @@ describe("goalPasses / mapToSearchParams", () => {
   });
 });
 
-describe("discoveryBeginnGate (date/year — documented valid_from only)", () => {
+describe("discoveryBeginnGate (discovery stage — documented mismatches only)", () => {
   const item = (valid_from: string | null) => ({ valid_from });
 
-  it("date mode: exact documented date only, missing → false", () => {
+  it("date mode: exact documented date passes, documented other date is a mismatch", () => {
     expect(discoveryBeginnGate(item("2027-08-01T00:00:00Z"), { mode: "date", date: "2027-08-01" })).toBe(true);
     expect(discoveryBeginnGate(item("2027-08-02"), { mode: "date", date: "2027-08-01" })).toBe(false);
-    expect(discoveryBeginnGate(item(null), { mode: "date", date: "2027-08-01" })).toBe(false);
   });
 
-  it("year mode: exact year only, missing → false", () => {
+  it("year mode: exact documented year passes, documented other year is a mismatch", () => {
     expect(discoveryBeginnGate(item("2027-12-31"), { mode: "year", year: 2027 })).toBe(true);
     expect(discoveryBeginnGate(item("2026-01-01"), { mode: "year", year: 2027 })).toBe(false);
-    expect(discoveryBeginnGate(item(null), { mode: "year", year: 2027 })).toBe(false);
+  });
+
+  it("a MISSING start is NOT a mismatch — it is unverified (the acceptance stage decides)", () => {
+    // One source's absent field is no proof about the company: the offer
+    // proceeds to company resolution, where the company's own site may
+    // document the start. null never becomes a COUNTED result — but it is
+    // no longer a discovery-stage kill.
+    expect(discoveryBeginnGate(item(null), { mode: "date", date: "2027-08-01" })).toBe(true);
+    expect(discoveryBeginnGate(item(null), { mode: "year", year: 2027 })).toBe(true);
   });
 
   it("from_now/month are engine-applied → the gate passes them through", () => {
@@ -481,7 +488,7 @@ describe("runDiscoveryPipeline", () => {
     expect(finishOutcome).toMatchObject({ foundCompanies: 1, offersAnalyzed: 1 });
   });
 
-  it("beginn=year: only offers documented for that year count; missing start → rejected", async () => {
+  it("beginn=year: documented match counts; documented mismatch rejected at discovery; missing start is VERIFIED, not killed", async () => {
     const seeds = [
       mkOpp({ id: "arbeitsagentur:E1-S", company_name: "Alpha GmbH", valid_from: "2027-08-01" }),
       mkOpp({ id: "arbeitsagentur:E2-S", company_name: "Beta GmbH", valid_from: "2026-09-01" }),
@@ -489,10 +496,20 @@ describe("runDiscoveryPipeline", () => {
     ];
     const { fn } = engineWindow(seeds); // engine beginn "any" for year mode
     await runPipeline(fn);
-    expect(recordedCompanies.map((c) => c.companyKey)).toEqual(["alpha"]);
+    // Alpha: documented 2027 → resolved and accepted. Gamma: no documented
+    // start → NOT killed at discovery; the company was resolved (processed),
+    // found no confirmable start anywhere → rejected beginn_not_confirmed.
+    // (Online, Gamma's own site could document the year — offline here.)
+    // Beta: documented 2026 → killed AT DISCOVERY, before any company work.
+    expect(recordedCompanies.map((c) => c.companyKey)).toEqual(["alpha", "gamma"]);
+    expect(recordedCompanies.find((c) => c.companyKey === "gamma")).toMatchObject({
+      status: "rejected",
+      rejectReason: "beginn_not_confirmed",
+    });
     expect(finishOutcome).toMatchObject({
       foundCompanies: 1,
-      companiesRejected: 2, // Beta (2026) + Gamma (undocumented)
+      companiesRejected: 2, // Beta (documented 2026, at discovery) + Gamma (unconfirmed, at acceptance)
+      companiesProcessed: 2, // Alpha and Gamma reached company resolution
       offersAnalyzed: 3,
       status: "partial",
     });

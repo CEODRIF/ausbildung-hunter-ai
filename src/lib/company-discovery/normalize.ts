@@ -77,10 +77,17 @@ export function mapToSearchParams(
 }
 
 /**
- * Discovery beginn gate for the modes the engine cannot express.
- * Documented `valid_from` only — a missing start NEVER matches a concrete
- * constraint (no guessing). "from_now"/"month" return true here because the
- * engine's own beginn matcher already enforces them on the window.
+ * The DISCOVERY-stage beginn gate for the modes the engine cannot express —
+ * cheap pre-filtering only, NOT the strict final decision:
+ *  - a DOCUMENTED start that contradicts the concrete constraint is a
+ *    mismatch → rejected here (it would waste company-resolution work);
+ *  - a MISSING start is unknown, not wrong: one source's absent field is no
+ *    proof about the company. The offer proceeds to company resolution,
+ *    where the company's own site may document the start. The STRICT decision
+ *    (confirmed / mismatch / not confirmed) happens at acceptance, and
+ *    `null` never becomes `true` (no guessing).
+ * "from_now"/"month" return true here because the engine's own beginn
+ * matcher already enforces them on the window.
  */
 export function discoveryBeginnGate(
   item: { valid_from: string | null },
@@ -88,7 +95,7 @@ export function discoveryBeginnGate(
 ): boolean {
   if (beginn.mode === "from_now" || beginn.mode === "month") return true;
   const start = item.valid_from ? item.valid_from.slice(0, 10) : null;
-  if (!start) return false;
+  if (!start) return true;
   if (beginn.mode === "date") return start === beginn.date;
   return start.slice(0, 4) === String(beginn.year);
 }

@@ -222,12 +222,16 @@ export function classifyResponse(facts: ResponseFacts): ResponseClassification {
       };
     }
     if (head.trim().length === 0) {
-      // An empty shell is not a page we can honestly claim to have read.
-      return {
-        blocked: true,
-        reason: "js_protected",
-        detail: "empty body",
-      };
+      // An empty shell on a 2xx response is not a page we can honestly claim
+      // to have read. On 4xx the empty body simply means "that page does not
+      // exist" — a real answer, never a block (many servers send bare 404s).
+      if (facts.status < 400) {
+        return {
+          blocked: true,
+          reason: "js_protected",
+          detail: "empty body",
+        };
+      }
     }
   }
 

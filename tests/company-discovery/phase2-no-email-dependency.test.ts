@@ -66,8 +66,11 @@ describe("a run survives a database without the email table", () => {
 
 describe("onlyPublicEmail gates counting, honestly", () => {
   it("counts a company only when the option allows it", () => {
+    // The counting gate: the email outcome AND the beginn confirmation must
+    // both hold before a company is counted — everything below the anchor is
+    // the single rejection branch that records an audit reason instead.
     const gate = pipeline.slice(
-      pipeline.indexOf("if (\n        !countsAsResult("),
+      pipeline.indexOf("const emailCounts = countsAsResult({"),
       pipeline.indexOf("const { companyId } = await recordCompany"),
     );
     expect(gate).toContain("onlyPublicEmail: params.onlyPublicEmail");

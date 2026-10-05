@@ -36,10 +36,27 @@ import type { DiscoveryEmailSource, SourceAttempt } from "./types";
  */
 
 /**
- * Pages fetched per company. The §4.7 ceiling is 6; this budget is deliberately
- * lower because Impressum/Kontakt almost always suffice in Germany.
+ * Pages fetched per company. The §4.7 ceiling is 6 — and the fixed target
+ * list (SITE_PAGE_PATHS) has exactly 6 entries, so the default tries ALL of
+ * them: Impressum/Kontakt first (highest email yield), then Karriere/Jobs/
+ * Ausbildung (the pages that document the START YEAR of the apprenticeship),
+ * then Team. 404s are real answers and cost one request each; a robots/
+ * deliberate refusal stops the host. Env-tunable (DISCOVERY_MAX_EMAIL_PAGES,
+ * clamped into [0, 6]).
  */
-export const MAX_EMAIL_PAGES_PER_COMPANY = 3;
+export function emailPageBudget(): number {
+  const raw = process.env.DISCOVERY_MAX_EMAIL_PAGES?.trim();
+  if (raw !== undefined && raw !== "") {
+    const value = Number.parseInt(raw, 10);
+    if (Number.isInteger(value) && value >= 0) {
+      return Math.min(value, 6);
+    }
+  }
+  return 6;
+}
+
+/** Kept for tests/contracts: the hard ceiling the budget may never exceed. */
+export const MAX_EMAIL_PAGES_PER_COMPANY = 6;
 
 /** Per-company wall clock budget (§4.7). */
 export const MAX_COMPANY_EMAIL_MS = 25_000;
@@ -242,7 +259,7 @@ export function createGuardedSiteFetcher(ctx: FetchContext): CompanySiteFetcher 
     const targets = SITE_PAGE_PATHS.map((entry) => ({
       url: `${origin}${entry.path}`,
       kind: entry.kind,
-    })).slice(0, MAX_EMAIL_PAGES_PER_COMPANY);
+    })).slice(0, emailPageBudget());
 
     /** Required pages that were actually inspected (reachable, not blocked). */
     const inspected = new Set<string>();
@@ -445,6 +462,75 @@ export async function resolveOfficialSite(input: {
   return empty;
 }
 
+// ---------------------------------------------------------------------------
+// Start-year evidence — the company's own pages, in apprenticeship context
+// ---------------------------------------------------------------------------
+
+/**
+ * A start year documented on the company's OWN inspected pages. A year only
+ * counts when an apprenticeship/beginning word sits in its sentence
+ * neighbourhood — "Ausbildung 2027", "Ausbildungsbeginn: 01.08.2027",
+ * "Beginn August 2027", "Start 2027", "Ausbildung ab 2027", "Ausbildungs-
+ * stellen 2027" … A bare number (copyright, address, phone) is noise and
+ * never counts. When the company's pages document DIFFERENT years, the
+ * evidence conflicts — the honest answer is "unusable", not a choice.
+ */
+export interface SiteYearEvidence {
+  /** The documented year (first one found), or null when no evidence. */
+  year: number | null;
+  /** The page where it is documented (evidence provenance). */
+  url: string | null;
+  /** The company's own pages contradict each other (≥2 different years). */
+  conflict: boolean;
+}
+
+/**
+ * Context windows stay within one text block (no newline) and are short, so
+ * the year stays in the neighbourhood of its word — German dates
+ * ("01.08.2027") keep their dots and are still matched.
+ */
+/** "…Ausbildung …2027" / "…Ausbildungsplatz …01.08.2027" (word → year). */
+const YEAR_AFTER_APPRENTICESHIP_RE =
+  /\b(ausbildung|ausbildungen|ausbildungsplatz|ausbildungsplatze|ausbildungsstellen|ausbildungsstart|azubi|azubis|duales studium|lehrstelle)\b[^\n]{0,80}?(\b20\d{2}\b)/gi;
+/** "…Beginn August 2027" / "…Ausbildungsbeginn: 2027" / "…Start 2027". */
+const YEAR_AFTER_BEGINNING_RE =
+  /\b(ausbildungsbeginn|beginn|antritt|start)\b[^\n]{0,40}?(20\d{2})\b/gi;
+/** "…2027 …Ausbildung" (year → word, e.g. "Ausbildung ab 2027" variants). */
+const YEAR_BEFORE_APPRENTICESHIP_RE =
+  /(\b20\d{2}\b)[^\n]{0,40}?\b(ausbildung|azubis?)\b/gi;
+
+/**
+ * Scan the company's own fetched pages for a documented start year. Pure and
+ * deterministic: it reports what the pages literally say, nothing else.
+ */
+export function siteYearEvidence(
+  pages: Array<{ url: string; text: string }>,
+): SiteYearEvidence {
+  const years = new Map<number, string>(); // year → page where documented
+  const push = (year: number, url: string): void => {
+    if (!years.has(year)) years.set(year, url);
+  };
+  for (const page of pages) {
+    for (const entry of [
+      [YEAR_AFTER_APPRENTICESHIP_RE, 2] as const,
+      [YEAR_AFTER_BEGINNING_RE, 2] as const,
+      [YEAR_BEFORE_APPRENTICESHIP_RE, 1] as const,
+    ]) {
+      const [re, group] = entry;
+      re.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(page.text)) !== null) {
+        push(Number(match[group]), page.url);
+        if (match[0].length === 0) re.lastIndex += 1; // safety: zero-width
+      }
+    }
+  }
+  const entries = [...years.entries()];
+  if (entries.length === 0) return { year: null, url: null, conflict: false };
+  const [year, url] = entries[0];
+  return { year, url, conflict: entries.length > 1 };
+}
+
 /**
  * An address printed in an ENABLED portal's listing (§4.1 step 1). The literal
  * presence is re-checked against the listing evidence; the attribution was
@@ -563,6 +649,12 @@ export interface CompanyEmailOutcome {
   reasonCode: "email_found" | "no_public_email" | "source_blocked" | "no_website_found";
   /** The primary address (highest priority), or null. */
   primary: MergedAcceptedEmail | null;
+  /**
+   * Start year documented on the company's OWN inspected pages (null: no
+   * site, no evidence, or conflict — the caller must then treat the year as
+   * UNCONFIRMED, never as a guess).
+   */
+  siteYear: SiteYearEvidence | null;
 }
 
 /**
@@ -622,6 +714,8 @@ export async function resolveCompanyEmails(
   let blockedReason: BlockedReason | null = null;
   let requiredInspected = false;
   const inspectedPages: Array<{ url: string; kind: string }> = [];
+  /** The company's own pages with their text (start-year evidence input). */
+  const sitePagesWithText: CompanySiteTextPage[] = [];
 
   if (website) {
     // Pages already fetched this run on the verified domain (domain
@@ -629,6 +723,7 @@ export async function resolveCompanyEmails(
     // inspected — they are real evidence, not a second fetch's promise.
     for (const page of input.prefetchedPages ?? []) {
       inspectedPages.push({ url: page.url, kind: page.kind });
+      sitePagesWithText.push(page);
       collected.push(
         ...sitePageEmails({
           page,
@@ -647,6 +742,7 @@ export async function resolveCompanyEmails(
       attempts.push(...outcome.attempts);
       for (const page of outcome.pages) {
         inspectedPages.push({ url: page.url, kind: page.kind });
+        sitePagesWithText.push(page);
         collected.push(
           ...sitePageEmails({
             page,
@@ -672,6 +768,12 @@ export async function resolveCompanyEmails(
     }
   }
 
+  // Start year documented on the company's OWN inspected pages: the
+  // acceptance stage may confirm the run's beginn filter with it (year mode).
+  // No site / no evidence / conflicting pages → null = UNCONFIRMED.
+  const siteYear: SiteYearEvidence | null =
+    sitePagesWithText.length > 0 ? siteYearEvidence(sitePagesWithText) : null;
+
   const emails = mergeAcceptedEmails(collected);
   const primary = emails[0] ?? null;
 
@@ -686,6 +788,7 @@ export async function resolveCompanyEmails(
       blockedReason: null,
       reasonCode: "email_found",
       primary,
+      siteYear,
     };
   }
 
@@ -699,6 +802,7 @@ export async function resolveCompanyEmails(
       blockedReason: "unreachable",
       reasonCode: "no_website_found",
       primary: null,
+      siteYear,
     };
   }
 
@@ -712,6 +816,7 @@ export async function resolveCompanyEmails(
       blockedReason,
       reasonCode: "source_blocked",
       primary: null,
+      siteYear,
     };
   }
 
@@ -724,6 +829,7 @@ export async function resolveCompanyEmails(
     blockedReason: null,
     reasonCode: "no_public_email",
     primary: null,
+    siteYear,
   };
 }
 

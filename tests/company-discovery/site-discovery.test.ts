@@ -118,7 +118,7 @@ describe("guarded site pass with in-site discovery", () => {
     vi.unstubAllGlobals();
   });
 
-  function siteFetchImpl(failAusbildung: boolean) {
+  function siteFetchImpl(failDiscovered: boolean) {
     const calls: string[] = [];
     const impl = (async (input: RequestInfo | URL): Promise<Response> => {
       const url = String(input);
@@ -128,12 +128,12 @@ describe("guarded site pass with in-site discovery", () => {
       }
       if (url === `${ORIGIN}/impressum`) {
         return page(`<html><body>
-          <a href="/kontakt">Kontakt</a>
-          <a href="/ausbildung">Ausbildung</a>
-          <a href="/jobs/bewerben">Jetzt bewerben</a>
-          <a href="/shop">Shop</a>
-          E-Mail: info@firma.de
-        </body></html>`);
+           <a href="/kontakt">Kontakt</a>
+           <a href="/ausbildung">Ausbildung</a>
+           <a href="/jobs/bewerben">Jetzt bewerben</a>
+           <a href="/shop">Shop</a>
+           E-Mail: info@firma.de
+         </body></html>`);
       }
       if (url === `${ORIGIN}/kontakt`) {
         return page(`<html><body>info@firma.de</body></html>`);
@@ -142,15 +142,17 @@ describe("guarded site pass with in-site discovery", () => {
         return page("<html><body>Karriere bei Firma</body></html>");
       }
       if (url === `${ORIGIN}/ausbildung`) {
-        return failAusbildung
+        return page(`<html><body>azubi@firma.de</body></html>`);
+      }
+      // A DISCOVERED-only page (never one of the fixed targets): the dead-link
+      // scenario must hit this URL so its 403 stays in the discovery branch.
+      if (url === `${ORIGIN}/jobs/bewerben`) {
+        return failDiscovered
           ? new Response("Forbidden", {
               status: 403,
               headers: { "content-type": "text/html; charset=utf-8" },
             })
-          : page(`<html><body>azubi@firma.de</body></html>`);
-      }
-      if (url === `${ORIGIN}/jobs/bewerben`) {
-        return page(`<html><body>Stellenausschreibung</body></html>`);
+          : page(`<html><body>Stellenausschreibung</body></html>`);
       }
       return page("");
     }) as unknown as typeof fetch;
@@ -168,7 +170,9 @@ describe("guarded site pass with in-site discovery", () => {
     );
     const outcome = await fetcher(`${ORIGIN}/`);
 
-    // Fixed targets first (priority untouched), then the DISCOVERED pages:
+    // Fixed targets first (priority untouched — all six of them now), then
+    // the DISCOVERED page: /ausbildung is a fixed target (200 here), the
+    // discovered /jobs/bewerben adds the jobs evidence.
     const kinds = outcome.pages.map((page) => page.kind);
     expect(kinds.slice(0, 3)).toEqual(["impressum", "kontakt", "karriere"]);
     expect(kinds).toContain("ausbildung");
@@ -177,8 +181,9 @@ describe("guarded site pass with in-site discovery", () => {
     // The site's /shop link is NEVER fetched; neither is a second karriere:
     expect(calls).not.toContain(`${ORIGIN}/shop`);
     expect(calls.filter((url) => url.includes("karriere"))).toHaveLength(1);
-    // Real requests only: robots + 3 fixed + 2 discovered = 6.
-    expect(calls).toHaveLength(6);
+    // Real requests only: robots + 6 fixed + 1 discovered = 8.
+    // (The /jobs and /team fixed targets 404 empty — real answers, no block.)
+    expect(calls).toHaveLength(8);
   });
 
   it("the env cap limits the discovered pages", async () => {
@@ -188,9 +193,10 @@ describe("guarded site pass with in-site discovery", () => {
       createFetchContext({ fetchImpl: impl, isPublicHost: async () => true, sleep: async () => undefined }),
     );
     const outcome = await fetcher(`${ORIGIN}/`);
-    expect(outcome.pages.map((page) => page.kind)).toEqual(["impressum", "kontakt", "karriere", "ausbildung"]);
-    // Only ONE discovered page fetched (jobs/bewerben never reached):
-    expect(calls).not.toContain(`${ORIGIN}/jobs/bewerben`);
+    // Exactly ONE discovered page fetched (/jobs/bewerben); /bewerbung never
+    // reached:
+    expect(outcome.pages.map((page) => page.kind)).toEqual(["impressum", "kontakt", "karriere", "ausbildung", "jobs"]);
+    expect(calls).not.toContain(`${ORIGIN}/bewerbung`);
   });
 
   it("0 disables discovery: exactly the fixed targets run", async () => {
@@ -200,13 +206,13 @@ describe("guarded site pass with in-site discovery", () => {
       createFetchContext({ fetchImpl: impl, isPublicHost: async () => true, sleep: async () => undefined }),
     );
     const outcome = await fetcher(`${ORIGIN}/`);
-    expect(outcome.pages.map((page) => page.kind)).toEqual(["impressum", "kontakt", "karriere"]);
-    expect(calls).toHaveLength(4); // robots + 3 fixed
+    expect(outcome.pages.map((page) => page.kind)).toEqual(["impressum", "kontakt", "karriere", "ausbildung"]);
+    expect(calls).toHaveLength(7); // robots + 6 fixed
   });
 
   it("a dead DISCOVERED link never taints the pass or an email already found", async () => {
     delete process.env.DISCOVERY_MAX_DISCOVERED_PAGES;
-    const { impl } = siteFetchImpl(true); // /ausbildung → 403
+    const { impl } = siteFetchImpl(true); // /jobs/bewerben (discovered-only) → 403
     const fetcher = createGuardedSiteFetcher(
       createFetchContext({ fetchImpl: impl, isPublicHost: async () => true, sleep: async () => undefined }),
     );

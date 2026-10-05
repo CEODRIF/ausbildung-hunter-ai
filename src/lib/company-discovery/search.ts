@@ -825,6 +825,7 @@ export async function runDiscoveryPipeline(
           blockedReason: "unreachable",
           reasonCode: "source_blocked",
           primary: null,
+          siteYear: null,
         };
       }
 
@@ -851,18 +852,6 @@ export async function runDiscoveryPipeline(
         blockedReason: resolution.blockedReason,
       });
 
-      // The audit label of a rejected company. `no_website_found` is its own
-      // reason (the required search step could not run); it is still an
-      // OUTCOME of type source_blocked, and the two are never interchanged.
-      const label =
-        outcome === "no_website_found"
-          ? REJECT_NO_WEBSITE
-          : outcome === "source_blocked"
-            ? REJECT_SOURCE_BLOCKED
-            : outcome === "no_public_email"
-              ? REJECT_NO_PUBLIC_EMAIL
-              : "email_found";
-
       // STRONG dedupe, part two: the VERIFIED public email is part of the
       // company's identity. Two listings under different names that publish
       // the same address are ONE company — the first counted one wins, the
@@ -882,7 +871,16 @@ export async function runDiscoveryPipeline(
       // an address that was literally read, a URL that was actually
       // inspected. Nothing is derived from a name or a domain pattern.
       const applicationUrl = applicationUrlOf(resolution, null);
-      const beginnYearConfirmed = beginnYearConfirmedOf(offer, params);
+      // The STRICT final beginn decision: the discovery gate already
+      // rejected documented mismatches; here "unconfirmed" (null) is settled
+      // with the company's own site evidence where it exists. A concrete
+      // beginn filter (year/date/month) is a USER FILTER on the result —
+      // the company counts only when its start is confirmed, never guessed.
+      const beginnYearConfirmed = beginnYearConfirmedOf(
+        offer,
+        params,
+        resolution.siteYear,
+      );
       const emailSourceUrls = resolution.primary
         ? [resolution.primary.sourceUrl, ...resolution.primary.sourceUrls]
             .filter((url): url is string => Boolean(url))
@@ -915,18 +913,39 @@ export async function runDiscoveryPipeline(
         conflict: beginnYearConfirmed === false,
       });
 
-      if (
-        !countsAsResult({
-          onlyPublicEmail: params.onlyPublicEmail,
-          hasPublicEmail: resolution.primary !== null,
-          outcome:
-            outcome === "no_website_found" ? "source_blocked" : outcome,
-        })
-      ) {
+      const emailCounts = countsAsResult({
+        onlyPublicEmail: params.onlyPublicEmail,
+        hasPublicEmail: resolution.primary !== null,
+        outcome:
+          outcome === "no_website_found"
+            ? "source_blocked"
+            : (outcome as "email_found" | "no_public_email" | "source_blocked"),
+      });
+      const beginnOk =
+        params.beginn.mode === "from_now" || beginnYearConfirmed === true;
+
+      if (!emailCounts || !beginnOk) {
         if (!rejectedKeys.has(key)) {
           counters.companiesRejected += 1;
           rejectedKeys.add(key);
         }
+        // The audit label: the EMAIL outcome is the company's factual state
+        // (kept in `emailStatus` regardless); the REJECT reason reports the
+        // user-filter that failed — an email/website failure first, else the
+        // beginn filter. The email failure is classified precisely into its
+        // three states (never lumped together):
+        //   no usable official site found  → no_website_found
+        //   the source/site was blocked    → source_blocked
+        //   site checked, no literal email → no_public_email
+        const label = !emailCounts
+          ? outcome === "no_website_found"
+            ? REJECT_NO_WEBSITE
+            : outcome === "source_blocked"
+              ? REJECT_SOURCE_BLOCKED
+              : REJECT_NO_PUBLIC_EMAIL
+          : beginnYearConfirmed === false
+            ? "beginn_mismatch"
+            : "beginn_not_confirmed";
         await recordCompany(runId, {
           ...companyFactsFromOffer(offer, params, key),
           websiteUrl,
@@ -944,7 +963,12 @@ export async function runDiscoveryPipeline(
           confidenceReasons: confidence.reasons,
           conflict: confidence.conflict,
         });
-        traceOffer("rejected", offer, { rejectReason: label, onlyPublicEmail: params.onlyPublicEmail });
+        traceOffer("rejected", offer, {
+          rejectReason: label,
+          onlyPublicEmail: params.onlyPublicEmail,
+          beginnConfirmed: beginnYearConfirmed,
+          emailStatus: outcome,
+        });
         await flushProgress();
         continue;
       }
@@ -1338,20 +1362,23 @@ function discoveryOfferFromOpportunity(opp: Opportunity): DiscoveryOffer {
 }
 
 /**
- * The 2027 (beginn-year) confirmation of a counted offer — three honest
- * states, never a guess:
- *   true   the run has a CONCRETE beginn (year/month/date) and the offer's
- *          DOCUMENTED start is in that same year;
- *   false  the offer documents a start, but in a different year;
- *   null   the offer documents no start, or the run's constraint is
- *          `from_now` (there is no concrete year to confirm).
+ * The beginn confirmation of a company — three honest states, never a
+ * guess:
+ *   true   the run has a CONCRETE beginn (year/month/date) and the start is
+ *          DOCUMENTED in that target — in the offer itself, or (year mode)
+ *          on the company's own inspected site pages;
+ *   false  the start is documented, but NOT in the target;
+ *   null   nothing is documented anywhere, the evidence conflicts, or the
+ *          run's constraint is `from_now` (no concrete year to confirm).
+ * Evidence order: the offer's documented start first; the company's own
+ * site second (a site year cannot confirm a concrete date or month window).
+ * Stored per company for transparency.
  */
 export function beginnYearConfirmedOf(
   offer: Pick<DiscoveryOffer, "beginn">,
   params: Pick<DiscoveryRunParams, "beginn">,
+  siteYear: { year: number | null; conflict: boolean } | null = null,
 ): boolean | null {
-  const documentedYear = offer.beginn ? offer.beginn.slice(0, 4) : null;
-  if (!/^\d{4}$/.test(documentedYear ?? "")) return null; // not documented
   const runYear =
     params.beginn.mode === "year"
       ? String(params.beginn.year)
@@ -1361,7 +1388,26 @@ export function beginnYearConfirmedOf(
           ? params.beginn.date.slice(0, 4)
           : null; // from_now: no concrete year to confirm
   if (!runYear) return null;
-  return documentedYear === runYear;
+
+  // 1. The offer's own documented start is the primary evidence.
+  const documentedYear = offer.beginn ? offer.beginn.slice(0, 4) : null;
+  if (/^\d{4}$/.test(documentedYear ?? "")) return documentedYear === runYear;
+
+  // 2. Undocumented in the offer: the company's OWN inspected pages are the
+  //    next documented source — a start year stated in apprenticeship
+  //    context (year mode only, and only when the pages do not conflict).
+  if (
+    params.beginn.mode === "year" &&
+    siteYear &&
+    !siteYear.conflict &&
+    siteYear.year !== null
+  ) {
+    return String(siteYear.year) === runYear;
+  }
+
+  // 3. Nothing documented anywhere: UNCONFIRMED — the acceptance stage
+  //    rejects with a clear reason instead of counting it.
+  return null;
 }
 
 /** Exported for tests: the outcome counters must always add up. */
