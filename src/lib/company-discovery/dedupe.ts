@@ -154,4 +154,13 @@ export class CompanyIdentityIndex {
   get nameCount(): number {
     return this.nameKeys.size;
   }
+
+  /**
+   * The domains this run has already counted (bare hosts, key-normalized).
+   * Lets a discovery source SKIP companies it would only re-discover — work
+   * is never repeated without a reason.
+   */
+  knownDomains(): ReadonlySet<string> {
+    return this.domainKeys;
+  }
 }

@@ -15,6 +15,7 @@ import {
   MAX_TAVILY_REQUESTS_PER_RUN,
   type WebSearchClient,
 } from "@/lib/web-search";
+import { generateSearchQueries } from "./queries";
 import { enabledAdapters } from "./adapters";
 import type { NormalizedOffer, OfferSourceAdapter } from "./adapter";
 import { emailConfidenceOf } from "./accept";
@@ -32,6 +33,10 @@ import {
   isUsableCompanyName,
 } from "./dedupe";
 import { createCamofoxClient, type CamofoxClient } from "./camofox/client";
+import {
+  runBrowserDiscovery,
+  type BrowserSourceResult,
+} from "./camofox/browser-source";
 import { crawlCompanySite } from "./camofox/deep-crawl";
 import { createFetchContext, type FetchContext } from "./fetch-guard";
 import {
@@ -283,6 +288,10 @@ export async function runDiscoveryPipeline(
   };
   /** Provider queries the search adapter issued in THIS batch. */
   let adapterQueriesIssued = 0;
+  /** The provider queries the search layer actually issued (measured). The
+   *  browser discovery source re-runs THESE queries in the real browser —
+   *  the sources share one strategy space, they do not diverge. */
+  const issuedQueries: string[] = [];
   /** Every URL the research discovered in THIS batch (search results + crawl). */
   const discoveredUrls = new Set<string>();
   /** Counted companies that got a verified application URL in THIS batch. */
@@ -420,6 +429,7 @@ export async function runDiscoveryPipeline(
           live.currentQuery = query;
           live.currentSource = sourceById(source)?.displayName ?? source;
           adapterQueriesIssued += 1; // measured: one provider request
+          issuedQueries.push(query);
         },
         // Research memory for the search phase: what THIS goal pass already
         // issued/visited (fresh run: nothing; continue batch: the persisted
@@ -1301,6 +1311,123 @@ export async function runDiscoveryPipeline(
       if (aborted) break;
     }
 
+    // (b2) BROWSER DISCOVERY (Camofox): the run's research queries executed
+    //      in a REAL browser — rendered search-result pages (Google via the
+    //      engine's anti-detection, DuckDuckGo/Bing as honest fallbacks),
+    //      then candidate pages inspected in the same session. The offers
+    //      flow through the SAME funnel (dedupe → email resolution → gates)
+    //      as every other source, so nothing is double-counted and a browser
+    //      failure never stops the run. Hoisted so the LATER crawl-phase
+    //      source-row upsert (c) can merge it: the browser's own measured
+    //      work must never be overwritten as "skipped".
+    let browserDiscovery: BrowserSourceResult | null = null;
+    if (
+      !aborted &&
+      camofox &&
+      counters.foundCompanies < target &&
+      identity.nameCount < maxCompanies
+    ) {
+      const browserLive = async (text: string): Promise<void> => {
+        live.currentSource = "Camofox Browser Search";
+        live.currentStrategy = text;
+        flushLiveState();
+      };
+      const probe = await camofox.probe();
+      if (!probe) {
+        upsertSource("browser-camofox", {
+          status: "unavailable",
+          reason: camofox.unavailableReason ?? "unreachable",
+        });
+       } else {
+        // The browser re-runs the SAME queries the planner issued for this
+        // run (measured). When the search layer issued none (provider down /
+        // no key), the static seed list is the fallback — the research does
+        // not depend on Tavily being alive. `goal` is the offer-TYPE
+        // FALLBACK only (stated types always win), so "both" runs use the
+        // product's primary anchor.
+        const browserGoal: "ausbildung" | "arbeit" =
+          params.goal === "both" ? "ausbildung" : params.goal;
+        const browserQueries =
+          issuedQueries.length > 0
+            ? [...new Set(issuedQueries)]
+            : generateSearchQueries(
+                {
+                  role: params.role,
+                  keyword: params.field,
+                  goal: browserGoal,
+                  location: "",
+                  cities: [],
+                },
+                {},
+                12,
+              );
+        upsertSource("browser-camofox", {
+          status: "running",
+          candidates: 0,
+        });
+        const browserOffersByGoal: Record<
+          "ausbildung" | "arbeit",
+          DiscoveryOffer[]
+        > = { ausbildung: [], arbeit: [] };
+        const browserVisited = new Set([
+          ...(memories.ausbildung?.visitedUrls ?? []),
+          ...(memories.arbeit?.visitedUrls ?? []),
+        ]);
+        const browserResult = await runBrowserDiscovery({
+          camofox,
+          queries: browserQueries,
+          goal: browserGoal,
+          field: params.field,
+          knownCompanyDomains: identity.knownDomains(),
+          visitedUrls: browserVisited,
+          maxCandidatesPerQuery: 6,
+          callbacks: {
+            onOffer: (offer) => {
+              browserOffersByGoal[offer.offerType ?? browserGoal].push(
+                discoveryOfferFromListing(offer, "browser-camofox"),
+              );
+            },
+            onUrlsDiscovered: (urls) => {
+              for (const discovered of urls) discoveredUrls.add(discovered);
+            },
+            onLiveState: (text) => {
+              void browserLive(text);
+            },
+            shouldStop: () =>
+              runtimeBudgetExceeded() || counters.foundCompanies >= target,
+          },
+        });
+        browserDiscovery = browserResult;
+        await flushProgress();
+        if (!aborted) {
+          await processOffers(
+            browserOffersByGoal.ausbildung,
+            "ausbildung",
+          );
+          if (!aborted) {
+            await processOffers(browserOffersByGoal.arbeit, "arbeit");
+          }
+        }
+        upsertSource("browser-camofox", {
+          status: browserResult.blocked ? "blocked" : "ok",
+          reason:
+            browserResult.blockedReason ??
+            (Object.keys(browserResult.providerFailures).length > 0
+              ? Object.entries(browserResult.providerFailures)
+                  .map(([key, hits]) => `${key}(${hits})`)
+                  .join(",")
+              : undefined),
+          candidates: browserResult.offersFound,
+          stats: {
+            queriesExecuted: browserResult.queriesExecuted,
+            resultsInspected: browserResult.pagesUsed,
+          },
+        });
+        live.currentSource = null;
+        live.currentStrategy = null;
+      }
+    }
+
     // (c) company-website offer discovery (§11): a bounded pass over the
     //     already-accepted companies that carry a verified official domain.
     //     Its offers flow through the SAME funnel (normalization → dedupe →
@@ -1431,24 +1558,42 @@ export async function runDiscoveryPipeline(
           candidates: siteOffersTotal,
         });
         if (camofox) {
-          // The browser source's honest row: pages it really rendered, or
-          // WHY it could not run (unavailable engine / budget spent).
+          // The browser source's honest row — MERGED across both browser
+          // passes: the (b2) discovery run AND this crawl phase. The crawl
+          // may be HTTP-only (b2 legitimately spent the client's shared page
+          // budget), so a browser that really ran must never be reported
+          // "skipped"; and a walled/blocked discovery run stays "blocked"
+          // when the crawl added no browser work of its own.
+          const crawlDidWork = crawlPagesTotal > 0 || crawlBlockedTotal > 0;
+          const status = !camofox.available
+            ? "unavailable"
+            : !browserDiscovery && !crawlDidWork
+              ? "skipped"
+              : browserDiscovery?.blocked && !crawlDidWork
+                ? "blocked"
+                : "ok";
+          const failureSummary = browserDiscovery
+            ? Object.entries(browserDiscovery.providerFailures)
+                .map(([key, hits]) => `${key}(${hits})`)
+                .join(",")
+            : "";
           upsertSource("browser-camofox", {
             displayName: "Camofox Browser",
             category: "search",
             policy: "enabled_public",
-            status: camofox.available
-              ? crawlPagesTotal > 0 || crawlBlockedTotal > 0
-                ? "ok"
-                : "skipped"
-              : "unavailable",
-            reason: camofox.available
-              ? undefined
-              : (camofox.unavailableReason ?? "browser_unavailable"),
-            candidates: crawlPagesTotal,
+            status,
+            reason: !camofox.available
+              ? (camofox.unavailableReason ?? "browser_unavailable")
+              : browserDiscovery
+                ? browserDiscovery.blocked
+                  ? (browserDiscovery.blockedReason ?? undefined)
+                  : (failureSummary.length > 0 ? failureSummary : undefined)
+                : undefined,
+            candidates: browserDiscovery?.offersFound ?? 0,
             stats: {
-              queriesExecuted: 0,
-              resultsInspected: crawlPagesTotal,
+              queriesExecuted: browserDiscovery?.queriesExecuted ?? 0,
+              resultsInspected:
+                (browserDiscovery?.pagesUsed ?? 0) + crawlPagesTotal,
             },
           });
         }

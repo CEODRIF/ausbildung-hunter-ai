@@ -54,6 +54,12 @@ export interface RenderedPage {
   text: string;
   /** Absolute http(s) links on the rendered page. */
   links: string[];
+  /**
+   * The VISIBLE LABEL of each link (url → text), when the engine exposes it.
+   * On a search-result page this is the result title (how a company presents
+   * itself — used for company-name extraction, never guessed otherwise).
+   */
+  linkTitles?: Record<string, string>;
 }
 
 export interface CamofoxConfig {
@@ -130,9 +136,18 @@ export interface CamofoxClientOptions {
   deps?: CamofoxClientDeps;
 }
 
-const MAX_RENDERED_HTML_CHARS = 800_000;
-const MAX_RENDERED_TEXT_CHARS = 200_000;
 const MAX_LINKS_PER_PAGE = 240;
+
+/** The shape `renderExpression` produces in the page. */
+interface RenderedEval {
+  title?: string | null;
+  href?: string;
+  status?: number;
+  html?: string;
+  text?: string;
+  /** `url\u0000label` pairs (see renderExpression). */
+  links?: unknown[];
+}
 
 /**
  * One client instance = ONE research run. It owns the run's Camofox session
@@ -197,13 +212,18 @@ export class CamofoxClient {
     if (this.probed) return true;
     const res = await this.request("GET", "/health");
     this.probed = true;
-    if (!res || res.status !== 200) {
+    const health = res?.json as { ok?: boolean } | null | undefined;
+    if (!res || res.status !== 200 || !health || health.ok !== true) {
       // request() may already have set a MORE specific reason (e.g. a 5xx
-      // from the engine) — never overwrite a measured reason.
+      // from the engine) — never overwrite a measured reason. A 200 whose
+      // body is not the engine's health object is ALSO a failure (a proxy
+      // error page or an empty body is not a healthy engine).
       if (!this.unavailable) {
         this.unavailable = true;
         this.unavailableReason = res
-          ? `health_http_${res.status}`
+          ? health
+            ? `health_http_${res.status}`
+            : "health_invalid"
           : "browser_unreachable";
       }
       return false;
@@ -232,8 +252,8 @@ export class CamofoxClient {
       url?: string;
       httpStatus?: number | null;
       navigationOk?: boolean;
-    };
-    if (!body.tabId) {
+    } | null;
+    if (!body || !body.tabId) {
       this.markUnavailable("open_tab_no_tabid");
       return null;
     }
@@ -264,13 +284,13 @@ export class CamofoxClient {
       this.markUnavailable(res ? `navigate_http_${res.status}` : "browser_error");
       return null;
     }
-    const body = res.json as {
+    const body = (res.json ?? null) as {
       ok?: boolean;
       url?: string;
       httpStatus?: number | null;
       navigationOk?: boolean;
-    };
-    if (!body.ok || !body.url) {
+    } | null;
+    if (!body || !body.ok || !body.url) {
       this.markUnavailable("navigate_failed");
       return null;
     }
@@ -287,39 +307,153 @@ export class CamofoxClient {
     };
   }
 
-  /** The rendered content of the tab's CURRENT page (no budget — it is not a
-   *  new page load; the navigation paid for it). */
+  /**
+   * Navigate the tab through a SEARCH MACRO (verified in the deployed v2.4.8
+   * source: `@google_search` → `https://www.google.com/search?q=<query>`).
+   * The browser performs a REAL search — this is how the discovery engine
+   * turns a planner query into a rendered search-result page without any
+   * search-API quota. Returns the final (SERP) url.
+   */
+  async navigateSearch(
+    tabId: string,
+    query: string,
+    macro = "@google_search",
+  ): Promise<string | null> {
+    if (!this.available || !this.hasPageBudget()) return null;
+    const res = await this.request("POST", `/tabs/${tabId}/navigate`, {
+      userId: this.userId,
+      macro,
+      query,
+    });
+    if (!res || res.status !== 200) {
+      this.markUnavailable(res ? `navigate_http_${res.status}` : "browser_error");
+      return null;
+    }
+    const body = (res.json ?? null) as { ok?: boolean; url?: string } | null;
+    if (!body || !body.ok || !body.url) {
+      this.markUnavailable("navigate_failed");
+      return null;
+    }
+    const finalSafe = await this.checkUrlSafe(body.url);
+    if (!finalSafe) return null;
+    this.pagesUsed += 1;
+    return body.url;
+  }
+
+  /**
+   * The rendered content of the tab's CURRENT page (no budget — it is not a
+   * new page load; the navigation paid for it).
+   *
+   * ONE evaluate round-trip carries title, final href, the navigation status
+   * (from `performance`, because v2.4.8 navigate responses do not report
+   * httpStatus), the rendered HTML, the visible text AND the link list with
+   * its visible labels (v2.4.8 has no /links endpoint — verified in source).
+   * On a parse failure (v2.x 1MB result cap) it retries once with a smaller
+   * payload.
+   */
   async currentTabContent(
     tabId: string,
     requestedUrl: string,
     nav: { finalUrl: string; status: number; notFound: boolean },
   ): Promise<RenderedPage | null> {
     if (!this.available) return null;
-    const evaluated = await this.evaluate<{
-      title: string | null;
-      href: string;
-      html: string;
-      text: string;
-    }>(
-      tabId,
-      "(() => { const d = document; return { title: d.title || null, " +
-        "href: location.href, " +
-        "html: (d.documentElement ? d.documentElement.outerHTML : '').slice(0, " +
-        MAX_RENDERED_HTML_CHARS + "), " +
-        "text: (d.body ? d.body.innerText : '').slice(0, " +
-        MAX_RENDERED_TEXT_CHARS + ") }; })()",
-    );
+    const evaluated =
+      (await this.evaluateRendered(tabId, 500_000, 100_000)) ??
+      (await this.evaluateRendered(tabId, 150_000, 40_000));
     if (evaluated === null) return null;
-    const links = await this.links(tabId);
+    let links = evaluated.links.filter(
+      (link): link is string => typeof link === "string" && link.length > 0,
+    );
+    const linkTitles: Record<string, string> = {};
+    if (evaluated.linkTitles && typeof evaluated.linkTitles === "object") {
+      for (const [key, value] of Object.entries(evaluated.linkTitles)) {
+        if (typeof value === "string" && value) linkTitles[key] = value;
+      }
+    }
+    // v1.18.1 exposes links with a dedicated endpoint; prefer it when the
+    // embedded list is empty (older engines predate the embedded form).
+    if (links.length === 0 && Object.keys(linkTitles).length === 0) {
+      links = await this.links(tabId);
+    }
+    links = Array.from(new Set(links)).slice(0, MAX_LINKS_PER_PAGE);
+    const status = nav.status || evaluated.status;
     return {
       url: requestedUrl,
       finalUrl: nav.finalUrl,
-      status: nav.status,
-      notFound: nav.notFound,
-      title: evaluated.title,
-      html: evaluated.html,
-      text: evaluated.text,
+      status,
+      notFound: nav.notFound || status === 404,
+      title:
+        typeof evaluated.title === "string" && evaluated.title
+          ? evaluated.title
+          : null,
+      html: typeof evaluated.html === "string" ? evaluated.html : "",
+      text: typeof evaluated.text === "string" ? evaluated.text : "",
       links,
+      linkTitles,
+    };
+  }
+
+  /**
+   * The evaluate expression for `currentTabContent`. Links are returned as
+   * `url\u0000label` pairs (label = visible anchor text; on a search-result
+   * page that is the result title) so ONE round-trip carries everything.
+   */
+  private renderExpression(htmlChars: number, textChars: number): string {
+    return (
+      "(() => { const d = document; const nav = (typeof performance !== 'undefined' && performance.getEntriesByType) ? performance.getEntriesByType('navigation').slice(-1)[0] : null; " +
+      "const a = Array.from(d.querySelectorAll ? d.querySelectorAll('a[href]') : []); " +
+      "const pairs = []; const seen = new Set(); " +
+      "for (const el of a) { try { const u = el.href; if (!u || seen.has(u)) continue; seen.add(u); " +
+      "pairs.push(u + '\\u0000' + (el.textContent || '').trim().replace(/[\\u0000\\n]+/g, ' ').slice(0, 200)); " +
+      "if (pairs.length >= " + MAX_LINKS_PER_PAGE + ") break; } catch (e) {} } " +
+      "return { title: d.title || null, href: location.href, " +
+      "status: nav && typeof nav.responseStatus === 'number' ? nav.responseStatus : 0, " +
+      "html: (d.documentElement ? d.documentElement.outerHTML : '').slice(0, " + htmlChars + "), " +
+      "text: (d.body ? d.body.innerText : '').slice(0, " + textChars + "), " +
+      "links: pairs }; })()"
+    );
+  }
+
+  private async evaluateRendered(
+    tabId: string,
+    htmlChars: number,
+    textChars: number,
+  ): Promise<{
+    title: string | null;
+    status: number;
+    html: string;
+    text: string;
+    links: string[];
+    linkTitles: Record<string, string>;
+  } | null> {
+    const raw = await this.evaluate<RenderedEval>(
+      tabId,
+      this.renderExpression(htmlChars, textChars),
+    );
+    // null → the engine call itself failed; a bare string → the v2.x 1MB
+    // "[Truncated: …]" marker (unusable). Both: try the smaller retry.
+    if (raw === null || typeof raw === "string") return null;
+    const linkTitles: Record<string, string> = {};
+    const links: string[] = [];
+    const pairs: string[] = Array.isArray(raw.links)
+      ? raw.links.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    for (const pair of pairs) {
+      const idx = pair.indexOf("\u0000");
+      if (idx <= 0) continue;
+      const url = pair.slice(0, idx);
+      if (!url || links.includes(url)) continue;
+      links.push(url);
+      const label = pair.slice(idx + 1).trim();
+      if (label) linkTitles[url] = label;
+    }
+    return {
+      title: typeof raw.title === "string" && raw.title ? raw.title : null,
+      status: typeof raw.status === "number" ? raw.status : 0,
+      html: typeof raw.html === "string" ? raw.html : "",
+      text: typeof raw.text === "string" ? raw.text : "",
+      links,
+      linkTitles,
     };
   }
 
@@ -333,7 +467,7 @@ export class CamofoxClient {
         "GET",
         `/tabs/${tabId}/links?userId=${encodeURIComponent(this.userId)}&limit=100&offset=${offset}`,
       );
-      if (!res || res.status !== 200) return out;
+      if (!res || res.status !== 200 || !res.json) return out;
       const body = res.json as {
         links?: Array<{ url?: string }>;
         pagination?: { hasMore?: boolean };
@@ -359,8 +493,8 @@ export class CamofoxClient {
       `/tabs/${tabId}/snapshot?userId=${encodeURIComponent(this.userId)}&format=text&includeScreenshot=false`,
     );
     if (!res || res.status !== 200) return "";
-    const body = res.json as { snapshot?: string };
-    return typeof body.snapshot === "string" ? body.snapshot : "";
+    const body = res.json as { snapshot?: string } | null;
+    return body && typeof body.snapshot === "string" ? body.snapshot : "";
   }
 
   /**
@@ -425,12 +559,12 @@ export class CamofoxClient {
       this.markUnavailable(res ? `open_tab_http_${res.status}` : "browser_error");
       return null;
     }
-    const body = res.json as {
+    const body = (res.json ?? null) as {
       tabId?: string;
       httpStatus?: number | null;
       navigationOk?: boolean;
-    };
-    if (!body.tabId) {
+    } | null;
+    if (!body || !body.tabId) {
       this.markUnavailable("open_tab_no_tabid");
       return null;
     }
@@ -484,9 +618,22 @@ export class CamofoxClient {
       expression,
     });
     if (!res || res.status !== 200) return null;
-    const body = res.json as { ok?: boolean; result?: unknown };
-    if (body.ok !== true) return null;
-    return body.result as T;
+    const body = (res.json ?? null) as { ok?: boolean; result?: unknown } | null;
+    if (!body || body.ok !== true) return null;
+    const raw = body.result;
+    // VERSION-ADAPTIVE (verified against deployed v2.4.8 and v1.18.1):
+    // v2.x SERIALIZES the evaluated value — an object comes back as a JSON
+    // STRING (`resultType: "string"`); v1.x returns the object directly. A
+    // v2.x result that exceeds the 1MB cap comes back as a "[Truncated: …]"
+    // marker, detected by the parse failure below.
+    if (typeof raw === "string") {
+      try {
+        return JSON.parse(raw) as T;
+      } catch {
+        return raw as unknown as T;
+      }
+    }
+    return raw as T;
   }
 
   private async renderedPageOf(
@@ -563,6 +710,13 @@ export class CamofoxClient {
       json = await response.json();
     } catch {
       json = null;
+    }
+    if (response.status === 403 && !this.unavailable) {
+      // The engine is up but REFUSES our key — a misconfigured
+      // CAMOFOX_ACCESS_KEY (the deployed Railway service enforces Bearer auth).
+      // A distinct, actionable reason so the source row says exactly this.
+      this.markUnavailable("auth_forbidden");
+      return null;
     }
     if (response.status >= 500 && !this.unavailable) {
       // The engine itself is failing (5xx) — treat as unavailable.

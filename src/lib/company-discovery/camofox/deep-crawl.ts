@@ -406,21 +406,22 @@ export async function crawlCompanySite(
         nav = next;
       }
 
-      // A 404 is a missing page, NOT a JS block or a browser failure:
-      // record it honestly and move on (the circuit breaker stays shut).
-      if (nav.notFound) {
-        visited.add(key);
-        frontier.setOutcome(entry.url, "not_found", "http_404");
-        continue;
-      }
-
-      // ---- render + extract ------------------------------------------------
-      const content = await camofox.currentTabContent(tabId, entry.url, nav);
-      if (!content) {
-        result.blocked = true;
-        result.blockedReason = camofox.unavailableReason ?? "browser_error";
-        break;
-      }
+       // ---- render + extract ------------------------------------------------
+       const content = await camofox.currentTabContent(tabId, entry.url, nav);
+       if (!content) {
+         result.blocked = true;
+         result.blockedReason = camofox.unavailableReason ?? "browser_error";
+         break;
+       }
+       // A 404 is a missing page, NOT a JS block or a browser failure: record
+       // it honestly and move on (the circuit breaker stays shut). On v2.4.8
+       // the navigate response carries no httpStatus, so the status comes
+       // from the page's `performance` entry (see the client).
+       if (content.notFound) {
+         visited.add(key);
+         frontier.setOutcome(entry.url, "not_found", "http_404");
+         continue;
+       }
       const outcome = await finishPage(
         camofox,
         tabId,
