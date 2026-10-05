@@ -220,6 +220,14 @@ function sourceStatusTone(status: string): StatusTone {
 
 function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
   const sources = run.progress.sources;
+  // Sources skipped by policy stay persisted in the run (audit) but are not
+  // shown in the user-facing source table.
+  const visibleSources = sources.filter(
+    (s) => s.status !== "skipped_by_policy",
+  );
+  const hiddenPolicySources = sources.filter(
+    (s) => s.status === "skipped_by_policy",
+  ).length;
   const source = sources[0];
   const sourceLabel = !source
     ? "—"
@@ -233,7 +241,7 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
   const activeSources = sources.filter((s) => s.status === "ok").length;
   const blockedSources = sources.filter((s) => s.status === "blocked").length;
   const familyCount = (cats: string[]): number =>
-    sources.filter((s) => s.category && cats.includes(s.category)).length;
+    visibleSources.filter((s) => s.category && cats.includes(s.category)).length;
   const families: Array<{ key: string; cats: string[] }> = [
     { key: "portals", cats: ["ausbildung", "jobs", "local-jobs", "government"] },
     { key: "search", cats: ["search"] },
@@ -244,8 +252,8 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const filteredSources =
     sourceFilter === "all"
-      ? sources
-      : sources.filter(
+      ? visibleSources
+      : visibleSources.filter(
           (s) =>
             s.category &&
             families.find((f) => f.key === sourceFilter)?.cats.includes(s.category) === true,
@@ -445,7 +453,7 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
                 label={t("premium.filterAll")}
                 active={sourceFilter === "all"}
                 onClick={() => setSourceFilter("all")}
-                count={sources.length}
+                count={visibleSources.length}
               />
               {families.map((family) => (
                 <Chip
@@ -458,6 +466,13 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
               ))}
             </div>
           </div>
+          {hiddenPolicySources > 0 && (
+            <p className="px-5 pt-3 text-[11px] leading-4 text-faint">
+              {t("companyDiscovery.sources.hiddenPolicySources", {
+                count: hiddenPolicySources,
+              })}
+            </p>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full min-w-[46rem] border-collapse text-xs">
               <thead>

@@ -804,6 +804,8 @@ const de = {
         unavailable: "nicht verfügbar",
         skipped: "übersprungen",
       },
+      hiddenPolicySources:
+        "{count} nicht verfügbare Quellen sind in dieser Tabelle ausgeblendet.",
     },
     discovery: {
       title: "Internet-Suche",
@@ -2405,6 +2407,8 @@ const en: Dict = {
         unavailable: "unavailable",
         skipped: "skipped",
       },
+      hiddenPolicySources:
+        "{count} unavailable sources are hidden from this table.",
     },
     discovery: {
       title: "Internet Discovery",
@@ -3994,6 +3998,8 @@ const fr: Dict = {
         unavailable: "indisponible",
         skipped: "ignorée",
       },
+      hiddenPolicySources:
+        "{count} sources indisponibles sont masquées de ce tableau.",
     },
     discovery: {
       title: "Découverte Internet",
@@ -5579,6 +5585,7 @@ const ar: Dict = {
         unavailable: "غير متاح",
         skipped: "مُستبعَد",
       },
+      hiddenPolicySources: "تم إخفاء {count} مصادر غير متاحة من هذا الجدول.",
     },
     discovery: {
       title: "اكتشاف الإنترنت",
