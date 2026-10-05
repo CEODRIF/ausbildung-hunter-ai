@@ -115,11 +115,13 @@ describe("no fabricated addresses anywhere in the resolution path", () => {
   });
 
   it("keeps the fetch budget bounded per run", () => {
-    // The per-run page budget is env-tunable and bounded by default.
+    // The per-run page budget is env-tunable and bounded by default: it
+    // covers the MAX run target (so a 300-company goal is never capped at 8)
+    // and the wall-clock runtime + per-host pacing remain the true governors.
     expect(pipeline).toContain("discoveryEmailSitePasses()");
     expect(pipeline).toContain("fetchSite: siteBudgetAvailable ? siteFetcher : null");
     expect(read("src/lib/company-discovery/types.ts")).toContain(
-      'envInt("DISCOVERY_MAX_EMAIL_SITE_PASSES", 8)',
+      'envInt("DISCOVERY_MAX_EMAIL_SITE_PASSES", DISCOVERY_TARGET_MAX)',
     );
   });
 });

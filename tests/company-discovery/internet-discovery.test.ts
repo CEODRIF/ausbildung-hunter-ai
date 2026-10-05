@@ -347,12 +347,20 @@ describe("the structured query generator", () => {
 describe("the fan-out configuration is exported and bounded", () => {
   it("mirrors the registry and the documented defaults", () => {
     const limits = discoveryLimits();
-    expect(limits.maxSearchQueries).toBe(12);
+    // The query budget is the FULL provider budget (Tavily: 30 requests per
+    // run by default) — the agentic planner spends it while there is real
+    // research value; the provider cap + wall clock stay the safety bounds.
+    expect(limits.maxSearchQueries).toBe(30);
     expect(limits.maxSearchResultsPerQuery).toBe(10);
     expect(limits.maxSearchPagesPerQuery).toBe(5);
     expect(limits.maxSearchPagesToFetch).toBe(20);
     expect(limits.maxCompanySiteOfferCompanies).toBe(12);
     expect(limits.maxCompanySiteOfferPages).toBe(6);
+    // The browser research fan-out (Camofox) — bounded, env-tunable.
+    expect(limits.maxBrowserPages).toBe(100);
+    expect(limits.maxBrowserPagesPerCompany).toBe(8);
+    expect(limits.maxCrawlDepth).toBe(3);
+    expect(limits.maxBrowserInteractionsPerCompany).toBe(8);
 
     const fanout = discoveryFanout();
     expect(fanout.maxEnabledSourcesPerRun).toBe(enabledSources().length);
@@ -365,6 +373,12 @@ describe("the fan-out configuration is exported and bounded", () => {
     expect(fanout.maxSearchPagesPerRun).toBe(limits.maxSearchPagesToFetch);
     expect(fanout.maxCompanySiteCompaniesPerRun).toBe(limits.maxCompanySiteOfferCompanies);
     expect(fanout.maxCompanySitePagesPerCompany).toBe(limits.maxCompanySiteOfferPages);
+    expect(fanout.maxBrowserPagesPerRun).toBe(limits.maxBrowserPages);
+    expect(fanout.maxBrowserPagesPerCompany).toBe(limits.maxBrowserPagesPerCompany);
+    expect(fanout.maxCrawlDepth).toBe(limits.maxCrawlDepth);
+    expect(fanout.maxBrowserInteractionsPerCompany).toBe(
+      limits.maxBrowserInteractionsPerCompany,
+    );
   });
 
   it("stays env-tunable without a code change", () => {
@@ -379,13 +393,21 @@ describe("the fan-out configuration is exported and bounded", () => {
     vi.stubEnv("DISCOVERY_MAX_SEARCH_PAGES_TO_FETCH", "10000");
     vi.stubEnv("DISCOVERY_MAX_COMPANY_SITE_COMPANIES", "9999");
     vi.stubEnv("DISCOVERY_MAX_COMPANY_SITE_PAGES", "64");
+    vi.stubEnv("DISCOVERY_MAX_BROWSER_PAGES", "99999");
+    vi.stubEnv("DISCOVERY_MAX_BROWSER_PAGES_PER_COMPANY", "999");
+    vi.stubEnv("DISCOVERY_MAX_CRAWL_DEPTH", "999");
+    vi.stubEnv("DISCOVERY_MAX_BROWSER_INTERACTIONS_PER_COMPANY", "9999");
     const limits = discoveryLimits();
-    expect(limits.maxSearchQueries).toBe(20);
+    expect(limits.maxSearchQueries).toBe(60);
     expect(limits.maxSearchResultsPerQuery).toBe(20);
     expect(limits.maxSearchPagesPerQuery).toBe(10);
     expect(limits.maxSearchPagesToFetch).toBe(60);
     expect(limits.maxCompanySiteOfferCompanies).toBe(20);
     expect(limits.maxCompanySiteOfferPages).toBe(8);
+    expect(limits.maxBrowserPages).toBe(300);
+    expect(limits.maxBrowserPagesPerCompany).toBe(15);
+    expect(limits.maxCrawlDepth).toBe(5);
+    expect(limits.maxBrowserInteractionsPerCompany).toBe(16);
   });
 });
 

@@ -314,12 +314,16 @@ describe("the expanded query families", () => {
 describe("the fan-out configuration", () => {
   it("documents the hard caps for every radius value", () => {
     expect(DISCOVERY_FANOUT_CAPS).toEqual({
-      maxSearchQueries: 20,
+      maxSearchQueries: 60,
       maxSearchResultsPerQuery: 20,
       maxSearchPagesPerQuery: 10,
       maxSearchPagesToFetch: 60,
       maxCompanySiteOfferCompanies: 20,
       maxCompanySiteOfferPages: 8,
+      maxBrowserPages: 300,
+      maxBrowserPagesPerCompany: 15,
+      maxCrawlDepth: 5,
+      maxBrowserInteractionsPerCompany: 16,
     });
     const limits = discoveryLimits();
     const fanout = discoveryFanout();
@@ -329,6 +333,12 @@ describe("the fan-out configuration", () => {
     expect(fanout.maxSearchPagesPerRun).toBe(limits.maxSearchPagesToFetch);
     expect(fanout.maxCompanySiteCompaniesPerRun).toBe(limits.maxCompanySiteOfferCompanies);
     expect(fanout.maxCompanySitePagesPerCompany).toBe(limits.maxCompanySiteOfferPages);
+    expect(fanout.maxBrowserPagesPerRun).toBe(limits.maxBrowserPages);
+    expect(fanout.maxBrowserPagesPerCompany).toBe(limits.maxBrowserPagesPerCompany);
+    expect(fanout.maxCrawlDepth).toBe(limits.maxCrawlDepth);
+    expect(fanout.maxBrowserInteractionsPerCompany).toBe(
+      limits.maxBrowserInteractionsPerCompany,
+    );
     expect(fanout.maxConcurrentCompanies).toBeLessThanOrEqual(5);
     expect(fanout.maxRequestsPerHost).toBe(1);
     expect(fanout.minHostDelayMs).toBeGreaterThanOrEqual(1000);

@@ -253,16 +253,30 @@ function RunCounters({ run, t }: { run: DiscoveryRun; t: TranslateFn }) {
   // The search layer's honest execution stats (persisted in the source
   // report) — 0 before the layer ran or on runs from before it existed.
   const searchStats = sources.find((s) => s.id === "search-api")?.stats;
+  // Every value below is MEASURED by the running engine and persisted on the
+  // run (0 before it ran / on older rows) — nothing is interpolated.
+  const progress = run.progress;
   const discoveryTiles: Array<{ key: string; value: number }> = [
     { key: "scanned", value: scanned },
     { key: "active", value: activeSources },
-    { key: "offers", value: run.progress.offersAnalyzed },
-    { key: "companies", value: run.progress.uniqueCompanies },
-    { key: "duplicates", value: run.progress.duplicatesRemoved },
+    { key: "offers", value: progress.offersAnalyzed },
+    { key: "companies", value: progress.uniqueCompanies },
+    { key: "duplicates", value: progress.duplicatesRemoved },
     { key: "blocked", value: blockedSources },
-    { key: "queries", value: searchStats?.queriesExecuted ?? 0 },
+    // Run-level queries (search layer + per-company lookups); the source
+    // stat is the pre-migration fallback for the same measured value.
+    {
+      key: "queries",
+      value: progress.queriesExecuted ?? searchStats?.queriesExecuted ?? 0,
+    },
     { key: "results", value: searchStats?.resultsInspected ?? 0 },
-    { key: "processed", value: run.progress.companiesProcessed },
+    { key: "processed", value: progress.companiesProcessed },
+    { key: "pagesInspected", value: progress.pagesInspected ?? 0 },
+    { key: "urlsDiscovered", value: progress.urlsDiscovered ?? 0 },
+    { key: "browserPages", value: progress.browserPages ?? 0 },
+    { key: "browserInteractions", value: progress.browserInteractions ?? 0 },
+    { key: "applicationsFound", value: progress.applicationsFound ?? 0 },
+    { key: "beginnConfirmed", value: progress.beginnConfirmed ?? 0 },
   ];
 
   return (

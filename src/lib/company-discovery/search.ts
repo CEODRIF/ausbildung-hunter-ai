@@ -31,6 +31,8 @@ import {
   CompanyIdentityIndex,
   isUsableCompanyName,
 } from "./dedupe";
+import { createCamofoxClient, type CamofoxClient } from "./camofox/client";
+import { crawlCompanySite } from "./camofox/deep-crawl";
 import { createFetchContext, type FetchContext } from "./fetch-guard";
 import {
   applicationUrlOf,
@@ -70,6 +72,7 @@ import {
   recordCandidates,
   recordCompany,
   recordCompanyEmail,
+  setCompanyApplicationUrlIfMissing,
   setRunCounters,
   startDiscoveryRun,
 } from "./runs";
@@ -152,6 +155,12 @@ export interface DiscoveryPipelineDeps {
   isPublicHost?: (hostname: string) => Promise<boolean>;
   /** Test seam: the run clock (runtime budget). Default: Date.now. */
   now?: () => number;
+  /**
+   * The run's anti-detection browser (Camofox). Injectable for tests; default:
+   * a fresh client when the engine is configured (else null → HTTP-only run,
+   * exactly the legacy behavior).
+   */
+  camofoxClient?: CamofoxClient | null;
 }
 
 /** The host of a URL, lowercased (www stripped), or "" when unparseable. */
@@ -260,6 +269,27 @@ export async function runDiscoveryPipeline(
     companiesProcessed: prior.companiesProcessed,
   };
 
+  // ---- research-engine execution stats (measured, never estimated) --------
+  // A CONTINUE batch keeps counting from the persisted totals: the bases
+  // below are the previous batches' measured values; this batch adds to them.
+  const statsBase = {
+    queriesExecuted: prior.queriesExecuted ?? 0,
+    pagesInspected: prior.pagesInspected ?? 0,
+    urlsDiscovered: prior.urlsDiscovered ?? 0,
+    browserPages: prior.browserPages ?? 0,
+    browserInteractions: prior.browserInteractions ?? 0,
+    applicationsFound: prior.applicationsFound ?? 0,
+    beginnConfirmed: prior.beginnConfirmed ?? 0,
+  };
+  /** Provider queries the search adapter issued in THIS batch. */
+  let adapterQueriesIssued = 0;
+  /** Every URL the research discovered in THIS batch (search results + crawl). */
+  const discoveredUrls = new Set<string>();
+  /** Counted companies that got a verified application URL in THIS batch. */
+  let applicationsFoundThisBatch = 0;
+  /** Counted companies whose beginn year was DOCUMENTED in THIS batch. */
+  let beginnConfirmedThisBatch = 0;
+
   // ---- live research state (the "Current query / Current source" UI) ----
   // Only the orchestrator writes it, always with the value of the step that is
   // ACTUALLY running; the UI renders it verbatim (nothing is simulated).
@@ -317,11 +347,41 @@ export async function runDiscoveryPipeline(
     }
   }
 
+  // ---- the anti-detection browser (Camofox) — the run's deep-inspect tool ---
+  // HTTP first, browser when needed: the guarded fetcher escalates a
+  // js_protected / bot_challenge / captcha page to a rendered one through
+  // this client (fail-soft — unavailable engine ⇒ the HTTP-only behavior).
+  const camofox: CamofoxClient | null =
+    deps.camofoxClient === undefined
+      ? createCamofoxClient(
+          runId,
+          limits.maxBrowserPages,
+          limits.maxBrowserPages * 2, // an interaction never exceeds a page load
+        )
+      : deps.camofoxClient;
   const fetchContext =
     deps.fetchContext ??
-    createFetchContext(
-      deps.isPublicHost ? { isPublicHost: deps.isPublicHost } : {},
-    );
+    createFetchContext({
+      ...(deps.isPublicHost ? { isPublicHost: deps.isPublicHost } : {}),
+      // Browser escalation: one rendered attempt per blocked page (the
+      // client's own budget + breaker make this bounded and fail-soft).
+      renderFallback: camofox
+        ? async (_ctx, url) => {
+            void _ctx; // host pacing was already applied by the guard
+            if (!(await camofox.probe())) return null;
+            return camofox.openPage(url);
+          }
+        : undefined,
+    });
+  if (camofox) {
+    upsertSource("browser-camofox", {
+      displayName: "Camofox Browser",
+      category: "search",
+      policy: "enabled_public",
+      status: "running",
+      candidates: 0,
+    });
+  }
   const siteFetcher = createGuardedSiteFetcher(fetchContext);
   // The search layer's query generator needs the run's concrete beginn context
   // (the BA-shaped criteria alone only carries "any" for date/year modes).
@@ -359,6 +419,7 @@ export async function runDiscoveryPipeline(
         onQuery: ({ query, source }) => {
           live.currentQuery = query;
           live.currentSource = sourceById(source)?.displayName ?? source;
+          adapterQueriesIssued += 1; // measured: one provider request
         },
         // Research memory for the search phase: what THIS goal pass already
         // issued/visited (fresh run: nothing; continue batch: the persisted
@@ -420,6 +481,8 @@ export async function runDiscoveryPipeline(
         // research memory is checkpointed, and the run survives a kill.
         onBatch: (report) => {
           const planner = plannerRef.current;
+          // Every URL the batch discovered/visited is a measured discovery.
+          for (const visited of report.visitedUrls) discoveredUrls.add(visited);
           if (planner) {
             planner.noteVisitedUrls(report.visitedUrls);
             planner.observe(
@@ -448,6 +511,36 @@ export async function runDiscoveryPipeline(
   /** Permitted public-search attempts issued in this run (client cap aware). */
   let searchAttempts = 0;
 
+  /**
+   * The research engine's LIVE execution stats — every value MEASURED
+   * (persisted base + this batch's measured delta), never estimated:
+   *  - queriesExecuted: provider queries the search adapter issued
+   *    (onQuery) + the per-company email-lookup queries (searchAttempts);
+   *  - pagesInspected: guarded fetches that actually returned a page
+   *    (plain HTTP or browser-rendered — `ok_via_browser`);
+   *  - urlsDiscovered: URLs the research found (search results + crawl);
+   *  - browserPages / browserInteractions: the Camofox client's counters;
+   *  - applicationsFound / beginnConfirmed: verified facts accepted this
+   *    batch (an application URL on the official domain / a documented
+   *    beginn year — never a guess).
+   */
+  const researchStats = () => ({
+    queriesExecuted:
+      statsBase.queriesExecuted + adapterQueriesIssued + searchAttempts,
+    pagesInspected:
+      statsBase.pagesInspected +
+      fetchContext.attempts.filter(
+        (attempt) =>
+          attempt.outcome === "ok" || attempt.outcome === "ok_via_browser",
+      ).length,
+    urlsDiscovered: statsBase.urlsDiscovered + discoveredUrls.size,
+    browserPages: statsBase.browserPages + (camofox?.pagesUsed ?? 0),
+    browserInteractions:
+      statsBase.browserInteractions + (camofox?.interactionsUsed ?? 0),
+    applicationsFound: statsBase.applicationsFound + applicationsFoundThisBatch,
+    beginnConfirmed: statsBase.beginnConfirmed + beginnConfirmedThisBatch,
+  });
+
   let delivered = 0;
   /**
    * Accepted companies that carry a verified official website — the input of
@@ -458,6 +551,10 @@ export async function runDiscoveryPipeline(
     websiteUrl: string;
     goal: "ausbildung" | "arbeit";
     field: string;
+    /** The counted company (the crawl's evidence attribution). */
+    companyName: string;
+    /** Its run-local company row (crawl emails corroborate it). */
+    companyId: string;
   }> = [];
   /** Remaining official-site passes for the public-email resolution. */
   let emailSiteBudget = discoveryEmailSitePasses();
@@ -485,6 +582,8 @@ export async function runDiscoveryPipeline(
     }
     await setRunCounters(runId, userId, {
       ...counters,
+      // The measured research-engine stats (a continue batch resumes them).
+      ...researchStats(),
       currentQuery: live.currentQuery,
       currentSource: live.currentSource,
       currentStrategy: live.currentStrategy,
@@ -1006,13 +1105,20 @@ export async function runDiscoveryPipeline(
       identity.mark(key, websiteUrl, resolution.primary?.email ?? null);
       counters.uniqueCompanies += 1;
       counters.foundCompanies += 1;
+      // Measured verification facts (never guessed): a verified application
+      // URL and a documented beginn year are counted into the run's stats.
+      if (applicationUrl !== null) applicationsFoundThisBatch += 1;
+      if (beginnYearConfirmed === true) beginnConfirmedThisBatch += 1;
       // A VERIFIED official site (stated or resolved) feeds the
-      // company-websites layer: its own career/offer pages are scanned next.
+      // company-websites layer: its own career/offer pages are scanned next
+      // (HTTP pass, or the browser deep crawl when the engine is available).
       if (websiteUrl) {
         acceptedSites.push({
           websiteUrl,
           goal: offer.goal,
           field: params.field,
+          companyName: offer.companyName ?? "",
+          companyId,
         });
       }
       traceOffer("accepted", offer, {
@@ -1214,6 +1320,8 @@ export async function runDiscoveryPipeline(
         candidates: 0,
       });
       let siteOffersTotal = 0;
+      let crawlPagesTotal = 0;
+      let crawlBlockedTotal = 0;
       const siteOffersByGoal: Record<"ausbildung" | "arbeit", DiscoveryOffer[]> = {
         ausbildung: [],
         arbeit: [],
@@ -1230,19 +1338,90 @@ export async function runDiscoveryPipeline(
           aborted = true;
           break;
         }
-        const result = await discoverCompanySiteOffers(fetchContext, {
-          websiteUrl: site.websiteUrl,
-          field: site.field,
-          goal: site.goal,
-          maxPages: limits.maxCompanySiteOfferPages,
-        });
-        siteOffersTotal += result.offers.length;
-        for (const offer of result.offers) {
-          const offerGoal = offer.offerType ?? site.goal;
-          siteOffersByGoal[offerGoal].push(
-            discoveryOfferFromListing(offer, COMPANY_WEBSITES_LAYER.id),
-          );
+        // ---- the DEEP crawl: browser first (JS portals, lazy listings,
+        //      interactions), HTTP as the fallback when the engine is not
+        //      available for this site (reliability: browser failure never
+        //      stops the research, the plain-HTTP pass still runs).
+        let usedBrowser = false;
+        if (camofox && (await camofox.probe()) && camofox.hasPageBudget()) {
+          live.currentSource = `${COMPANY_WEBSITES_LAYER.displayName} · browser deep crawl`;
+          flushLiveState();
+          try {
+            const crawl = await crawlCompanySite(camofox, {
+              websiteUrl: site.websiteUrl,
+              companyName: site.companyName,
+              companyDomain: hostOfUrl(site.websiteUrl) || "",
+              role: params.role,
+              field: params.field,
+              goal: site.goal,
+              limits: {
+                maxDepth: limits.maxCrawlDepth,
+                maxPages: limits.maxBrowserPagesPerCompany,
+                maxInteractions: limits.maxBrowserInteractionsPerCompany,
+                textBudget: 20_000,
+              },
+              callbacks: {
+                onNewUrls: (urls) => {
+                  for (const url of urls) discoveredUrls.add(url);
+                },
+                shouldStop: () =>
+                  runtimeBudgetExceeded() ||
+                  counters.foundCompanies >= target,
+                onLiveState: (text) => {
+                  live.currentStrategy = text;
+                  flushLiveState();
+                },
+              },
+              // A continue batch never re-fetches pages it already paid for.
+              visitedUrls: memories[site.goal]?.visitedUrls ?? [],
+            });
+            usedBrowser = true;
+            crawlPagesTotal += crawl.pagesFetched;
+            if (crawl.blocked) crawlBlockedTotal += 1;
+            siteOffersTotal += crawl.offers.length;
+            for (const offer of crawl.offers) {
+              const offerGoal = offer.offerType ?? site.goal;
+              siteOffersByGoal[offerGoal].push(
+                discoveryOfferFromListing(offer, COMPANY_WEBSITES_LAYER.id),
+              );
+            }
+            // Crawl evidence for the ACCEPTED company itself: literally
+            // published emails corroborate (idempotent) and a verified
+            // application page fills the row when the email pass found none.
+            for (const email of crawl.emails) {
+              try {
+                await recordCompanyEmail(site.companyId, email);
+              } catch {
+                // Corroboration must never break the run.
+              }
+            }
+            if (crawl.applicationUrl) {
+              await setCompanyApplicationUrlIfMissing(
+                site.companyId,
+                crawl.applicationUrl,
+              ).catch(() => undefined);
+            }
+          } catch {
+            // A crawl must never kill the run: fall through to the HTTP pass.
+            usedBrowser = false;
+          }
         }
+        if (!usedBrowser) {
+          const result = await discoverCompanySiteOffers(fetchContext, {
+            websiteUrl: site.websiteUrl,
+            field: site.field,
+            goal: site.goal,
+            maxPages: limits.maxCompanySiteOfferPages,
+          });
+          siteOffersTotal += result.offers.length;
+          for (const offer of result.offers) {
+            const offerGoal = offer.offerType ?? site.goal;
+            siteOffersByGoal[offerGoal].push(
+              discoveryOfferFromListing(offer, COMPANY_WEBSITES_LAYER.id),
+            );
+          }
+        }
+        await flushProgress();
       }
       if (!aborted) {
         await processOffers(siteOffersByGoal.ausbildung, "ausbildung");
@@ -1251,6 +1430,28 @@ export async function runDiscoveryPipeline(
           status: "ok",
           candidates: siteOffersTotal,
         });
+        if (camofox) {
+          // The browser source's honest row: pages it really rendered, or
+          // WHY it could not run (unavailable engine / budget spent).
+          upsertSource("browser-camofox", {
+            displayName: "Camofox Browser",
+            category: "search",
+            policy: "enabled_public",
+            status: camofox.available
+              ? crawlPagesTotal > 0 || crawlBlockedTotal > 0
+                ? "ok"
+                : "skipped"
+              : "unavailable",
+            reason: camofox.available
+              ? undefined
+              : (camofox.unavailableReason ?? "browser_unavailable"),
+            candidates: crawlPagesTotal,
+            stats: {
+              queriesExecuted: 0,
+              resultsInspected: crawlPagesTotal,
+            },
+          });
+        }
       }
     }
 
@@ -1277,6 +1478,7 @@ export async function runDiscoveryPipeline(
       noPublicEmail: counters.noPublicEmail,
       sourcesBlocked: counters.sourcesBlocked,
       companiesProcessed: counters.companiesProcessed,
+      ...researchStats(),
       sources: [...sourceStatus.values()],
       error:
         status === "failed"
@@ -1299,10 +1501,15 @@ export async function runDiscoveryPipeline(
       noPublicEmail: counters.noPublicEmail,
       sourcesBlocked: counters.sourcesBlocked,
       companiesProcessed: counters.companiesProcessed,
+      ...researchStats(),
       sources: [...sourceStatus.values()],
       error: "The discovery run failed.",
     }).catch(() => undefined);
     throw error;
+  } finally {
+    // The run's browser session must not outlive the run (cookies, storage,
+    // tabs). Best effort: a cleanup failure never changes the run's outcome.
+    camofox?.destroySession().catch(() => undefined);
   }
 }
 

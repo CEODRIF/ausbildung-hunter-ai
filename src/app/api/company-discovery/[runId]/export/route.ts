@@ -238,6 +238,21 @@ export async function GET(
         value: safeCell(String(searchStats.resultsInspected)),
       });
     }
+    // The research engine's execution stats (measured by the run itself;
+    // blank on runs from before the research-engine migration).
+    for (const [field, value] of [
+      ["Queries executed (run)", run.progress.queriesExecuted],
+      ["Pages inspected (run)", run.progress.pagesInspected],
+      ["URLs discovered", run.progress.urlsDiscovered],
+      ["Browser pages (Camofox)", run.progress.browserPages],
+      ["Browser interactions", run.progress.browserInteractions],
+      ["Application pages found", run.progress.applicationsFound],
+      ["Beginn confirmed (documented)", run.progress.beginnConfirmed],
+    ] as Array<[string, number | undefined]>) {
+      if (value !== undefined) {
+        meta.addRow({ field: safeCell(field), value: safeCell(String(value)) });
+      }
+    }
     for (const source of run.progress.sources) {
       meta.addRow({
         field: `Source: ${safeCell(source.displayName ?? source.id)}`,

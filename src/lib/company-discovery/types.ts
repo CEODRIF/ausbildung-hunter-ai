@@ -251,6 +251,25 @@ export interface DiscoveryProgress {
    * invented) — null before the first batch or on an older row.
    */
   currentStrategy: string | null;
+  // ---- Research-engine execution stats (agentic web research) --------------
+  // Every value is MEASURED during the run (never estimated) and exposed
+  // read-only. Optional on the type because the columns are migration-
+  // dependent: on a database without 20261026000000_discovery_research_engine
+  // .sql the row simply does not carry them (readers use `?? 0`).
+  /** Provider (search-API) queries actually issued across the run. */
+  queriesExecuted?: number;
+  /** Pages successfully fetched AND parsed (HTTP and browser-rendered). */
+  pagesInspected?: number;
+  /** Distinct URLs the research discovered (search results + crawled links). */
+  urlsDiscovered?: number;
+  /** Pages loaded in the anti-detection browser (Camofox). */
+  browserPages?: number;
+  /** In-page interactions performed by the browser (clicks, scrolls, …). */
+  browserInteractions?: number;
+  /** Verified application URLs found for counted companies. */
+  applicationsFound?: number;
+  /** Counted companies whose run's beginn year is DOCUMENTED (never guessed). */
+  beginnConfirmed?: number;
 }
 
 /**
@@ -420,7 +439,10 @@ export interface DiscoveryLimits {
   maxRuntimeMs: number;
   // ---- Internet discovery fan-out (§17) — the search radius, NOT volume ----
   /** Structured search-engine QUERIES (families) for the OFFER-discovery
-   *  layer. Default 12 (target 10–15), hard cap 20. */
+   *  layer. Default 30 — the full provider budget (Tavily allows 30
+   *  requests per run by default): the agentic planner issues queries while
+   *  there is real research value, and the provider's own request cap plus
+   *  the wall-clock budget remain the safety bounds. Hard cap 60. */
   maxSearchQueries: number;
   /** Result URLs considered per search query (the provider hard-caps 20).
    *  Default 10, hard cap 20. */
@@ -436,6 +458,21 @@ export interface DiscoveryLimits {
   /** Company-site offer discovery: pages fetched per company INCLUDING the
    *  homepage (homepage + offer links / known paths). Default 6, hard cap 8. */
   maxCompanySiteOfferPages: number;
+  // ---- Browser research fan-out (Camofox anti-detection browser) -----------
+  /** Total browser-rendered pages the run may load (across all companies and
+   *  escalations). Default 100, hard cap 300. The browser is expensive, so
+   *  every page must be justified by the research (escalation on a JS block,
+   *  or the priority frontier of the company deep crawl). */
+  maxBrowserPages: number;
+  /** Browser pages per single company during its deep crawl. Default 8,
+   *  hard cap 15. */
+  maxBrowserPagesPerCompany: number;
+  /** Maximum link-following depth of a company deep crawl (0 = homepage
+   *  only). Default 3, hard cap 5. */
+  maxCrawlDepth: number;
+  /** In-page interactions (click / scroll for "Load more", pagination,
+   *  accordions) allowed per company. Default 8, hard cap 16. */
+  maxBrowserInteractionsPerCompany: number;
 }
 
 /**
@@ -444,22 +481,36 @@ export interface DiscoveryLimits {
  * host can enlarge the radius within reason, never remove the bound.
  */
 export const DISCOVERY_FANOUT_CAPS = {
-  maxSearchQueries: 20,
+  maxSearchQueries: 60,
   maxSearchResultsPerQuery: 20,
   maxSearchPagesPerQuery: 10,
   maxSearchPagesToFetch: 60,
   maxCompanySiteOfferCompanies: 20,
   maxCompanySiteOfferPages: 8,
+  maxBrowserPages: 300,
+  maxBrowserPagesPerCompany: 15,
+  maxCrawlDepth: 5,
+  maxBrowserInteractionsPerCompany: 16,
 } as const;
 
-/** Positive integer from an env var, clamped into `[1, cap]`, else fallback. */
-function envIntClamped(name: string, fallback: number, cap: number): number {
+/** Integer from an env var, clamped into `[min, cap]`, else fallback. */
+function envIntClampedRange(
+  name: string,
+  fallback: number,
+  min: number,
+  cap: number,
+): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
   const value = Number(raw);
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1)
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < min)
     return fallback;
   return Math.min(value, cap);
+}
+
+/** Positive integer from an env var, clamped into `[1, cap]`, else fallback. */
+function envIntClamped(name: string, fallback: number, cap: number): number {
+  return envIntClampedRange(name, fallback, 1, cap);
 }
 
 /** Positive integer from an env var, or the fallback. */
@@ -481,9 +532,15 @@ function envInt(name: string, fallback: number): number {
  * Companies beyond it are NOT inspected; their outcome is reported as
  * `source_blocked` (inconclusive) rather than as "no public email", because an
  * uninspected source must never be presented as a checked one (§4.4).
+ *
+ * The default covers the MAXIMUM run target (DISCOVERY_TARGET_MAX) so the
+ * email pass is never the thing that makes a 300-company run "stop at 8" —
+ * the true cost governors are the wall-clock runtime budget and the per-host
+ * pacing (one in-flight request per host, ≥1 s apart). An operator can still
+ * dial it down with DISCOVERY_MAX_EMAIL_SITE_PASSES.
  */
 export function discoveryEmailSitePasses(): number {
-  return envInt("DISCOVERY_MAX_EMAIL_SITE_PASSES", 8);
+  return envInt("DISCOVERY_MAX_EMAIL_SITE_PASSES", DISCOVERY_TARGET_MAX);
 }
 
 export function discoveryLimits(): DiscoveryLimits {
@@ -499,7 +556,7 @@ export function discoveryLimits(): DiscoveryLimits {
     // the bound.
     maxSearchQueries: envIntClamped(
       "DISCOVERY_MAX_SEARCH_QUERIES",
-      12,
+      30,
       DISCOVERY_FANOUT_CAPS.maxSearchQueries,
     ),
     maxSearchResultsPerQuery: envIntClamped(
@@ -526,6 +583,28 @@ export function discoveryLimits(): DiscoveryLimits {
       "DISCOVERY_MAX_COMPANY_SITE_PAGES",
       6,
       DISCOVERY_FANOUT_CAPS.maxCompanySiteOfferPages,
+    ),
+    maxBrowserPages: envIntClamped(
+      "DISCOVERY_MAX_BROWSER_PAGES",
+      100,
+      DISCOVERY_FANOUT_CAPS.maxBrowserPages,
+    ),
+    maxBrowserPagesPerCompany: envIntClamped(
+      "DISCOVERY_MAX_BROWSER_PAGES_PER_COMPANY",
+      8,
+      DISCOVERY_FANOUT_CAPS.maxBrowserPagesPerCompany,
+    ),
+    // 0 is meaningful here (homepage-only crawl), so the range variant.
+    maxCrawlDepth: envIntClampedRange(
+      "DISCOVERY_MAX_CRAWL_DEPTH",
+      3,
+      0,
+      DISCOVERY_FANOUT_CAPS.maxCrawlDepth,
+    ),
+    maxBrowserInteractionsPerCompany: envIntClamped(
+      "DISCOVERY_MAX_BROWSER_INTERACTIONS_PER_COMPANY",
+      8,
+      DISCOVERY_FANOUT_CAPS.maxBrowserInteractionsPerCompany,
     ),
   };
 }
@@ -557,6 +636,14 @@ export interface DiscoveryFanout {
   maxConcurrentCompanies: number;
   /** One in-flight request per host (the fetcher's `MAX_HOST_CONCURRENCY`). */
   maxRequestsPerHost: number;
+  /** Browser-rendered pages the run may load in total. */
+  maxBrowserPagesPerRun: number;
+  /** Browser pages per company during its deep crawl. */
+  maxBrowserPagesPerCompany: number;
+  /** Link depth of a company deep crawl (0 = homepage only). */
+  maxCrawlDepth: number;
+  /** In-page browser interactions allowed per company. */
+  maxBrowserInteractionsPerCompany: number;
   /** Minimum spacing between two requests to the same host, in ms. */
   minHostDelayMs: number;
   /** Per-request timeout of the discovery fetcher, in ms. */
@@ -577,6 +664,11 @@ export function discoveryFanout(): DiscoveryFanout {
     maxPagesPerCompany: limits.maxPagesPerCompany,
     maxConcurrentCompanies: limits.maxConcurrent,
     maxRequestsPerHost: 1,
+    maxBrowserPagesPerRun: limits.maxBrowserPages,
+    maxBrowserPagesPerCompany: limits.maxBrowserPagesPerCompany,
+    maxCrawlDepth: limits.maxCrawlDepth,
+    maxBrowserInteractionsPerCompany:
+      limits.maxBrowserInteractionsPerCompany,
     // Mirror the fetcher's named constants (fetch-guard is server-only and
     // must not be imported here — this module stays client-safe):
     // MIN_HOST_INTERVAL_MS / REQUEST_TIMEOUT_MS.

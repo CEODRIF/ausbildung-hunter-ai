@@ -64,6 +64,15 @@ interface DiscoveryRunRow {
    *  absent pre-migration. */
   current_strategy?: string | null;
   research_memory?: unknown;
+  /** Research-engine execution stats (research-engine migration); absent
+   *  pre-migration — every read falls back to 0. */
+  queries_executed?: number;
+  pages_inspected?: number;
+  urls_discovered?: number;
+  browser_pages?: number;
+  browser_interactions?: number;
+  applications_found?: number;
+  beginn_confirmed?: number;
   sources: unknown;
   credits_charged: number;
   error: string | null;
@@ -161,6 +170,14 @@ const MIGRATION_DEPENDENT_KEYS = [
   "evidence",
   "confidence_reasons",
   "conflict",
+  // 20261026000000_discovery_research_engine.sql:
+  "queries_executed",
+  "pages_inspected",
+  "urls_discovered",
+  "browser_pages",
+  "browser_interactions",
+  "applications_found",
+  "beginn_confirmed",
 ] as const;
 
 /** The patch without the migration-dependent keys. */
@@ -251,6 +268,13 @@ function parseStringList(raw: unknown): string[] {
     .slice(0, 20);
 }
 
+/** A stored counter is a non-negative integer, or 0 when absent/malformed. */
+function nonNegativeInt(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : 0;
+}
+
 function rowToRun(row: DiscoveryRunRow): DiscoveryRun {
   const parsed = discoveryRunParamsSchema.parse(row.params);
   const status = row.status as DiscoveryRunStatus;
@@ -271,6 +295,15 @@ function rowToRun(row: DiscoveryRunRow): DiscoveryRun {
     currentQuery: row.current_query ?? null,
     currentSource: row.current_source ?? null,
     currentStrategy: row.current_strategy ?? null,
+    // Research-engine execution stats — 0 on a database without the columns
+    // (measured values only, never estimates).
+    queriesExecuted: nonNegativeInt(row.queries_executed),
+    pagesInspected: nonNegativeInt(row.pages_inspected),
+    urlsDiscovered: nonNegativeInt(row.urls_discovered),
+    browserPages: nonNegativeInt(row.browser_pages),
+    browserInteractions: nonNegativeInt(row.browser_interactions),
+    applicationsFound: nonNegativeInt(row.applications_found),
+    beginnConfirmed: nonNegativeInt(row.beginn_confirmed),
     sources: parseSources(row.sources),
   };
   return {
@@ -491,6 +524,14 @@ export interface FinishRunOutcome {
   noPublicEmail?: number;
   sourcesBlocked?: number;
   companiesProcessed?: number;
+  /** Research-engine execution stats (measured; research-engine migration). */
+  queriesExecuted?: number;
+  pagesInspected?: number;
+  urlsDiscovered?: number;
+  browserPages?: number;
+  browserInteractions?: number;
+  applicationsFound?: number;
+  beginnConfirmed?: number;
   sources: DiscoverySourceStatus[];
   error?: string | null;
 }
@@ -513,6 +554,13 @@ export async function finishDiscoveryRun(
     no_public_email: outcome.noPublicEmail ?? 0,
     sources_blocked: outcome.sourcesBlocked ?? 0,
     companies_processed: outcome.companiesProcessed ?? 0,
+    queries_executed: outcome.queriesExecuted ?? 0,
+    pages_inspected: outcome.pagesInspected ?? 0,
+    urls_discovered: outcome.urlsDiscovered ?? 0,
+    browser_pages: outcome.browserPages ?? 0,
+    browser_interactions: outcome.browserInteractions ?? 0,
+    applications_found: outcome.applicationsFound ?? 0,
+    beginn_confirmed: outcome.beginnConfirmed ?? 0,
     sources: outcome.sources,
     error: outcome.error ?? null,
     finished_at: new Date().toISOString(),
@@ -566,11 +614,18 @@ export async function setRunCounters(
       | "companiesRejected"
       | "emailsFound"
       | "noPublicEmail"
-      | "sourcesBlocked"
-  | "companiesProcessed"
-  | "currentQuery"
-  | "currentSource"
-  | "currentStrategy"
+   | "sourcesBlocked"
+   | "companiesProcessed"
+   | "queriesExecuted"
+   | "pagesInspected"
+   | "urlsDiscovered"
+   | "browserPages"
+   | "browserInteractions"
+   | "applicationsFound"
+   | "beginnConfirmed"
+   | "currentQuery"
+   | "currentSource"
+   | "currentStrategy"
     >
   > & {
     /** The run's research memory (persisted on every batch checkpoint). */
@@ -597,6 +652,21 @@ export async function setRunCounters(
     patch.sources_blocked = counters.sourcesBlocked;
   if (counters.companiesProcessed !== undefined)
     patch.companies_processed = counters.companiesProcessed;
+  // Research-engine execution stats (measured values only).
+  if (counters.queriesExecuted !== undefined)
+    patch.queries_executed = counters.queriesExecuted;
+  if (counters.pagesInspected !== undefined)
+    patch.pages_inspected = counters.pagesInspected;
+  if (counters.urlsDiscovered !== undefined)
+    patch.urls_discovered = counters.urlsDiscovered;
+  if (counters.browserPages !== undefined)
+    patch.browser_pages = counters.browserPages;
+  if (counters.browserInteractions !== undefined)
+    patch.browser_interactions = counters.browserInteractions;
+  if (counters.applicationsFound !== undefined)
+    patch.applications_found = counters.applicationsFound;
+  if (counters.beginnConfirmed !== undefined)
+    patch.beginn_confirmed = counters.beginnConfirmed;
   // Live research state (the "Current query / Current source" UI).
   if (counters.currentQuery !== undefined)
     patch.current_query = counters.currentQuery;
@@ -813,6 +883,36 @@ export async function recordCompany(
     throw new Error("Failed to record the discovered company.");
   }
   return { companyId: data.id as string, created: true };
+}
+
+/**
+ * Set a company's application URL — but ONLY when the row currently has none
+ * (a verified URL from the earlier email pass always wins over the crawl's).
+ * The value comes from the browser deep crawl: a real page on the company's
+ * own official domain (never guessed). Idempotent and drift-tolerant
+ * (pre-migration database → silently skipped).
+ */
+export async function setCompanyApplicationUrlIfMissing(
+  companyId: string,
+  applicationUrl: string,
+): Promise<void> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("discovery_companies")
+    .select("application_url")
+    .eq("id", companyId)
+    .maybeSingle();
+  if (error || !data) return;
+  if (typeof data.application_url === "string" && data.application_url.length > 0) {
+    return; // a verified URL is already stored
+  }
+  const { error: updateError } = await admin
+    .from("discovery_companies")
+    .update({ application_url: applicationUrl })
+    .eq("id", companyId);
+  if (updateError && isUnknownColumnError(updateError)) {
+    return; // pre-migration database: the fact stays in the run stats only
+  }
 }
 
 /**

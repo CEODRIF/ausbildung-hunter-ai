@@ -199,13 +199,20 @@ describe("discoveryLimits", () => {
       maxTavilyQueries: 30,
       maxPagesPerCompany: 4,
       maxRuntimeMs: 10 * 60 * 1000,
-      // The internet-discovery fan-out (§17): a wider radius, still bounded.
-      maxSearchQueries: 12,
+      // The internet-discovery fan-out (§17): the FULL provider budget by
+      // default (Tavily allows 30 requests per run) — the agentic planner
+      // spends it while there is real research value.
+      maxSearchQueries: 30,
       maxSearchResultsPerQuery: 10,
       maxSearchPagesPerQuery: 5,
       maxSearchPagesToFetch: 20,
       maxCompanySiteOfferCompanies: 12,
       maxCompanySiteOfferPages: 6,
+      // The browser research fan-out (Camofox): bounded, env-tunable.
+      maxBrowserPages: 100,
+      maxBrowserPagesPerCompany: 8,
+      maxCrawlDepth: 3,
+      maxBrowserInteractionsPerCompany: 8,
     });
   });
 

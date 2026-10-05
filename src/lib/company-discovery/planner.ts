@@ -232,6 +232,85 @@ const ARBEIT_ANCHORS: readonly string[] = [
   "Stellenangebote",
 ];
 
+/**
+ * Major German city → its Bundesland. A CLOSED, curated list that powers the
+ * planner's GEOGRAPHIC EXPANSION: when the run discovers offers in a city but
+ * the city-level queries stagnate, the state level is a documented widening
+ * (München → Bayern) — a logged decision, never an unexplained jump. Keys are
+ * normalized (lowercase, umlauts in both spellings where they differ).
+ */
+const CITY_STATE: Record<string, string> = {
+  aachen: "Nordrhein-Westfalen",
+  augsburg: "Bayern",
+  bielefeld: "Nordrhein-Westfalen",
+  bochum: "Nordrhein-Westfalen",
+  braunschweig: "Niedersachsen",
+  bremerhaven: "Bremen",
+  chemnitz: "Sachsen",
+  darmstadt: "Hessen",
+  dortmund: "Nordrhein-Westfalen",
+  dresden: "Sachsen",
+  duesseldorf: "Nordrhein-Westfalen",
+  "düsseldorf": "Nordrhein-Westfalen",
+  erfurt: "Thüringen",
+  essen: "Nordrhein-Westfalen",
+  frankfurt: "Hessen",
+  "frankfurt am main": "Hessen",
+  "freiburg im breisgau": "Baden-Württemberg",
+  friedrichshafen: "Baden-Württemberg",
+  gelsenkirchen: "Nordrhein-Westfalen",
+  goettingen: "Niedersachsen",
+  "göttingen": "Niedersachsen",
+  hagen: "Nordrhein-Westfalen",
+  hamburg: "Hamburg",
+  hannover: "Niedersachsen",
+  heilbronn: "Baden-Württemberg",
+  herne: "Nordrhein-Westfalen",
+  ingolstadt: "Bayern",
+  jena: "Thüringen",
+  kaiserslautern: "Rheinland-Pfalz",
+  kassel: "Hessen",
+  kiel: "Schleswig-Holstein",
+  koeln: "Nordrhein-Westfalen",
+  "köln": "Nordrhein-Westfalen",
+  krefeld: "Nordrhein-Westfalen",
+  "ludwigshafen am rhein": "Rheinland-Pfalz",
+  luebeck: "Schleswig-Holstein",
+  "lübeck": "Schleswig-Holstein",
+  magdeburg: "Sachsen-Anhalt",
+  mainz: "Rheinland-Pfalz",
+  mannheim: "Baden-Württemberg",
+  "mönchengladbach": "Nordrhein-Westfalen",
+  muenchen: "Bayern",
+  münchen: "Bayern",
+  muenster: "Nordrhein-Westfalen",
+  münster: "Nordrhein-Westfalen",
+  nuernberg: "Bayern",
+  nürnberg: "Bayern",
+  "offenbach am main": "Hessen",
+  oldenburg: "Niedersachsen",
+  osnabrueck: "Niedersachsen",
+  "osnabrück": "Niedersachsen",
+  paderborn: "Nordrhein-Westfalen",
+  passau: "Bayern",
+  potsdam: "Brandenburg",
+  regensburg: "Bayern",
+  rostock: "Mecklenburg-Vorpommern",
+  "saarbrücken": "Saarland",
+  saarbruecken: "Saarland",
+  stuttgart: "Baden-Württemberg",
+  ulm: "Baden-Württemberg",
+  wiesbaden: "Hessen",
+  wuppertal: "Nordrhein-Westfalen",
+  zwickau: "Sachsen",
+};
+
+/** The state a known city implies (null when the city is not in the list). */
+function stateForCity(city: string): string | null {
+  const key = clean(city).toLowerCase();
+  return CITY_STATE[key] ?? null;
+}
+
 function clean(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -491,6 +570,12 @@ export class ResearchPlanner {
         this.cities.push(city);
         this.counts.newRegions += 1;
       }
+      // GEOGRAPHIC EXPANSION (logged): a discovered city implies its
+      // Bundesland — the state enters the strategy space, so the refine-
+      // region family can widen city-level searches to state level
+      // (München → „Mechatroniker Ausbildung Bayern") instead of grinding
+      // on a small city. A documented, deterministic widening.
+      this.inferStateForCity(city);
     }
     const state = clean(discovery.state);
     if (
@@ -501,6 +586,23 @@ export class ResearchPlanner {
         this.states.push(state);
         this.counts.newRegions += 1;
       }
+    }
+  }
+
+  /**
+   * Widen a discovered city to its Bundesland (the documented geographic
+   * expansion). Deterministic: the same city always implies the same state;
+   * unknown cities imply nothing (no guessing). The state cap still applies.
+   */
+  private inferStateForCity(city: string): void {
+    const state = stateForCity(city);
+    if (!state || !isGermanState(state)) return;
+    if (this.states.some((existing) => existing.toLowerCase() === state.toLowerCase())) {
+      return;
+    }
+    if (this.states.length < MAX_DISCOVERED_STATES) {
+      this.states.push(state);
+      this.counts.newRegions += 1;
     }
   }
 

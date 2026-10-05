@@ -9,6 +9,7 @@ import {
   type RobotsPolicy,
 } from "@/lib/web-search/fetch-page";
 import { classifyResponse, type BlockedReason } from "./classify";
+import type { RenderedPage } from "./camofox/client";
 import type { SourceAttempt } from "./types";
 
 /**
@@ -78,6 +79,21 @@ export interface FetchDependencies {
   sleep: (ms: number) => Promise<void>;
   nowIso: () => string;
   nowMs: () => number;
+  /**
+   * OPTIONAL browser escalation: when plain HTTP classifies a page as
+   * `js_protected`, `bot_challenge` or `captcha` (content the HTML shell
+   * cannot serve), the guarded fetcher MAY render the page with the anti-
+   * detection browser and re-evaluate the rendered content. Absent (the
+   * default, and on a run without a configured browser) the block stays
+   * terminal exactly as before. Must be fail-soft: null on any failure.
+   * It NEVER runs for `robots_disallow`, `forbidden`, `login_required` or
+   * `rate_limited` (policy/technical blocks, not render problems).
+   */
+  renderFallback?: (
+    ctx: FetchContext,
+    url: string,
+    reason: BlockedReason,
+  ) => Promise<RenderedPage | null>;
 }
 
 export interface FetchContext {
@@ -111,6 +127,9 @@ export function createFetchContext(
       sleep: deps.sleep ?? ((ms) => new Promise((done) => setTimeout(done, ms))),
       nowIso: deps.nowIso ?? (() => new Date().toISOString()),
       nowMs: deps.nowMs ?? (() => Date.now()),
+      // Browser escalation (optional): wired by the orchestrator when a
+      // Camofox engine is configured for the run; undefined → HTTP-only.
+      renderFallback: deps.renderFallback,
     },
   };
 }
@@ -179,6 +198,22 @@ function reserveHostSlot(
 export function isHostBlocked(ctx: FetchContext, host: string): boolean {
   return ctx.blockedHosts.has(host);
 }
+
+/**
+ * The block reasons that are a RENDER problem (the content exists but the
+ * plain-HTTP shell cannot see it) and therefore worth one browser escalation.
+ * `robots_disallow`, `forbidden`, `login_required` and `rate_limited` are
+ * policy/technical decisions and are NEVER escalated — the browser does not
+ * (and must not) override a site's stated rules.
+ */
+export const ESCALABLE_BLOCK_REASONS: ReadonlySet<BlockedReason> = new Set([
+  "js_protected",
+  "bot_challenge",
+  "captcha",
+]);
+
+/** A rendered page must actually show content to count as unblocked. */
+const MIN_RENDERED_TEXT_LENGTH = 80;
 
 interface HopCheck {
   ok: boolean;
@@ -359,6 +394,49 @@ export async function guardedFetch(
       visibleTextLength: contentType?.includes("html") ? visibleText.length : undefined,
     });
     if (classification.blocked) {
+      // ---- HTTP-first, browser-when-needed --------------------------------
+      // A JS shell / bot wall / captcha is a RENDER problem: the page's
+      // content exists, plain HTTP just cannot see it. One escalation through
+      // the anti-detection browser is attempted (budget- and availability-
+      // aware, fail-soft). The rendered content goes through the SAME
+      // classifier before it is accepted — a rendered page that still shows a
+      // challenge stays blocked, and the breaker opens as before.
+      if (
+        ESCALABLE_BLOCK_REASONS.has(classification.reason) &&
+        ctx.deps.renderFallback
+      ) {
+        let rendered: RenderedPage | null = null;
+        try {
+          rendered = await ctx.deps.renderFallback(ctx, currentUrl, classification.reason);
+        } catch {
+          rendered = null; // fail-soft: the block below stays in force
+        }
+        if (rendered && !rendered.notFound) {
+          const recheck = classifyResponse({
+            url: rendered.finalUrl,
+            status: rendered.status || 200,
+            headers: {},
+            contentType: "text/html",
+            bodyHead: rendered.html.slice(0, 4_000),
+            visibleTextLength: rendered.text.length,
+          });
+          if (!recheck.blocked && rendered.text.length >= MIN_RENDERED_TEXT_LENGTH) {
+            record(ctx, host, currentUrl, "ok_via_browser", rendered.status || null);
+            return {
+              ok: true,
+              page: {
+                url,
+                finalUrl: rendered.finalUrl,
+                status: rendered.status || 200,
+                title: rendered.title,
+                text: rendered.text.slice(0, options.textBudget ?? 20_000),
+                html: rendered.html.slice(0, MAX_RAW_HTML_CHARS),
+                links: rendered.links.slice(0, MAX_PAGE_LINKS),
+              },
+            };
+          }
+        }
+      }
       record(ctx, host, currentUrl, classification.reason, response.status);
       ctx.blockedHosts.set(host, classification.reason);
       return {
