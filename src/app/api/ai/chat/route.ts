@@ -74,7 +74,7 @@ export async function POST(request: Request) {
       ? body.fileIds.filter((id) => typeof id === "string")
       : [];
     // Server-side scope gate (BEFORE any model call): the assistant is a
-    // specialist for Ausbildung Hunter AI. Out-of-scope questions get a
+    // specialist for AusbildungsWeg. Out-of-scope questions get a
     // short, language-matched redirect — streamed and persisted like any
     // assistant reply, with no model call and no fabricated off-topic answer.
     // The hardened system prompt enforces the same boundary on the model side

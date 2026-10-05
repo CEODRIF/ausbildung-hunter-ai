@@ -17,7 +17,7 @@ export async function GET(): Promise<NextResponse> {
     status: 200,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "content-disposition": `attachment; filename="ausbildung-hunter-export-${new Date().toISOString().slice(0, 10)}.json"`,
+      "content-disposition": `attachment; filename="ausbildungsweg-export-${new Date().toISOString().slice(0, 10)}.json"`,
       "cache-control": "no-store",
     },
   });

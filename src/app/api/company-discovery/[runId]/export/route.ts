@@ -104,7 +104,7 @@ export async function GET(
     );
 
     const workbook = new ExcelJS.Workbook();
-    workbook.creator = "Ausbildung Hunter AI";
+    workbook.creator = "AusbildungsWeg";
     workbook.created = new Date();
 
     const sheet = workbook.addWorksheet("Companies");

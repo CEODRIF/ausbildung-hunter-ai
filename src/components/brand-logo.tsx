@@ -1,26 +1,31 @@
 import Link from "next/link";
 
 /**
- * Centralized brand logo.
+ * Centralized brand logo — the SINGLE source of the AusbildungsWeg identity.
  *
- * The official logo image has not been delivered to this workspace yet, so
- * the mark renders the existing letter-tile identity (blue tile + "A") that
- * is already used across the app — it is NOT a CSS re-drawing of artwork:
- * it is the app's current brand mark, kept 1:1 (proportions, colors).
+ * The official artwork lives in `public/`:
+ *   - `public/logo-mark.svg` — the compact mark (A whose right stroke is a
+ *     road leading up to a graduation cap); rendered here as the tile.
+ *   - `public/logo.svg` — full logo (mark + wordmark) for static contexts
+ *     (downloads, social cards).
  *
- * ASSET SWAP POINT: drop the official file at `public/logo.svg` (or
- * `.png`) and set `BRAND_LOGO_URL` below to it — every surface (sidebar,
- * auth, dashboard, AI assistant, scanner, search, opportunities,
- * applications, settings, mobile nav, empty states) picks it up from this
- * single component. The tile version (`variant="mark"`) and the favicon
- * (`src/app/icon.svg`) are the compact crops.
+ * Every surface that uses `<BrandLogo />` (sidebar, auth, dashboard, AI
+ * assistant, scanner, search, opportunities, applications, settings, mobile
+ * nav, empty states) picks up the identity from this one component. The
+ * wordmark is HTML text — not CSS art — so it stays crisp, theme-aware and
+ * accessible: "Ausbildungs" in the surface ink color, "Weg" in brand blue.
  */
-export const BRAND_LOGO_URL: string | null = null;
+export const BRAND_LOGO_URL = "/logo-mark.svg";
+
+/** Brand accent for the "Weg" part of the wordmark. */
+const WEG_CLASS =
+  "text-[#0B63E5] dark:text-[#168CFF]";
+const WEG_CLASS_LIGHT = "text-[#168CFF]";
 
 export interface BrandLogoProps {
   /** "full" = mark + wordmark, "mark" = compact icon only. */
   variant?: "full" | "mark";
-  /** Rendered tile size in px (default 36). */
+  /** Rendered mark size in px (default 36). */
   size?: number;
   className?: string;
   /** Optional link target (defaults to the landing page). */
@@ -28,7 +33,7 @@ export interface BrandLogoProps {
   /** Accessible label. */
   label?: string;
   /**
-   * "light" forces a white wordmark for placement on dark brand surfaces
+   * "light" forces a light wordmark for placement on dark brand surfaces
    * (the auth panel is dark in both themes). Default follows the theme.
    */
   tone?: "auto" | "light";
@@ -40,27 +45,16 @@ export interface BrandLogoProps {
 }
 
 function Mark({ size }: { size: number }) {
-  if (BRAND_LOGO_URL) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element -- brand asset, fixed dimensions
-      <img
-        src={BRAND_LOGO_URL}
-        alt=""
-        width={size}
-        height={size}
-        style={{ width: size, height: size }}
-        className="rounded-xl object-contain"
-      />
-    );
-  }
   return (
-    <span
-      aria-hidden="true"
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.44) }}
-      className="flex shrink-0 items-center justify-center rounded-xl bg-accent font-bold text-white shadow-[0_6px_14px_rgba(var(--glow-accent-rgb),0.25)] ring-1 ring-black/5 dark:shadow-[0_6px_14px_rgba(var(--glow-accent-rgb),0.3)] dark:ring-white/10"
-    >
-      A
-    </span>
+    // eslint-disable-next-line @next/next/no-img-element -- brand asset, fixed dimensions
+    <img
+      src={BRAND_LOGO_URL}
+      alt=""
+      width={size}
+      height={size}
+      style={{ width: size, height: size }}
+      className="shrink-0 object-contain"
+    />
   );
 }
 
@@ -69,16 +63,13 @@ export function BrandLogo({
   size = 36,
   className = "",
   href = "/",
-  label = "Ausbildung Hunter AI",
+  label = "AusbildungsWeg",
   tone = "auto",
   wordmarkClassName = "",
 }: BrandLogoProps) {
-  const wordmarkClass =
-    tone === "light"
-      ? "text-white"
-      : "text-ink";
-  const accentClass = tone === "light" ? "text-cyan" : "text-accent";
-  let content =
+  const wordmarkClass = tone === "light" ? "text-white" : "text-ink";
+  const wegClass = tone === "light" ? WEG_CLASS_LIGHT : WEG_CLASS;
+  const content =
     variant === "mark" ? (
       <Mark size={size} />
     ) : (
@@ -88,13 +79,13 @@ export function BrandLogo({
           className={`min-w-0 truncate text-sm font-bold tracking-[-0.02em] ${wordmarkClass} ${wordmarkClassName}`}
           style={{ lineHeight: 1 }}
         >
-          Ausbildung Hunter <span className={accentClass}>AI</span>
+          Ausbildungs<span className={wegClass}>Weg</span>
         </span>
       </span>
     );
 
   if (href) {
-    content = (
+    return (
       <Link
         href={href}
         aria-label={label}
@@ -103,10 +94,8 @@ export function BrandLogo({
         {content}
       </Link>
     );
-  } else {
-    content = (
-      <span className={`inline-flex items-center ${className}`}>{content}</span>
-    );
   }
-  return content;
+  return (
+    <span className={`inline-flex items-center ${className}`}>{content}</span>
+  );
 }

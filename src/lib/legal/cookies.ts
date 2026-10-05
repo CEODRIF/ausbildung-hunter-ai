@@ -15,10 +15,10 @@ export const cookiesDoc: LegalDoc = {
     ar: "سياسة ملفات الارتباط",
   },
   intro: {
-    de: "Diese Cookie Policy erklärt, welche Cookies und verwandten Technologien Ausbildung Hunter AI verwendet, warum sie benötigt werden und wie Sie sie steuern können. Sie beschreibt ausschließlich Technologien, die in der Plattform tatsächlich eingesetzt werden.",
-    en: "This Cookie Policy explains which cookies and related technologies Ausbildung Hunter AI uses, why they are needed, and how you can control them. It describes only technologies actually deployed in the platform.",
-    fr: "La présente politique relative aux cookies explique quels cookies et quelles technologies connexes Ausbildung Hunter AI utilise, pourquoi ils sont nécessaires et comment vous pouvez les contrôler. Elle ne décrit que les technologies réellement déployées dans la plateforme.",
-    ar: "تشرح سياسة ملفات الارتباط هذه الكوكيز والتقنيات المرتبطة التي تستخدمها منصّة Ausbildung Hunter AI، ولماذا هي ضرورية، وكيف تتحكم بها. وهي تصف فقط التقنيات المستخدمة فعلًا في المنصّة.",
+    de: "Diese Cookie Policy erklärt, welche Cookies und verwandten Technologien AusbildungsWeg verwendet, warum sie benötigt werden und wie Sie sie steuern können. Sie beschreibt ausschließlich Technologien, die in der Plattform tatsächlich eingesetzt werden.",
+    en: "This Cookie Policy explains which cookies and related technologies AusbildungsWeg uses, why they are needed, and how you can control them. It describes only technologies actually deployed in the platform.",
+    fr: "La présente politique relative aux cookies explique quels cookies et quelles technologies connexes AusbildungsWeg utilise, pourquoi ils sont nécessaires et comment vous pouvez les contrôler. Elle ne décrit que les technologies réellement déployées dans la plateforme.",
+    ar: "تشرح سياسة ملفات الارتباط هذه الكوكيز والتقنيات المرتبطة التي تستخدمها منصّة AusbildungsWeg، ولماذا هي ضرورية، وكيف تتحكم بها. وهي تصف فقط التقنيات المستخدمة فعلًا في المنصّة.",
   },
   sections: [
     {

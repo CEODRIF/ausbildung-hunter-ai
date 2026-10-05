@@ -116,7 +116,7 @@ describe("language detection for the redirect", () => {
     for (const language of ["de", "en", "fr", "ar"] as const) {
       const redirect = SCOPE_REDIRECTS[language];
       expect(redirect.length).toBeGreaterThan(60);
-      expect(redirect).not.toContain("Ausbildung Hunter AI\u0000");
+      expect(redirect).not.toContain("AusbildungsWeg\u0000");
     }
     expect(SCOPE_REDIRECTS.de).toContain("Einwanderung");
     expect(SCOPE_REDIRECTS.en).toContain("immigration");

@@ -6,7 +6,7 @@
  * for users coming from Morocco: immigration and residence law, visa and
  * consulate procedures, Ausbildung, university study, language exams,
  * documents, recognition of qualifications, work rights, daily life and
- * citizenship — plus the Ausbildung Hunter AI platform itself. It is still
+ * citizenship — plus the AusbildungsWeg platform itself. It is still
  * NOT a general chatbot.
  *
  * This module decides, deterministically and BEFORE any model call, whether a
@@ -370,8 +370,8 @@ export function detectUILanguage(raw: string): UILanguage {
 }
 
 export const SCOPE_REDIRECTS: Record<UILanguage, string> = {
-  de: "Ich bin auf Deutschland spezialisiert: Einwanderung und Aufenthalt, Visa und Botschaft/Konsulat, Ausbildung, Studium, Sprachprüfungen, Dokumente, Anerkennung, Arbeit, Alltag und Einbürgerung — und auf die Nutzung von Ausbildung Hunter AI. Frag mich gerne zu einem dieser Themen.",
-  en: "I specialise in Germany: immigration and residence, visas and embassy/consulate procedures, Ausbildung, university study, language exams, documents, recognition of qualifications, work, daily life and citizenship — plus how to use Ausbildung Hunter AI. Ask me anything in these areas.",
-  fr: "Je suis spécialisé sur l'Allemagne : immigration et séjour, visas et procédures d'ambassade/consulat, formation professionnelle (Ausbildung), études, examens de langue, documents, reconnaissance des diplômes, travail, vie quotidienne et nationalité — ainsi que l'utilisation d'Ausbildung Hunter AI. Posez-moi votre question dans ces domaines.",
-  ar: "أنا متخصص في كل ما يتعلق بألمانيا: الهجرة والإقامة، التأشيرات والسفارة/القنصلية، Ausbildung، الدراسة الجامعية، امتحانات اللغة، الوثائق، معادلة الشهادات، العمل، الحياة اليومية، والجنسية — بالإضافة إلى استخدام منصة Ausbildung Hunter AI. اسألني عن أي من هذه المواضيع.",
+  de: "Ich bin auf Deutschland spezialisiert: Einwanderung und Aufenthalt, Visa und Botschaft/Konsulat, Ausbildung, Studium, Sprachprüfungen, Dokumente, Anerkennung, Arbeit, Alltag und Einbürgerung — und auf die Nutzung von AusbildungsWeg. Frag mich gerne zu einem dieser Themen.",
+  en: "I specialise in Germany: immigration and residence, visas and embassy/consulate procedures, Ausbildung, university study, language exams, documents, recognition of qualifications, work, daily life and citizenship — plus how to use AusbildungsWeg. Ask me anything in these areas.",
+  fr: "Je suis spécialisé sur l'Allemagne : immigration et séjour, visas et procédures d'ambassade/consulat, formation professionnelle (Ausbildung), études, examens de langue, documents, reconnaissance des diplômes, travail, vie quotidienne et nationalité — ainsi que l'utilisation d'AusbildungsWeg. Posez-moi votre question dans ces domaines.",
+  ar: "أنا متخصص في كل ما يتعلق بألمانيا: الهجرة والإقامة، التأشيرات والسفارة/القنصلية، Ausbildung، الدراسة الجامعية، امتحانات اللغة، الوثائق، معادلة الشهادات، العمل، الحياة اليومية، والجنسية — بالإضافة إلى استخدام منصة AusbildungsWeg. اسألني عن أي من هذه المواضيع.",
 };

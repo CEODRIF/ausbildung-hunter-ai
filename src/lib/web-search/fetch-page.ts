@@ -20,7 +20,7 @@ import { lookup } from "node:dns/promises";
 const PAGE_TIMEOUT_MS = 8_000;
 const ROBOTS_TIMEOUT_MS = 6_000;
 const MAX_BODY_BYTES = 750_000;
-export const AGENT = "AusbildungHunterDiscovery/1.0";
+export const AGENT = "AusbildungsWegDiscovery/1.0";
 
 export type PageFetchFailure =
   | "http_error"

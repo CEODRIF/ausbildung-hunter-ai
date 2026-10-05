@@ -16,10 +16,10 @@ export const termsDoc: LegalDoc = {
     ar: "شروط الخدمة",
   },
   intro: {
-    de: "Diese Nutzungsbedingungen regeln die Verwendung der Plattform Ausbildung Hunter AI durch Sie. Durch die Registrierung oder die Nutzung der Plattform erklären Sie sich mit diesen Bedingungen einverstanden.",
-    en: "These Terms of Service govern your use of the Ausbildung Hunter AI platform. By registering for or using the platform, you agree to these terms.",
-    fr: "Les présentes conditions d'utilisation régissent votre utilisation de la plateforme Ausbildung Hunter AI. En vous inscrivant ou en utilisant la plateforme, vous acceptez ces conditions.",
-    ar: "تنظّم شروط الخدمة هذه استخدامك لمنصّة Ausbildung Hunter AI. وبقيامك بالتسجيل أو استخدام المنصّة، فإنك توافق على هذه الشروط.",
+    de: "Diese Nutzungsbedingungen regeln die Verwendung der Plattform AusbildungsWeg durch Sie. Durch die Registrierung oder die Nutzung der Plattform erklären Sie sich mit diesen Bedingungen einverstanden.",
+    en: "These Terms of Service govern your use of the AusbildungsWeg platform. By registering for or using the platform, you agree to these terms.",
+    fr: "Les présentes conditions d'utilisation régissent votre utilisation de la plateforme AusbildungsWeg. En vous inscrivant ou en utilisant la plateforme, vous acceptez ces conditions.",
+    ar: "تنظّم شروط الخدمة هذه استخدامك لمنصّة AusbildungsWeg. وبقيامك بالتسجيل أو استخدام المنصّة، فإنك توافق على هذه الشروط.",
   },
   sections: [
     {
@@ -49,10 +49,10 @@ export const termsDoc: LegalDoc = {
       },
       p: [
         {
-          de: "Ausbildung Hunter AI ist ein Arbeitsbereich für die Suche nach Ausbildung und Jobs in Deutschland. Die Plattform bietet unter anderem: klassische Suche (Quelle: Jobbörse der Bundesagentur für Arbeit), KI-Suche, gespeicherte Stellen, Bewerbungsscan, CV-Builder, Anschreiben-Builder, E-Mail-Tools (Sammlung und Versand), Bewerbungen und Benachrichtigungen.",
-          en: "Ausbildung Hunter AI is a workspace for searching apprenticeships and jobs in Germany. The platform offers, among others: classic search (source: Federal Employment Agency Jobbörse), AI Search, saved opportunities, Application Scanner, CV Builder, Cover Letter Builder, email tools (collector and sending), applications and notifications.",
-          fr: "Ausbildung Hunter AI est un espace de travail pour la recherche d'alternance et d'emplois en Allemagne. La plateforme propose notamment : recherche classique (source : Jobbörse de l'Agence fédérale), Recherche IA, offres enregistrées, Scan de candidature, éditeur de CV, éditeur de lettre, outils e-mail (collecteur et envoi), candidatures et notifications.",
-          ar: "Ausbildung Hunter AI هي مساحة عمل للبحث عن التدريب المهني والوظائف في ألمانيا. وتوفر المنصّة على سبيل المثال: البحث العادي (المصدر: لوحة وظائف وكالة العمل)، والبحث بالذكاء الاصطناعي، والوظائف المحفوظة، وماسح الطلبات، ومنشئ السيرة الذاتية، ومنشئ خطاب التقديم، وأدوات البريد (الجمع والإرسال)، وطلبات التقديم، والإشعارات.",
+          de: "AusbildungsWeg ist ein Arbeitsbereich für die Suche nach Ausbildung und Jobs in Deutschland. Die Plattform bietet unter anderem: klassische Suche (Quelle: Jobbörse der Bundesagentur für Arbeit), KI-Suche, gespeicherte Stellen, Bewerbungsscan, CV-Builder, Anschreiben-Builder, E-Mail-Tools (Sammlung und Versand), Bewerbungen und Benachrichtigungen.",
+          en: "AusbildungsWeg is a workspace for searching apprenticeships and jobs in Germany. The platform offers, among others: classic search (source: Federal Employment Agency Jobbörse), AI Search, saved opportunities, Application Scanner, CV Builder, Cover Letter Builder, email tools (collector and sending), applications and notifications.",
+          fr: "AusbildungsWeg est un espace de travail pour la recherche d'alternance et d'emplois en Allemagne. La plateforme propose notamment : recherche classique (source : Jobbörse de l'Agence fédérale), Recherche IA, offres enregistrées, Scan de candidature, éditeur de CV, éditeur de lettre, outils e-mail (collecteur et envoi), candidatures et notifications.",
+          ar: "AusbildungsWeg هي مساحة عمل للبحث عن التدريب المهني والوظائف في ألمانيا. وتوفر المنصّة على سبيل المثال: البحث العادي (المصدر: لوحة وظائف وكالة العمل)، والبحث بالذكاء الاصطناعي، والوظائف المحفوظة، وماسح الطلبات، ومنشئ السيرة الذاتية، ومنشئ خطاب التقديم، وأدوات البريد (الجمع والإرسال)، وطلبات التقديم، والإشعارات.",
         },
       ],
     },

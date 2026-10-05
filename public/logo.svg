@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 316 64">
+  <!-- AusbildungsWeg full logo: mark + wordmark.
+       Mark: the letter A whose right stroke is a road leading up to a
+       graduation cap. Wordmark: "Ausbildungs" in navy, "Weg" in blue.
+       Palette: navy #0B214F, deep blue #0B2D78, primary #0B63E5, bright #168CFF. -->
+  <g>
+    <path d="M15 57 L31 19" stroke="#0B214F" stroke-width="7.5" stroke-linecap="round" fill="none"/>
+    <path d="M49 57 C45.5 43 38.5 28 33.5 18.5" stroke="#0B63E5" stroke-width="7.5" stroke-linecap="round" fill="none"/>
+    <path d="M47.8 53.5 C44.6 41.5 39 28.5 34.9 20" stroke="#168CFF" stroke-width="1.9" stroke-dasharray="4.2 3.4" stroke-linecap="round" fill="none"/>
+    <path d="M20.5 45 L38.5 45" stroke="#0B2D78" stroke-width="5.5" stroke-linecap="round" fill="none"/>
+    <path d="M32 3 L48.5 10.5 L32 18 L15.5 10.5 Z" fill="#0B214F"/>
+    <path d="M24 13 v6 c0 2.7 16 2.7 16 0 v-6" fill="none" stroke="#0B2D78" stroke-width="3"/>
+    <path d="M48.5 10.5 L52 17.5" stroke="#168CFF" stroke-width="1.9" stroke-linecap="round"/>
+    <circle cx="52.4" cy="19.2" r="1.9" fill="#168CFF"/>
+  </g>
+  <text x="78" y="41" font-family="'Rubik','Inter','Segoe UI',Roboto,Arial,sans-serif" font-size="27" font-weight="700" letter-spacing="-0.5"><tspan fill="#0B214F">Ausbildungs</tspan><tspan fill="#0B63E5">Weg</tspan></text>
+</svg>

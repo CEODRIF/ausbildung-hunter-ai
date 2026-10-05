@@ -15,10 +15,10 @@ export const aiUsageDoc: LegalDoc = {
     ar: "استخدام الذكاء الاصطناعي",
   },
   intro: {
-    de: "Diese Seite erklärt, welche Funktionen Ausbildung Hunter AI mit KI arbeiten, welche Daten dabei an KI-Dienste übermittelt werden und welche Einschränkungen Sie beachten sollten. Sie beschreibt das tatsächliche Verhalten der Plattform.",
-    en: "This page explains which Ausbildung Hunter AI features run with AI, what data is transmitted to AI services in the process, and what limitations you should be aware of. It describes the platform's actual behavior.",
-    fr: "Cette page explique quelles fonctionnalités d'Ausbildung Hunter AI fonctionnent avec l'IA, quelles données sont transmises aux services IA dans ce processus et quelles limites vous devez connaître. Elle décrit le comportement réel de la plateforme.",
-    ar: "تشرح هذه الصفحة الميزات التي تعمل بالذكاء الاصطناعي في منصّة Ausbildung Hunter AI، وأي بيانات تُرسَل إلى خدمات الذكاء الاصطناعي، وما القيود التي يجب مراعاتها. وهي تصف السلوك الفعلي للمنصّة.",
+    de: "Diese Seite erklärt, welche Funktionen AusbildungsWeg mit KI arbeiten, welche Daten dabei an KI-Dienste übermittelt werden und welche Einschränkungen Sie beachten sollten. Sie beschreibt das tatsächliche Verhalten der Plattform.",
+    en: "This page explains which AusbildungsWeg features run with AI, what data is transmitted to AI services in the process, and what limitations you should be aware of. It describes the platform's actual behavior.",
+    fr: "Cette page explique quelles fonctionnalités d'AusbildungsWeg fonctionnent avec l'IA, quelles données sont transmises aux services IA dans ce processus et quelles limites vous devez connaître. Elle décrit le comportement réel de la plateforme.",
+    ar: "تشرح هذه الصفحة الميزات التي تعمل بالذكاء الاصطناعي في منصّة AusbildungsWeg، وأي بيانات تُرسَل إلى خدمات الذكاء الاصطناعي، وما القيود التي يجب مراعاتها. وهي تصف السلوك الفعلي للمنصّة.",
   },
   sections: [
     {

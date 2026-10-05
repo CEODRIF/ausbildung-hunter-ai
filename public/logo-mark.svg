@@ -1,10 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- AusbildungsWeg mark (favicon): the letter A whose right stroke is a
-       road leading up to a graduation cap. -->
+  <!-- AusbildungsWeg mark: the letter A whose right stroke is a road leading
+       up to a graduation cap. Brand palette: navy #0B214F, deep blue #0B2D78,
+       primary blue #0B63E5, bright blue #168CFF. -->
+  <!-- Left leg of the A — solid navy -->
   <path d="M15 57 L31 19" stroke="#0B214F" stroke-width="7.5" stroke-linecap="round" fill="none"/>
+  <!-- Right leg — the road, curving up to the cap -->
   <path d="M49 57 C45.5 43 38.5 28 33.5 18.5" stroke="#0B63E5" stroke-width="7.5" stroke-linecap="round" fill="none"/>
+  <!-- Road centerline (dashed) -->
   <path d="M47.8 53.5 C44.6 41.5 39 28.5 34.9 20" stroke="#168CFF" stroke-width="1.9" stroke-dasharray="4.2 3.4" stroke-linecap="round" fill="none"/>
+  <!-- Crossbar -->
   <path d="M20.5 45 L38.5 45" stroke="#0B2D78" stroke-width="5.5" stroke-linecap="round" fill="none"/>
+  <!-- Graduation cap: mortarboard + head band + tassel -->
   <path d="M32 3 L48.5 10.5 L32 18 L15.5 10.5 Z" fill="#0B214F"/>
   <path d="M24 13 v6 c0 2.7 16 2.7 16 0 v-6" fill="none" stroke="#0B2D78" stroke-width="3"/>
   <path d="M48.5 10.5 L52 17.5" stroke="#168CFF" stroke-width="1.9" stroke-linecap="round"/>

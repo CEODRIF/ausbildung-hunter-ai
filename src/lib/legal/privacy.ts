@@ -16,10 +16,10 @@ export const privacyDoc: LegalDoc = {
     ar: "سياسة الخصوصية",
   },
   intro: {
-    de: "Diese Datenschutzerklärung erklärt, welche Informationen Ausbildung Hunter AI erhebt, warum und wie sie verwendet werden, wie sie gespeichert und geschützt sind, welche Dienste Dritter eingebunden sind und welche Rechte Ihnen zustehen. Jede Aussage beschreibt das tatsächliche Verhalten der Plattform.",
-    en: "This Privacy Policy explains what information Ausbildung Hunter AI collects, why and how it is used, how it is stored and protected, which third-party services are involved, and what rights you have. Every statement describes the platform's actual behavior.",
-    fr: "La présente politique de confidentialité explique quelles informations Ausbildung Hunter AI collecte, pourquoi et comment elles sont utilisées, comment elles sont stockées et protégées, quels services tiers sont impliqués et quels droits vous sont reconnus. Chaque affirmation décrit le comportement réel de la plateforme.",
-    ar: "تشرح سياسة الخصوصية هذه المعلومات التي تجمعها منصّة Ausbildung Hunter AI، ولماذا وكيف تُستخدم، وكيف تُخزَّن وتُحمى، وأي خدمات خارجية مستخدمة، وما الحقوق المتاحة لك. كل عبارة تصف السلوك الفعلي للمنصّة.",
+    de: "Diese Datenschutzerklärung erklärt, welche Informationen AusbildungsWeg erhebt, warum und wie sie verwendet werden, wie sie gespeichert und geschützt sind, welche Dienste Dritter eingebunden sind und welche Rechte Ihnen zustehen. Jede Aussage beschreibt das tatsächliche Verhalten der Plattform.",
+    en: "This Privacy Policy explains what information AusbildungsWeg collects, why and how it is used, how it is stored and protected, which third-party services are involved, and what rights you have. Every statement describes the platform's actual behavior.",
+    fr: "La présente politique de confidentialité explique quelles informations AusbildungsWeg collecte, pourquoi et comment elles sont utilisées, comment elles sont stockées et protégées, quels services tiers sont impliqués et quels droits vous sont reconnus. Chaque affirmation décrit le comportement réel de la plateforme.",
+    ar: "تشرح سياسة الخصوصية هذه المعلومات التي تجمعها منصّة AusbildungsWeg، ولماذا وكيف تُستخدم، وكيف تُخزَّن وتُحمى، وأي خدمات خارجية مستخدمة، وما الحقوق المتاحة لك. كل عبارة تصف السلوك الفعلي للمنصّة.",
   },
   sections: [
     {

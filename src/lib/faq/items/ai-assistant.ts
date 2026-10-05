@@ -397,10 +397,10 @@ export const aiAssistantItems: FaqItem[] = [
     id: "aa-specialized",
     category: "ai-assistant",
     question: {
-      de: "Ist er auf Ausbildung Hunter AI spezialisiert?",
-      en: "Is it specialized in Ausbildung Hunter AI?",
-      fr: "Est-il spécialisé dans Ausbildung Hunter AI ?",
-      ar: "هل هو متخصص في Ausbildung Hunter AI؟",
+      de: "Ist er auf AusbildungsWeg spezialisiert?",
+      en: "Is it specialized in AusbildungsWeg?",
+      fr: "Est-il spécialisé dans AusbildungsWeg ?",
+      ar: "هل هو متخصص في AusbildungsWeg؟",
     },
     answer: {
       de: "Ja. Der Assistent ist als dedizierter Fachassistent für diese Plattform konzipiert und orientiert sich an ihren Tools und Ihrem Bewerbungskontext.",

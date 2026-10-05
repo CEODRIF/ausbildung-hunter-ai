@@ -1515,7 +1515,7 @@ describe("community i18n parity", () => {
     const en = dictionaries.en;
     expect(lookup(en, "community.emptyTitle")).toBe("Welcome to the Community");
     expect(lookup(en, "community.emptyText")).toBe(
-      "Connect with other Ausbildung Hunter members, share experiences and help each other.",
+      "Connect with other AusbildungsWeg members, share experiences and help each other.",
     );
     expect(lookup(en, "community.emptyCta")).toBe("Be the first to send a message.");
   });

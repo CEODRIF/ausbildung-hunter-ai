@@ -479,7 +479,7 @@ describe("GET /api/account/export", () => {
     const res = await GET();
     expect(res.status).toBe(200);
     expect(res.headers.get("content-disposition")).toContain(
-      'attachment; filename="ausbildung-hunter-export-',
+      'attachment; filename="ausbildungsweg-export-',
     );
     expect(res.headers.get("cache-control")).toBe("no-store");
     const body = (await res.json()) as Record<string, unknown>;

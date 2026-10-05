@@ -326,7 +326,7 @@ const MessageBubble = memo(function MessageBubble({
       <div className="min-w-0 max-w-[88%] flex-1">
         <div className="mb-1 flex items-baseline gap-2">
           <span className="text-[11px] font-bold text-ink-soft">
-            Ausbildung Hunter AI
+            AusbildungsWeg
           </span>
           <span className="text-[10px] text-faint">
             {formatTime(message.created_at)}
@@ -747,13 +747,19 @@ export function AIChat({
         <Link
           href="/"
           className="flex items-center gap-2.5"
-          aria-label="Ausbildung Hunter AI – Startseite"
+          aria-label="AusbildungsWeg – Startseite"
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-white shadow-[0_6px_14px_rgba(var(--glow-accent-rgb),0.25)]">
-            <span className="text-lg font-bold">A</span>
-          </span>
+          {/* eslint-disable-next-line @next/next/no-img-element -- brand asset, fixed dimensions */}
+          <img
+            src="/logo-mark.svg"
+            alt=""
+            width={36}
+            height={36}
+            className="h-9 w-9 object-contain"
+          />
           <span className="text-sm font-bold tracking-[-0.02em] text-ink">
-            Ausbildung Hunter <span className="text-accent">AI</span>
+            Ausbildungs
+            <span className="text-[#0B63E5] dark:text-[#168CFF]">Weg</span>
           </span>
         </Link>
         <button
@@ -923,7 +929,7 @@ export function AIChat({
                      </span>
                     <div className="min-w-0 flex-1">
                       <div className="mb-1 text-[11px] font-bold text-ink-soft">
-                        Ausbildung Hunter AI
+                        AusbildungsWeg
                       </div>
                       {streamContent ? (
                         // Plain (unformatted) text while streaming: parsing

@@ -17,11 +17,11 @@ const rubik = Rubik({
 
 export const metadata: Metadata = {
   title: {
-    default: "Ausbildung Hunter AI",
-    template: "%s | Ausbildung Hunter AI",
+    default: "AusbildungsWeg",
+    template: "%s | AusbildungsWeg",
   },
   description:
-    "A focused workspace for finding Ausbildung and jobs in Germany.",
+    "AusbildungsWeg is an AI-powered platform for discovering Ausbildung opportunities, researching companies and preparing applications in Germany.",
 };
 
 /** iOS Safari: `viewport-fit=cover` extends the layout into the safe areas

@@ -399,7 +399,7 @@ describe("redirect language", () => {
     expect(detectUILanguage("What is the latest movie?")).toBe("en");
     for (const lang of ["de", "en", "fr", "ar"] as const) {
       expect(SCOPE_REDIRECTS[lang].length).toBeGreaterThan(20);
-      expect(SCOPE_REDIRECTS[lang]).toContain("Ausbildung Hunter AI");
+      expect(SCOPE_REDIRECTS[lang]).toContain("AusbildungsWeg");
     }
   });
 });

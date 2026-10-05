@@ -206,7 +206,7 @@ export default async function Home() {
 
       <footer className="border-t border-line">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-8 text-xs text-muted sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-10">
-          <span>© 2025 Ausbildung Hunter AI</span>
+          <span>© 2026 AusbildungsWeg</span>
           <span>{t("landing.footerNote")}</span>
         </div>
       </footer>

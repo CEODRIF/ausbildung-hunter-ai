@@ -1,5 +1,5 @@
 /**
- * Canonical icon system for Ausbildung Hunter AI.
+ * Canonical icon system for AusbildungsWeg.
  *
  * One component, one stroke weight (1.8), one 24×24 grid, round caps/joins —
  * so every icon in the app aligns and reads as a set. Previously the icons

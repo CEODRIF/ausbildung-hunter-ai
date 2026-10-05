@@ -46,7 +46,7 @@ export function AuthShell({
           </div>
         </div>
         <p className="relative text-xs text-[#8d9db4]">
-          © 2025 Ausbildung Hunter AI
+          © 2026 AusbildungsWeg
         </p>
       </section>
       <section className="flex items-center justify-center px-5 py-10 sm:px-8">

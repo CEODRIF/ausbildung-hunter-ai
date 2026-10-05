@@ -1,5 +1,5 @@
 /**
- * Ausbildung Hunter AI — UI dictionaries.
+ * AusbildungsWeg — UI dictionaries.
  *
  * German (`de`) is the source of truth and the default language. Every other
  * language is typed against `typeof de` so a missing/extra key is a compile
@@ -392,7 +392,7 @@ const de = {
     contact: "Kontakt",
     brandTagline: "Ihr Arbeitsbereich für Ausbildung und Jobs in Deutschland.",
     emailLabel: "E-Mail-Adresse",
-    copyright: "© {year} Ausbildung Hunter AI",
+    copyright: "© {year} AusbildungsWeg",
   },
 
   // ---- Auth screen (brand panel pitch) ------------------------------------
@@ -426,7 +426,7 @@ const de = {
       forgotPassword: "Passwort vergessen?",
       or: "oder",
       continueGoogle: "Mit Google fortfahren",
-      newHere: "Neu bei Ausbildung Hunter AI?",
+      newHere: "Neu bei AusbildungsWeg?",
       createAccount: "Konto erstellen",
       byContinuing:
         "Mit dem Fortfahren stimmen Sie unseren Nutzungsbedingungen und der Datenschutzrichtlinie zu.",
@@ -443,7 +443,7 @@ const de = {
     heroBadge: "Ihr nächster Schritt beginnt hier",
     heroTitle: "Finde deine Ausbildung. Mit KI.",
     heroSubtitle:
-      "Ausbildung Hunter AI analysiert dein Profil, findet passende Ausbildungsplätze und hilft dir bei deiner Bewerbung.",
+      "AusbildungsWeg analysiert dein Profil, findet passende Ausbildungsplätze und hilft dir bei deiner Bewerbung.",
     ctaStart: "Jetzt kostenlos starten",
     ctaExplore: "Dashboard ansehen",
     navHow: "So funktioniert es",
@@ -494,7 +494,7 @@ const de = {
     hero: {
       title: "Ihr intelligenter Weg zur Ausbildung.",
       subtitle:
-        "Ausbildung Hunter AI findet passende Ausbildungsplätze, analysiert Ihre Bewerbung und hilft Ihnen bei jedem Schritt – von der Suche bis zum Kontakt mit dem Unternehmen.",
+        "AusbildungsWeg findet passende Ausbildungsplätze, analysiert Ihre Bewerbung und hilft Ihnen bei jedem Schritt – von der Suche bis zum Kontakt mit dem Unternehmen.",
       ctaAnalyze: "Lebenslauf analysieren",
     },
     features: {
@@ -1625,7 +1625,7 @@ const de = {
     rateLimited: "Zu viele Anfragen. Bitte warte kurz und versuche es erneut.",
     emptyTitle: "Willkommen in der Community",
     emptyText:
-      "Vernetze dich mit anderen Ausbildung Hunter Mitgliedern, teile Erfahrungen und helft euch gegenseitig.",
+      "Vernetze dich mit anderen AusbildungsWeg Mitgliedern, teile Erfahrungen und helft euch gegenseitig.",
     emptyCta: "Sei der Erste, der eine Nachricht sendet.",
     placeholder: "Schreibe eine Nachricht…",
     attachImage: "Bild anhängen",
@@ -2018,7 +2018,7 @@ const en: Dict = {
     contact: "Contact",
     brandTagline: "Your workspace for apprenticeships and jobs in Germany.",
     emailLabel: "Email address",
-    copyright: "© {year} Ausbildung Hunter AI",
+    copyright: "© {year} AusbildungsWeg",
   },
   auth: {
     pitchTitle: "Build a career you can be proud of.",
@@ -2050,7 +2050,7 @@ const en: Dict = {
       forgotPassword: "Forgot password?",
       or: "or",
       continueGoogle: "Continue with Google",
-      newHere: "New to Ausbildung Hunter AI?",
+      newHere: "New to AusbildungsWeg?",
       createAccount: "Create an account",
       byContinuing:
         "By continuing, you agree to our Terms of Service and Privacy Policy.",
@@ -2065,7 +2065,7 @@ const en: Dict = {
     heroBadge: "Your next step starts here",
     heroTitle: "Find your apprenticeship. With AI.",
     heroSubtitle:
-      "Ausbildung Hunter AI analyzes your profile, finds matching apprenticeship vacancies and helps you with your application.",
+      "AusbildungsWeg analyzes your profile, finds matching apprenticeship vacancies and helps you with your application.",
     ctaStart: "Get started for free",
     ctaExplore: "View the dashboard",
     navHow: "How it works",
@@ -2113,7 +2113,7 @@ const en: Dict = {
     hero: {
       title: "Your intelligent path to an apprenticeship.",
       subtitle:
-        "Ausbildung Hunter AI finds matching apprenticeships, analyzes your application and helps you at every step — from search to contacting the company.",
+        "AusbildungsWeg finds matching apprenticeships, analyzes your application and helps you at every step — from search to contacting the company.",
       ctaAnalyze: "Analyze your CV",
     },
     features: {
@@ -3218,7 +3218,7 @@ const en: Dict = {
     rateLimited: "Too many requests. Please wait a moment and try again.",
     emptyTitle: "Welcome to the Community",
     emptyText:
-      "Connect with other Ausbildung Hunter members, share experiences and help each other.",
+      "Connect with other AusbildungsWeg members, share experiences and help each other.",
     emptyCta: "Be the first to send a message.",
     placeholder: "Write a message…",
     attachImage: "Attach an image",
@@ -3609,7 +3609,7 @@ const fr: Dict = {
     contact: "Contact",
     brandTagline: "Votre espace de travail pour l'alternance et les emplois en Allemagne.",
     emailLabel: "Adresse e-mail",
-    copyright: "© {year} Ausbildung Hunter AI",
+    copyright: "© {year} AusbildungsWeg",
   },
   auth: {
     pitchTitle: "Bâtissez une carrière dont vous pouvez être fier.",
@@ -3641,7 +3641,7 @@ const fr: Dict = {
       forgotPassword: "Mot de passe oublié ?",
       or: "ou",
       continueGoogle: "Continuer avec Google",
-      newHere: "Nouveau sur Ausbildung Hunter AI ?",
+      newHere: "Nouveau sur AusbildungsWeg ?",
       createAccount: "Créer un compte",
       byContinuing:
         "En continuant, vous acceptez nos conditions d'utilisation et notre politique de confidentialité.",
@@ -3656,7 +3656,7 @@ const fr: Dict = {
     heroBadge: "Votre prochaine étape commence ici",
     heroTitle: "Trouvez votre alternance. Avec l'IA.",
     heroSubtitle:
-      "Ausbildung Hunter AI analyse votre profil, trouve des offres d'alternance correspondantes et vous aide dans votre candidature.",
+      "AusbildungsWeg analyse votre profil, trouve des offres d'alternance correspondantes et vous aide dans votre candidature.",
     ctaStart: "Commencer gratuitement",
     ctaExplore: "Voir le tableau de bord",
     navHow: "Comment ça marche",
@@ -3704,7 +3704,7 @@ const fr: Dict = {
     hero: {
       title: "Votre chemin intelligent vers l'alternance.",
       subtitle:
-        "Ausbildung Hunter AI trouve des alternances adaptées, analyse votre candidature et vous accompagne à chaque étape — de la recherche au contact avec l'entreprise.",
+        "AusbildungsWeg trouve des alternances adaptées, analyse votre candidature et vous accompagne à chaque étape — de la recherche au contact avec l'entreprise.",
       ctaAnalyze: "Analyser votre CV",
     },
     features: {
@@ -4815,7 +4815,7 @@ const fr: Dict = {
     rateLimited: "Trop de requêtes. Veuillez patienter un instant puis réessayer.",
     emptyTitle: "Bienvenue dans la communauté",
     emptyText:
-      "Connectez-vous avec d'autres membres d'Ausbildung Hunter, partagez vos expériences et aidez-vous mutuellement.",
+      "Connectez-vous avec d'autres membres d'AusbildungsWeg, partagez vos expériences et aidez-vous mutuellement.",
     emptyCta: "Soyez le premier à envoyer un message.",
     placeholder: "Écrivez un message…",
     attachImage: "Joindre une image",
@@ -5196,7 +5196,7 @@ const ar: Dict = {
     contact: "اتصل بنا",
     brandTagline: "مساحتك للتدريب المهني والعمل في ألمانيا.",
     emailLabel: "عنوان البريد الإلكتروني",
-    copyright: "© {year} Ausbildung Hunter AI",
+    copyright: "© {year} AusbildungsWeg",
   },
   auth: {
     pitchTitle: "ابنِ مسيرة تفخر بها.",
@@ -5228,7 +5228,7 @@ const ar: Dict = {
       forgotPassword: "نسيت كلمة المرور؟",
       or: "أو",
       continueGoogle: "المتابعة باستخدام Google",
-      newHere: "جديد على Ausbildung Hunter AI؟",
+      newHere: "جديد على AusbildungsWeg؟",
       createAccount: "إنشاء حساب",
       byContinuing:
         "بمتابعتك، فأنت توافق على شروط الخدمة والسياسة الخاصة بالخصوصية.",
@@ -5243,7 +5243,7 @@ const ar: Dict = {
     heroBadge: "خطوتك التالية تبدأ هنا",
     heroTitle: "اعثر على تدريبك المهني. بالذكاء الاصطناعي.",
     heroSubtitle:
-      "يحلّل Ausbildung Hunter AI ملفك، ويجد أماكن تدريب مناسبة، ويساعدك في تقديم طلبك.",
+      "يحلّل AusbildungsWeg ملفك، ويجد أماكن تدريب مناسبة، ويساعدك في تقديم طلبك.",
     ctaStart: "ابدأ مجانًا الآن",
     ctaExplore: "عرض لوحة التحكم",
     navHow: "كيف يعمل",
@@ -5291,7 +5291,7 @@ const ar: Dict = {
     hero: {
       title: "طريقك الذكي نحو التدريب المهني.",
       subtitle:
-        "يجد Ausbildung Hunter AI أماكن تدريب مناسبة، ويحلّل طلبك، ويساعدك في كل خطوة — من البحث إلى التواصل مع الشركة.",
+        "يجد AusbildungsWeg أماكن تدريب مناسبة، ويحلّل طلبك، ويساعدك في كل خطوة — من البحث إلى التواصل مع الشركة.",
       ctaAnalyze: "حلّل سيرتك الذاتية",
     },
     features: {
@@ -6371,7 +6371,7 @@ const ar: Dict = {
     rateLimited: "عدد كبير من الطلبات. يرجى الانتظار لحظة ثم المحاولة مرة أخرى.",
     emptyTitle: "مرحبًا بك في المجتمع",
     emptyText:
-      "تواصل مع أعضاء Ausbildung Hunter الآخرين، شارك الخبرات وساعدوا بعضكم البعض.",
+      "تواصل مع أعضاء AusbildungsWeg الآخرين، شارك الخبرات وساعدوا بعضكم البعض.",
     emptyCta: "كن أول من يرسل رسالة.",
     placeholder: "اكتب رسالة…",
     attachImage: "إرفاق صورة",
