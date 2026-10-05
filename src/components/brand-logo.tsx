@@ -3,10 +3,10 @@ import Link from "next/link";
 /**
  * Centralized brand logo — the SINGLE source of the AusbildungsWeg identity.
  *
- * The official artwork lives in `public/`:
- *   - `public/logo-mark.svg` — the compact mark (A whose right stroke is a
+ * The official artwork (delivered brand image) lives in `public/`:
+ *   - `public/logo-mark.jpg` — the compact mark (A whose right stroke is a
  *     road leading up to a graduation cap); rendered here as the tile.
- *   - `public/logo.svg` — full logo (mark + wordmark) for static contexts
+ *   - `public/logo.jpg` — full logo (mark + wordmark) for static contexts
  *     (downloads, social cards).
  *
  * Every surface that uses `<BrandLogo />` (sidebar, auth, dashboard, AI
@@ -15,7 +15,7 @@ import Link from "next/link";
  * wordmark is HTML text — not CSS art — so it stays crisp, theme-aware and
  * accessible: "Ausbildungs" in the surface ink color, "Weg" in brand blue.
  */
-export const BRAND_LOGO_URL = "/logo-mark.svg";
+export const BRAND_LOGO_URL = "/logo-mark.jpg";
 
 /** Brand accent for the "Weg" part of the wordmark. */
 const WEG_CLASS =
@@ -45,6 +45,9 @@ export interface BrandLogoProps {
 }
 
 function Mark({ size }: { size: number }) {
+  // The official mark artwork carries a white background; the rounded tile
+  // makes that read as an intentional badge on dark surfaces and blends
+  // invisibly into light ones.
   return (
     // eslint-disable-next-line @next/next/no-img-element -- brand asset, fixed dimensions
     <img
@@ -53,7 +56,7 @@ function Mark({ size }: { size: number }) {
       width={size}
       height={size}
       style={{ width: size, height: size }}
-      className="shrink-0 object-contain"
+      className="shrink-0 rounded-xl bg-white object-contain ring-1 ring-black/5"
     />
   );
 }

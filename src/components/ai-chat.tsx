@@ -751,11 +751,11 @@ export function AIChat({
         >
           {/* eslint-disable-next-line @next/next/no-img-element -- brand asset, fixed dimensions */}
           <img
-            src="/logo-mark.svg"
+            src="/logo-mark.jpg"
             alt=""
             width={36}
             height={36}
-            className="h-9 w-9 object-contain"
+            className="h-9 w-9 rounded-xl bg-white object-contain ring-1 ring-black/5"
           />
           <span className="text-sm font-bold tracking-[-0.02em] text-ink">
             Ausbildungs
