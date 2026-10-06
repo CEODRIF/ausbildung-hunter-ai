@@ -228,7 +228,9 @@ describe("PDF / print path isolation (download unchanged)", () => {
   const globals = read("../src/app/globals.css");
   const cv = read("../src/components/cv-builder.tsx");
   const cl = read("../src/components/cover-letter-builder.tsx");
-  const cvDoc = read("../src/components/cv-document.tsx");
+  // The A4 sheet constants live in the shared template module (cv-document.tsx
+  // re-exports them; every template renders the same 794×1123 sheet).
+  const cvDoc = read("../src/components/cv-templates/shared.tsx");
   const clDoc = read("../src/components/cover-letter-document.tsx");
 
   it("print CSS still uses real A4 millimeters", () => {

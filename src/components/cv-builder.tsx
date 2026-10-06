@@ -41,6 +41,8 @@ import {
   CV_SHEET_WIDTH,
   type CvLabels,
 } from "@/components/cv-document";
+import { CvTemplateSelector } from "@/components/cv-template-selector";
+import { TEMPLATE_NAME_KEYS } from "@/components/cv-templates";
 import { CvCustomizationPanel } from "@/components/cv-customization";
 import {
   defaultCvCustomization,
@@ -63,6 +65,7 @@ import {
   type CvDocument,
   type CvListSection,
   type CvPersonal,
+  type CvTemplateId,
 } from "@/lib/templates/cv";
 
 interface CvBuilderProps {
@@ -582,6 +585,12 @@ export function CvBuilder({
     setCv((c) => ({ ...c, customization: next }));
   }, []);
 
+  // Template selection lives on the document too (cv.templateId) — switching
+  // only changes the presentation; the CV data and customization are kept.
+  const selectTemplate = useCallback((id: CvTemplateId) => {
+    setCv((c) => ({ ...c, templateId: id }));
+  }, []);
+
   // ---- Import existing scanner profile ---------------------------------------
   const applyImport = useCallback((doc: CvDocument) => {
     setCv(doc);
@@ -711,7 +720,7 @@ export function CvBuilder({
               {t("templates.builderTitle")}
             </h2>
             <span className="rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-bold text-muted">
-              {t("templates.templateName")}
+              {t(TEMPLATE_NAME_KEYS[cv.templateId])}
             </span>
           </div>
           <p className="mt-1 text-sm text-muted">
@@ -799,6 +808,21 @@ export function CvBuilder({
           </Button>
         </div>
       </div>
+
+      {/* ========================== Template selector =========================
+          Four real template renderings (scaled live miniatures of the user's
+          own CV data). Selecting only swaps cv.templateId — content,
+          customization and photo are untouched and persist as before. */}
+      {started && (
+        <div className="mt-6">
+          <CvTemplateSelector
+            cv={cv}
+            labels={cvLabels}
+            selected={cv.templateId}
+            onSelect={selectTemplate}
+          />
+        </div>
+      )}
 
       {/* ============================= Empty state ============================ */}
       {!started ? (

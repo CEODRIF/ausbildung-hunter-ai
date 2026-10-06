@@ -177,6 +177,41 @@ describe("sanitizeCvDocument", () => {
   });
 });
 
+describe("templateId (multi-template system)", () => {
+  it("a fresh document uses the original classic template", () => {
+    expect(cvEmpty().templateId).toBe("classic");
+  });
+
+  it("legacy documents WITHOUT templateId resolve to classic", () => {
+    // Simulates a localStorage document saved before the template system.
+    const legacy = JSON.parse(JSON.stringify(cvEmpty()));
+    delete legacy.templateId;
+    expect(sanitizeCvDocument(legacy)?.templateId).toBe("classic");
+    expect(sanitizeCvDocument({ personal: { fullName: "Alt" } })?.templateId).toBe(
+      "classic",
+    );
+  });
+
+  it("keeps every valid template id", () => {
+    for (const id of ["classic", "executive", "modern", "professional"]) {
+      expect(sanitizeCvDocument({ templateId: id })?.templateId).toBe(id);
+    }
+  });
+
+  it("falls back to classic for unknown/invalid template ids", () => {
+    expect(sanitizeCvDocument({ templateId: "sparkly" })?.templateId).toBe("classic");
+    expect(sanitizeCvDocument({ templateId: 42 })?.templateId).toBe("classic");
+    expect(sanitizeCvDocument({ templateId: null })?.templateId).toBe("classic");
+  });
+
+  it("round-trips a non-classic template through JSON", () => {
+    const doc: CvDocument = { ...cvEmpty(), templateId: "modern" };
+    expect(sanitizeCvDocument(JSON.parse(JSON.stringify(doc)))?.templateId).toBe(
+      "modern",
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Profile import (Bewerbung Scanner CandidateProfile → CV)
 // ---------------------------------------------------------------------------

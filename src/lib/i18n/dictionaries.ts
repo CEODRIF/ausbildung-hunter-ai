@@ -1309,6 +1309,19 @@ const de = {
     builderSubtitle:
       "Erstellen Sie einen professionellen Lebenslauf für Ihre nächste Chance in Deutschland.",
     templateName: "Professional Classic",
+    templateSelectorTitle: "CV-Templates",
+    templateClassic: "Professional Classic",
+    templateClassicDesc:
+      "Serif-Design mit Punktlisten — die klassische elegante Anordnung.",
+    templateExecutive: "Executive",
+    templateExecutiveDesc:
+      "Zentrierter Kopf mit eleganten Linien — premium Corporate-Look.",
+    templateModern: "Modern",
+    templateModernDesc:
+      "Stahlblaue Akzente mit Kontakt-Icons — modernes Corporate-Design.",
+    templateProfessional: "Professional",
+    templateProfessionalDesc:
+      "Kompaktes Schwarz-Weiß mit dichten Zeilenlisten.",
     downloadPdf: "PDF herunterladen",
     saving: "Wird gespeichert…",
     saved: "Gespeichert",
@@ -2910,6 +2923,19 @@ const en: Dict = {
     builderSubtitle:
       "Create a professional CV for your next opportunity in Germany.",
     templateName: "Professional Classic",
+    templateSelectorTitle: "CV Templates",
+    templateClassic: "Classic",
+    templateClassicDesc:
+      "Serif design with dot lists — the classic elegant arrangement.",
+    templateExecutive: "Executive",
+    templateExecutiveDesc:
+      "Centered header with refined rules — premium corporate look.",
+    templateModern: "Modern",
+    templateModernDesc:
+      "Steel-blue accents with contact icons — modern corporate design.",
+    templateProfessional: "Professional",
+    templateProfessionalDesc:
+      "Compact black-and-white type with dense inline lists.",
     downloadPdf: "Download PDF",
     saving: "Saving…",
     saved: "Saved",
@@ -4503,6 +4529,19 @@ const fr: Dict = {
     builderSubtitle:
       "Créez un CV professionnel pour votre prochaine opportunité en Allemagne.",
     templateName: "Professional Classic",
+    templateSelectorTitle: "Modèles CV",
+    templateClassic: "Classique",
+    templateClassicDesc:
+      "Design serif à puces — l'arrangement classique et élégant.",
+    templateExecutive: "Executive",
+    templateExecutiveDesc:
+      "En-tête centré avec filets élégants — look corporate premium.",
+    templateModern: "Moderne",
+    templateModernDesc:
+      "Accents bleu acier avec icônes de contact — design corporate moderne.",
+    templateProfessional: "Professionnel",
+    templateProfessionalDesc:
+      "Typographie noir et blanc compacte, listes en ligne denses.",
     downloadPdf: "Télécharger le PDF",
     saving: "Enregistrement…",
     saved: "Enregistré",
@@ -6072,6 +6111,15 @@ const ar: Dict = {
     builderSubtitle:
       "أنشئ سيرة ذاتية احترافية لفرصتك القادمة في ألمانيا.",
     templateName: "Professional Classic",
+    templateSelectorTitle: "قوالب السيرة الذاتية",
+    templateClassic: "كلاسيكي",
+    templateClassicDesc: "تصميم Serif تقليدي أنيق مع قوائم نقطية.",
+    templateExecutive: "تنفيذي",
+    templateExecutiveDesc: "ترويسة مركزية بخطوط راقية بمظهر مؤسسي فاخر.",
+    templateModern: "حديث",
+    templateModernDesc: "لمسات زرقاء فولاذية مع أيقونات التواصل وتصميم حديث.",
+    templateProfessional: "احترافي",
+    templateProfessionalDesc: "نص أسود وأبيض مدمج مع قوائم مدمجة.",
     downloadPdf: "تنزيل PDF",
     saving: "جارٍ الحفظ…",
     saved: "تم الحفظ",

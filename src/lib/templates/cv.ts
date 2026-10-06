@@ -82,8 +82,34 @@ export interface CvProject {
   technologies: string;
 }
 
+/**
+ * The selectable CV template (presentation only — the content data model is
+ * identical for every template).
+ *  - classic:      the original "Editorial Serif" design (default)
+ *  - executive:    centered header, refined rules, premium corporate look
+ *  - modern:       steel-blue accents, contact icons, modern corporate look
+ *  - professional: strong black-and-white type, compact inline lists
+ */
+export const CV_TEMPLATE_IDS = [
+  "classic",
+  "executive",
+  "modern",
+  "professional",
+] as const;
+
+export type CvTemplateId = (typeof CV_TEMPLATE_IDS)[number];
+
+export function resolveCvTemplateId(value: unknown): CvTemplateId {
+  return typeof value === "string" &&
+    (CV_TEMPLATE_IDS as readonly string[]).includes(value)
+    ? (value as CvTemplateId)
+    : "classic";
+}
+
 export interface CvDocument {
   version: 1;
+  /** Presentation template. Absent in pre-rebrand storage → "classic". */
+  templateId: CvTemplateId;
   personal: CvPersonal;
   summary: string;
   education: CvEducation[];
@@ -185,6 +211,7 @@ export function emptyProject(): CvProject {
 export function cvEmpty(): CvDocument {
   return {
     version: 1,
+    templateId: "classic",
     personal: emptyPersonal(),
     summary: "",
     education: [],
@@ -362,6 +389,9 @@ export function sanitizeCvDocument(raw: unknown): CvDocument | null {
 
   return {
     version: 1,
+    // Legacy documents (stored before the template system existed) and
+    // corrupt values both resolve to the original "classic" design.
+    templateId: resolveCvTemplateId(data.templateId),
     personal: {
       fullName: str(personal.fullName),
       professionalTitle: str(personal.professionalTitle),
