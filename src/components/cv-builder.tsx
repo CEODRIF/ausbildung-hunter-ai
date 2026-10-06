@@ -24,6 +24,7 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useI18n } from "@/lib/i18n";
 import { Icon, type IconName } from "@/components/icon";
@@ -43,6 +44,7 @@ import {
 } from "@/components/cv-document";
 import { CvTemplateSelector } from "@/components/cv-template-selector";
 import { TEMPLATE_NAME_KEYS } from "@/components/cv-templates";
+import { buildDemoCv } from "@/components/cv-templates/demo-cv";
 import { CvCustomizationPanel } from "@/components/cv-customization";
 import {
   defaultCvCustomization,
@@ -76,6 +78,10 @@ interface CvBuilderProps {
 
 const cvStorageKey = (userId: string) => `aha:cv:${userId}`;
 const cvStartedKey = (userId: string) => `aha:cv-started:${userId}`;
+// "Last edited" timestamp (display metadata only — NOT part of CvDocument).
+const cvSavedAtKey = (userId: string) => `aha:cv-saved-at:${userId}`;
+
+type BuilderStep = "start" | "template" | "edit";
 
 type AddContentSection =
   | "summary"
@@ -409,6 +415,88 @@ function AddContentModal({
 }
 
 // ---------------------------------------------------------------------------
+// Step indicator — 1 Start · 2 Template · 3 Edit
+// Current step is highlighted; completed steps are clickable to go back;
+// not-yet-reachable steps render disabled (no skipping into invalid states).
+// ---------------------------------------------------------------------------
+
+function StepIndicator({
+  current,
+  canTemplate,
+  canEdit,
+  onNavigate,
+}: {
+  current: BuilderStep;
+  canTemplate: boolean;
+  canEdit: boolean;
+  onNavigate: (step: BuilderStep) => void;
+}) {
+  const { t } = useI18n();
+  const order: BuilderStep[] = ["start", "template", "edit"];
+  const labels: Record<BuilderStep, string> = {
+    start: t("templates.stepStart"),
+    template: t("templates.stepTemplate"),
+    edit: t("templates.stepEdit"),
+  };
+  return (
+    <nav aria-label={t("templates.stepNav")} className="mt-3 flex flex-wrap items-center gap-y-1 text-xs">
+      {order.map((id, i) => {
+        const isCurrent = id === current;
+        const enabled =
+          id === "start" ? true : id === "template" ? canTemplate : canEdit;
+        const bullet = (
+          <span
+            aria-hidden="true"
+            className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold ${
+              isCurrent
+                ? "border-accent bg-accent text-white"
+                : enabled
+                  ? "border-line-strong text-muted"
+                  : "border-line text-faint"
+            }`}
+          >
+            {isCurrent ? <Icon name="check" size={9} strokeWidth={3} /> : i + 1}
+          </span>
+        );
+        return (
+          <Fragment key={id}>
+            {i > 0 && (
+              <span aria-hidden="true" className="mx-2 h-px w-6 bg-line-strong" />
+            )}
+            {isCurrent ? (
+              <span
+                aria-current="step"
+                className="flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 font-bold text-accent"
+              >
+                {bullet}
+                {labels[id]}
+              </span>
+            ) : enabled ? (
+              <button
+                type="button"
+                onClick={() => onNavigate(id)}
+                className="flex items-center gap-1.5 rounded-full px-2 py-1 font-semibold text-muted transition-colors hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                {bullet}
+                {labels[id]}
+              </button>
+            ) : (
+              <span
+                aria-disabled="true"
+                className="flex items-center gap-1.5 px-2 py-1 font-semibold text-faint/70"
+              >
+                {bullet}
+                {labels[id]}
+              </span>
+            )}
+          </Fragment>
+        );
+      })}
+    </nav>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -417,14 +505,27 @@ export function CvBuilder({
   profileFullName,
   profileEmail,
 }: CvBuilderProps) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  const router = useRouter();
 
   const [cv, setCv] = useState<CvDocument>(cvEmpty);
   const [ready, setReady] = useState(false);
   const [started, setStarted] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [mobileView, setMobileView] = useState<"edit" | "preview">("edit");
-  const [view, setView] = useState<"content" | "customize">("content");
+  // Content tab = the section editor, Design tab = CvCustomizationPanel,
+  // Preview tab = the A4 sheet full-width (desktop).
+  const [view, setView] = useState<"content" | "design" | "preview">("content");
+  // 3-step flow: start → template → edit. Entering the builder ALWAYS lands
+  // on "start" (empty variant without a saved CV, continue variant with one)
+  // so the long editor is never the first thing a user sees.
+  const [step, setStep] = useState<BuilderStep>("start");
+  // The template step has been entered this session (new scratch / import) —
+  // this is what makes step 2 clickable in the indicator before the document
+  // is committed with started=true.
+  const [templateReached, setTemplateReached] = useState(false);
+  const [newCvConfirmOpen, setNewCvConfirmOpen] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importNotice, setImportNotice] = useState<"" | "notfound" | "error">("");
@@ -460,6 +561,17 @@ export function CvBuilder({
     active: mobileView === "preview",
   });
 
+  // Focus lands on the current step's heading after every step change
+  // (never on initial mount — the app shell keeps its natural focus).
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  const prevStep = useRef<BuilderStep>(step);
+  useEffect(() => {
+    if (prevStep.current !== step) {
+      prevStep.current = step;
+      headingRef.current?.focus();
+    }
+  }, [step]);
+
   // ---- Load persisted document (post-hydration; server render stays empty) --
   useEffect(() => {
     let loaded: CvDocument | null = null;
@@ -468,6 +580,8 @@ export function CvBuilder({
       const raw = window.localStorage.getItem(cvStorageKey(userId));
       hadStored = Boolean(raw);
       if (raw) loaded = sanitizeCvDocument(JSON.parse(raw));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSavedAt(window.localStorage.getItem(cvSavedAtKey(userId)));
     } catch {
       /* corrupt storage — start fresh */
     }
@@ -492,21 +606,31 @@ export function CvBuilder({
     }
     // Intentional post-hydration restore of the persisted CV (localStorage);
     // the server render uses the empty document on purpose (no mismatch).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCv(initial);
     setStarted(initialStarted);
     setReady(true);
   }, [userId, profileFullName, profileEmail]);
 
   // ---- Autosave (debounced) + save indicator --------------------------------
+  // The first effect run after mount is only the hydration restore (cv just
+  // became "ready") — it must NOT touch the "last edited" timestamp; only
+  // real document changes update it.
+  const firstSaveRun = useRef(true);
   useEffect(() => {
     if (!ready) return;
+    const isFirstRun = firstSaveRun.current;
+    firstSaveRun.current = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSaveState("saving");
     const timer = window.setTimeout(() => {
       try {
         window.localStorage.setItem(cvStorageKey(userId), JSON.stringify(cv));
         window.localStorage.setItem(cvStartedKey(userId), started ? "true" : "false");
+        if (!isFirstRun) {
+          const now = new Date().toISOString();
+          window.localStorage.setItem(cvSavedAtKey(userId), now);
+          setSavedAt(now);
+        }
       } catch {
         /* storage full/unavailable — in-memory doc still works */
       }
@@ -520,6 +644,10 @@ export function CvBuilder({
     document.body.classList.add("cv-builder-active");
     return () => document.body.classList.remove("cv-builder-active");
   }, []);
+
+  // Gallery-only demo document for the template previews (see demo-cv.ts —
+  // never written to or mixed with the user's CV).
+  const demoCv = useMemo(() => buildDemoCv(), []);
 
   const cvLabels = useMemo<CvLabels>(
     () => ({
@@ -597,6 +725,11 @@ export function CvBuilder({
     setStarted(true);
     setImportPending(null);
     setImportNotice("");
+    // Imported content → next flow step: pick a template for the document.
+    setTemplateReached(true);
+    setView("content");
+    setMobileView("edit");
+    setStep("template");
   }, []);
 
   const runImport = useCallback(async () => {
@@ -676,14 +809,81 @@ export function CvBuilder({
     [setPersonal],
   );
 
-  const handleStartBuilding = useCallback(() => {
-    try {
-      window.localStorage.setItem(cvStartedKey(userId), "true");
-    } catch {
-      /* ignore */
-    }
+  // ---- 3-step flow: start → template → edit ----------------------------------
+  const goTemplate = useCallback(() => {
+    setTemplateReached(true);
+    setStep("template");
+  }, []);
+
+  // Committing the document: started=true makes the autosave persist the
+  // document (with its templateId) — this is the only point where a brand-new
+  // CV is written to storage.
+  const handleContinueFromTemplate = useCallback(() => {
     setStarted(true);
-  }, [userId]);
+    setStep("edit");
+  }, []);
+
+  // "Create a new CV" — the reset happens ONLY inside this confirmed handler:
+  // a fresh, profile-prefilled document in memory, back to the start screen.
+  // The stored CV is untouched until the next autosave (which only fires
+  // because the in-memory document legitimately changed).
+  const handleConfirmNewCv = useCallback(() => {
+    setNewCvConfirmOpen(false);
+    const fresh = cvEmpty();
+    const name = profileFullName.trim();
+    const email = profileEmail.trim();
+    if (name) fresh.personal.fullName = name;
+    if (email) fresh.personal.email = email;
+    setCv(fresh);
+    setStarted(false);
+    setTemplateReached(false);
+    setView("content");
+    setMobileView("edit");
+    setStep("start");
+  }, [profileFullName, profileEmail]);
+
+  // Back: start → previous dashboard page (history), template → start,
+  // edit → template. Going backward NEVER touches the document.
+  const handleBack = useCallback(() => {
+    if (step === "start") {
+      router.back();
+      return;
+    }
+    if (step === "template") {
+      setStep("start");
+      return;
+    }
+    setStep("template");
+  }, [step, router]);
+
+  const handleStepNavigate = useCallback(
+    (target: BuilderStep) => {
+      if (target === "start") setStep("start");
+      if (target === "template") goTemplate();
+      if (target === "edit") setStep("edit");
+    },
+    [goTemplate],
+  );
+
+  // Invalid-state guard for the indicator: template needs a document in the
+  // flow (saved CV, committed, or entered this session), edit needs a
+  // committed document.
+  const canTemplate = started || templateReached || cvHasContent(cv);
+  const canEdit = started;
+
+  const lastEditedLabel = useMemo(() => {
+    if (!savedAt) return "";
+    const d = new Date(savedAt);
+    if (Number.isNaN(d.getTime())) return "";
+    try {
+      return new Intl.DateTimeFormat(lang, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(d);
+    } catch {
+      return d.toLocaleString();
+    }
+  }, [savedAt, lang]);
 
   const handlePrint = useCallback(() => {
     window.print();
@@ -703,32 +903,79 @@ export function CvBuilder({
 
   const personal = cv.personal;
 
+  // A4 preview subtree — the single source of truth for the preview geometry
+  // (direction-independent flex centering, tight LTR frame, uniform scale).
+  // Used by BOTH the pinned preview pane and the desktop "Preview" tab;
+  // exactly one instance is mounted at a time (the pane unmounts while the
+  // tab shows).
+  const previewBlock = (
+    <div ref={previewOuterRef} className="w-full overflow-x-clip">
+      <div className="flex w-full justify-center">
+        <div
+          className="overflow-hidden rounded-[6px]"
+          style={{
+            direction: "ltr",
+            width: CV_SHEET_WIDTH * preview.scale,
+            height: preview.sheetHeight * preview.scale,
+          }}
+        >
+          <div
+            ref={previewSheetRef}
+            className="shadow-[0_16px_48px_rgba(16,32,59,0.16)] dark:shadow-[0_16px_48px_rgba(0,0,0,0.5)]"
+            style={{
+              width: CV_SHEET_WIDTH,
+              transform: `scale(${preview.scale})`,
+              transformOrigin: "top left",
+            }}
+          >
+            <CvDocumentSheet cv={cv} labels={cvLabels} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div>
-      {/* ============================== Top bar ==============================
-          Mobile (320–430px): strict single-column flow —
-          row 1 title+badge, row 2 subtitle, row 3 [Inhalt|Gestalten],
-          row 4 [Bearbeiten|Vorschau], row 5 full-width PDF button.
-          The control cluster is w-full on phones so each control group
-          gets its own row (no compressed side-by-side row, no wrapped
-          button labels); from sm up the groups sit side-by-side and on
-          desktop (lg) everything returns to the original single row. */}
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <h2 className="text-xl font-bold tracking-tight text-ink">
-              {t("templates.builderTitle")}
-            </h2>
-            <span className="rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-bold text-muted">
-              {t(TEMPLATE_NAME_KEYS[cv.templateId])}
+      {/* ============================ Compact header ==========================
+          One row: [← Back] [CV Builder] [Template badge] … [Saved ✓] [PDF].
+          The long subtitle of the old top bar is gone — the 3-step flow
+          itself explains the page. Mobile: title row wraps above the
+          full-width control row (same single-column discipline as before). */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={handleBack}
+            aria-label={t("templates.back")}
+            className="shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-surface-2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <Icon
+              name="arrowLeft"
+              size={17}
+              strokeWidth={2.2}
+              className="rtl:rotate-180"
+            />
+          </button>
+          <h2
+            ref={step === "edit" ? headingRef : undefined}
+            tabIndex={step === "edit" ? -1 : undefined}
+            className="truncate text-lg font-bold tracking-tight text-ink"
+            // Programmatic focus target (tabIndex -1, not keyboard-reachable) —
+            // the global [tabindex]:focus-visible rule would draw a box here,
+            // so suppress it inline (inline wins over unlayered author CSS).
+            style={{ outline: "none" }}
+          >
+            {t("templates.builderTitle")}
+          </h2>
+          {step !== "start" && (
+            <span className="hidden shrink-0 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-bold text-muted md:inline">
+              {t("templates.templateLabel")}: {t(TEMPLATE_NAME_KEYS[cv.templateId])}
             </span>
-          </div>
-          <p className="mt-1 text-sm text-muted">
-            {t("templates.builderSubtitle")}
-          </p>
+          )}
         </div>
         <div className="flex w-full flex-wrap items-center gap-2.5 sm:w-auto sm:justify-end">
-          {saveState !== "idle" && started && (
+          {step === "edit" && saveState !== "idle" && started && (
             <span
               role="status"
               className="hidden items-center gap-1.5 text-xs font-semibold text-muted sm:inline-flex"
@@ -739,130 +986,297 @@ export function CvBuilder({
                 : t("templates.saving")}
             </span>
           )}
-          {started && (
-          <div className="flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto">
-            <button
-              type="button"
-              aria-pressed={view === "content"}
-              onClick={() => setView("content")}
-              className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
-                view === "content"
-                  ? "bg-accent text-white"
-                  : "text-muted hover:text-ink"
-              }`}
+          {step === "edit" && (
+            <Button
+              variant="dark"
+              onClick={handlePrint}
+              disabled={!hasContent}
+              className="w-full whitespace-nowrap sm:w-auto"
             >
-              <Icon name="edit" size={13} strokeWidth={2.2} />
-              {t("templates.tabContent")}
-            </button>
-            <button
-              type="button"
-              aria-pressed={view === "customize"}
-              onClick={() => setView("customize")}
-              className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
-                view === "customize"
-                  ? "bg-accent text-white"
-                  : "text-muted hover:text-ink"
-              }`}
-            >
-              <Icon name="spark" size={13} strokeWidth={2.2} />
-              {t("templates.tabCustomize")}
-            </button>
-          </div>
+              <Icon name="download" size={15} />
+              {t("templates.downloadPdf")}
+            </Button>
           )}
-          {started && (
-          <div className="flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto lg:hidden">
-            <button
-              type="button"
-              aria-pressed={mobileView === "edit"}
-              onClick={() => setMobileView("edit")}
-              className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
-                mobileView === "edit"
-                  ? "bg-accent text-white"
-                  : "text-muted hover:text-ink"
-              }`}
-            >
-              {t("templates.tabEdit")}
-            </button>
-            <button
-              type="button"
-              aria-pressed={mobileView === "preview"}
-              onClick={() => setMobileView("preview")}
-              className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
-                mobileView === "preview"
-                  ? "bg-accent text-white"
-                  : "text-muted hover:text-ink"
-              }`}
-            >
-              {t("templates.tabPreview")}
-            </button>
-          </div>
-          )}
-          <Button
-            variant="dark"
-            onClick={handlePrint}
-            disabled={!hasContent}
-            className="w-full whitespace-nowrap sm:w-auto"
-          >
-            <Icon name="download" size={15} />
-            {t("templates.downloadPdf")}
-          </Button>
         </div>
       </div>
 
-      {/* ========================== Template selector =========================
-          Four real template renderings (scaled live miniatures of the user's
-          own CV data). Selecting only swaps cv.templateId — content,
-          customization and photo are untouched and persist as before. */}
-      {started && (
-        <div className="mt-6">
-          <CvTemplateSelector
-            cv={cv}
-            labels={cvLabels}
-            selected={cv.templateId}
-            onSelect={selectTemplate}
-          />
+      <StepIndicator
+        current={step}
+        canTemplate={canTemplate}
+        canEdit={canEdit}
+        onNavigate={handleStepNavigate}
+      />
+
+      {/* ============================ STEP 1 — START ==========================
+          Never a wall of forms: either the two ways to begin (no saved CV)
+          or the continue card (saved CV — the stored document is untouched
+          until the user explicitly confirms "Create a new CV"). */}
+      {step === "start" && (
+        <div className="mx-auto mt-8 max-w-2xl sm:mt-12">
+          {started ? (
+            <Card className="p-8 text-center sm:p-10">
+              <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+                <Icon name="file" size={24} />
+              </span>
+              <h3
+                ref={headingRef}
+                tabIndex={-1}
+                className="mt-5 text-2xl font-bold tracking-tight text-ink sm:text-3xl"
+                style={{ outline: "none" }}
+              >
+                {t("templates.continueTitle")}
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                {t("templates.continueText")}
+              </p>
+              {lastEditedLabel && (
+                <p className="mt-3 text-xs font-medium text-faint">
+                  {t("templates.lastEdited")}: {lastEditedLabel}
+                </p>
+              )}
+              <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
+                <Button size="lg" onClick={() => setStep("edit")}>
+                  {t("templates.continueEditing")}
+                </Button>
+                <Button
+                  size="lg"
+                  variant="secondary"
+                  onClick={() => setNewCvConfirmOpen(true)}
+                >
+                  {t("templates.createNewCv")}
+                </Button>
+              </div>
+            </Card>
+          ) : (
+            <div>
+              <div className="text-center">
+                <h3
+                  ref={headingRef}
+                  tabIndex={-1}
+                  className="text-2xl font-bold tracking-tight text-ink sm:text-3xl"
+                  style={{ outline: "none" }}
+                >
+                  {t("templates.startTitle")}
+                </h3>
+                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted">
+                  {t("templates.startSubtitle")}
+                </p>
+              </div>
+              <div className="mt-8 grid gap-4 text-start sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={goTemplate}
+                  className="rounded-2xl border border-line bg-surface p-6 text-start transition-all hover:border-accent/50 hover:shadow-[0_10px_30px_rgba(var(--glow-accent-rgb),0.12)] focus:outline-none focus-visible:ring-4 focus-visible:ring-accent/25"
+                >
+                  <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent-soft text-accent">
+                    <Icon name="edit" size={22} />
+                  </span>
+                  <span className="mt-4 block text-base font-bold text-ink">
+                    {t("templates.startCardScratch")}
+                  </span>
+                  <span className="mt-1.5 block text-sm leading-6 text-muted">
+                    {t("templates.startCardScratchDesc")}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runImport()}
+                  disabled={importing}
+                  className="rounded-2xl border border-line bg-surface p-6 text-start transition-all hover:border-accent/50 hover:shadow-[0_10px_30px_rgba(var(--glow-accent-rgb),0.12)] focus:outline-none focus-visible:ring-4 focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent-soft text-accent">
+                    <Icon name={importing ? "clock" : "upload"} size={22} />
+                  </span>
+                  <span className="mt-4 block text-base font-bold text-ink">
+                    {importing
+                      ? t("templates.importing")
+                      : t("templates.startCardUpload")}
+                  </span>
+                  <span className="mt-1.5 block text-sm leading-6 text-muted">
+                    {t("templates.startCardUploadDesc")}
+                  </span>
+                </button>
+              </div>
+              {importNotice === "notfound" && (
+                <p
+                  role="status"
+                  className="mt-5 text-center text-xs font-medium text-muted"
+                >
+                  {t("templates.importNotFound")}
+                </p>
+              )}
+              {importNotice === "error" && (
+                <p
+                  role="alert"
+                  className="mt-5 text-center text-xs font-medium text-danger"
+                >
+                  {t("templates.importFailed")}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
 
-      {/* ============================= Empty state ============================ */}
-      {!started ? (
-        <Card className="mx-auto mt-8 flex min-h-[55vh] max-w-xl flex-col items-center justify-center p-8 text-center sm:mt-12">
-          <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-soft text-accent">
-            <Icon name="file" size={28} />
-          </span>
-          <h3 className="mt-6 text-2xl font-bold text-ink">
-            {t("templates.emptyTitle")}
-          </h3>
-          <p className="mt-2 max-w-sm text-sm leading-6 text-muted">
-            {t("templates.emptyText")}
-          </p>
-          <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-            <Button size="lg" onClick={handleStartBuilding}>
-              {t("templates.startBuilding")}
-            </Button>
-            <Button
-              size="lg"
-              variant="secondary"
-              onClick={() => void runImport()}
-              disabled={importing}
+      {/* ========================= STEP 2 — TEMPLATE ===========================
+          Large A4-ratio gallery cards (2-col desktop, 1-col mobile). Each
+          card renders the ACTUAL template renderer with the dedicated demo
+          document (reference-like density) so the complete visual identity —
+          header, sections, columns, rules, colors, typography — is visible
+          before selection. The demo data is gallery-only: the user's CV is
+          never touched. Selecting only swaps cv.templateId; "Continue"
+          commits the document (started=true) and opens the editor. */}
+      {step === "template" && (
+        <div className="mx-auto mt-8 max-w-5xl sm:mt-10">
+          <div className="text-center">
+            <h3
+              ref={headingRef}
+              tabIndex={-1}
+              className="text-2xl font-bold tracking-tight text-ink sm:text-3xl"
+              style={{ outline: "none" }}
             >
-              {importing ? t("templates.importing") : t("templates.importProfile")}
+              {t("templates.chooseTemplateTitle")}
+            </h3>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted">
+              {t("templates.chooseTemplateText")}
+            </p>
+          </div>
+          <div className="mt-7">
+            <CvTemplateSelector
+              size="large"
+              showTitle={false}
+              cv={cv}
+              previewCv={demoCv}
+              labels={cvLabels}
+              selected={cv.templateId}
+              onSelect={selectTemplate}
+            />
+          </div>
+          <div className="mt-8 flex justify-center">
+            <Button size="lg" onClick={handleContinueFromTemplate}>
+              {t("templates.continueCta")}
+              <Icon
+                name="arrowRight"
+                size={15}
+                strokeWidth={2.2}
+                className="rtl:rotate-180"
+              />
             </Button>
           </div>
-          {importNotice === "notfound" && (
-            <p role="status" className="mt-5 text-xs font-medium text-muted">
-              {t("templates.importNotFound")}
-            </p>
-          )}
-          {importNotice === "error" && (
-            <p role="alert" className="mt-5 text-xs font-medium text-danger">
-              {t("templates.importFailed")}
-            </p>
-          )}
-        </Card>
-      ) : (
-        /* ============================ Workspace ============================ */
-        <div className="mt-6 grid w-full grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
+        </div>
+      )}
+
+      {/* ============================ STEP 3 — EDIT ===========================
+          Only now does the full editor appear. Desktop: tab row
+          [Content | Design | Preview] + editor column + pinned A4 pane.
+          Mobile: the existing [Content|Design] + [Edit|Preview] toggles,
+          strictly single column. */}
+      {step === "edit" && (
+        <div className="mt-6">
+          {/* Mobile: control groups get their own full row on phones. */}
+          <div className="mb-4 flex flex-wrap items-center gap-2.5 lg:hidden">
+            <div className="flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto">
+              <button
+                type="button"
+                aria-pressed={view === "content"}
+                onClick={() => setView("content")}
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
+                  view === "content"
+                    ? "bg-accent text-white"
+                    : "text-muted hover:text-ink"
+                }`}
+              >
+                <Icon name="edit" size={13} strokeWidth={2.2} />
+                {t("templates.tabContent")}
+              </button>
+              <button
+                type="button"
+                aria-pressed={view === "design"}
+                onClick={() => setView("design")}
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
+                  view === "design"
+                    ? "bg-accent text-white"
+                    : "text-muted hover:text-ink"
+                }`}
+              >
+                <Icon name="spark" size={13} strokeWidth={2.2} />
+                {t("templates.tabDesign")}
+              </button>
+            </div>
+            <div className="flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto lg:hidden">
+              <button
+                type="button"
+                aria-pressed={mobileView === "edit"}
+                onClick={() => setMobileView("edit")}
+                className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
+                  mobileView === "edit"
+                    ? "bg-accent text-white"
+                    : "text-muted hover:text-ink"
+                }`}
+              >
+                {t("templates.tabEdit")}
+              </button>
+              <button
+                type="button"
+                aria-pressed={mobileView === "preview"}
+                onClick={() => setMobileView("preview")}
+                className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
+                  mobileView === "preview"
+                    ? "bg-accent text-white"
+                    : "text-muted hover:text-ink"
+                }`}
+              >
+                {t("templates.tabPreview")}
+              </button>
+            </div>
+          </div>
+
+          {/* Desktop: the [Content | Design | Preview] tab row. */}
+          <div className="mb-4 hidden max-w-fit lg:block">
+            <div className="flex items-center rounded-xl border border-line-strong bg-surface p-1">
+              <button
+                type="button"
+                aria-pressed={view === "content"}
+                onClick={() => setView("content")}
+                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                  view === "content"
+                    ? "bg-accent text-white"
+                    : "text-muted hover:text-ink"
+                }`}
+              >
+                <Icon name="edit" size={13} strokeWidth={2.2} />
+                {t("templates.tabContent")}
+              </button>
+              <button
+                type="button"
+                aria-pressed={view === "design"}
+                onClick={() => setView("design")}
+                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                  view === "design"
+                    ? "bg-accent text-white"
+                    : "text-muted hover:text-ink"
+                }`}
+              >
+                <Icon name="spark" size={13} strokeWidth={2.2} />
+                {t("templates.tabDesign")}
+              </button>
+              <button
+                type="button"
+                aria-pressed={view === "preview"}
+                onClick={() => setView("preview")}
+                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                  view === "preview"
+                    ? "bg-accent text-white"
+                    : "text-muted hover:text-ink"
+                }`}
+              >
+                {t("templates.tabPreview")}
+              </button>
+            </div>
+          </div>
+
+          {/* ============================ Workspace ============================ */}
+          <div className="grid w-full grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
           {/* ------------------------------ Editor ----------------------------- */}
           {/* w-full min-w-0: the editor column is EXACTLY the viewport
               content width on phones (single column), and can shrink
@@ -1527,12 +1941,15 @@ export function CvBuilder({
               </SectionCard>
             </div>
             </Fragment>
-            ) : (
+            ) : view === "design" ? (
             <CvCustomizationPanel
               settings={cv.customization ?? defaultCvCustomization()}
               onChange={updateCustomization}
               hasPhoto={Boolean(personal.photo)}
             />
+            ) : (
+            /* Desktop "Preview" tab: the A4 sheet, centered full-width. */
+            <div className="mx-auto max-w-2xl">{previewBlock}</div>
             )}
           </div>
 
@@ -1543,65 +1960,48 @@ export function CvBuilder({
               lg:items-start gives the pane a content-height box whose
               containing block is the full row track (sized by the taller
               editor column), so the pane releases naturally at the end of
-              the builder container — no JS, desktop-only via lg:. */}
-          <div
-            className={`min-w-0 lg:sticky lg:top-20 ${mobileView === "preview" ? "" : "hidden lg:block"}`}
-          >
-            {/* Preview geometry (direction-independent, no magic offsets):
-                outer (measured width; overflow-x-clip guards the 1-frame
-                pre-scale flash so the page never gains a horizontal
-                scroll state)
-                └─ flex centering layer (inline-axis center: identical in
-                   LTR and RTL)
-                   └─ frame (tight: scaled width/height, overflow-hidden,
-                      DIRECTION: LTR — verified root cause of the iPhone
-                      bug: in an RTL app, the oversized 794px sheet block
-                      anchors to the frame's RIGHT edge, so its layout box
-                      starts at frame.right − 794 (e.g. −318px on a 390px
-                      phone) and `transform-origin: top left` (physical)
-                      scaled it further off-screen — only a thin strip
-                      survived the frame's clip. Forcing the containing
-                      block to LTR makes the sheet anchor to the frame's
-                      left edge in BOTH app directions, so the sheet's
-                      painted box === the frame box, and the flex layer
-                      centers the frame ⇒ sheet center = screen center.
-                      The document itself keeps its own dir (cv-sheet is
-                      dir="ltr" regardless of app language).)
-                      └─ sheet (true 794px layout, uniform transform) */}
-            <div ref={previewOuterRef} className="w-full overflow-x-clip">
-              <div className="flex w-full justify-center">
-                <div
-                  className="overflow-hidden rounded-[6px]"
-                  style={{
-                    direction: "ltr",
-                    width: CV_SHEET_WIDTH * preview.scale,
-                    height: preview.sheetHeight * preview.scale,
-                  }}
-                >
-                  <div
-                    ref={previewSheetRef}
-                    className="shadow-[0_16px_48px_rgba(16,32,59,0.16)] dark:shadow-[0_16px_48px_rgba(0,0,0,0.5)]"
-                    style={{
-                      width: CV_SHEET_WIDTH,
-                      transform: `scale(${preview.scale})`,
-                      transformOrigin: "top left",
-                    }}
-                  >
-                    <CvDocumentSheet cv={cv} labels={cvLabels} />
-                  </div>
-                </div>
-              </div>
+              the builder container — no JS, desktop-only via lg:.
+              The pane unmounts while the desktop "Preview" tab is active —
+              the same preview subtree then lives in the editor column, so
+              the refs are attached in exactly one place at a time. */}
+          {view !== "preview" && (
+            <div
+              className={`min-w-0 lg:sticky lg:top-20 ${mobileView === "preview" ? "" : "hidden lg:block"}`}
+            >
+              {previewBlock}
             </div>
-          </div>
+          )}
+        </div>
         </div>
       )}
 
       {/* =============================== Modals =============================== */}
       <AddContentModal
-        open={addOpen && started}
+        open={addOpen && step === "edit"}
         onClose={() => setAddOpen(false)}
         onPick={handleAddContent}
       />
+
+      {/* "Create a new CV" — the ONLY place the document is reset, and it
+          requires this explicit confirmation. Dismissing it keeps the saved
+          CV untouched. */}
+      <Modal
+        open={newCvConfirmOpen}
+        onClose={() => setNewCvConfirmOpen(false)}
+        title={t("templates.newCvConfirmTitle")}
+      >
+        <p className="text-sm leading-6 text-muted">
+          {t("templates.newCvConfirmText")}
+        </p>
+        <div className="mt-6 flex justify-end gap-2.5">
+          <Button variant="secondary" onClick={() => setNewCvConfirmOpen(false)}>
+            {t("common.cancel")}
+          </Button>
+          <Button onClick={handleConfirmNewCv}>
+            {t("templates.newCvConfirmAction")}
+          </Button>
+        </div>
+      </Modal>
 
       <Modal
         open={importPending !== null}
