@@ -41,6 +41,7 @@ const {
   VOICE_SWEEP_DEFAULT_MAX,
 } = await import("@/app/api/internal/voice-sweep/route");
 const { POST: voiceTokenPost } = await import("@/app/api/community/voice/token/route");
+const { POST: voiceDiagnosticPost } = await import("@/app/api/community/voice/diagnostic/route");
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const read = (rel: string): string => readFileSync(join(ROOT, rel), "utf8");
@@ -396,6 +397,8 @@ describe("C-3 · structured logging (community.voice.*)", () => {
       "community.voice.cleanup",
       "community.voice.eviction",
       "community.voice.unavailable",
+      "community.voice.sfu_probe",
+      "community.voice.client_error",
     ]);
   });
 
@@ -514,5 +517,241 @@ describe("C-3 · structured logging (community.voice.*)", () => {
     expect(lines[0]).toBe(
       "[community] community.voice.unavailable context=stale_sweep detail=ECONNREFUSED",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Production incident · secret-free voice failure diagnostics
+// (LiveKit still failing on iPhone after the roomCreate fix: the client now
+// reports the REAL connect failure to the server logs, the UI shows a muted
+// diagnostic line, and the token route logs safe config metadata + a
+// non-destructive SFU reachability probe — never tokens/keys/secrets.)
+// ---------------------------------------------------------------------------
+const TOKEN_ROUTE = read("src/app/api/community/voice/token/route.ts");
+const DIAG_ROUTE = read("src/app/api/community/voice/diagnostic/route.ts");
+const USE_VOICE = read("src/components/community/use-voice.ts");
+const VOICE_PANEL = read("src/components/community/voice-panel.tsx");
+const RATE_LIMIT = read("src/lib/rate-limit.ts");
+
+const FAKE_JWT = `eyJ${"x1Y2z3".repeat(12)}`; // JWT-shaped (tokens start with eyJ)
+
+const diagnosticRequest = (body: unknown) =>
+  new Request("http://localhost/api/community/voice/diagnostic", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+describe("Incident · secret-free voice failure diagnostics", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+  });
+
+  it("21 · unauthenticated reports are rejected (401) and nothing is logged", async () => {
+    const lines = captureConsole();
+    mockAuth(null);
+    const res = await voiceDiagnosticPost(
+      diagnosticRequest({
+        phase: "room.connect",
+        code: "connection_failed",
+        errorName: "Error",
+        message: "boom",
+      }),
+    );
+    expect(res.status).toBe(401);
+    expect(lines).toHaveLength(0);
+  });
+
+  it("22 · only the stable cause whitelist is accepted (400 otherwise, 204 valid)", async () => {
+    mockAuth(ALICE);
+    mockAdminForRoute({ suspended: false });
+    expect((await voiceDiagnosticPost(diagnosticRequest({ code: "anything_else" }))).status).toBe(400);
+    expect((await voiceDiagnosticPost(diagnosticRequest({}))).status).toBe(400);
+    expect(
+      (
+        await voiceDiagnosticPost(
+          diagnosticRequest({
+            phase: "room.connect",
+            code: "connection_failed",
+            errorName: "LiveKitRtcError",
+          }),
+        )
+      ).status,
+    ).toBe(204);
+  });
+
+  it("23 · a valid report is logged ONCE at ERROR with the safe metadata fields", async () => {
+    const errLines: string[] = [];
+    const warnLines: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errLines.push(a.map(String).join(" "));
+    });
+    vi.spyOn(console, "warn").mockImplementation((...a: unknown[]) => {
+      warnLines.push(a.map(String).join(" "));
+    });
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    mockAuth(ALICE);
+    mockAdminForRoute({ suspended: false });
+    const res = await voiceDiagnosticPost(
+      diagnosticRequest({
+        phase: "room.connect",
+        code: "invalid_room_or_grants",
+        errorName: "LiveKitRtcError",
+        errorCode: 104,
+        host: "sfu.example.test",
+        room: "croom-b100",
+        message: "requested room does not exist",
+      }),
+    );
+    expect(res.status).toBe(204);
+    expect(errLines).toHaveLength(1);
+    const line = errLines[0];
+    expect(line).toContain("community.voice.client_error");
+    expect(line).toContain(`userId=${ALICE}`);
+    expect(line).toContain("phase=room.connect");
+    expect(line).toContain("code=invalid_room_or_grants");
+    expect(line).toContain("errorName=LiveKitRtcError");
+    expect(line).toContain("errorCode=104");
+    expect(line).toContain("host=sfu.example.test");
+    expect(line).toContain("room=croom-b100");
+    expect(line).toContain("message=requested room does not exist");
+    expect(warnLines).toHaveLength(0);
+  });
+
+  it("24 · JWT-shaped content is redacted — never logged, never echoed", async () => {
+    const lines = captureConsole();
+    mockAuth(ALICE);
+    mockAdminForRoute({ suspended: false });
+    const res = await voiceDiagnosticPost(
+      diagnosticRequest({
+        phase: "room.connect",
+        code: "token_error",
+        errorName: "Error",
+        message: `auth ${FAKE_JWT} rejected`,
+      }),
+    );
+    expect(res.status).toBe(204);
+    const all = lines.join("\n");
+    expect(all).toContain("community.voice.client_error");
+    expect(all).toContain("[redacted: token-like content]");
+    expect(all).not.toContain(FAKE_JWT);
+    expect(all).not.toContain("eyJ");
+  });
+
+  it("25 · no log injection: newlines/tabs flattened, fields truncated, one event = one line", async () => {
+    const lines = captureConsole();
+    mockAuth(ALICE);
+    mockAdminForRoute({ suspended: false });
+    await voiceDiagnosticPost(
+      diagnosticRequest({
+        phase: "p",
+        code: "connection_failed",
+        errorName: "E",
+        message: `a\nb\tc = d\n${"x".repeat(300)}`,
+      }),
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0].split("\n")).toHaveLength(1);
+    expect(lines[0]).toContain("…(len=200)"); // bounded before the 120-char log cap
+    expect(lines[0]).not.toContain("x".repeat(130));
+  });
+
+  it("26 · the report channel is rate limited (community_voice_diagnostic) → 429", async () => {
+    mockAuth(ALICE);
+    vi.mocked(createAdminClient).mockReturnValue({
+      rpc: vi.fn(async (fn: string) =>
+        fn === "check_rate_limit"
+          ? { data: { allowed: false, count: 31, limit: 30, retry_after: 7 }, error: null }
+          : { data: null, error: null },
+      ),
+    } as never);
+    const res = await voiceDiagnosticPost(
+      diagnosticRequest({ phase: "room.connect", code: "connection_failed", errorName: "E", message: "x" }),
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("7");
+  });
+
+  it("27 · the token route logs SAFE config metadata and the exact grant set", () => {
+    // The incident-fix grant set is pinned per issued token:
+    expect(TOKEN_ROUTE).toContain("roomCreate: true,");
+    expect(TOKEN_ROUTE).toContain("roomJoin: true,");
+    expect(TOKEN_ROUTE).toContain("canPublish: true,");
+    expect(TOKEN_ROUTE).toContain("canSubscribe: true,");
+    // Safe config diagnostics: scheme + host + key LENGTH — never values:
+    expect(TOKEN_ROUTE).toContain("urlScheme: lkUrl.scheme,");
+    expect(TOKEN_ROUTE).toContain("urlHost: lkUrl.host,");
+    expect(TOKEN_ROUTE).toContain("apiKeyLen: config.apiKey?.length ?? 0,");
+    // The token_issued log block itself carries no secret / key VALUE
+    // (the mint call below legitimately passes config.apiSecret to the
+    // signer — that is not a log):
+    const issuedLog = TOKEN_ROUTE.split('communityLog("community.voice.token_issued"')[1].split("\n  });")[0];
+    expect(issuedLog).not.toContain("apiSecret");
+    expect(issuedLog).not.toContain("apiKey:");
+    expect(issuedLog).toContain("apiKeyLen:");
+    // Env access stays in the validated seam, not the route:
+    expect(TOKEN_ROUTE).not.toContain("process.env");
+  });
+
+  it("28 · the SFU reachability probe is non-destructive (plain GET, 4s budget, no credentials)", () => {
+    expect(TOKEN_ROUTE).toContain("void probeLiveKitReachable(config.url ?? \"\").then((result) => {");
+    expect(TOKEN_ROUTE).toContain('"community.voice.sfu_probe"');
+    const probeSrc = TOKEN_ROUTE.split("async function probeLiveKitReachable")[1];
+    expect(probeSrc).toContain('u.protocol === "wss:" || u.protocol === "https:"');
+    expect(probeSrc).toContain('method: "GET"');
+    expect(probeSrc).toContain("setTimeout(() => controller.abort(), 4000)");
+    expect(probeSrc).toContain("http_${res.status}");
+    expect(probeSrc).toContain('return "timeout_4s"');
+    expect(probeSrc).toContain("fail_${cause}");
+    // The probe never carries or needs credentials:
+    expect(probeSrc).not.toContain("apiKey");
+    expect(probeSrc).not.toContain("apiSecret");
+    expect(probeSrc).not.toContain("Authorization");
+  });
+
+  it("29 · the diagnostic route never asks for, logs, or echoes secrets", () => {
+    expect(DIAG_ROUTE).toContain("SAFE_CAUSES");
+    expect(DIAG_ROUTE).toContain("redactTokenLike");
+    expect(DIAG_ROUTE).toContain("eyJ");
+    expect(DIAG_ROUTE).not.toContain("b.token");
+    expect(DIAG_ROUTE).not.toContain("b.apiKey");
+    expect(DIAG_ROUTE).not.toContain("b.secret");
+    expect(DIAG_ROUTE).not.toContain("LIVEKIT_API_SECRET");
+    expect(DIAG_ROUTE).toContain('checkRateLimit("community_voice_diagnostic", user.id)');
+    expect(DIAG_ROUTE).toContain("status: 401");
+    expect(DIAG_ROUTE).toContain("status: 204");
+  });
+
+  it("30 · the client reports every failure class (connect, token fetch, SFU drop) — secret-free", () => {
+    expect(USE_VOICE).toContain("reportVoiceDiagnostic");
+    expect(USE_VOICE).toContain("navigator.sendBeacon");
+    expect(USE_VOICE).toContain("/api/community/voice/diagnostic");
+    // Connect-phase report (phase splits microphone vs room.connect):
+    expect(USE_VOICE).toContain('phase: code === "microphone_denied" ? "microphone" : "room.connect"');
+    // Token-fetch failure (HTTP status only — the SFU was never reached):
+    expect(USE_VOICE).toContain('code: "http_error"');
+    // Post-join SFU drop:
+    expect(USE_VOICE).toContain('code: "sfu_disconnected"');
+    // Secret-free by construction:
+    expect(USE_VOICE).toContain("redactTokenLike");
+    expect(USE_VOICE).toContain("new URL(url).host");
+    // Stale diagnostics never persist: cleared on success AND on leave:
+    expect(USE_VOICE.split("setDiagnostic(null)").length - 1).toBe(2);
+  });
+
+  it("31 · the UI shows the real cause as a muted diagnostic line in the error dialog", () => {
+    expect(VOICE_PANEL).toContain("{voice.diagnostic ? (");
+    expect(VOICE_PANEL).toContain("{voice.diagnostic}");
+    expect(VOICE_PANEL).toContain("font-mono");
+    // The friendly localized message stays the primary text:
+    expect(VOICE_PANEL).toContain('t("community.voiceConnectionError")');
+  });
+
+  it("32 · the report channel budget is bounded (30/min per user)", () => {
+    expect(RATE_LIMIT).toContain('| "community_voice_diagnostic"');
+    expect(RATE_LIMIT).toContain("community_voice_diagnostic: { max: 30, windowSeconds: 60 },");
   });
 });

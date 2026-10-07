@@ -58,6 +58,8 @@ export type RateLimitScope =
   // (realtime fallback). Higher ceiling than community_history so a
   // 1 req/s poll (60/min, ~240/min with headroom for several tabs) works.
   | "community_poll"
+  // Voice connect-failure reports (diagnostic channel, safe metadata only).
+  | "community_voice_diagnostic"
   | "community_onboarding"
   // Community v2 — message-level actions (per session user).
   | "community_edit"
@@ -161,6 +163,7 @@ export const RATE_LIMITS: Record<
   community_message: { max: 20, windowSeconds: 60 },
   community_history: { max: 30, windowSeconds: 60 },
   community_poll: { max: 240, windowSeconds: 60 },
+  community_voice_diagnostic: { max: 30, windowSeconds: 60 },
   community_onboarding: { max: 5, windowSeconds: 60 },
   // Message-level actions: editing is cheap but chatty when spammed
   // (60/min); a reaction toggle is one tiny row — 60/min covers even a

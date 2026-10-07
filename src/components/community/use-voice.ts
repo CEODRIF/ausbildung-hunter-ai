@@ -61,6 +61,13 @@ export interface UseVoice extends VoiceMeta {
   dialogOpen: boolean;
   openDialog: () => void;
   closeDialog: () => void;
+  /**
+   * Compact, secret-free failure detail for the LAST connection failure
+   * (e.g. "LiveKitRtcError (104): requested room does not exist"). Shown as
+   * a muted diagnostic line in the error dialog and reported to the server
+   * logs — the friendly message stays the primary text.
+   */
+  diagnostic: string | null;
   /** Explicit user action: token → connect → mic. Never called on load. */
   join: () => Promise<void>;
   /** Explicit user action after a permission denial. */
@@ -116,6 +123,56 @@ function voiceFailureMeta(error: unknown): { name: string; code?: number } {
   return typeof code === "number" ? { name, code } : { name };
 }
 
+/** JWT-shaped content is NEVER shown or sent (tokens always start with eyJ). */
+function redactTokenLike(value: string): string {
+  if (/eyJ[A-Za-z0-9_-]{10,}/.test(value)) return "[redacted: token-like content]";
+  return value;
+}
+
+/** host:port of a LiveKit URL — credentials/path dropped (host is not a secret). */
+function safeHost(url: string | undefined): string {
+  if (!url) return "";
+  try {
+    return new URL(url).host;
+  } catch {
+    return "(invalid url)";
+  }
+}
+
+/** One compact, secret-free diagnostic line for the UI + the server report. */
+function buildVoiceDiagnostic(error: unknown, host: string): string {
+  const meta = voiceFailureMeta(error);
+  const msg =
+    error instanceof Error && error.message ? redactTokenLike(error.message.slice(0, 120)) : "";
+  const base = `${meta.name}${meta.code !== undefined ? ` (code ${meta.code})` : ""}${msg ? `: ${msg}` : ""}`;
+  return host ? `${base} @ ${host}` : base;
+}
+
+/** Fire-and-forget report of a voice failure to the server logs (204). */
+function reportVoiceDiagnostic(payload: {
+  phase: string;
+  code: string;
+  errorName: string;
+  errorCode?: number;
+  host: string;
+  room: string;
+  message: string;
+}): void {
+  if (typeof navigator !== "undefined" && navigator.sendBeacon) {
+    navigator.sendBeacon(
+      "/api/community/voice/diagnostic",
+      new Blob([JSON.stringify(payload)], { type: "application/json" }),
+    );
+    return;
+  }
+  void fetch("/api/community/voice/diagnostic", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 export function useVoice(opts: UseVoiceOptions): UseVoice {
   const { roomId, me, initialMeta } = opts;
 
@@ -125,6 +182,7 @@ export function useVoice(opts: UseVoiceOptions): UseVoice {
   const [micState, setMicState] = useState<VoiceMicState>("off");
   const [participants, setParticipants] = useState<VoiceParticipant[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [diagnostic, setDiagnostic] = useState<string | null>(null);
   const [outputDevices, setOutputDevices] = useState<Array<{ deviceId: string; label: string }>>([]);
   const [selectedOutput, setSelectedOutput] = useState("");
   // Programmatic output selection (setSinkId) — feature-detected once; the
@@ -145,6 +203,9 @@ export function useVoice(opts: UseVoiceOptions): UseVoice {
   const lastCountRef = useRef(0);
   const lastSyncedCountRef = useRef(-1);
   const micStateRef = useRef<VoiceMicState>("off");
+  // Last attempted SFU target (host only, no credentials) — for diagnostics.
+  const lastUrlRef = useRef("");
+  const lastRoomRef = useRef("");
   const meRef = useRef(me);
   const onMetaChangeRef = useRef(opts.onMetaChange);
   const countChannelRef = useRef<RealtimeChannel | null>(null);
@@ -322,6 +383,16 @@ export function useVoice(opts: UseVoiceOptions): UseVoice {
         // Unrecoverable (or the SFU dropped us — e.g. duplicate identity):
         setConnection("error");
         setDialogOpen(true);
+        const detail = "SFU closed the connection after join (duplicate identity or server drop)";
+        setDiagnostic(detail);
+        reportVoiceDiagnostic({
+          phase: "room.connected",
+          code: "sfu_disconnected",
+          errorName: "Disconnected",
+          host: safeHost(lastUrlRef.current),
+          room: lastRoomRef.current,
+          message: detail,
+        });
         inVoiceRef.current = false;
         setInVoice(false);
         setParticipants([]);
@@ -385,6 +456,8 @@ export function useVoice(opts: UseVoiceOptions): UseVoice {
     setDialogOpen(true);
     setConnection("connecting");
     try {
+      lastUrlRef.current = "";
+      lastRoomRef.current = "";
       const res = await fetch("/api/community/voice/token", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -396,29 +469,53 @@ export function useVoice(opts: UseVoiceOptions): UseVoice {
         return;
       }
       if (!res.ok) {
+        // Token phase failed (401/403/404/429/500) — report the HTTP status.
         setConnection("error");
+        const detail = `token request failed: HTTP ${res.status}`;
+        setDiagnostic(detail);
+        reportVoiceDiagnostic({
+          phase: "token.fetch",
+          code: "http_error",
+          errorName: "HttpError",
+          errorCode: res.status,
+          host: "",
+          room: "",
+          message: detail,
+        });
         return;
       }
       const config = (await res.json()) as VoiceJoinConfig;
       if (disposedRef.current) return;
+      lastUrlRef.current = config.url;
+      lastRoomRef.current = config.room.slice(0, 12);
       leaveCalledRef.current = false;
       inVoiceRef.current = true;
       setInVoice(true);
       await connectToSfu(config);
       if (disposedRef.current) return;
       setConnection("connected");
+      setDiagnostic(null);
       setDialogOpen(false);
       const room = roomRef.current;
       if (room) refreshParticipants(room);
     } catch (error) {
       if (disposedRef.current) return;
       // Surface the real cause for debugging (the UI stays friendly). Secret-
-      // free by construction: name + numeric code only, never the token/URL.
-      console.error(
-        "[community-voice] join failed:",
-        classifyVoiceFailure(error),
-        voiceFailureMeta(error),
-      );
+      // free by construction: name + code + redacted message + host only.
+      const code = classifyVoiceFailure(error);
+      const host = safeHost(lastUrlRef.current);
+      const detail = buildVoiceDiagnostic(error, host);
+      console.error("[community-voice] join failed:", code, detail);
+      setDiagnostic(detail);
+      reportVoiceDiagnostic({
+        phase: code === "microphone_denied" ? "microphone" : "room.connect",
+        code,
+        errorName: voiceFailureMeta(error).name,
+        errorCode: voiceFailureMeta(error).code,
+        host,
+        room: lastRoomRef.current,
+        message: error instanceof Error ? redactTokenLike(error.message.slice(0, 200)) : "",
+      });
       const name = error instanceof Error ? error.name : "";
       const isPermission =
         name === "NotAllowedError" || name === "PermissionDeniedError" || /notallowed|permission/i.test(String(error));
@@ -481,6 +578,7 @@ export function useVoice(opts: UseVoiceOptions): UseVoice {
     setParticipants([]);
     setConnection("idle");
     setMicState("off");
+    setDiagnostic(null);
     setDialogOpen(false);
   }, [broadcastCount, roomId]);
 
@@ -570,6 +668,7 @@ export function useVoice(opts: UseVoiceOptions): UseVoice {
     dialogOpen,
     openDialog,
     closeDialog,
+    diagnostic,
     join,
     retryMic,
     retryConnection,

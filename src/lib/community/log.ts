@@ -33,6 +33,12 @@ export const COMMUNITY_VOICE_EVENTS = [
   "community.voice.cleanup",
   "community.voice.eviction",
   "community.voice.unavailable",
+  // Production diagnostics (voice incident): server-side SFU reachability
+  // probe + the CLIENT-side connect-failure report. Both carry only safe
+  // metadata (url scheme/host, key LENGTH, grant booleans, error name/code +
+  // redacted message) — never tokens, API keys, or secrets.
+  "community.voice.sfu_probe",
+  "community.voice.client_error",
 ] as const;
 
 export type CommunityVoiceEvent = (typeof COMMUNITY_VOICE_EVENTS)[number];

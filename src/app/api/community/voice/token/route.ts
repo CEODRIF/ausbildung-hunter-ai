@@ -127,19 +127,40 @@ export async function POST(req: Request) {
   const token = createLiveKitVoiceToken({
     apiKey: config.apiKey as string,
     apiSecret: config.apiSecret as string,
-    identity: user.id,
+    identity: user.id, // server-derived — the browser cannot spoof who joins
     room: conv.provider_room_name,
     name,
     avatarId: me && typeof me.avatar_id === "string" ? me.avatar_id : null,
   });
 
   // Phase 6C (C-3): token issued — metadata only, NEVER the token itself.
+  // Plus safe config diagnostics (production voice incident): scheme + HOST
+  // of the configured LiveKit URL (host is a public service name, never a
+  // secret), the API key LENGTH (catches empty/truncated keys without
+  // leaking the key), and the exact grant set the token carries. The probe
+  // below checks DNS+TLS+HTTP reachability of the SFU host — non-destructive
+  // and fire-and-forget, so join latency is not affected.
+  const lkUrl = safeUrlMeta(config.url ?? "");
   communityLog("community.voice.token_issued", {
     userId: user.id,
     roomId,
     room: conv.provider_room_name,
     participantCount: conv.participant_count,
     ttlSeconds: VOICE_TOKEN_TTL_SECONDS,
+    urlScheme: lkUrl.scheme,
+    urlHost: lkUrl.host,
+    apiKeyLen: config.apiKey?.length ?? 0,
+    roomCreate: true,
+    roomJoin: true,
+    canPublish: true,
+    canSubscribe: true,
+  });
+  void probeLiveKitReachable(config.url ?? "").then((result) => {
+    communityLog(
+      "community.voice.sfu_probe",
+      { userId: user.id, host: lkUrl.host, result },
+      result.startsWith("fail") || result === "timeout_4s" ? "error" : "warn",
+    );
   });
 
   return NextResponse.json(
@@ -158,4 +179,46 @@ export async function POST(req: Request) {
       },
     },
   );
+}
+
+/**
+ * { scheme, host } of a LiveKit URL — everything except protocol +
+ * hostname:port is dropped (no path, no credentials). Host is a public
+ * service name, not a secret; safe to log.
+ */
+function safeUrlMeta(url: string): { scheme: string; host: string } {
+  try {
+    const u = new URL(url);
+    return { scheme: u.protocol.replace(/:$/, ""), host: u.host || "(empty)" };
+  } catch {
+    return { scheme: "invalid", host: "(unparseable)" };
+  }
+}
+
+/**
+ * Non-destructive reachability probe of the SFU host: a plain GET against the
+ * HTTP(S) form of the LiveKit URL (LiveKit answers 404 for non-signal paths).
+ * Proves DNS + TLS + HTTP reachability from the server environment. Never
+ * creates/touches rooms or auth. Resolves to a short status token, never a
+ * stack trace.
+ */
+async function probeLiveKitReachable(url: string): Promise<string> {
+  try {
+    const u = new URL(url);
+    const https = u.protocol === "wss:" || u.protocol === "https:";
+    const httpUrl = `${https ? "https" : "http"}://${u.host}${u.pathname}${u.search}`;
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 4000);
+    try {
+      const res = await fetch(httpUrl, { method: "GET", signal: controller.signal });
+      return `http_${res.status}`;
+    } finally {
+      clearTimeout(t);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") return "timeout_4s";
+    const cause = (error as { cause?: { code?: string } } | null)?.cause?.code;
+    if (cause) return `fail_${cause}`; // e.g. fail_ENOTFOUND (DNS), fail_ECONNREFUSED, fail_CERT_* (TLS)
+    return "fail";
+  }
 }

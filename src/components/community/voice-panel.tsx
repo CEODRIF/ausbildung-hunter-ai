@@ -127,12 +127,23 @@ export function VoicePanel({ voice }: { voice: UseVoice }) {
             </p>
           )}
           {voice.connection === "error" && (
-            <p
-              role="alert"
-              className="rounded-lg bg-danger-soft px-3 py-2 text-xs font-semibold leading-5 text-danger"
-            >
-              {t("community.voiceConnectionError")}
-            </p>
+            <div className="flex flex-col gap-2">
+              <p
+                role="alert"
+                className="rounded-lg bg-danger-soft px-3 py-2 text-xs font-semibold leading-5 text-danger"
+              >
+                {t("community.voiceConnectionError")}
+              </p>
+              {/* Production-incident diagnostic: the REAL cause (error name +
+                  numeric code + redacted message + SFU host) — secret-free by
+                  construction; muted and technical. The friendly message
+                  above stays the primary text. */}
+              {voice.diagnostic ? (
+                <p className="break-words rounded-lg bg-surface-2 px-3 py-2 font-mono text-[11px] leading-4 text-muted">
+                  {voice.diagnostic}
+                </p>
+              ) : null}
+            </div>
           )}
           {voice.connection === "mic_denied" && (
             <p
