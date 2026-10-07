@@ -847,7 +847,21 @@ describe("v7 migration guards (additive, service-role-only)", () => {
     expect(flat).toContain("o.bucket_id = 'community-images'");
     expect(flat).toContain("strpos(o.name, p_user::text || '/') = 1");
     expect(flat).toContain("o.name like ('dm/%/' || p_user::text || '/%')");
-    expect(flat).toContain("coalesce(sum(o.size), 0)::bigint");
+  });
+
+  it("reads the byte size from storage.objects.metadata — Supabase has NO size column", () => {
+    // Supabase Production exposes the byte count in the `metadata` jsonb
+    // only; `o.size` exists on generic PostgreSQL but NOT on Supabase, where
+    // this function failed at call time (42703) until corrected to the
+    // metadata form below. This guard stops the repository from re-seeding
+    // the production bug into a fresh deployment.
+    expect(flat).toContain("coalesce(sum(coalesce((o.metadata->>'size')::bigint, 0)), 0)::bigint");
+    // Negative guards run against the comment-stripped source: the header
+    // comment legitimately QUOTES the old `sum(o.size)` form to warn about it.
+    const code = sql.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ");
+    expect(code).not.toMatch(/\bo\.size\b/);
+    expect(code).not.toMatch(/storage\.objects\.size/);
+    expect(code).not.toMatch(/sum\(\s*o\.size\s*\)/);
   });
 
   it("is purely additive — no destructive or policy statements", () => {

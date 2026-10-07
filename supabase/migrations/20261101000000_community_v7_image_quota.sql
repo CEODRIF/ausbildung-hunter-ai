@@ -6,8 +6,18 @@
 --
 -- It reports how many bytes of `community-images` storage belong to a user,
 -- counted from the storage catalog (`storage.objects`) — the same source
--- the GDPR deletion sweep and the storage janitor use. The three Community
--- image path shapes all resolve ownership from the path itself:
+-- the GDPR deletion sweep and the storage janitor use.
+--
+-- SUPABASE STORAGE SCHEMA — `storage.objects` has NO `size` column. The
+-- byte count lives in the `metadata` jsonb and must be read as
+-- `(o.metadata->>'size')::bigint` (the jsonb value is text). The original
+-- `sum(o.size)` compiled on generic PostgreSQL but failed on Supabase at
+-- CALL time (42703, column o.size does not exist) — the production
+-- function was corrected manually and this file now matches it. Guarded by
+-- tests/community-phase6a.test.ts and tests/community-migrations-audit.test.ts.
+--
+-- The three Community image path shapes all resolve ownership from the
+-- path itself:
 --   * room message images:  {user_id}/{message_id}/image.{ext}
 --   * question images:      {user_id}/{question_id}/image.{ext}
 --   * DM images:            dm/{conversation_id}/{sender_id}/{message_id}/image.{ext}
@@ -30,7 +40,7 @@ security definer
 set search_path = public
 stable
 as $$
-  select coalesce(sum(o.size), 0)::bigint
+  select coalesce(sum(coalesce((o.metadata->>'size')::bigint, 0)), 0)::bigint
   from storage.objects o
   where o.bucket_id = 'community-images'
     and (

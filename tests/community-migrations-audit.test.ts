@@ -299,4 +299,18 @@ describe("all community migrations (v1–v9) — PostgreSQL validity scan", () =
     expect(sql.v2).toContain("on public.community_profiles (lower(display_name));");
     expect(sql.v3).toContain("create unique index community_friendships_pair_uq");
   });
+
+  it("no migration reads storage.objects.size — Supabase stores size in metadata", () => {
+    // Supabase's storage.objects has NO `size` column (generic PostgreSQL
+    // shims often do, which is how this slipped through): the byte count
+    // lives in the `metadata` jsonb. v7 shipped with sum(o.size) and failed
+    // in Production at CALL time (42703) — corrected to the metadata form
+    // below, which a fresh deployment must keep.
+    for (const k of keys) {
+      const stripped = stripComments(sql[k]);
+      expect(stripped, `${k}: references storage.objects.size`).not.toMatch(/\bo\.size\b/);
+      expect(stripped, `${k}: references storage.objects.size`).not.toMatch(/storage\.objects\.size/);
+    }
+    expect(sql.v7).toContain("coalesce(sum(coalesce((o.metadata->>'size')::bigint, 0)), 0)::bigint");
+  });
 });
