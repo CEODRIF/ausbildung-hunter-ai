@@ -99,8 +99,10 @@ describe("settings profile page — premium visual redesign", () => {
     expect(PAGE).not.toContain("<form");
   });
 
-  it("account rows link to existing settings routes only", () => {
-    const hrefs = [...PAGE.matchAll(/href: "([^"]+)"/g)].map((m) => m[1]);
+  it("account rows link to existing internal settings routes only", () => {
+    // Internal links only (social tiles use full https: URLs — checked separately):
+    const hrefs = [...PAGE.matchAll(/href: "\/([^"]+)"/g)].map((m) => `/${m[1]}`);
+    expect(hrefs).toHaveLength(4);
     expect(new Set(hrefs).size).toBe(hrefs.length); // no duplicate targets
     for (const href of hrefs) {
       expect(["/settings/email", "/settings/usage", "/settings/billing", "/settings/data"], href).toContain(href);
@@ -138,5 +140,79 @@ describe("settings profile page — premium visual redesign", () => {
     // Avatar menu got the profile link back (removed in the c9353ca refactor):
     expect(menu).toContain('href="/settings/profile"');
     expect(menu).toContain('t("pages.settingsProfile.title")');
+  });
+});
+
+describe("settings profile — social media section", () => {
+  const ICON = read("src/components/icon.tsx");
+
+  it("contains exactly the three requested links with the exact URLs", () => {
+    expect(PAGE).toContain('href: "https://wa.me/4915210523155"');
+    expect(PAGE).toContain('href: "https://www.facebook.com/ceodrif?mibextid=wwXIfr"');
+    expect(PAGE).toContain('href: "https://www.tiktok.com/@ceodrif"');
+    expect(PAGE).toContain('label: "WhatsApp"');
+    expect(PAGE).toContain('label: "Facebook"');
+    expect(PAGE).toContain('label: "TikTok"');
+  });
+
+  it("no unrelated social channels were added (page or icon set)", () => {
+    const pageLower = PAGE.toLowerCase();
+    for (const u of ["youtube", "instagram", "telegram", "linkedin", "twitter", "x.com", "t.me", "pinterest"]) {
+      expect(pageLower, `page must not reference "${u}"`).not.toContain(u);
+    }
+    const iconLower = ICON.toLowerCase();
+    for (const u of ["youtube", "instagram", "telegram", "linkedin", "whatsapp-alt"]) {
+      expect(iconLower, `icon set must not reference "${u}"`).not.toContain(u);
+    }
+  });
+
+  it("all three open externally with safe rel and accessible labels", () => {
+    // Exactly three external (https:) social targets:
+    expect((PAGE.match(/href: "https:[^"]+"/g) ?? []).length).toBe(3);
+    // The shared tile markup opens in a new, safe tab — applied to all three
+    // entries via the map, and stays keyboard-accessible with per-tile labels:
+    const socialBlock = PAGE.split("SOCIALS.map")[1];
+    expect(socialBlock).toContain('target="_blank"');
+    expect(socialBlock).toContain('rel="noopener noreferrer"');
+    expect(socialBlock).toContain("aria-label={s.label}");
+    expect(socialBlock).toContain("<Link");
+  });
+
+  it("brand icons exist in the icon system as official filled glyphs", () => {
+    for (const name of ["whatsapp", "facebook", "tiktok"]) {
+      expect(ICON).toContain(`| "${name}"`);
+      expect(ICON).toContain(`${name}: (`);
+    }
+    // Filled brand marks (not the stroke set):
+    expect(ICON.split("whatsapp: (")[1].slice(0, 200)).toContain('fill="currentColor"');
+  });
+
+  it("premium glass tiles: one centered row, responsive size, reduced-motion safe", () => {
+    // Centered flex row with even spacing, single row on phones:
+    expect(PAGE).toContain("flex items-center justify-center gap-3 sm:gap-4");
+    // 64px tiles on mobile → 96px at sm+; radius 22px → 24px:
+    expect(PAGE).toContain("h-16 w-16");
+    expect(PAGE).toContain("sm:h-24 sm:w-24");
+    expect(PAGE).toContain("rounded-[22px]");
+    expect(PAGE).toContain("sm:rounded-3xl");
+    // Consistent icon size (32px, within the 28–34 band):
+    expect(PAGE).toContain("size={32}");
+    // Hover: ~5% scale + lift + brand glow, 200ms transition:
+    expect(PAGE).toContain("hover:scale-[1.05]");
+    expect(PAGE).toContain("duration-200");
+    expect(PAGE).toContain("drop-shadow-[0_0_10px");
+    // Touch target ≥44px (h-16 = 64px) and prefers-reduced-motion respected:
+    expect(PAGE).toContain("motion-reduce:transition-none");
+    expect(PAGE).toContain("motion-reduce:hover:scale-100");
+  });
+
+  it("the social heading is localized in all four languages", () => {
+    for (const lang of LANGS) {
+      const v = translate(lang, "profile.page.social.title");
+      expect(v, `${lang} · social.title`).not.toBe("profile.page.social.title");
+      expect(v.trim().length, `${lang} · social.title`).toBeGreaterThan(0);
+    }
+    expect(translate("de", "profile.page.social.title")).toBe("Social Media");
+    expect(translate("ar", "profile.page.social.title")).toBe("وسائل التواصل الاجتماعي");
   });
 });

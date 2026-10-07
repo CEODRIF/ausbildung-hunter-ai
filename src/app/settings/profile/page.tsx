@@ -15,6 +15,38 @@ export const dynamic = "force-dynamic";
 type T = (path: string, vars?: TranslateVars) => string;
 
 /**
+ * Social / contact links — the three requested channels only. Brand tints
+ * are the official brand colors (hover state only); at rest everything is
+ * drawn from the design tokens, so light and dark stay consistent.
+ */
+const SOCIALS = [
+  {
+    icon: "whatsapp",
+    label: "WhatsApp",
+    href: "https://wa.me/4915210523155",
+    tileHover: "hover:border-[#25D366]/40",
+    iconHover:
+      "group-hover:text-[#25D366] group-hover:drop-shadow-[0_0_10px_rgba(37,211,102,0.35)]",
+  },
+  {
+    icon: "facebook",
+    label: "Facebook",
+    href: "https://www.facebook.com/ceodrif?mibextid=wwXIfr",
+    tileHover: "hover:border-[#1877F2]/40",
+    iconHover:
+      "group-hover:text-[#1877F2] group-hover:drop-shadow-[0_0_10px_rgba(24,119,242,0.35)]",
+  },
+  {
+    icon: "tiktok",
+    label: "TikTok",
+    href: "https://www.tiktok.com/@ceodrif",
+    tileHover: "hover:border-[#FE2C55]/40",
+    iconHover:
+      "group-hover:text-[#FE2C55] group-hover:drop-shadow-[0_0_10px_rgba(254,44,85,0.3)]",
+  },
+] as const;
+
+/**
  * Settings — Profile. A premium identity dashboard over the EXISTING
  * profile data (no new backend, no new fields, no new endpoints):
  *
@@ -261,6 +293,34 @@ export default async function ProfileSettingsPage() {
             </div>
           </GlassCard>
         </div>
+
+        {/* ----------------------------------------------- social media */}
+        <section
+          aria-label={t("profile.page.social.title")}
+          className="mx-auto mt-10 flex max-w-3xl flex-col items-center"
+        >
+          <h2 className="mb-4 text-xs font-bold uppercase tracking-[0.14em] text-faint">
+            {t("profile.page.social.title")}
+          </h2>
+          <div className="flex items-center justify-center gap-3 sm:gap-4">
+            {SOCIALS.map((s) => (
+              <Link
+                key={s.label}
+                href={s.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={s.label}
+                className={`group flex h-16 w-16 items-center justify-center rounded-[22px] border border-line-strong bg-surface shadow-[var(--shadow-card)] transition-all duration-200 hover:-translate-y-0.5 hover:scale-[1.05] hover:shadow-[var(--shadow-float)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70 sm:h-24 sm:w-24 sm:rounded-3xl motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100 ${s.tileHover}`}
+              >
+                <Icon
+                  name={s.icon}
+                  size={32}
+                  className={`text-muted transition-[color,filter] duration-200 ${s.iconHover}`}
+                />
+              </Link>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   );

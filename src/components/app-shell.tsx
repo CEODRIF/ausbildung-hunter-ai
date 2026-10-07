@@ -61,6 +61,7 @@ import {
   Moon,
   MoreHorizontal,
   MessageCircle,
+  Music2,
   Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
@@ -72,6 +73,7 @@ import {
   Search,
   Send,
   Settings,
+  Share2,
   Shield,
   Smile,
   Sparkles,
@@ -227,6 +229,12 @@ const LUCIDE: Record<IconName, LucideIcon> = {
   shield: Shield,
   flag: Flag,
   award: Award,
+  // Brand marks: the shell never renders these — the profile social tiles
+  // use the filled official glyphs from the Icon component. These are
+  // stroke-set placeholders that keep the Record exhaustive.
+  whatsapp: MessageCircle,
+  facebook: Share2,
+  tiktok: Music2,
 };
 
 /** Mobile floating bottom bar: the four most-used destinations + More. */

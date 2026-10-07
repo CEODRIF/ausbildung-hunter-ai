@@ -283,6 +283,7 @@ const de = {
         title: "Verknüpfte Konten",
         hint: "E-Mail, Verbrauch, Abrechnung und Daten.",
       },
+      social: { title: "Social Media" },
     },
     // ---- Scanner results (candidate profile review) ----
     title: "Ihr Bewerbungsprofil",
@@ -2437,6 +2438,7 @@ const en: Dict = {
         title: "Connected accounts",
         hint: "Email, usage, billing and data.",
       },
+      social: { title: "Social media" },
     },
     // ---- Scanner results (candidate profile review) ----
     title: "Your application profile",
@@ -4549,6 +4551,7 @@ const fr: Dict = {
         title: "Comptes liés",
         hint: "E-mail, utilisation, facturation et données.",
       },
+      social: { title: "Réseaux sociaux" },
     },
     // ---- Scanner results (candidate profile review) ----
     title: "Votre profil de candidature",
@@ -6657,6 +6660,7 @@ const ar: Dict = {
         title: "الحسابات المرتبطة",
         hint: "البريد الإلكتروني والاستخدام والفوترة والبيانات.",
       },
+      social: { title: "وسائل التواصل الاجتماعي" },
     },
     // ---- Scanner results (candidate profile review) ----
     title: "ملفك للطلبات",
