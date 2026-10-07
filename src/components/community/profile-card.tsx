@@ -97,7 +97,13 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
   const [stats, setStats] = useState<ReputationStats | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<CardAction | null>(null);
-  const [actionError, setActionError] = useState(false);
+  // Classified action failure (incident: production showed only the generic
+  // message, so the user could not tell self-request / blocked / not-found /
+  // rate-limit / server error apart). The server is the classifier; the card
+  // just maps the safe code to the matching localized copy.
+  const [actionError, setActionError] = useState<
+    false | "self_request" | "blocked" | "not_found" | "rate_limited" | "generic"
+  >(false);
   const [confirming, setConfirming] = useState<null | "block" | "remove_friend">(null);
   // Phase 5: report dialog (self-report is blocked server-side; the button
   // is simply hidden for one's own card).
@@ -226,7 +232,21 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ userId: targetUserId }),
           });
-          if (!response.ok) throw new Error(`send_request ${response.status}`);
+          if (!response.ok) {
+            const errBody = (await json(response)) as { error?: unknown } | null;
+            const code = typeof errBody?.error === "string" ? errBody.error : "";
+            const cls =
+              code === "self_request"
+                ? "self_request"
+                : code === "blocked"
+                  ? "blocked"
+                  : code === "member_not_found"
+                    ? "not_found"
+                    : response.status === 429
+                      ? "rate_limited"
+                      : "generic";
+            throw new Error(`friend_error:${cls}`);
+          }
           const body = (await json(response)) as { friendship?: { requester_id: string; status: "pending" | "accepted"; id: string } } | null;
           const row = body?.friendship;
           if (row) {
@@ -291,7 +311,7 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
           if (!response.ok) {
             const body = (await json(response)) as { error?: string } | null;
             if (body?.error === "not_friends") {
-              setActionError(true);
+              setActionError("generic");
               setBusy(null);
               setRelationship({ state: "none" });
               return;
@@ -305,11 +325,16 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
           router.push(`/community/messages/${conversationId}`);
           return;
         }
-      } catch {
+      } catch (error) {
         // The server is the truth: on ANY failure the local state is left
         // untouched and the user can retry (or re-open the card, which
-        // re-fetches).
-        setActionError(true);
+        // re-fetches). A tagged friend-error keeps its classification;
+        // everything else degrades to the generic retry-able message.
+        const tag =
+          error instanceof Error && error.message.startsWith("friend_error:")
+            ? error.message.slice("friend_error:".length)
+            : "generic";
+        setActionError(tag as "generic" | "self_request" | "blocked" | "not_found" | "rate_limited");
       } finally {
         setBusy(null);
       }
@@ -461,7 +486,17 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
 
             {actionError && (
               <p role="alert" className="mt-3 text-xs font-medium text-danger">
-                {t("community.actionFailed")}
+                {t(
+                  actionError === "self_request"
+                    ? "community.friendErrorSelf"
+                    : actionError === "blocked"
+                      ? "community.friendErrorBlocked"
+                      : actionError === "not_found"
+                        ? "community.friendErrorNotFound"
+                        : actionError === "rate_limited"
+                          ? "community.friendErrorRateLimit"
+                          : "community.actionFailed",
+                )}
               </p>
             )}
 

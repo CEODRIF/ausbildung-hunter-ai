@@ -25,8 +25,12 @@
  * mocked Supabase clients (queued per-table results + recorded calls) and
  * a mocked admin client (rate limiting + service-role notification writes).
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
+
+const readSrc = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
 
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
@@ -62,6 +66,8 @@ import {
   markAllNotificationsRead,
   markDmRead,
   markNotificationRead,
+  setPresenceMode,
+  setShowPresence,
   touchCommunityPresence,
 } from "@/app/community/actions";
 
@@ -231,17 +237,24 @@ function makeUserClient(opts: ClientOpts = {}) {
     };
     base.upsert = (values: unknown, upsertOpts?: unknown) => {
       calls.push({ table, op: "upsert", args: [values, upsertOpts] });
-      // upsert(...) is awaited directly (thenable) in the read-cursor action.
-      return Promise.resolve(consume()).then(
-        (r) => {
+      // The real client returns a chainable builder that is ALSO thenable
+      // (filters like .not(...) may follow the upsert, as in the presence
+      // heartbeat's DND guard). Reproduce both facets.
+      const chainable: Record<string, unknown> = {
+        then: (onF?: (v: unknown) => unknown, onR?: (e: unknown) => unknown) => {
           calls.push({ table, op: "then", args: [] });
-          return r;
+          return Promise.resolve(consume()).then(onF as never, onR as never);
         },
-        (e: unknown) => {
-          calls.push({ table, op: "then", args: [] });
-          throw e;
-        },
-      );
+      };
+      for (const op of ["not", "eq", "neq", "in", "or", "single", "maybeSingle"]) {
+        chainable[op] = (...args: unknown[]) => {
+          calls.push({ table, op, args });
+          return op === "single" || op === "maybeSingle"
+            ? Promise.resolve(consume())
+            : chainable;
+        };
+      }
+      return chainable;
     };
     Object.assign(base, {
       then: (onF?: (v: unknown) => unknown, onR?: (e: unknown) => unknown) => {
@@ -1815,7 +1828,10 @@ describe("social server actions", () => {
     await expect(touchCommunityPresence()).resolves.toBeUndefined();
     const upsert = client.calls.find((c) => c.table === "community_profiles" && c.op === "upsert");
     expect(upsert?.args[0]).toMatchObject({ user_id: ALICE });
-    expect(upsert?.args[1]).toMatchObject({ ignoreDuplicates: true });
+    // Incident fix: NO ignoreDuplicates — every real member already has a
+    // row, and ignoreDuplicates made the heartbeat a silent no-op (stale
+    // last_seen_at / online state for everyone).
+    expect(upsert?.args[1]).toEqual({ onConflict: "user_id" });
 
     // Rate-limited: no DB write at all.
     mockAdmin({ rateLimit: { allowed: false, count: 5, limit: 4, retry_after: 30 } });
@@ -2250,5 +2266,220 @@ describe("community v3 migration (source guards)", () => {
     );
     // The owner folder segment must equal the uploader's uid:
     expect(uploadPolicy).toContain('(storage.foldername(name))[3] = auth.uid()::text');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 15. Production incidents (2026-10-07, ausbildungsweg.net)
+//
+//     BUG 1 — friend request: the UI showed only the generic failure. The
+//     card renders (GET works) but the request never created a row, so the
+//     failure sits at the INSERT (or an immediately preceding step). The
+//     route now classifies every failure with the SQLSTATE code + a
+//     structured server log, and the card maps the safe classes to
+//     localized copy.
+//
+//     BUG 2 — community settings: setPresenceMode / touchCommunityPresence
+//     upserted with ignoreDuplicates: true — a SILENT NO-OP on the rows
+//     every real member already has. Manual mode never persisted and the
+//     heartbeat never stamped last_seen_at.
+// ---------------------------------------------------------------------------
+
+describe("incident — friend request failure classification (BUG 1)", () => {
+  const capturedErrors = (): string[] => {
+    const lines: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      lines.push(a.map(String).join(" "));
+    });
+    return lines;
+  };
+
+  it("insert RLS violation (42501) → 500 + friendship_error + code 42501 + structured log (the exact production failure shape)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const lines = capturedErrors();
+    const { client } = makeUserClient({
+      queues: {
+        community_profiles: [ok(profileRow(BOB, "B"))],
+        community_blocks: [ok([])],
+        community_friendships: [
+          fail('new row violates row-level security policy for table "community_friendships"', "42501"),
+        ],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await friendsPOST(post("/api/community/friends", { userId: BOB }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "friendship_error", code: "42501" });
+    vi.restoreAllMocks();
+    expect(lines.some((l) => l.includes("friend_request_failed step=insert") && l.includes("code=42501"))).toBe(true);
+    expect(lines.some((l) => l.includes(`userId=${ALICE}`) && l.includes(`target=${BOB}`))).toBe(true);
+  });
+
+  it("insert FK violation (23503) → 500 + code 23503 (target row vanished mid-flight)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    capturedErrors();
+    const { client } = makeUserClient({
+      queues: {
+        community_profiles: [ok(profileRow(BOB, "B"))],
+        community_blocks: [ok([])],
+        community_friendships: [fail("insert or update on table community_friendships violates foreign key", "23503")],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await friendsPOST(post("/api/community/friends", { userId: BOB }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "friendship_error", code: "23503" });
+    vi.restoreAllMocks();
+  });
+
+  it("23505 collision whose existing row is unreadable → 500 + logged duplicate_recover step", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const lines = capturedErrors();
+    const { client } = makeUserClient({
+      queues: {
+        community_profiles: [ok(profileRow(BOB, "B"))],
+        community_blocks: [ok([])],
+        community_friendships: [
+          fail("duplicate key value violates unique constraint", "23505"),
+          fail("boom"),
+        ],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await friendsPOST(post("/api/community/friends", { userId: BOB }));
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toBe("friendship_error");
+    vi.restoreAllMocks();
+    expect(lines.some((l) => l.includes("friend_request_failed step=duplicate_recover"))).toBe(true);
+  });
+
+  it("target read failure → 500 + friendship_error + logged target step (no insert attempted)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const lines = capturedErrors();
+    const { client } = makeUserClient({
+      queues: { community_profiles: [fail("db down")] },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await friendsPOST(post("/api/community/friends", { userId: BOB }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "friendship_error", code: "db_read" });
+    vi.restoreAllMocks();
+    expect(lines.some((l) => l.includes("friend_request_failed step=target"))).toBe(true);
+    expect(client.calls.some((c) => c.table === "community_friendships" && c.op === "insert")).toBe(false);
+  });
+
+  it("the success path is unchanged: 201 + the friendship row (convergence data for the UI)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const { client } = makeUserClient({
+      queues: {
+        community_profiles: [ok(profileRow(BOB, "B"))],
+        community_blocks: [ok([])],
+        community_friendships: [
+          ok({ id: FRIENDSHIP_ID, requester_id: ALICE, requestee_id: BOB, status: "pending", created_at: NOW }),
+        ],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await friendsPOST(post("/api/community/friends", { userId: BOB }));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { friendship: { status: string } };
+    expect(body.friendship.status).toBe("pending");
+  });
+
+  it("the card maps the server classifications to localized copy (source audit)", () => {
+    const CARD = readSrc("src/components/community/profile-card.tsx");
+    for (const marker of [
+      'code === "self_request"',
+      'code === "blocked"',
+      'code === "member_not_found"',
+      "response.status === 429",
+      '"community.friendErrorSelf"',
+      '"community.friendErrorBlocked"',
+      '"community.friendErrorNotFound"',
+      '"community.friendErrorRateLimit"',
+      '"community.actionFailed"',
+    ]) {
+      expect(CARD, `card must reference ${marker}`).toContain(marker);
+    }
+  });
+
+  it("the four friend-error keys exist in all four languages (no hardcoded language)", async () => {
+    const { dictionaries } = await import("@/lib/i18n/dictionaries");
+    for (const dict of Object.values(dictionaries)) {
+      const community = dict.community as Record<string, unknown>;
+      for (const key of ["friendErrorSelf", "friendErrorBlocked", "friendErrorNotFound", "friendErrorRateLimit"]) {
+        expect(typeof community[key] === "string" && (community[key] as string).length > 0, `${key}`).toBe(true);
+      }
+    }
+  });
+});
+
+describe("incident — community settings persistence (BUG 2)", () => {
+  it("setPresenceMode upserts WITHOUT ignoreDuplicates — the existing row is UPDATED (the choice persists)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const { client } = makeUserClient();
+    vi.mocked(createClient).mockResolvedValue(client);
+    await setPresenceMode("away");
+    const upsert = client.calls.find((c) => c.table === "community_profiles" && c.op === "upsert");
+    expect(upsert).toBeTruthy();
+    expect(upsert?.args[1]).toEqual({ onConflict: "user_id" });
+    const values = upsert?.args[0] as { user_id: string; presence_mode: string; last_seen_at?: string };
+    expect(values.user_id).toBe(ALICE);
+    expect(values.presence_mode).toBe("away");
+    expect(typeof values.last_seen_at).toBe("string"); // re-appearance stamps last_seen
+  });
+
+  it("setPresenceMode('dnd') persists dnd WITHOUT stamping last_seen (hidden state stays hidden)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const { client } = makeUserClient();
+    vi.mocked(createClient).mockResolvedValue(client);
+    await setPresenceMode("dnd");
+    const upsert = client.calls.find((c) => c.table === "community_profiles" && c.op === "upsert");
+    const values = upsert?.args[0] as Record<string, unknown>;
+    expect(values.presence_mode).toBe("dnd");
+    expect("last_seen_at" in values).toBe(false);
+    expect(upsert?.args[1]).toEqual({ onConflict: "user_id" });
+  });
+
+  it("the heartbeat updates existing rows again (no ignoreDuplicates) and keeps the DND guard", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const { client } = makeUserClient();
+    vi.mocked(createClient).mockResolvedValue(client);
+    await touchCommunityPresence("online");
+    const upsert = client.calls.find((c) => c.table === "community_profiles" && c.op === "upsert");
+    expect(upsert?.args[1]).toEqual({ onConflict: "user_id" });
+    expect(client.calls.find((c) => c.op === "not")?.args).toEqual(["presence_mode", "eq", "dnd"]);
+
+    // A dnd-mode heartbeat carries no filter (it only writes last_seen for
+    // non-dnd rows; the dnd row is never touched by the heartbeat).
+    const dndClient = makeUserClient();
+    vi.mocked(createClient).mockResolvedValue(dndClient.client);
+    await touchCommunityPresence("dnd");
+    expect(dndClient.calls.some((c) => c.op === "not")).toBe(false);
+  });
+
+  it("setShowPresence persists via a plain own-row UPDATE", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const { client } = makeUserClient();
+    vi.mocked(createClient).mockResolvedValue(client);
+    await setShowPresence(false);
+    const update = client.calls.find((c) => c.table === "community_profiles" && c.op === "update");
+    expect(update?.args[0]).toEqual({ show_presence: false });
+  });
+
+  it("the settings modal reverts optimistic state on failure and never reloads the page", () => {
+    const SHEET = readSrc("src/components/community/community-settings.tsx");
+    expect(SHEET).toContain("if (!ok) setState(prev)");
+    expect(SHEET).not.toContain("router.refresh");
+    expect(SHEET).not.toContain("window.location");
   });
 });

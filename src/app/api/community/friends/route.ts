@@ -39,6 +39,31 @@ export async function GET() {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Production diagnostics (incident: the friend request failed in production
+ * while the modal + card renders fine). Every failure path logs ONE safe,
+ * structured line — the SQLSTATE `code` is the discriminator:
+ *   42501 → row-level security violation (insert policy missing/broken)
+ *   23503 → foreign key (target row vanished)
+ *   23514 → check constraint violation
+ *   23505 → duplicate (handled as convergence, never a failure)
+ * The message is truncated and carries no user content or credentials.
+ */
+function logFriendRequestFailure(
+  step: string,
+  userId: string,
+  targetId: string | null,
+  code: string | null | undefined,
+  message: string | null | undefined,
+): void {
+  console.error(
+    `[community] friend_request_failed step=${step} userId=${userId}` +
+      ` target=${targetId ?? "-"}` +
+      ` code=${code ?? "unknown"}` +
+      ` message=${(message ?? "").slice(0, 200)}`,
+  );
+}
+
+/**
  * POST /api/community/friends — send a friend request.
  *
  * Server-side gates (never trust the client):
@@ -82,7 +107,8 @@ export async function POST(request: Request) {
     .eq("user_id", rawUserId)
     .maybeSingle();
   if (targetRes.error) {
-    return NextResponse.json({ error: "Could not send request." }, { status: 500 });
+    logFriendRequestFailure("target", user.id, rawUserId, targetRes.error.code, targetRes.error.message);
+    return NextResponse.json({ error: "friendship_error", code: targetRes.error.code ?? "db_read" }, { status: 500 });
   }
   const target = targetRes.data as { user_id: string } | null;
   if (!target) {
@@ -97,7 +123,8 @@ export async function POST(request: Request) {
       `blocker_id.eq.${user.id}.and.blocked_id.eq.${rawUserId},blocker_id.eq.${rawUserId}.and.blocked_id.eq.${user.id}`,
     );
   if (blockRes.error) {
-    return NextResponse.json({ error: "Could not send request." }, { status: 500 });
+    logFriendRequestFailure("block", user.id, rawUserId, blockRes.error.code, blockRes.error.message);
+    return NextResponse.json({ error: "friendship_error", code: blockRes.error.code ?? "db_read" }, { status: 500 });
   }
   if ((blockRes.data ?? []).length > 0) {
     return NextResponse.json({ error: "blocked" }, { status: 403 });
@@ -119,15 +146,21 @@ export async function POST(request: Request) {
           `requester_id.eq.${user.id}.and.requestee_id.eq.${rawUserId},requester_id.eq.${rawUserId}.and.requestee_id.eq.${user.id}`,
         )
         .maybeSingle();
-      if (!existingRes.error && existingRes.data) {
+       if (!existingRes.error && existingRes.data) {
         return NextResponse.json(
           { friendship: existingRes.data, duplicate: true },
           { status: 200, headers: rateLimitHeaders(limited) },
         );
       }
+      // The collision was real but the existing row is not readable —
+      // log it (normally impossible: the viewer is a participant).
+      logFriendRequestFailure("duplicate_recover", user.id, rawUserId, existingRes.error?.code, existingRes.error?.message);
     }
-    console.error("[community] friend request insert failed:", error.message);
-    return NextResponse.json({ error: "Could not send request." }, { status: 500 });
+    // THE production discriminator: 42501 = RLS violation (the insert
+    // policy "Users can send friend requests as themselves" is not
+    // effective on this database), 23503 = FK, 23514 = check constraint.
+    logFriendRequestFailure("insert", user.id, rawUserId, error.code, error.message);
+    return NextResponse.json({ error: "friendship_error", code: error.code ?? "unknown" }, { status: 500 });
   }
 
   // Phase 3: friend_request notification (idempotent by request id; the

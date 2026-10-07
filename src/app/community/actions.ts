@@ -235,15 +235,26 @@ export async function touchCommunityPresence(
     const limited = await checkRateLimit("community_presence", user.id);
     if (!limited.allowed) return;
     const values = { user_id: user.id, last_seen_at: new Date().toISOString() };
+    // NOTE: deliberately NO ignoreDuplicates — every real member already has
+    // a profile row (created at onboarding), and an upsert with
+    // ignoreDuplicates is a SILENT NO-OP on existing rows: the heartbeat
+    // would never stamp last_seen_at and presence would go stale for
+    // everyone. A plain onConflict upsert UPDATES the existing row (insert
+    // only happens when the row is genuinely missing).
     let query = supabase
       .from("community_profiles")
-      .upsert({ ...values, presence_mode: mode }, { onConflict: "user_id", ignoreDuplicates: true });
+      .upsert({ ...values, presence_mode: mode }, { onConflict: "user_id" });
     if (mode !== "dnd") {
-      // The heartbeat must not flip a manual DND back to online/away.
+      // The heartbeat must not flip a manual DND back to online/away. The
+      // filter applies to the on-conflict UPDATE branch (a missing row is
+      // still inserted).
       query = query.not("presence_mode", "eq", "dnd");
     }
     const { error } = await query;
-    if (error) console.error("[community] presence heartbeat failed:", error.message);
+    if (error)
+      console.error(
+        `[community] presence heartbeat failed code=${error.code ?? "unknown"} message=${error.message.slice(0, 200)}`,
+      );
   } catch (thrown) {
     console.error("[community] presence heartbeat threw:", thrown);
   }
@@ -266,10 +277,16 @@ export async function setPresenceMode(mode: "online" | "away" | "dnd"): Promise<
     if (!limited.allowed) return;
     const values: Record<string, unknown> = { user_id: user.id, presence_mode: mode };
     if (mode !== "dnd") values.last_seen_at = new Date().toISOString();
+    // Plain onConflict upsert: for every real member the row already exists,
+    // so the conflict branch must UPDATE it — ignoreDuplicates would make
+    // the manual choice a silent no-op and the setting would never persist.
     const { error } = await supabase
       .from("community_profiles")
-      .upsert(values, { onConflict: "user_id", ignoreDuplicates: true });
-    if (error) console.error("[community] set presence mode failed:", error.message);
+      .upsert(values, { onConflict: "user_id" });
+    if (error)
+      console.error(
+        `[community] set presence mode failed code=${error.code ?? "unknown"} message=${error.message.slice(0, 200)}`,
+      );
   } catch (thrown) {
     console.error("[community] set presence mode threw:", thrown);
   }
