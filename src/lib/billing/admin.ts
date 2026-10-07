@@ -27,19 +27,22 @@ export function isUuid(value: unknown): value is string {
 }
 
 /**
- * The /admin gate check WITH a diagnostic reason.
- *
- * Production incident (2026-10-08): the designated platform admin was
- * bounced from /admin to /dashboard with no trace of WHY. The gate below
- * is the same check as before (session → `public.admins` membership →
- * `profiles` row, all server-side), but it reports which step failed so
- * the layout can log it and render an explicit 403 instead of a silent
- * redirect.
+ * Per-step gate diagnostics (secret-free by construction: step outcomes +
+ * SQLSTATE codes only — never email, JWT, cookies or tokens).
  */
+export type GateStepState = "found" | "not_found" | "error" | "skipped";
+
+export interface GateDiagnostics {
+  /** `public.admins` membership read: found / not_found / error:<SQLSTATE>. */
+  admins: GateStepState | `error:${string}`;
+  /** `profiles` row read: found / not_found / error:<SQLSTATE> / skipped. */
+  profile: GateStepState | `error:${string}`;
+}
+
 export type AdminAccess =
   | { status: "ok"; profile: Profile }
   | { status: "unauthenticated" }
-  | { status: "forbidden"; reason: "no_membership" | "no_profile"; userId: string };
+  | { status: "forbidden"; reason: "no_membership" | "no_profile"; userId: string; diag: GateDiagnostics };
 
 /** Session user + admin check with a diagnostic reason (server-side only). */
 export async function diagnoseAdminAccess(): Promise<AdminAccess> {
@@ -47,21 +50,59 @@ export async function diagnoseAdminAccess(): Promise<AdminAccess> {
   const { data } = await supabase.auth.getUser();
   const user = data.user;
   if (!user || !isUuid(user.id)) return { status: "unauthenticated" };
+
   const admin = createAdminClient();
-  const { data: membership } = await admin
+
+  // Step 1 — admin membership (service role; PK read, no filters).
+  const { data: membership, error: membershipError } = await admin
     .from("admins")
     .select("user_id")
     .eq("user_id", user.id)
     .maybeSingle();
-  if (!membership) return { status: "forbidden", reason: "no_membership", userId: user.id };
-  const { data: profile } = await admin
+  const adminsState: GateDiagnostics["admins"] = membershipError
+    ? `error:${membershipError.code ?? "unknown"}`
+    : membership
+      ? "found"
+      : "not_found";
+  if (!membership)
+    return {
+      status: "forbidden",
+      reason: "no_membership",
+      userId: user.id,
+      diag: { admins: adminsState, profile: "skipped" },
+    };
+
+  // Step 2 — profile row (service role).
+  //
+  // CRITICAL (production incident 2026-10-08, second report): this select
+  // MUST stay `*`. The previous explicit column list named the avatar
+  // display column added by the FEATURE migration
+  // 20261013000000_profile_settings — not by the base auth schema. In the
+  // production project that column was absent, so the explicit select
+  // failed (SQLSTATE 42703) with `data: null` even though the admin row,
+  // the stable UUID and the profile row all existed — and the gate denied
+  // a fully provisioned platform admin (403; before the 403 page it was
+  // the same null → the silent /dashboard bounce). `select *` can never
+  // fail on a missing column, and the gate decision only needs the row to
+  // exist; every consumer of requireAdmin() reads `.id` only.
+  const { data: profile, error: profileError } = await admin
     .from("profiles")
-    .select(
-      "id, email, full_name, avatar_url, selected_goal, daily_email_limit, account_status, created_at, updated_at",
-    )
+    .select("*")
     .eq("id", user.id)
     .maybeSingle();
-  if (!profile) return { status: "forbidden", reason: "no_profile", userId: user.id };
+  const profileState: GateDiagnostics["profile"] = profileError
+    ? `error:${profileError.code ?? "unknown"}`
+    : profile
+      ? "found"
+      : "not_found";
+  if (!profile)
+    return {
+      status: "forbidden",
+      reason: "no_profile",
+      userId: user.id,
+      diag: { admins: "found", profile: profileState },
+    };
+
   return { status: "ok", profile: profile as Profile };
 }
 

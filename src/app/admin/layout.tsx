@@ -34,8 +34,19 @@ export default async function AdminLayout({
   // server-side); only the denial UX + the log line changed.
   const access = await diagnoseAdminAccess();
   if (access.status !== "ok") {
-    const reason = access.status === "forbidden" ? access.reason : "session_error";
-    console.error(`[admin] access denied user=${user.id} reason=${reason}`);
+    // Secret-free per-step diagnostics (user UUID + step outcomes +
+    // SQLSTATE codes only):
+    //   admins=found profile=error:42703 → profiles schema drift
+    //   admins=not_found / error:…        → membership missing OR the
+    //                                        service client points at a
+    //                                        different project than the
+    //                                        one the row was verified in
+    //   profile=not_found                → profile row genuinely absent
+    const detail =
+      access.status === "forbidden"
+        ? `reason=${access.reason} admins=${access.diag.admins} profile=${access.diag.profile}`
+        : "reason=session_error";
+    console.error(`[admin] access denied user=${user.id} ${detail}`);
     return <AdminForbidden />;
   }
 

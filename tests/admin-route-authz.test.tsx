@@ -164,7 +164,12 @@ describe("/admin route decisions (diagnoseAdminAccess)", () => {
     mockSession({ id: ALICE, email: "alice@example.com" });
 
     const access = await diagnoseAdminAccess();
-    expect(access).toEqual({ status: "forbidden", reason: "no_membership", userId: ALICE });
+    expect(access).toEqual({
+      status: "forbidden",
+      reason: "no_membership",
+      userId: ALICE,
+      diag: { admins: "not_found", profile: "skipped" },
+    });
     expect(await requireAdmin()).toBeNull();
   });
 
@@ -189,7 +194,12 @@ describe("/admin route decisions (diagnoseAdminAccess)", () => {
     // normal user:
     admin.queue("admins", { data: null, error: null });
     const access = await diagnoseAdminAccess();
-    expect(access).toEqual({ status: "forbidden", reason: "no_membership", userId: ALICE });
+    expect(access).toEqual({
+      status: "forbidden",
+      reason: "no_membership",
+      userId: ALICE,
+      diag: { admins: "not_found", profile: "skipped" },
+    });
   });
 
   it("5. wrong admin id WITH a real membership row → still denied", async () => {
@@ -212,7 +222,12 @@ describe("/admin route decisions (diagnoseAdminAccess)", () => {
 
     expect(await isPlatformAdmin()).toEqual({ ok: false, code: "not_bound" });
     const access = await diagnoseAdminAccess();
-    expect(access).toEqual({ status: "forbidden", reason: "no_membership", userId: ADMIN });
+    expect(access).toEqual({
+      status: "forbidden",
+      reason: "no_membership",
+      userId: ADMIN,
+      diag: { admins: "not_found", profile: "skipped" },
+    });
     expect(await requireAdmin()).toBeNull();
   });
 
@@ -234,7 +249,108 @@ describe("/admin route decisions (diagnoseAdminAccess)", () => {
       status: "forbidden",
       reason: "no_profile",
       userId: ADMIN,
+      diag: { admins: "found", profile: "not_found" },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A2. EXACT PRODUCTION STATE (verified 2026-10-08 in Supabase):
+//     auth.users.id = 6fa45036-… for contact@ausbildungsweg.net,
+//     public.admins row EXISTS, profile EXISTS with account_status active,
+//     and the production profiles schema does NOT expose every feature
+//     column (the gate must not depend on one of them).
+//     Expected: platform admin = TRUE (no 403).
+// ---------------------------------------------------------------------------
+
+describe("exact production state (second incident: 403 despite full provisioning)", () => {
+  // The verified production auth UUID — identical to PLATFORM_ADMIN_USER_ID.
+  const PROD_UID = "6fa45036-1b86-427a-a7d0-54a3a3904767";
+
+  it("admins row + active profile (no avatar_url column) → platform admin TRUE", async () => {
+    expect(PROD_UID).toBe(PLATFORM_ADMIN_USER_ID); // the constant is the verified id
+
+    const admin = mockAdminClient();
+    admin.queue("admins", { data: { user_id: PROD_UID, created_by: null }, error: null });
+    // the production profile row — account_status active — WITHOUT the
+    // feature-migration column that broke the explicit-column select:
+    admin.queue("profiles", {
+      data: {
+        id: PROD_UID,
+        email: "contact@ausbildungsweg.net",
+        full_name: "yassine salmi",
+        account_status: "active",
+        selected_goal: null,
+        daily_email_limit: 50,
+        created_at: "2026-10-07T17:22:19.902852+00:00",
+        updated_at: "2026-10-07T17:22:19.902852+00:00",
+      },
+      error: null,
+    });
+    mockSession({ id: PROD_UID, email: "contact@ausbildungsweg.net" });
+
+    const access = await diagnoseAdminAccess();
+    expect(access.status).toBe("ok");
+    if (access.status === "ok") expect(access.profile.id).toBe(PROD_UID);
+
+    // the platform gate (stable id + session + membership) agrees:
+    admin.queue("admins", { data: { user_id: PROD_UID }, error: null });
+    expect(await isPlatformAdmin()).toEqual({ ok: true, userId: PROD_UID });
+
+    // and the legacy wrapper resolves a profile (billing surface intact):
+    admin.queue("admins", { data: { user_id: PROD_UID }, error: null });
+    admin.queue("profiles", {
+      data: { id: PROD_UID, email: "contact@ausbildungsweg.net", full_name: "yassine salmi", account_status: "active" },
+      error: null,
+    });
+    expect((await requireAdmin())?.id).toBe(PROD_UID);
+  });
+
+  it("the gate's profiles select is `*` — it can never fail on a missing column", async () => {
+    const admin = mockAdminClient();
+    admin.queue("admins", { data: { user_id: PROD_UID }, error: null });
+    admin.queue("profiles", { data: { id: PROD_UID }, error: null });
+    mockSession({ id: PROD_UID });
+    await diagnoseAdminAccess();
+
+    const profileSelect = admin.calls.find((c) => c.table === "profiles" && c.op === "select");
+    expect(profileSelect?.args).toEqual(["*"]);
+  });
+
+  it("source guard: the gate never names feature columns in the profiles select", () => {
+    const src = readSrc("src/lib/billing/admin.ts");
+    // the explicit-column select that caused the incident must not return:
+    expect(src).not.toContain("avatar_url");
+    expect(src).toMatch(/from\("profiles"\)\s*\.select\("\*"\)/);
+  });
+
+  it("a profile READ ERROR (e.g. 42703 schema drift) fails closed WITH the SQLSTATE in diagnostics", async () => {
+    const admin = mockAdminClient();
+    admin.queue("admins", { data: { user_id: PROD_UID }, error: null });
+    admin.queue("profiles", { data: null, error: { message: "column does not exist", code: "42703" } });
+    mockSession({ id: PROD_UID });
+
+    const access = await diagnoseAdminAccess();
+    expect(access).toEqual({
+      status: "forbidden",
+      reason: "no_profile",
+      userId: PROD_UID,
+      diag: { admins: "found", profile: "error:42703" },
+    });
+    expect(await requireAdmin()).toBeNull(); // fail-closed
+  });
+
+  it("diagnostics are secret-free (no email / JWT / token material)", async () => {
+    const admin = mockAdminClient();
+    admin.queue("admins", { data: null, error: null });
+    mockSession({ id: PROD_UID, email: "contact@ausbildungsweg.net" });
+
+    const access = await diagnoseAdminAccess();
+    if (access.status !== "forbidden") throw new Error("expected forbidden");
+    const serialized = JSON.stringify(access.diag);
+    expect(serialized).not.toContain("contact@");
+    expect(serialized).not.toContain("eyJ");
+    expect(serialized).not.toContain(PROD_UID); // only the top-level userId may carry the id
   });
 });
 
