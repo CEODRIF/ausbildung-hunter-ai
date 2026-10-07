@@ -2761,6 +2761,29 @@ describe("incident — friendship action failure classification (accept/decline/
     expect(lines.some((l) => l.includes("friendship_action_failed step=load") && l.includes(`userId=${BOB}`))).toBe(true);
   });
 
+  it("requirement 9: POST /friends' FIRST interaction with community_friendships is the INSERT itself (no pre-existing friendship required)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const { client } = makeUserClient({
+      queues: {
+        community_profiles: [ok(profileRow(BOB, "B"))],
+        community_blocks: [ok([])],
+        community_friendships: [
+          ok({ id: FRIENDSHIP_ID, requester_id: ALICE, requestee_id: BOB, status: "pending", created_at: NOW }),
+        ],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await friendsPOST(post("/api/community/friends", { userId: BOB }));
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as { duplicate?: boolean }).duplicate).toBeUndefined();
+    // No SELECT/or/maybeSingle on community_friendships may precede the
+    // INSERT: a request from A to B must not depend on any prior A↔B row.
+    const friendshipCalls = client.calls.filter((c) => c.table === "community_friendships");
+    expect(friendshipCalls.length).toBeGreaterThan(0);
+    expect(friendshipCalls[0].op).toBe("insert");
+  });
+
   it("the DM send + friend + friendship-action routes keep their structured diagnostics (source audit)", () => {
     const dmRoute = readSrc("src/app/api/community/dm/[conversationId]/messages/route.ts");
     expect(dmRoute).toContain("dm_send_failed step=");
