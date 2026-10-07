@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import type { Profile } from "@/lib/auth";
 import { logout } from "@/app/login/actions";
 import { useI18n } from "@/lib/i18n";
@@ -61,6 +62,14 @@ export function ProfileMenu({ profile }: { profile: Profile }) {
             <p className="truncate text-xs text-muted">{profile.email}</p>
           </div>
           <div className="pt-1">
+            <Link
+              href="/settings/profile"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-semibold text-ink-soft transition-colors hover:bg-accent-soft hover:text-accent"
+            >
+              <Icon name="user" size={16} />
+              {t("pages.settingsProfile.title")}
+            </Link>
             <form action={logout}>
               <button
                 type="submit"

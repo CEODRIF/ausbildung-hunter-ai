@@ -271,6 +271,19 @@ const de = {
   profile: {
     signOut: "Abmelden",
     settings: "Einstellungen",
+    // ---- Settings profile page (/settings/profile) ----
+    page: {
+      memberSince: "Mitglied seit",
+      status: { active: "Aktiv", pending: "Ausstehend", suspended: "Gesperrt" },
+      personal: {
+        title: "Persönliche Informationen",
+        hint: "Ihre grundlegenden Angaben.",
+      },
+      accounts: {
+        title: "Verknüpfte Konten",
+        hint: "E-Mail, Verbrauch, Abrechnung und Daten.",
+      },
+    },
     // ---- Scanner results (candidate profile review) ----
     title: "Ihr Bewerbungsprofil",
     note: "KI-extrahierte Angaben werden mit einem klaren Prüf- und Korrekturpfad angezeigt. Ihre Korrekturen bleiben erhalten.",
@@ -2412,6 +2425,19 @@ const en: Dict = {
   profile: {
     signOut: "Sign out",
     settings: "Settings",
+    // ---- Settings profile page (/settings/profile) ----
+    page: {
+      memberSince: "Member since",
+      status: { active: "Active", pending: "Pending", suspended: "Suspended" },
+      personal: {
+        title: "Personal information",
+        hint: "Your basic details.",
+      },
+      accounts: {
+        title: "Connected accounts",
+        hint: "Email, usage, billing and data.",
+      },
+    },
     // ---- Scanner results (candidate profile review) ----
     title: "Your application profile",
     note: "AI-extracted information is shown with a clear review path. Your corrections are preserved.",
@@ -4511,6 +4537,19 @@ const fr: Dict = {
   profile: {
     signOut: "Se déconnecter",
     settings: "Réglages",
+    // ---- Settings profile page (/settings/profile) ----
+    page: {
+      memberSince: "Membre depuis",
+      status: { active: "Actif", pending: "En attente", suspended: "Suspendu" },
+      personal: {
+        title: "Informations personnelles",
+        hint: "Vos informations de base.",
+      },
+      accounts: {
+        title: "Comptes liés",
+        hint: "E-mail, utilisation, facturation et données.",
+      },
+    },
     // ---- Scanner results (candidate profile review) ----
     title: "Votre profil de candidature",
     note: "Les informations extraites par l'IA sont affichées avec un parcours de revue clair. Vos corrections sont conservées.",
@@ -6606,6 +6645,19 @@ const ar: Dict = {
   profile: {
     signOut: "تسجيل الخروج",
     settings: "الإعدادات",
+    // ---- Settings profile page (/settings/profile) ----
+    page: {
+      memberSince: "عضو منذ",
+      status: { active: "نشط", pending: "قيد الانتظار", suspended: "موقوف" },
+      personal: {
+        title: "المعلومات الشخصية",
+        hint: "بياناتك الأساسية.",
+      },
+      accounts: {
+        title: "الحسابات المرتبطة",
+        hint: "البريد الإلكتروني والاستخدام والفوترة والبيانات.",
+      },
+    },
     // ---- Scanner results (candidate profile review) ----
     title: "ملفك للطلبات",
     note: "تظهر المعلومات المستخرجة بالذكاء الاصطناعي مع مسار مراجعة واضح. تبقى تعديلاتك محفوظة.",
