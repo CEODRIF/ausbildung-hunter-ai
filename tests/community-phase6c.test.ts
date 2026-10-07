@@ -737,7 +737,10 @@ describe("Incident · secret-free voice failure diagnostics", () => {
     expect(USE_VOICE).toContain('code: "sfu_disconnected"');
     // Secret-free by construction:
     expect(USE_VOICE).toContain("redactTokenLike");
-    expect(USE_VOICE).toContain("new URL(url).host");
+    // The diagnostic carries the DIALED SCHEME + host (ws:// vs wss:// is a
+    // root-cause discriminator: mixed-content WS is hard-blocked on iOS):
+    expect(USE_VOICE).toContain("//${u.host}");
+    expect(USE_VOICE).toContain("u.protocol");
     // Stale diagnostics never persist: cleared on success AND on leave:
     expect(USE_VOICE.split("setDiagnostic(null)").length - 1).toBe(2);
   });

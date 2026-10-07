@@ -129,11 +129,18 @@ function redactTokenLike(value: string): string {
   return value;
 }
 
-/** host:port of a LiveKit URL — credentials/path dropped (host is not a secret). */
+/**
+ * scheme://host:port of the LiveKit URL — exactly what the SDK dials
+ * (credentials/path dropped). The host is a public service name, not a
+ * secret; the SCHEME is load-bearing: `ws://` from an HTTPS page is mixed
+ * content that iOS Safari hard-blocks ("Failed to fetch"), while `wss://`
+ * is the required production form.
+ */
 function safeHost(url: string | undefined): string {
   if (!url) return "";
   try {
-    return new URL(url).host;
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}`;
   } catch {
     return "(invalid url)";
   }
