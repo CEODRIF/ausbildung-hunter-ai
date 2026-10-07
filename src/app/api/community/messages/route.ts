@@ -47,10 +47,19 @@ export async function GET(request: Request) {
   if (!user)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const limited = await checkRateLimit("community_history", user.id);
+  const url = new URL(request.url);
+  // `?poll=1` marks the 1s background refresh of the ACTIVE room (the
+  // realtime fallback). It uses its own higher rate bucket so a 1 req/s
+  // poll is feasible; everything else keeps the community_history bucket.
+  // Auth + RLS are IDENTICAL to a normal load — a poll can never read more
+  // than the session user is already allowed to see.
+  const isPoll = url.searchParams.get("poll") === "1";
+  const limited = await checkRateLimit(
+    isPoll ? "community_poll" : "community_history",
+    user.id,
+  );
   if (!limited.allowed) return tooManyRequests(limited);
 
-  const url = new URL(request.url);
   const roomSlug = url.searchParams.get("room") ?? COMMUNITY_DEFAULT_ROOM_SLUG;
   const beforeAt = url.searchParams.get("before_at");
   if (beforeAt && Number.isNaN(Date.parse(beforeAt))) {

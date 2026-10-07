@@ -54,6 +54,10 @@ export type RateLimitScope =
   // Community (per session user).
   | "community_message"
   | "community_history"
+  // Community — 1s background poll of the ACTIVE room's newest page
+  // (realtime fallback). Higher ceiling than community_history so a
+  // 1 req/s poll (60/min, ~240/min with headroom for several tabs) works.
+  | "community_poll"
   | "community_onboarding"
   // Community v2 — message-level actions (per session user).
   | "community_edit"
@@ -105,8 +109,11 @@ export type RateLimitScope =
  * - community_message: 20/min per user — comfortably above normal human
  *   typing in a group chat, far below a flooding rate (also caps the
  *   downstream realtime fan-out and storage writes per user).
- * - community_history: "load older" pagination fetches; 30/min.
- * - community_onboarding: one-time profile completion upserts; 5/min.
+  * - community_history: "load older" pagination fetches; 30/min.
+  * - community_poll: 1s background refresh of the active room (realtime
+  *   fallback); 240/min so a 1 req/s poll (60/min) works, with headroom for
+  *   several open tabs, while still bounding a runaway client.
+  * - community_onboarding: one-time profile completion upserts; 5/min.
  */
 export const RATE_LIMITS: Record<
   RateLimitScope,
@@ -153,6 +160,7 @@ export const RATE_LIMITS: Record<
   // onboarding + the occasional identity edit (both are rare upserts).
   community_message: { max: 20, windowSeconds: 60 },
   community_history: { max: 30, windowSeconds: 60 },
+  community_poll: { max: 240, windowSeconds: 60 },
   community_onboarding: { max: 5, windowSeconds: 60 },
   // Message-level actions: editing is cheap but chatty when spammed
   // (60/min); a reaction toggle is one tiny row — 60/min covers even a

@@ -442,18 +442,47 @@ export function RoomChat({
     if (markReadTimer.current) window.clearTimeout(markReadTimer.current);
   }, [room.id]);
 
-  // Resync the newest page after a dropped connection has recovered.
+  // Resync the newest page of the ACTIVE room after a dropped connection has
+  // recovered, and (every second) as the authoritative background fallback for
+  // the realtime stream. `?poll=1` uses the higher poll rate bucket. The fetch
+  // is room-scoped only — never the whole dataset, never other rooms.
   const resyncRecent = useCallback(async (reason?: string) => {
     devLog("sync", "resync", { room: room.slug, reason: reason ?? "reconnect" });
     try {
       const response = await fetch(
-        `/api/community/messages?room=${encodeURIComponent(room.slug)}`,
+        `/api/community/messages?room=${encodeURIComponent(room.slug)}&poll=1`,
         { cache: "no-store" },
       );
-      if (!response.ok) return;
+      if (!response.ok) return; // e.g. 429 — keep state; the next tick retries
       const data = (await response.json()) as { items: CommunityMessageClient[] };
       setHistoryMissing(false);
       const before = new Set(knownIds.current);
+      // NO-OP when nothing new AND nothing changed: a 1s tick against a quiet
+      // room must not re-render the list (no flash, no scroll reset, no
+      // duplicate rows). mergeCommunityMessages always returns a NEW array, so
+      // we must skip the setState entirely when there is nothing to apply.
+      const localById = new Map(
+        messagesRef.current.map((m) => [m.id, m] as const),
+      );
+      let changed = false;
+      for (const m of data.items) {
+        if (!before.has(m.id)) {
+          changed = true;
+          break;
+        }
+        const local = localById.get(m.id);
+        if (
+          local &&
+          (local.message !== m.message ||
+            (local.image_path ?? null) !== (m.image_path ?? null) ||
+            (local.reply_to_message_id ?? null) !== (m.reply_to_message_id ?? null) ||
+            local.updated_at !== m.updated_at)
+        ) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) return;
       for (const m of data.items) knownIds.current.add(m.id);
       // Server rows win on id collision (they flip a lost in-flight row to
       // "sent" and carry the DB created_at + reactions + reply previews).
@@ -471,9 +500,47 @@ export function RoomChat({
         return next;
       });
     } catch {
-      /* keep the current state; the next reconnect retries */
+      /* keep the current state; the next tick retries */
     }
   }, [room.slug]);
+
+  // --- 1s invisible background refresh of the ACTIVE room ---------------
+  // Realtime (postgres_changes INSERT) is the fast primary path. This poll is
+  // the authoritative fallback so a message the realtime stream missed (mobile
+  // socket drops, iOS app lifecycle, RLS edge cases) still appears within ~1s
+  // WITHOUT a page reload or navigation. resyncRecent() is a no-op when nothing
+  // new/changed arrived, so a quiet room costs one small room-scoped fetch and
+  // causes NO re-render. One timer per room; a still-running request is never
+  // overlapped; a hidden tab pauses (and catches up once on return).
+  useEffect(() => {
+    let disposed = false;
+    let inFlight = false;
+    let timer: number | null = null;
+    const tick = () => {
+      if (disposed || inFlight) return; // overlap guard
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      inFlight = true;
+      void resyncRecent("poll")
+        .catch(() => {
+          /* network error: keep state; the next tick retries silently */
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    const onVisibility = () => {
+      // Returning to the tab: one immediate catch-up poll.
+      tick();
+    };
+    tick(); // fill any gap since (re)mount
+    timer = window.setInterval(tick, 1000);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      disposed = true;
+      if (timer != null) window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [resyncRecent]);
 
   // --- Typing indicator (ephemeral presence, over the room channel) ---
 

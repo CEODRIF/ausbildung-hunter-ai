@@ -1209,6 +1209,10 @@ describe("community rate-limit budgets", () => {
   it("defines dedicated per-user scopes that do not weaken existing limits", () => {
     expect(RATE_LIMITS.community_message).toEqual({ max: 20, windowSeconds: 60 });
     expect(RATE_LIMITS.community_history).toEqual({ max: 30, windowSeconds: 60 });
+    // The 1s poll gets its OWN higher bucket so a 1 req/s poll (60/min, with
+    // headroom for several tabs) is feasible — WITHOUT weakening the 30/min
+    // "load older" budget that community_history still enforces.
+    expect(RATE_LIMITS.community_poll).toEqual({ max: 240, windowSeconds: 60 });
     expect(RATE_LIMITS.community_onboarding).toEqual({ max: 5, windowSeconds: 60 });
     // v2 message-level actions.
     expect(RATE_LIMITS.community_edit).toEqual({ max: 60, windowSeconds: 60 });
@@ -1637,6 +1641,24 @@ describe("GET /api/community/messages", () => {
     const res = await messagesGET(new Request("http://localhost/api/community/messages"));
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("17");
+  });
+
+  it("only ?poll=1 uses the dedicated community_poll bucket (same auth + RLS path)", () => {
+    const routeSrc = readFileSync(
+      resolve(
+        fileURLToPath(new URL("..", import.meta.url)),
+        "src/app/api/community/messages/route.ts",
+      ),
+      "utf8",
+    );
+    // The poll flag is the ONLY thing that switches buckets…
+    expect(routeSrc).toContain('url.searchParams.get("poll") === "1"');
+    expect(routeSrc).toContain('isPoll ? "community_poll" : "community_history"');
+    // …and auth is asserted FIRST (before any bucket / DB work) — a poll can
+    // never bypass the session check, and RLS still scopes the room page.
+    expect(routeSrc).toContain('const { user } = await getCurrentUserAndProfile();');
+    expect(routeSrc.indexOf('if (!user)') < routeSrc.indexOf("isPoll")).toBe(true);
+    expect(routeSrc).toContain("fetchRoomMessagePage(supabase, room.id, user.id,");
   });
 
   it("returns the room page ascending, enriched with authors/reactions/replies", async () => {

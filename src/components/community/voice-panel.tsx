@@ -19,6 +19,7 @@
  * (and the exit transition is then skipped in JS, so no tile can linger).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "@/lib/i18n";
 import { communityAvatarUrl } from "@/lib/community";
 import { Icon } from "@/components/icon";
@@ -76,10 +77,24 @@ export function VoicePanel({ voice }: { voice: UseVoice }) {
       voice.connection === "error" ||
       voice.connection === "mic_denied" ||
       voice.connection === "unavailable";
-    return (
-      <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+    // Viewport-level modal: portal to <body> so NO ancestor (transform,
+    // backdrop-filter, overflow) can become the `fixed` containing block —
+    // the classic iOS mis-anchoring. Centered horizontally AND vertically at
+    // every width (the old bottom-docked sheet sat under the floating bottom
+    // nav), z-50 above content/header(z-20)/nav(z-30)/drawer(z-40), with the
+    // overlay padding honouring iOS safe-area insets (notch, home indicator).
+    // The full-viewport backdrop sits ABOVE the bottom nav, so it is dimmed
+    // and click-blocked behind the dialog.
+    return createPortal(
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center"
+        style={{
+          padding:
+            "max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left))",
+        }}
+      >
         <div
-          className="absolute inset-0 bg-ink/40"
+          className="fixed inset-0 bg-ink/40"
           onClick={voice.closeDialog}
           aria-hidden="true"
         />
@@ -87,7 +102,7 @@ export function VoicePanel({ voice }: { voice: UseVoice }) {
           role="dialog"
           aria-modal="true"
           aria-labelledby="voice-dialog-title"
-          className="relative flex w-full max-w-sm flex-col gap-3 rounded-t-2xl border border-line bg-surface p-5 shadow-xl sm:rounded-2xl"
+          className="relative flex w-full max-w-sm flex-col gap-3 rounded-2xl border border-line bg-surface p-5 shadow-xl"
         >
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
@@ -148,7 +163,8 @@ export function VoicePanel({ voice }: { voice: UseVoice }) {
             </button>
           </div>
         </div>
-      </div>
+      </div>,
+      document.body
     );
   }
 
