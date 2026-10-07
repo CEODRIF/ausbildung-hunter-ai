@@ -2,10 +2,20 @@
  * Community Phase 4 — LiveKit access-token builder (SERVER ONLY),
  * claim layout fixed in Phase 6D (D-5) to the current LiveKit token
  * contract (verified against the LiveKit server SDK source + docs):
- *   * video grants under the `video` claim — room / roomJoin /
+ *   * video grants under the `video` claim — room / roomCreate / roomJoin /
  *     canPublish / canSubscribe: the deliberately minimal grant set
  *     (join ONE server-derived room, publish audio, subscribe audio;
- *     NO roomAdmin, NO roomList, no roomCreate/roomRecord, no SIP),
+ *     NO roomAdmin, NO roomList, no roomRecord, no SIP).
+ *
+ *     roomCreate is REQUIRED, not optional: LiveKit rooms are EPHEMERAL —
+ *     the SFU room `croom-<roomId>` does not exist until the FIRST
+ *     participant joins (the Supabase community_voice_join row is only a DB
+ *     record, not an SFU room). Joining a not-yet-existing room with a token
+ *     that lacks roomCreate fails with 404 "requested room does not exist"
+ *     (livekit/client-sdk-js#1883) — which surfaced in production as
+ *     "Verbindung unterbrochen" on every first join. roomCreate is scoped to
+ *     the single server-derived `room` below, so it cannot create any other
+ *     room (the identity + room are both server-verified and signed).
  *   * participant display name in the top-level `name` claim
  *     (surfaced to the UI as Participant.name),
  *   * custom participant data as the top-level `metadata` STRING —
@@ -61,6 +71,8 @@ export interface VoiceTokenClaims {
   /** Current LiveKit contract: grants live under `video` (NOT metadata). */
   video: {
     room: string;
+    /** The first participant creates the ephemeral SFU room (see header). */
+    roomCreate: boolean;
     roomJoin: boolean;
     canPublish: boolean;
     canSubscribe: boolean;
@@ -99,6 +111,7 @@ export function createLiveKitVoiceToken(opts: {
     jti: b64url(randomBytes(16)),
     video: {
       room: opts.room,
+      roomCreate: true, // first participant creates the ephemeral SFU room
       roomJoin: true,
       canPublish: true,
       canSubscribe: true,

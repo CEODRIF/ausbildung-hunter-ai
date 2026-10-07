@@ -186,6 +186,7 @@ describe("LiveKit token builder", () => {
     // toEqual is exact: ANY extra grant would fail this assertion.
     expect(claims.video).toEqual({
       room: PROVIDER_ROOM,
+      roomCreate: true,
       roomJoin: true,
       canPublish: true,
       canSubscribe: true,
@@ -193,12 +194,29 @@ describe("LiveKit token builder", () => {
     // D-5 items 4+5: ordinary participants get NO admin/list capability.
     expect(claims.video).not.toHaveProperty("roomAdmin");
     expect(claims.video).not.toHaveProperty("roomList");
+    expect(claims.video).not.toHaveProperty("roomRecord");
     // Display name is a top-level claim (surfaced as Participant.name).
     expect(claims.name).toBe("Alice");
     // Custom data is the top-level metadata STRING the frozen UI parses
     // via JSON.parse(participant.metadata) for the avatarId.
     expect(typeof claims.metadata).toBe("string");
     expect(JSON.parse(claims.metadata)).toEqual({ avatarId: "avatar-1" });
+  });
+
+  it("grants roomCreate — the FIRST joiner must be able to create the ephemeral SFU room (production regression)", () => {
+    // LiveKit rooms are ephemeral: the SFU room does not exist until the
+    // first participant joins, and joining a not-yet-existing room with a
+    // token LACKING roomCreate fails 404 "requested room does not exist"
+    // (livekit/client-sdk-js#1883). That omission shipped in Phase 6D and
+    // surfaced in production as "Verbindung unterbrochen" on every first
+    // join. This pins the grant so a fresh deploy cannot regress it.
+    const claims = JSON.parse(b64urlDecode(mint().split(".")[1]));
+    expect(claims.video.roomCreate).toBe(true);
+    expect(claims.video.roomJoin).toBe(true);
+    // roomCreate is scoped to the single server-derived room — it cannot
+    // create any other room (identity + room are both signed server-side).
+    expect(claims.video.room).toBe(PROVIDER_ROOM);
+    expect(claims.sub).toBe(ALICE);
   });
 
   it("expires after exactly the documented TTL", () => {

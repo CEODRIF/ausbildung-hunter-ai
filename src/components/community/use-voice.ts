@@ -78,6 +78,44 @@ type LKModule = typeof import("livekit-client");
 
 const MAX_PARTICIPANTS = 50;
 
+// ------------------------------------------------------------------
+// Debug classification. The production UI stays friendly (one localized
+// "connection error" state), but the REAL LiveKit/network cause is logged
+// here for debugging — NEVER the token, the SFU URL credentials, or any
+// secret: only the error name + numeric code.
+// ------------------------------------------------------------------
+type VoiceFailureCode =
+  | "microphone_denied"
+  | "invalid_room_or_grants" // SFU rejected room/token (e.g. room not found)
+  | "livekit_unreachable" // network / websocket / timeout
+  | "token_error"
+  | "connection_failed";
+
+function classifyVoiceFailure(error: unknown): VoiceFailureCode {
+  const name = error instanceof Error ? error.name : "";
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+  if (name === "NotAllowedError" || name === "PermissionDeniedError" || /notallowed|permission/i.test(msg)) {
+    return "microphone_denied";
+  }
+  if (/room not found|requested room does not exist|roomcreate|insufficient permission|not authorized/i.test(msg)) {
+    return "invalid_room_or_grants";
+  }
+  if (/websocket|network|fetch failed|econn|etimedout|timeout|econnreset/i.test(msg)) {
+    return "livekit_unreachable";
+  }
+  if (name === "TokenError" || /token/i.test(msg)) {
+    return "token_error";
+  }
+  return "connection_failed";
+}
+
+/** Non-sensitive error meta for logs (name + numeric code only — no token). */
+function voiceFailureMeta(error: unknown): { name: string; code?: number } {
+  const name = error instanceof Error ? error.name : typeof error;
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "number" ? { name, code } : { name };
+}
+
 export function useVoice(opts: UseVoiceOptions): UseVoice {
   const { roomId, me, initialMeta } = opts;
 
@@ -374,6 +412,13 @@ export function useVoice(opts: UseVoiceOptions): UseVoice {
       if (room) refreshParticipants(room);
     } catch (error) {
       if (disposedRef.current) return;
+      // Surface the real cause for debugging (the UI stays friendly). Secret-
+      // free by construction: name + numeric code only, never the token/URL.
+      console.error(
+        "[community-voice] join failed:",
+        classifyVoiceFailure(error),
+        voiceFailureMeta(error),
+      );
       const name = error instanceof Error ? error.name : "";
       const isPermission =
         name === "NotAllowedError" || name === "PermissionDeniedError" || /notallowed|permission/i.test(String(error));
