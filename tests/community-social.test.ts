@@ -2151,9 +2151,14 @@ describe("community v3 migration (source guards)", () => {
     // Blocks: no self-block, one row per (blocker, blocked):
     expect(sql).toContain("constraint community_blocks_self check (blocker_id <> blocked_id)");
     expect(sql).toContain("constraint community_blocks_unique unique (blocker_id, blocked_id)");
-    // Conversations: no self-conversation, one row per unordered pair (dedupe):
+    // Conversations: no self-conversation, one row per unordered pair (dedupe).
+    // PostgreSQL rejects expressions inside a UNIQUE TABLE CONSTRAINT (the
+    // original v3 form failed with 42601 in production), so pair-uniqueness
+    // must live in a UNIQUE EXPRESSION INDEX with identical semantics:
     expect(sql).toContain("constraint community_conversations_self check (member_a <> member_b)");
-    expect(sql).toContain("community_conversations_unique_pair unique (least(member_a, member_b),");
+    expect(sql).toContain("create unique index community_conversations_unique_pair");
+    expect(sql).toContain("on public.community_conversations (least(member_a, member_b),");
+    expect(sql).not.toContain("community_conversations_unique_pair unique (least(");
     // DMs need content (text OR image) and a message-id per client id:
     expect(sql).toContain("constraint community_dm_has_content");
   });

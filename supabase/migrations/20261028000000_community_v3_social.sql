@@ -177,10 +177,15 @@ create table public.community_conversations (
   member_b uuid not null references auth.users(id) on delete cascade,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now()),
-  constraint community_conversations_self check (member_a <> member_b),
-  constraint community_conversations_unique_pair unique (least(member_a, member_b),
-                                                         greatest(member_a, member_b))
+  constraint community_conversations_self check (member_a <> member_b)
 );
+
+-- At most ONE conversation per UNORDERED pair (any state). PostgreSQL cannot
+-- express an expression as a UNIQUE TABLE CONSTRAINT — the pair uniqueness
+-- lives in a UNIQUE EXPRESSION INDEX with the identical semantics.
+create unique index community_conversations_unique_pair
+  on public.community_conversations (least(member_a, member_b),
+                                     greatest(member_a, member_b));
 
 create index community_conversations_member_idx
   on public.community_conversations (member_a);

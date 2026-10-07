@@ -242,6 +242,22 @@ create index if not exists community_messages_hidden_idx
 -- 5. Q&A — questions + answers
 -- ---------------------------------------------------------------------------
 
+-- CHECK constraints cannot contain subqueries in PostgreSQL — the per-tag
+-- length rule therefore lives in an IMMUTABLE helper (no table access),
+-- called from the constraint with identical semantics: 0–5 tags, each
+-- 1–24 characters.
+create or replace function public.community_question_tags_valid(p_tags text[])
+returns boolean
+language sql
+immutable
+as $$
+  select coalesce(array_length(p_tags, 1), 0) between 0 and 5
+    and not exists (
+      select 1 from unnest(coalesce(p_tags, '{}')) t
+      where char_length(t) not between 1 and 24
+    );
+$$;
+
 create table if not exists public.community_questions (
   id uuid primary key default gen_random_uuid(),
   room_id uuid not null references public.community_rooms(id) on delete cascade,
@@ -257,9 +273,7 @@ create table if not exists public.community_questions (
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now()),
   constraint community_questions_tags_bounded
-    check (coalesce(array_length(tags, 1), 0) between 0 and 5
-           and not exists (select 1 from unnest(coalesce(tags, '{}')) t
-                            where char_length(t) not between 1 and 24))
+    check (public.community_question_tags_valid(tags))
 );
 
 create index community_questions_room_idx
@@ -413,6 +427,25 @@ alter table public.community_questions
 -- 6. Pins — one row per pinned message
 -- ---------------------------------------------------------------------------
 
+-- CHECK constraints cannot contain subqueries in PostgreSQL — the
+-- room/message consistency rule therefore lives in an IMMUTABLE helper
+-- (single-row lookup, no table mutation), called from the constraint with
+-- identical semantics.
+-- Parameter names carry the p_ prefix DELIBERATELY: inside the subquery,
+-- an unqualified name that matches a community_messages column (room_id!)
+-- resolves to the COLUMN, shadowing the function parameter (st1 vs st2 in
+-- the audit report) — which would make the check a no-op.
+create or replace function public.community_pins_room_matches(p_message_id uuid, p_room_id uuid)
+returns boolean
+language sql
+immutable
+as $$
+  select exists (
+    select 1 from public.community_messages m
+    where m.id = p_message_id and m.room_id = p_room_id
+  );
+$$;
+
 create table if not exists public.community_pins (
   id uuid primary key default gen_random_uuid(),
   room_id uuid not null references public.community_rooms(id) on delete cascade,
@@ -421,9 +454,7 @@ create table if not exists public.community_pins (
   pinned_by uuid not null references auth.users(id) on delete cascade,
   created_at timestamptz not null default timezone('utc', now()),
   constraint community_pins_room_matches_message
-    check (exists (
-      select 1 from public.community_messages m where m.id = message_id and m.room_id = room_id
-    ))
+    check (public.community_pins_room_matches(message_id, room_id))
 );
 
 create index community_pins_room_idx on public.community_pins (room_id, created_at);
@@ -641,6 +672,10 @@ alter table public.notifications
 --       authors (either direction) are excluded inside the function.
 --     * keyset pagination: (created_at, id) cursor, bounded page, no offset.
 --     * 'simple' text config + websearch_to_tsquery (no ILIKE '%q%').
+--       websearch_to_tsquery is a pg_catalog BUILTIN — it is qualified as
+--       pg_catalog.websearch_to_tsquery. A `public.` prefix would fail at
+--       call time (the function is not in the public schema on Supabase;
+--       plpgsql bodies resolve references only when executed).
 -- ---------------------------------------------------------------------------
 
 create or replace function public.community_search(
@@ -704,18 +739,21 @@ begin
    select s.kind, s.id, s.room_id, s.room_slug, s.room_name,
           s.author_id, s.author_name, s.content, s.created_at, s.question_id
    from (
-    -- messages (FTS; hidden rows excluded; blocks both directions)
-    select 'message'::text as kind, m.id, m.room_id, r.slug as room_slug,
-           r.name as room_name, m.user_id as author_id,
-           p.display_name as author_name,
-            left(coalesce(m.message, ''), 240) as content, m.created_at,
-            null
-     from public.community_messages m
+     -- messages (FTS; hidden rows excluded; blocks both directions)
+     -- NOTE: this FIRST branch names the UNION's output columns — every
+     -- column (including the message-less question_id) carries its alias
+     -- here, and question_id is cast so the union resolves to uuid.
+     select 'message'::text as kind, m.id, m.room_id, r.slug as room_slug,
+            r.name as room_name, m.user_id as author_id,
+            p.display_name as author_name,
+             left(coalesce(m.message, ''), 240) as content, m.created_at,
+             null::uuid as question_id
+      from public.community_messages m
     join public.community_rooms r on r.id = m.room_id and r.enabled = true
     left join public.community_profiles p on p.user_id = m.user_id
     where (v_kind = 'all' or v_kind = 'message')
       and m.hidden_by is null
-      and m.search_vector @@ public.websearch_to_tsquery('simple', v_query)
+      and m.search_vector @@ pg_catalog.websearch_to_tsquery('simple', v_query)
       and (p_room is null or m.room_id = p_room)
       and (p_author is null or m.user_id = p_author)
       and (p_since is null or m.created_at >= p_since)
@@ -737,7 +775,7 @@ begin
     join public.community_rooms r on r.id = q.room_id and r.enabled = true
     left join public.community_profiles p on p.user_id = q.author_id
     where (v_kind = 'all' or v_kind = 'question')
-      and q.search_vector @@ public.websearch_to_tsquery('simple', v_query)
+      and q.search_vector @@ pg_catalog.websearch_to_tsquery('simple', v_query)
       and (p_room is null or q.room_id = p_room)
       and (p_author is null or q.author_id = p_author)
       and (p_since is null or q.created_at >= p_since)
@@ -761,7 +799,7 @@ begin
     left join public.community_profiles p on p.user_id = a.author_id
     where (v_kind = 'all' or v_kind = 'answer')
       and a.deleted_at is null
-      and a.search_vector @@ public.websearch_to_tsquery('simple', v_query)
+      and a.search_vector @@ pg_catalog.websearch_to_tsquery('simple', v_query)
       and (p_room is null or q.room_id = p_room)
       and (p_author is null or a.author_id = p_author)
       and (p_since is null or a.created_at >= p_since)
@@ -783,7 +821,7 @@ begin
     where (v_kind = 'all' or v_kind = 'user')
       and p_room is null
       and to_tsvector('simple', lower(p.display_name))
-          @@ public.websearch_to_tsquery('simple', v_query)
+          @@ pg_catalog.websearch_to_tsquery('simple', v_query)
       and (p_author is null or p.user_id = p_author)
       and not exists (
         select 1 from public.community_blocks b
@@ -803,7 +841,7 @@ begin
     where (v_kind = 'all' or v_kind = 'room')
       and r.enabled = true
       and (to_tsvector('simple', r.name) || to_tsvector('simple', coalesce(r.description, '')))
-          @@ public.websearch_to_tsquery('simple', v_query)
+          @@ pg_catalog.websearch_to_tsquery('simple', v_query)
   ) s
   order by s.created_at desc, s.id desc
   limit v_limit;
