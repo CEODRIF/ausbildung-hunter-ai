@@ -2539,3 +2539,246 @@ describe("incident — community settings persistence (BUG 2)", () => {
     expect(SHEET).not.toContain("window.location");
   });
 });
+
+// ---------------------------------------------------------------------------
+// 17. Write-side failure classification (2026-10-08): DM insert + friendship
+//     accept/decline/cancel.
+//
+//     The READ paths are proven working in production (the profile card and
+//     friends list render); the reported failures are all WRITE paths
+//     (friendship INSERT / friendship UPDATE / conversation INSERT / DM
+//     INSERT). Every write failure must now log ONE structured, secret-free
+//     line — the SQLSTATE is the production discriminator (42501 = the RLS
+//     write policy is not effective on that database).
+//
+//     Scenario 15 of the end-to-end matrix (no forged-client-payload bypass)
+//     is pinned here: author / requester are ALWAYS the session user.
+// ---------------------------------------------------------------------------
+
+describe("incident — DM insert failure classification (write side)", () => {
+  const capturedErrors = (): string[] => {
+    const lines: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      lines.push(a.map(String).join(" "));
+    });
+    return lines;
+  };
+
+  it("dm insert RLS violation (42501) → 500 + structured log WITHOUT message content (the production DM failure shape)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const lines = capturedErrors();
+    const secret = "TOP-SECRET-DM-CONTENT";
+    const { client } = makeUserClient({
+      queues: {
+        community_conversations: [ok(conversationRow(ALICE, BOB))],
+        community_friendships: [ok([{ id: FRIENDSHIP_ID, status: "accepted" }])],
+        community_blocks: [ok([])],
+        community_direct_messages: [
+          ok(null), // idempotency pre-check
+          fail('new row violates row-level security policy for table "community_direct_messages"', "42501"),
+        ],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await dmSendPOST(
+      sendForm({ message: secret, id: "e2222222-0000-4000-8000-000000000001" }),
+      sendParams,
+    );
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "Could not send message." });
+    vi.restoreAllMocks();
+    expect(lines.some((l) => l.includes("dm_send_failed step=insert") && l.includes("code=42501"))).toBe(true);
+    expect(lines.some((l) => l.includes(`conversation=${CONVERSATION_ID}`) && l.includes(`userId=${ALICE}`))).toBe(true);
+    // Secret-free: neither the message content nor the raw error text
+    // (which can embed row values) may reach the log.
+    for (const line of lines) {
+      expect(line).not.toContain(secret);
+      expect(line).not.toContain("row-level security policy");
+    }
+  });
+
+  it("23505 collision whose existing row is unreadable → 500 + logged duplicate_recover step", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const lines = capturedErrors();
+    const { client } = makeUserClient({
+      queues: {
+        community_conversations: [ok(conversationRow(ALICE, BOB))],
+        community_friendships: [ok([{ id: FRIENDSHIP_ID, status: "accepted" }])],
+        community_blocks: [ok([])],
+        community_direct_messages: [
+          ok(null),
+          fail("duplicate key value violates unique constraint", "23505"),
+          fail("boom"),
+        ],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await dmSendPOST(
+      sendForm({ message: "x", id: "e4444444-0000-4000-8000-000000000001" }),
+      sendParams,
+    );
+    expect(res.status).toBe(500);
+    vi.restoreAllMocks();
+    expect(lines.some((l) => l.includes("dm_send_failed step=duplicate_recover"))).toBe(true);
+    expect(lines.some((l) => l.includes("dm_send_failed step=insert") && l.includes("code=23505"))).toBe(true);
+  });
+
+  it("a forged author field in the DM form is IGNORED — the insert author is always the session user (scenario 15)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const clientId = "e3333333-0000-4000-8000-000000000001";
+    const { client } = makeUserClient({
+      queues: {
+        community_conversations: [ok(conversationRow(ALICE, BOB))],
+        community_friendships: [ok([{ id: FRIENDSHIP_ID, status: "accepted" }])],
+        community_blocks: [ok([])],
+        community_direct_messages: [ok(null), ok(dmMessageRow(clientId, ALICE, "hi", NOW))],
+        community_profiles: [ok({ display_name: "AliceFox" })],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const form = new FormData();
+    form.set("message", "hi");
+    form.set("id", clientId);
+    form.set("user_id", BOB); // forged: attribute the message to Bob
+    form.set("userId", BOB);
+    const res = await dmSendPOST(
+      new Request(`http://localhost/api/community/dm/${CONVERSATION_ID}/messages`, {
+        method: "POST",
+        body: form,
+      }),
+      sendParams,
+    );
+    expect(res.status).toBe(201);
+    const insertCall = client.calls.find((c) => c.table === "community_direct_messages" && c.op === "insert");
+    expect((insertCall?.args[0] as { user_id: string }).user_id).toBe(ALICE);
+  });
+
+  it("a forged requester field in the friend body is IGNORED — requester_id is always the session user (scenario 15)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const { client } = makeUserClient({
+      queues: {
+        community_profiles: [ok(profileRow(BOB, "B"))],
+        community_blocks: [ok([])],
+        community_friendships: [
+          ok({ id: FRIENDSHIP_ID, requester_id: ALICE, requestee_id: BOB, status: "pending", created_at: NOW }),
+        ],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await friendsPOST(
+      post("/api/community/friends", { userId: BOB, requester_id: BOB, requestee_id: CAROL }),
+    );
+    expect(res.status).toBe(201);
+    const insertCall = client.calls.find((c) => c.table === "community_friendships" && c.op === "insert");
+    expect(insertCall?.args[0]).toEqual({ requester_id: ALICE, requestee_id: BOB });
+  });
+});
+
+describe("incident — friendship action failure classification (accept/decline/cancel)", () => {
+  const capturedErrors = (): string[] => {
+    const lines: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      lines.push(a.map(String).join(" "));
+    });
+    return lines;
+  };
+
+  it("accept UPDATE RLS violation (42501) → 500 + structured log (step=accept, code, request, userId)", async () => {
+    mockAuth(BOB); // BOB is the requestee
+    const lines = capturedErrors();
+    const { client } = makeUserClient({
+      queues: {
+        community_friendships: [
+          ok(friendshipRow(ALICE, BOB, "pending")),
+          fail('new row violates row-level security policy for table "community_friendships"', "42501"),
+        ],
+        community_blocks: [ok([])],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await requestPOST(post("/api/community/friends/requests/x", { action: "accept" }), {
+      params: Promise.resolve({ requestId: FRIENDSHIP_ID }),
+    });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "Could not accept request." });
+    vi.restoreAllMocks();
+    expect(lines.some((l) => l.includes("friendship_action_failed step=accept") && l.includes("code=42501"))).toBe(true);
+    expect(lines.some((l) => l.includes(`request=${FRIENDSHIP_ID}`) && l.includes(`userId=${BOB}`))).toBe(true);
+  });
+
+  it("decline / cancel failures log step=decline / step=cancel (secret-free, one line each)", async () => {
+    // decline (as the requestee):
+    mockAuth(BOB);
+    const declineLines = capturedErrors();
+    const declineClient = makeUserClient({
+      queues: {
+        community_friendships: [ok(friendshipRow(ALICE, BOB, "pending")), fail("boom", "42501")],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(declineClient.client);
+    const decline = await requestPOST(post("/api/community/friends/requests/x", { action: "decline" }), {
+      params: Promise.resolve({ requestId: FRIENDSHIP_ID }),
+    });
+    expect(decline.status).toBe(500);
+    vi.restoreAllMocks();
+    expect(declineLines.some((l) => l.includes("friendship_action_failed step=decline") && l.includes("code=42501"))).toBe(true);
+
+    // cancel (as the requester):
+    mockAuth(ALICE);
+    const cancelLines = capturedErrors();
+    const cancelClient = makeUserClient({
+      queues: {
+        community_friendships: [ok(friendshipRow(ALICE, BOB, "pending")), fail("boom", "42501")],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(cancelClient.client);
+    const cancel = await requestDELETE(
+      new Request("http://localhost/api/community/friends/requests/x", { method: "DELETE" }),
+      { params: Promise.resolve({ requestId: FRIENDSHIP_ID }) },
+    );
+    expect(cancel.status).toBe(500);
+    vi.restoreAllMocks();
+    expect(cancelLines.some((l) => l.includes("friendship_action_failed step=cancel") && l.includes("code=42501"))).toBe(true);
+  });
+
+  it("the request load failure logs step=load (never an unlogged 500)", async () => {
+    mockAuth(BOB);
+    const lines = capturedErrors();
+    const { client } = makeUserClient({
+      queues: { community_friendships: [fail("db down")] },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const res = await requestPOST(post("/api/community/friends/requests/x", { action: "accept" }), {
+      params: Promise.resolve({ requestId: FRIENDSHIP_ID }),
+    });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "Could not update request." });
+    vi.restoreAllMocks();
+    expect(lines.some((l) => l.includes("friendship_action_failed step=load") && l.includes(`userId=${BOB}`))).toBe(true);
+  });
+
+  it("the DM send + friend + friendship-action routes keep their structured diagnostics (source audit)", () => {
+    const dmRoute = readSrc("src/app/api/community/dm/[conversationId]/messages/route.ts");
+    expect(dmRoute).toContain("dm_send_failed step=");
+    expect(dmRoute).toContain('logDmSendFailure("insert"');
+    expect(dmRoute).toContain('logDmSendFailure("duplicate_recover"');
+    // The raw (content-bearing) error text is never logged:
+    expect(dmRoute).not.toContain("dm insert failed");
+    expect(dmRoute).not.toContain("insertError.message");
+
+    // BUG 1's discriminator line — preserved, not removed:
+    const friendsRoute = readSrc("src/app/api/community/friends/route.ts");
+    expect(friendsRoute).toContain("friend_request_failed step=");
+    expect(friendsRoute).toContain('logFriendRequestFailure("insert"');
+
+    const actionRoute = readSrc("src/app/api/community/friends/requests/[requestId]/route.ts");
+    for (const marker of ["load", "accept", "decline", "cancel"]) {
+      expect(actionRoute, `action route must log step=${marker}`).toContain(`logFriendshipActionFailure("${marker}"`);
+    }
+    expect(actionRoute).toContain("friendship_action_failed step=");
+  });
+});

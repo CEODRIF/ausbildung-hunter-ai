@@ -21,11 +21,34 @@ interface RequestRow {
   status: "pending" | "accepted";
 }
 
+/**
+ * Production diagnostics for accept/decline/cancel failures — the write-side
+ * step where a request flips to 'accepted'. Same contract as the friend
+ * route's `friend_request_failed` line: step + SQLSTATE + request id + the
+ * authenticated userId. Friendship rows carry no user content, so the error
+ * text is safe to include (truncated). SQLSTATE discriminator: 42501 = the
+ * UPDATE/DELETE RLS policy is not effective on this database, 23503 = FK.
+ */
+function logFriendshipActionFailure(
+  step: string,
+  userId: string,
+  requestId: string,
+  code: string | null | undefined,
+  message: string | null | undefined,
+): void {
+  console.error(
+    `[community] friendship_action_failed step=${step} request=${requestId}` +
+      ` userId=${userId} code=${code ?? "unknown"}` +
+      ` message=${(message ?? "").slice(0, 200)}`,
+  );
+}
+
 // Unit discriminants per member: TS only eliminates union members whose
 // discriminant is a unit type (a `"a" | "b"` discriminant is never removed in
 // the false branch, which would break the narrowing below).
 async function loadOwnedRequest(
   requestId: string,
+  userId: string,
 ): Promise<
   | { status: "error" }
   | { status: "not_found" }
@@ -39,7 +62,10 @@ async function loadOwnedRequest(
     .select("id,requester_id,requestee_id,status")
     .eq("id", requestId)
     .maybeSingle();
-  if (error) return { status: "error" };
+  if (error) {
+    logFriendshipActionFailure("load", userId, requestId, error.code, error.message);
+    return { status: "error" };
+  }
   if (!data) return { status: "not_found" };
   return { status: "ok", row: data as RequestRow };
 }
@@ -68,7 +94,7 @@ export async function POST(
   if (!gate.writable) return NextResponse.json({ error: gate.code }, { status: 403 });
 
   const { requestId } = await params;
-  const loaded = await loadOwnedRequest(requestId);
+  const loaded = await loadOwnedRequest(requestId, user.id);
   if (loaded.status === "error") {
     return NextResponse.json({ error: "Could not update request." }, { status: 500 });
   }
@@ -124,7 +150,7 @@ export async function POST(
       .eq("requestee_id", user.id) // defense in depth on top of RLS
       .eq("status", "pending"); // no double-accept races
     if (error) {
-      console.error("[community] accept failed:", error.message);
+      logFriendshipActionFailure("accept", user.id, row.id, error.code, error.message);
       return NextResponse.json({ error: "Could not accept request." }, { status: 500 });
     }
 
@@ -152,7 +178,7 @@ export async function POST(
     .eq("requestee_id", user.id)
     .eq("status", "pending");
   if (error) {
-    console.error("[community] decline failed:", error.message);
+    logFriendshipActionFailure("decline", user.id, row.id, error.code, error.message);
     return NextResponse.json({ error: "Could not decline request." }, { status: 500 });
   }
   return NextResponse.json({ declined: true }, { status: 200, headers: rateLimitHeaders(limited) });
@@ -178,7 +204,7 @@ export async function DELETE(
   if (!gate.writable) return NextResponse.json({ error: gate.code }, { status: 403 });
 
   const { requestId } = await params;
-  const loaded = await loadOwnedRequest(requestId);
+  const loaded = await loadOwnedRequest(requestId, user.id);
   if (loaded.status === "error") {
     return NextResponse.json({ error: "Could not cancel request." }, { status: 500 });
   }
@@ -201,7 +227,7 @@ export async function DELETE(
     .eq("requester_id", user.id)
     .eq("status", "pending");
   if (error) {
-    console.error("[community] cancel failed:", error.message);
+    logFriendshipActionFailure("cancel", user.id, row.id, error.code, error.message);
     return NextResponse.json({ error: "Could not cancel request." }, { status: 500 });
   }
   return NextResponse.json({ cancelled: true }, { status: 200, headers: rateLimitHeaders(limited) });

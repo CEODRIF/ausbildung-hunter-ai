@@ -23,6 +23,28 @@ import { checkCommunityImageQuota } from "@/lib/community/image-quota";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Production diagnostics for DM send failures — the write-side analog of the
+ * friend route's `friend_request_failed` line. Structured and SECRET-FREE:
+ * step + SQLSTATE + conversationId + the authenticated userId ONLY. The
+ * error text is deliberately never logged: on a constraint violation it can
+ * embed the failing row's values (the message content). The SQLSTATE is the
+ * discriminator: 42501 = the RLS insert policy ("Friends can send direct
+ * messages to each other") is not effective, 23514 = check constraint,
+ * 23503 = FK, 23505 = duplicate (normally converged, never a failure).
+ */
+function logDmSendFailure(
+  step: string,
+  userId: string,
+  conversationId: string,
+  code: string | null | undefined,
+): void {
+  console.error(
+    `[community] dm_send_failed step=${step} conversation=${conversationId}` +
+      ` userId=${userId} code=${code ?? "unknown"}`,
+  );
+}
+
+/**
  * POST /api/community/dm/:conversationId/messages
  *
  * Send a DM (text and/or image ≤ 2 MB, optional reply).
@@ -255,8 +277,14 @@ export async function POST(
           { status: 200, headers: rateLimitHeaders(limited) },
         );
       }
+      // The collision was real but the existing row is not readable/claimable
+      // — log it (normally impossible: the row's author is the session user).
+      logDmSendFailure("duplicate_recover", user.id, conversationId, retry.error?.code);
     }
-    console.error("[community] dm insert failed:", insertError.message);
+    // THE production discriminator for DM sends: 42501 = the RLS insert
+    // policy is not effective on this database, 23514 = check constraint,
+    // 23503 = FK. No message text is logged (see logDmSendFailure).
+    logDmSendFailure("insert", user.id, conversationId, insertError.code);
     return NextResponse.json({ error: "Could not send message." }, { status: 500 });
   }
   const row = inserted as {
