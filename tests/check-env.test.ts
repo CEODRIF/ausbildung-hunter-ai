@@ -18,7 +18,16 @@ const GOOD_ENV: Record<string, string> = {
   EMAIL_TOKEN_ENCRYPTION_KEY: "a-very-long-random-encryption-secret-123",
   EMAIL_WORKER_SECRET: "a-very-long-random-worker-secret-123",
   ARBEITSAGENTUR_API_KEY: "jobboerse-jobsuche", // documented public default
+  // Phase 6C (C-1): LiveKit SFU (server-side only), required in production.
+  LIVEKIT_URL: "wss://livekit.example.com",
+  LIVEKIT_API_KEY: "lk_prod_api_key_1234567890",
+  LIVEKIT_API_SECRET: "a-very-long-livekit-api-secret-123",
 };
+
+/** GOOD_ENV without the LiveKit trio (a dev/test environment). */
+const DEV_ENV: Record<string, string> = Object.fromEntries(
+  Object.entries(GOOD_ENV).filter(([k]) => !k.startsWith("LIVEKIT_")),
+);
 
 const CLI = fileURLToPath(new URL("../scripts/check-env.mjs", import.meta.url));
 
@@ -211,6 +220,97 @@ describe("validateEnv", () => {
   });
 });
 
+describe("C-1 · LiveKit environment seam (Phase 6C)", () => {
+  const prod = { production: true };
+  const lkResults = (env: Record<string, string>) => {
+    const r = validateEnv(env, prod);
+    return Object.fromEntries(
+      r.results.filter((x) => x.name.startsWith("LIVEKIT_")).map((x) => [x.name, x]),
+    );
+  };
+  const lkSeam = (env: Record<string, string>) =>
+    validateEnv(env, prod).seams.find((s) => s.name === "livekit-voice")?.status;
+
+  it("1 · production missing LIVEKIT_URL is detected (exit-code-gating fail)", () => {
+    const env = { ...GOOD_ENV };
+    delete env.LIVEKIT_URL;
+    const result = validateEnv(env, prod);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("LIVEKIT_URL");
+    expect(lkResults(env)["LIVEKIT_URL"]).toEqual(
+      expect.objectContaining({ status: "fail", message: "missing (required in production)" }),
+    );
+  });
+
+  it("2 · production missing LIVEKIT_API_KEY is detected", () => {
+    const env = { ...GOOD_ENV };
+    delete env.LIVEKIT_API_KEY;
+    const result = validateEnv(env, prod);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("LIVEKIT_API_KEY");
+  });
+
+  it("3 · production missing LIVEKIT_API_SECRET is detected", () => {
+    const env = { ...GOOD_ENV };
+    delete env.LIVEKIT_API_SECRET;
+    const result = validateEnv(env, prod);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("LIVEKIT_API_SECRET");
+  });
+
+  it("4 · a configured production environment passes (and the seam reports configured)", () => {
+    const result = validateEnv(GOOD_ENV, prod);
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(lkSeam(GOOD_ENV)).toBe("configured");
+  });
+
+  it("5 · secrets/keys never appear in any diagnostic output (API or CLI)", () => {
+    const result = validateEnv(GOOD_ENV, prod);
+    const everything = JSON.stringify(result);
+    expect(everything).not.toContain(GOOD_ENV.LIVEKIT_API_SECRET);
+    expect(everything).not.toContain(GOOD_ENV.LIVEKIT_API_KEY);
+    expect(everything).not.toContain(GOOD_ENV.LIVEKIT_URL);
+    return runCli(GOOD_ENV).then(({ out }) => {
+      expect(out).not.toContain(GOOD_ENV.LIVEKIT_API_SECRET);
+      expect(out).not.toContain(GOOD_ENV.LIVEKIT_API_KEY);
+      expect(out).toContain("LIVEKIT_URL"); // names only
+    });
+  });
+
+  it("6 · dev/test mode does NOT fail when LiveKit is intentionally absent", () => {
+    const result = validateEnv(DEV_ENV); // default = dev/test mode
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    const byName = Object.fromEntries(
+      result.results.filter((x) => x.name.startsWith("LIVEKIT_")).map((x) => [x.name, x]),
+    );
+    for (const name of Object.keys(byName)) {
+      expect(byName[name]).toEqual(expect.objectContaining({ status: "pass" }));
+    }
+    expect(lkSeam(DEV_ENV)).toBe("pending"); // seam stays informational
+  });
+
+  it("malformed LIVEKIT_URL fails in production; non-TLS ws:// only warns", () => {
+    const bad = validateEnv({ ...GOOD_ENV, LIVEKIT_URL: "not-a-url" }, prod);
+    expect(bad.ok).toBe(false);
+    expect(bad.errors.join(" ")).toContain("LIVEKIT_URL");
+    const local = validateEnv({ ...GOOD_ENV, LIVEKIT_URL: "ws://localhost:7880" }, prod);
+    expect(local.ok).toBe(true);
+    expect(local.warnings.join(" ")).toContain("LIVEKIT_URL");
+  });
+
+  it("placeholder LiveKit credentials fail and do NOT configure the seam", () => {
+    const result = validateEnv(
+      { ...GOOD_ENV, LIVEKIT_API_SECRET: "your-livekit-api-secret" },
+      prod,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("LIVEKIT_API_SECRET");
+    expect(lkSeam({ ...GOOD_ENV, LIVEKIT_API_SECRET: "your-livekit-api-secret" })).toBe("pending");
+  });
+});
+
 describe("check:env CLI", () => {
   it("exits 0 and reports readiness for a valid environment", async () => {
     const { code, out } = await runCli(GOOD_ENV);
@@ -235,6 +335,8 @@ describe("check:env CLI", () => {
     expect(out).not.toContain(JWT_B);
     expect(out).not.toContain(GOOD_ENV.EMAIL_TOKEN_ENCRYPTION_KEY);
     expect(out).not.toContain(GOOD_ENV.EMAIL_WORKER_SECRET);
+    expect(out).not.toContain(GOOD_ENV.LIVEKIT_API_SECRET);
+    expect(out).not.toContain(GOOD_ENV.LIVEKIT_API_KEY);
   });
 
   it("prints the external integration seams section (names/notes only, no values)", async () => {

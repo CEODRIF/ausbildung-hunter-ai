@@ -3,33 +3,42 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
-import { fetchInitialCommunityMessages, getCommunityMemberCount } from "@/lib/community/server";
+import { getCommunityMemberCount } from "@/lib/community/server";
+import {
+  fetchCommunityRoomGroups,
+  fetchHomeActivity,
+  fetchHomeAnnouncements,
+  fetchHomeOnlineCount,
+  fetchHomeRecent,
+  fetchRoomUnreadMap,
+} from "@/lib/community/rooms";
+import { fetchHomeQuestionFeeds, type QuestionListItem } from "@/lib/community/qa";
+import { fetchViewerRole, isModerator } from "@/lib/community/roles";
+import {
+  buildViewerSettings,
+  fetchSocialBadges,
+  VIEWER_SETTINGS_SELECT,
+} from "@/lib/community/social";
 import { COMMUNITY_COMING_SOON } from "@/lib/community/availability";
 import { getServerT } from "@/lib/i18n/server";
 import { Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
-import { CommunityChat } from "@/components/community-chat";
+import { CommunityShell } from "@/components/community/community-shell";
+import { CommunityHome } from "@/components/community/community-home";
 import { CommunityOnboarding } from "@/components/community-onboarding";
 import { CommunityComingSoon } from "@/components/community-coming-soon";
 
 export const dynamic = "force-dynamic";
 
 /**
- * /community — shared group chat for all authenticated members.
+ * /community — the Community home: welcome, room directory and recent
+ * activity, inside the Discord-inspired shell (room nav + main + members).
  *
- * First visit: the onboarding screen (display name + one of the five
- * predefined avatars). After that: the real-time chat. Both are rendered
- * inside the standard AppShell (sidebar/header/footer unchanged).
- *
- * The feature is currently parked (see `@/lib/community/availability`): while
- * COMMUNITY_COMING_SOON is true this route renders the Coming Soon page and
- * nothing below runs — no profile lookup, no message fetch, no realtime. No
- * community code was removed: flipping the constant back to false restores
- * the original page exactly as it was.
- *
- * Every data read here is degraded-safe: a database hiccup (or an incomplete
- * server environment) must NEVER escalate into the global error boundary —
- * that is what produced the post-onboarding "This page could not load" screen.
+ * First visit: the identity screen (generated username + one of the four
+ * predefined avatars). Everything below is degraded-safe: a database hiccup
+ * (or an incomplete server environment) must NEVER escalate into the global
+ * error boundary — that is what produced the post-onboarding "This page
+ * could not load" screen.
  */
 export function generateMetadata(): Metadata {
   if (!COMMUNITY_COMING_SOON) return {};
@@ -47,20 +56,23 @@ export default async function CommunityPage() {
 
   const supabase = await createClient();
 
-  let communityProfile: { display_name: string; avatar_id: string } | null = null;
+  type ProfileRow = {
+    display_name: string;
+    avatar_id: string;
+  } & Parameters<typeof buildViewerSettings>[0];
+  let communityProfile: ProfileRow | null = null;
   let lookupFailed = false;
   try {
     const { data, error } = await supabase
       .from("community_profiles")
-      .select("display_name,avatar_id")
+      .select(`display_name,avatar_id,${VIEWER_SETTINGS_SELECT}`)
       .eq("user_id", user.id)
       .maybeSingle();
     if (error) {
       lookupFailed = true;
       console.error("[community] profile lookup failed:", error.message);
     } else {
-      communityProfile =
-        (data as { display_name: string; avatar_id: string } | null) ?? null;
+      communityProfile = (data as ProfileRow | null) ?? null;
     }
   } catch (error) {
     // Network/DB outage: logged for the server logs, never thrown onward.
@@ -73,21 +85,82 @@ export default async function CommunityPage() {
   if (lookupFailed) return <CommunityUnavailable />;
   if (!communityProfile) return <CommunityOnboarding />;
 
-  const [history, memberCount] = await Promise.all([
-    fetchInitialCommunityMessages(supabase),
+  const [
+    directory,
+    unread,
+    memberCount,
+    recent,
+    socialUnread,
+    activity,
+    onlineCount,
+    announcements,
+    questionFeeds,
+    viewerRole,
+  ] = await Promise.all([
+    fetchCommunityRoomGroups(supabase),
+    fetchRoomUnreadMap(user.id),
     getCommunityMemberCount(supabase),
+    fetchHomeRecent(supabase),
+    fetchSocialBadges(supabase, user.id),
+    fetchHomeActivity(),
+    fetchHomeOnlineCount(supabase),
+    fetchHomeAnnouncements(supabase),
+    fetchHomeQuestionFeeds(supabase, {
+      id: user.id,
+      displayName: communityProfile.display_name,
+      avatarId: communityProfile.avatar_id,
+    }),
+    fetchViewerRole(supabase, user.id),
   ]);
+
+  const me = {
+    userId: user.id,
+    displayName: communityProfile.display_name,
+    avatarId: communityProfile.avatar_id,
+  };
+  // Phase 3: presence + notification preferences (own row, one query).
+  const viewer = buildViewerSettings(communityProfile);
+  // Phase 5: flatten the server question rows to the home's structural shape
+  // (the client component never imports the server-only qa module).
+  const toHomeQuestion = (q: QuestionListItem) => ({
+    id: q.id,
+    title: q.title,
+    status: q.status,
+    roomName: q.room?.name ?? "",
+    roomSlug: q.room?.slug ?? "",
+    answerCount: q.answerCount,
+    authorName: q.author?.display_name ?? "",
+    createdAt: q.created_at,
+  });
+  const homeQuestionFeeds = {
+    recent: questionFeeds.recent.map(toHomeQuestion),
+    unanswered: questionFeeds.unanswered.map(toHomeQuestion),
+    solved: questionFeeds.solved.map(toHomeQuestion),
+  };
+
   return (
-    <CommunityChat
-      me={{
-        userId: user.id,
-        displayName: communityProfile.display_name,
-        avatarId: communityProfile.avatar_id,
-      }}
-      initialMessages={history.messages}
-      historyUnavailable={history.unavailable}
-      memberCount={memberCount}
-    />
+    <CommunityShell
+      me={me}
+      categories={directory.groups}
+      unread={unread}
+      activeSlug={null}
+      socialUnread={socialUnread}
+      settings={viewer}
+      mutedRooms={viewer.mutedRooms}
+      viewerIsModerator={isModerator(viewerRole)}
+    >
+      <CommunityHome
+        me={me}
+        categories={directory.groups}
+        roomsUnavailable={directory.unavailable}
+        memberCount={memberCount}
+        recent={recent}
+        activity={activity}
+        onlineCount={onlineCount}
+        announcements={announcements}
+        questionFeeds={homeQuestionFeeds}
+      />
+    </CommunityShell>
   );
 }
 

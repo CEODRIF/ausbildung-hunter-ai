@@ -73,7 +73,11 @@ function isSet(env, name) {
 }
 
 /** The checks, in report order. `required` vars gate the exit code; optional
- *  vars are validated only when present (to catch typos/format errors). */
+ *  vars are validated only when present (to catch typos/format errors).
+ *  `required: "production"` = required for a production deployment (the
+ *  check:env CLI runs in production mode) but intentionally optional in
+ *  development/test — e.g. LiveKit, which the voice feature degrades
+ *  around (503 + eviction no-op) when unconfigured. */
 const CHECKS = [
   { name: "NEXT_PUBLIC_SUPABASE_URL", required: true, kind: "httpsUrl" },
   { name: "NEXT_PUBLIC_SUPABASE_ANON_KEY", required: true, kind: "jwt" },
@@ -94,6 +98,10 @@ const CHECKS = [
   { name: "ARBEITSAGENTUR_API_KEY", required: false, kind: "id" },
   { name: "TAVILY_API_KEY", required: false, kind: "secret" },
   { name: "GEMINI_API_KEY", required: false, kind: "secret" },
+  // Community voice (Phase 4 + 6B eviction seam): server-side only.
+  { name: "LIVEKIT_URL", required: "production", kind: "wsUrl" },
+  { name: "LIVEKIT_API_KEY", required: "production", kind: "id" },
+  { name: "LIVEKIT_API_SECRET", required: "production", kind: "secret" },
 ];
 
 /**
@@ -127,7 +135,17 @@ const SEAMS = [
     name: "email-worker-poller",
     status: (env) =>
       isSet(env, "EMAIL_WORKER_SECRET") ? "configured" : "pending",
-    note: "A durable external poller/scheduler must drive /api/internal/email-worker (and /api/internal/storage-reconcile); the web process never sends.",
+    note: "A durable external poller/scheduler must drive /api/internal/email-worker (and /api/internal/storage-reconcile and /api/internal/voice-sweep); the web process never sends.",
+  },
+  {
+    name: "livekit-voice",
+    status: (env) =>
+      isSet(env, "LIVEKIT_URL") &&
+      isSet(env, "LIVEKIT_API_KEY") &&
+      isSet(env, "LIVEKIT_API_SECRET")
+        ? "configured"
+        : "pending",
+    note: "Community voice (join tokens + suspend-time eviction, Phase 6B) needs a LiveKit SFU: LIVEKIT_URL + LIVEKIT_API_KEY + LIVEKIT_API_SECRET (server-side only). Unconfigured, voice degrades to 503 and eviction is a no-op.",
   },
   {
     name: "payment-provider",
@@ -148,8 +166,12 @@ const SEAMS = [
 ];
 
 /** Pure validation. `env` is a map of variable name → value (or undefined).
+ *  `opts.production` (default false) = production/deployment mode: vars with
+ *  `required: "production"` (LiveKit) are then gated like required vars —
+ *  dev/test environments may intentionally run without them.
  *  Returns per-variable results plus aggregated errors/warnings. */
-export function validateEnv(env) {
+export function validateEnv(env, opts = {}) {
+  const production = opts.production === true;
   const errors = [];
   const warnings = [];
   const results = [];
@@ -157,13 +179,19 @@ export function validateEnv(env) {
   for (const check of CHECKS) {
     const raw = env[check.name];
     const present = typeof raw === "string" && raw.trim().length > 0;
+    const required =
+      check.required === true ||
+      (check.required === "production" && production);
     let status = "pass"; // "pass" | "warn" | "fail"
     let message = "";
 
     if (!present) {
-      if (check.required) {
+      if (required) {
         status = "fail";
-        message = "missing (required)";
+        message =
+          check.required === "production"
+            ? "missing (required in production)"
+            : "missing (required)";
       } else {
         status = "pass";
         message = "not set (optional)";
@@ -188,6 +216,18 @@ export function validateEnv(env) {
             } else if (!value.startsWith("https://")) {
               status = "warn";
               message = "URL is not https";
+            }
+            break;
+          case "wsUrl":
+            // LiveKit SFU: wss(s) for production, ws/http tolerated for
+            // local dev (mirrors the token route, which uses the URL as-is
+            // for the join endpoint).
+            if (!isUrl(value)) {
+              status = "fail";
+              message = "not a valid URL";
+            } else if (/^(ws|http):/i.test(value)) {
+              status = "warn";
+              message = "URL is not TLS (wss:// or https:// expected; dev only)";
             }
             break;
           case "url":
@@ -237,7 +277,12 @@ const isMain =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
-  const { results, errors, warnings, ok, seams } = validateEnv(process.env);
+  // The CLI is the PRE-DEPLOY check: it validates production readiness,
+  // so `required: "production"` vars (LiveKit) are gated here. Pure
+  // callers (tests, dev tooling) use validateEnv(env) in dev mode.
+  const { results, errors, warnings, ok, seams } = validateEnv(process.env, {
+    production: true,
+  });
   console.log("Deployment environment check\n");
   for (const r of results) {
     const tag =

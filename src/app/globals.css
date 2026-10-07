@@ -754,3 +754,84 @@ textarea:focus-visible,
     background-position: -120% 0;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Community Phase 4 — voice tiles. Subtle join/leave transitions + the
+   speaking indicator. Pure CSS (no JS timers): the exit animation completes
+   on `animationend`, which the panel listens for. Under
+   prefers-reduced-motion everything animates away — and the panel skips the
+   exit-tile mechanism entirely in that case (no tile can linger).
+--------------------------------------------------------------------------- */
+.voice-tile-enter {
+  animation: voice-tile-in 160ms ease-out;
+}
+.voice-tile-exit {
+  animation: voice-tile-out 160ms ease-in forwards;
+}
+@keyframes voice-tile-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes voice-tile-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+/* Speaking indicator: bars (SHAPE, not color alone) + the tile border. */
+.voice-speaking-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 10px;
+}
+.voice-speaking-bars span {
+  width: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  animation: voice-speaking 900ms ease-in-out infinite;
+}
+.voice-speaking-bars span:nth-child(1) {
+  height: 4px;
+  animation-delay: 0ms;
+}
+.voice-speaking-bars span:nth-child(2) {
+  height: 8px;
+  animation-delay: 150ms;
+}
+.voice-speaking-bars span:nth-child(3) {
+  height: 5px;
+  animation-delay: 300ms;
+}
+@keyframes voice-speaking {
+  0%,
+  100% {
+    transform: scaleY(0.6);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-tile-enter,
+  .voice-tile-exit {
+    animation: none;
+  }
+  .voice-tile-exit {
+    display: none;
+  }
+  .voice-speaking-bars span {
+    animation: none;
+    height: 6px;
+  }
+}

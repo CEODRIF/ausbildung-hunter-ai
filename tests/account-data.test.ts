@@ -255,8 +255,9 @@ describe("exportUserData", () => {
   it("lists only this user's storage files (metadata only)", async () => {
     const mock = makeAdminMock(exportHandlers());
     const result = await exportUserData(USER_ID);
-    // 2 own files × 3 buckets (OTHER_ID's file is filtered out).
-    expect(result.storage_files).toHaveLength(6);
+    // 2 own files × 4 buckets (OTHER_ID's file is filtered out; Phase 6A
+    // added the community-images bucket to the user-prefix inventory).
+    expect(result.storage_files).toHaveLength(8);
     for (const file of result.storage_files as Array<Record<string, unknown>>) {
       expect(String(file["name"])).toMatch(new RegExp(`^${USER_ID}/`));
       expect(file["size"]).toBeTypeOf("number");
@@ -273,6 +274,8 @@ describe("exportUserData", () => {
       "application-attachments",
       "avatars",
       "avatars",
+      "community-images",
+      "community-images",
     ]);
     expect(mock.calls.some((c) => c.table === "email_accounts")).toBe(false);
   });
@@ -286,9 +289,15 @@ describe("exportUserData", () => {
       }),
     );
     await exportUserData(USER_ID);
+    // Every table is queried through its own owner column (Phase 6A:
+    // community_questions keys ownership on author_id).
+    const OWNER_COLUMN: Record<string, string> = {
+      profiles: "id",
+      community_questions: "author_id",
+    };
     for (const call of mock.calls) {
-      if (call.table === "profiles") expect(call.filters["id"]).toBe(USER_ID);
-      else expect(call.filters["user_id"]).toBe(USER_ID);
+      const column = OWNER_COLUMN[call.table] ?? "user_id";
+      expect(call.filters[column]).toBe(USER_ID);
       expect(call.table).not.toBe("email_accounts");
     }
   });
@@ -306,12 +315,31 @@ describe("exportUserData", () => {
 });
 
 describe("deleteUserAccount", () => {
-  it("deletes drafts first, then the auth user, then sweeps storage", async () => {
+  it("inventories community images, deletes drafts, cascades auth, then sweeps storage", async () => {
     const mock = makeAdminMock({ storageList: () => OWN_FILES });
     const result = await deleteUserAccount(USER_ID);
 
     expect(result).toEqual({ ok: true, storageSwept: true });
+    // Phase 6A: the Community image reference inventory runs BEFORE the
+    // cascade (its rows attribute the conversation-prefixed DM paths), then
+    // drafts, then the auth cascade, then the storage sweeps (existing
+    // buckets + the community-images backstop).
     expect(mock.calls[0]).toEqual({
+      table: "community_messages",
+      op: "list",
+      filters: { user_id: USER_ID, limit: 1000 },
+    });
+    expect(mock.calls[1]).toEqual({
+      table: "community_questions",
+      op: "list",
+      filters: { author_id: USER_ID, limit: 1000 },
+    });
+    expect(mock.calls[2]).toEqual({
+      table: "community_direct_messages",
+      op: "list",
+      filters: { user_id: USER_ID, limit: 1000 },
+    });
+    expect(mock.calls[3]).toEqual({
       table: "application_drafts",
       op: "delete",
       filters: { user_id: USER_ID },
@@ -333,6 +361,14 @@ describe("deleteUserAccount", () => {
       { bucket: "avatars", op: "list" },
       {
         bucket: "avatars",
+        op: "remove",
+        paths: [`${USER_ID}/a.pdf`, `${USER_ID}/sub/b.pdf`],
+      },
+      // No DB-referenced community paths here (empty inventory) → no exact
+      // remove; the user-prefix backstop list + remove still runs.
+      { bucket: "community-images", op: "list" },
+      {
+        bucket: "community-images",
         op: "remove",
         paths: [`${USER_ID}/a.pdf`, `${USER_ID}/sub/b.pdf`],
       },

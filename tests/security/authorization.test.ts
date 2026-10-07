@@ -255,16 +255,34 @@ describe("database authorization (RLS, grants, SECURITY DEFINER)", () => {
       // images (mirroring the community_messages SELECT policy). The bucket
       // stays private (signed URLs only) and every WRITE/insert policy — the
       // community upload included — must still be owner-folder scoped below.
-      if (
-        /on storage\.objects for select[^;]*bucket_id = 'community-images'/.test(
-          policy,
-        )
-      ) {
-        continue;
-      }
-      expect(policy, policy.slice(0, 80)).toMatch(
-        /\(storage\.foldername\(name\)\)\[1\] = auth\.uid\(\)::text/,
-      );
+       if (
+         /on storage\.objects for select[^;]*bucket_id = 'community-images'/.test(
+           policy,
+         )
+       ) {
+         continue;
+       }
+       // DM images use the NESTED layout dm/{conversation}/{author}/{message}/…
+       // (Postgres arrays are 1-based): the owner folder is element [3], the
+       // conversation id element [2]. The same ownership invariant holds — it
+       // is expressed against the DM path shape, and BOTH write and delete
+       // additionally require membership of that exact conversation.
+       if (
+         /on storage\.objects for (insert|delete) to authenticated (with check|using) \(bucket_id = 'community-images' and \(storage\.foldername\(name\)\)\[1\] = 'dm'/.test(
+           policy,
+         )
+       ) {
+         expect(policy, policy.slice(0, 80)).toMatch(
+           /\(storage\.foldername\(name\)\)\[3\] = auth\.uid\(\)::text/,
+         );
+         expect(policy, policy.slice(0, 80)).toMatch(
+           /exists \( select 1 from public\.community_conversations c where c\.id = \(storage\.foldername\(name\)\)\[2\]::uuid and auth\.uid\(\) in \(c\.member_a, c\.member_b\) \)/,
+         );
+         continue;
+       }
+       expect(policy, policy.slice(0, 80)).toMatch(
+         /\(storage\.foldername\(name\)\)\[1\] = auth\.uid\(\)::text/,
+       );
     }
   });
 

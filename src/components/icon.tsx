@@ -55,7 +55,25 @@ export type IconName =
   | "lock"
   | "clock"
   | "logout"
-  | "chart";
+  | "chart"
+  // Community v2 (rooms, reactions, voice, moderation).
+  | "hash"
+  | "book"
+  | "idCard"
+  | "message"
+  | "at"
+  | "smile"
+  | "reply"
+  | "pin"
+  | "mic"
+  | "micOff"
+  | "phoneOff"
+  | "volume"
+  | "wifi"
+  | "shield"
+  // Community Phase 5 (reports, reputation).
+  | "flag"
+  | "award";
 
 export interface IconProps {
   name: IconName;
@@ -254,6 +272,94 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   chart: <path d="M4 18V6M4 18h16M7 15l3-4 3 2 4-6" />,
+  hash: <path d="M9.5 4.5 8 19.5M16 4.5l-1.5 15M4.5 9h16M3.5 15h16" />,
+  book: (
+    <>
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21V5.5Z" />
+      <path d="M20 18.5H6.5A2.5 2.5 0 0 0 4 21M8 7.5h8" />
+    </>
+  ),
+  idCard: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <circle cx="8.5" cy="11" r="2" />
+      <path d="M5.8 16c.5-1.6 1.5-2.4 2.7-2.4s2.2.8 2.7 2.4M14.5 9.5H18M14.5 13H18" />
+    </>
+  ),
+  message: (
+    <path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5c-1.2 0-2.4-.25-3.4-.7L4 21l1.7-4.1A8.5 8.5 0 1 1 21 11.5Z" />
+  ),
+  at: (
+    <>
+      <circle cx="12" cy="12" r="3.5" />
+      <path d="M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12a8.5 8.5 0 1 0-3.3 6.7" />
+    </>
+  ),
+  smile: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01" />
+    </>
+  ),
+  reply: (
+    <>
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h9a7 7 0 0 1 7 7v4" />
+    </>
+  ),
+  pin: (
+    <>
+      <path d="M9 4h6l-1 6.5 3 3V15H7v-1.5l3-3L9 4Z" />
+      <path d="M12 15v6" />
+    </>
+  ),
+  mic: (
+    <>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6" />
+    </>
+  ),
+  micOff: (
+    <>
+      <path d="M9 9v4a3 3 0 0 0 5.1 2M15 14.5V6a3 3 0 0 0-5.1-1.9" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 10.4 5.2M18.5 11.5c0 .6-.1 1.2-.3 1.7M12 18v3M9 21h6" />
+      <path d="M3 3l18 18" />
+    </>
+  ),
+  phoneOff: (
+    <>
+      <path d="M10.8 6.2c-2.3-.5-4.7-.4-5.8.3-.9 2.3-.6 4.9.9 6.9 1.2-1.2 2.8-2 4.6-2.1l1.4 2.5-2.2 1.8c.7 1.2 1.7 2.2 2.9 2.9.1-1 .1-2.6-.3-4.7" />
+      <path d="M14.7 12.8c2.1.5 4 1.7 5.3 3.3 0-3.5-1.4-6.8-3.7-9.3-1.3.1-2.6.5-3.7 1.2" />
+      <path d="M3 3l18 18" />
+    </>
+  ),
+  volume: (
+    <>
+      <path d="M4 10v4h3l4 4V6L7 10H4Z" />
+      <path d="M15 9a4 4 0 0 1 0 6M17.5 6.5a8 8 0 0 1 0 11" />
+    </>
+  ),
+  wifi: (
+    <>
+      <path d="M2.5 9a15 15 0 0 1 19 0M5.5 12.5a10 10 0 0 1 13 0M8.5 16a5.5 5.5 0 0 1 7 0" />
+      <circle cx="12" cy="19" r="1" fill="currentColor" stroke="none" />
+    </>
+  ),
+  shield: (
+    <path d="M12 3 5 5.5V11c0 5 3 8.4 7 10 4-1.6 7-5 7-10V5.5L12 3Z" />
+  ),
+  flag: (
+    <>
+      <path d="M6 21V4" />
+      <path d="M6 4.5c2.2-1.3 4.3-1.3 6.5 0s4.3 1.3 6.5 0v8c-2.2 1.3-4.3 1.3-6.5 0s-4.3-1.3-6.5 0" />
+    </>
+  ),
+  award: (
+    <>
+      <circle cx="12" cy="9" r="5.5" />
+      <path d="m8.8 13.5-1.3 7 4.5-2.7 4.5 2.7-1.3-7" />
+    </>
+  ),
 };
 
 export function Icon({ name, size = 18, className = "", strokeWidth = 1.8 }: IconProps) {

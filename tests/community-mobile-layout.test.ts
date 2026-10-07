@@ -1,5 +1,5 @@
 /**
- * Community chat — mobile layout / keyboard contracts.
+ * Community v2 (rooms) — mobile layout / keyboard contracts.
  *
  * Physically simulating an iOS keyboard needs a real browser, which this repo's
  * test environment (node, no jsdom) does not provide. What IS verifiable — and
@@ -10,10 +10,12 @@
  *   main (fill):  relative + min-h-0 + overflow-hidden (positioned box,
  *                 NO padding) + a flex-sibling h-28 spacer that reserves
  *                 the fixed bottom nav → main's box ends where the nav starts
+ *   community shell: absolute inset-0 flex — owns the --kb keyboard
+ *                    reservation on the WHOLE community surface (room nav,
+ *                    chat, members panel all stay above the keyboard)
  *   chat root:    absolute inset-0 flex column (ZERO percentage-height
  *                 resolution — iOS Safari used to collapse `h-full` against
  *                 the flex-1 main and clip the composer below the fold)
- *                 + --kb keyboard reservation
  *   message list: the ONLY scroller (h-full min-h-0 overflow-y-auto)
  *   composer:     shrink-0, always last in the flex column → sits above the
  *                 bottom nav and, with the keyboard open, above the keyboard
@@ -32,36 +34,38 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const readSrc = (relative: string) =>
   readFileSync(resolve(root, relative), "utf8");
 
-const chatSrc = readSrc("src/components/community-chat.tsx");
-const shellSrc = readSrc("src/components/app-shell.tsx");
+const chatSrc = readSrc("src/components/community/room-chat.tsx");
+const shellSrc = readSrc("src/components/community/community-shell.tsx");
+const appShellSrc = readSrc("src/components/app-shell.tsx");
 const layoutSrc = readSrc("src/app/community/layout.tsx");
+const composerSrc = readSrc("src/components/community/composer.tsx");
 
 describe("chat height chain (only the message list scrolls)", () => {
   it("bounds the shell column to the viewport in fill mode", () => {
-    expect(shellSrc).toContain("fill?: boolean;");
-    expect(shellSrc).toMatch(/fill \? "h-\[100dvh\] min-h-0 overflow-hidden"/);
+    expect(appShellSrc).toContain("fill?: boolean;");
+    expect(appShellSrc).toMatch(/fill \? "h-\[100dvh\] min-h-0 overflow-hidden"/);
     // …and the phone reclaims the space the legal footer used to reserve.
-    expect(shellSrc).toMatch(/fill \? "max-lg:hidden"/);
+    expect(appShellSrc).toMatch(/fill \? "max-lg:hidden"/);
   });
 
   it("makes main a positioned, padding-free chat box in fill mode", () => {
-    // `relative` is the containing block for the chat root's `absolute
+    // `relative` is the containing block for the shell root's `absolute
     // inset-0`; `min-h-0 overflow-hidden` bounds it. NO padding here — the
     // bottom-nav reservation moved to a sibling spacer (below), so main's
     // box is EXACTLY the visible zone between the top bar and the nav.
-    expect(shellSrc).toMatch(/fill \? "relative min-h-0 overflow-hidden"/);
+    expect(appShellSrc).toMatch(/fill \? "relative min-h-0 overflow-hidden"/);
     // Normal routes keep the document-scroll shell untouched.
-    expect(shellSrc).toMatch(/: "pb-28 lg:pb-0"/);
+    expect(appShellSrc).toMatch(/: "pb-28 lg:pb-0"/);
   });
 
   it("reserves the fixed bottom nav as a flex sibling so it never covers the composer", () => {
     // Same 112px (h-28) as the old pb-28, now a real flex item: main's box
     // ends exactly where the floating nav begins. Phones only (max-lg),
     // fill routes only.
-    expect(shellSrc).toContain('{fill && <div aria-hidden className="h-28 max-lg:block shrink-0" />}');
+    expect(appShellSrc).toContain('{fill && <div aria-hidden className="h-28 max-lg:block shrink-0" />}');
     // The nav stays the same floating glass bar (z-30, bottom-3) — only its
     // reservation moved.
-    expect(shellSrc).toMatch(/fixed inset-x-3 bottom-3 z-30/);
+    expect(appShellSrc).toMatch(/fixed inset-x-3 bottom-3 z-30/);
   });
 
   it("fills main with absolute inset-0 — zero percentage-height resolution (iOS fix)", () => {
@@ -70,10 +74,12 @@ describe("chat height chain (only the message list scrolls)", () => {
     // grew to content height and the composer was clipped below the fold.
     // `absolute inset-0` against the positioned main needs no percentage
     // resolution at all — it fills the definite box on every engine.
+    // v2: the COMMUNITY SHELL owns the fill (room nav + chat + members).
+    expect(shellSrc).toContain('className="absolute inset-0 flex min-h-0"');
     expect(chatSrc).toContain('className="absolute inset-0 flex min-h-0 flex-col"');
     expect(chatSrc).not.toContain('className="flex h-full min-h-0 w-full flex-col"');
     // …and the chat root itself must never become a scroller.
-    expect(chatSrc).not.toMatch(/absolute inset-0[^"]*overflow-y-auto/);
+    expect(chatSrc).not.toMatch(/absolute inset-0[^\"]*overflow-y-auto/);
   });
 
   it("the /community layout opts into fill mode", () => {
@@ -95,28 +101,38 @@ describe("chat height chain (only the message list scrolls)", () => {
     const legacy = /h-\[100vh\]|min-h-\[100vh\]|height:\s*100vh|max-h-\[100vh\]/;
     expect(chatSrc).not.toMatch(legacy);
     expect(shellSrc).not.toMatch(legacy);
-    expect(shellSrc).toContain("h-[100dvh]");
+    expect(appShellSrc).not.toMatch(legacy);
+    expect(appShellSrc).toContain("h-[100dvh]");
   });
 });
 
 describe("iOS keyboard handling", () => {
-  it("reserves the keyboard height from visualViewport on the chat root", () => {
-    expect(chatSrc).toContain("window.visualViewport");
-    expect(chatSrc).toContain('root.style.setProperty("--kb"');
-    expect(chatSrc).toContain('style={{ paddingBottom: "var(--kb, 0px)" }}');
-    expect(chatSrc).toContain('vv.addEventListener("resize"');
-    expect(chatSrc).toContain('vv.removeEventListener("resize"');
-    expect(chatSrc).toContain('root.style.removeProperty("--kb")');
+  it("reserves the keyboard height from visualViewport on the SHELL (v2: sole owner)", () => {
+    // The reservation lives on the community shell root, so room nav, chat
+    // AND the members panel all stay above the keyboard — and the chat root
+    // must not add a SECOND reservation.
+    expect(shellSrc).toContain("window.visualViewport");
+    expect(shellSrc).toContain('root.style.setProperty("--kb"');
+    expect(shellSrc).toContain('style={{ paddingBottom: "var(--kb, 0px)" }}');
+    expect(shellSrc).toContain('vv.addEventListener("resize"');
+    expect(shellSrc).toContain('vv.removeEventListener("resize"');
+    expect(shellSrc).toContain('root.style.removeProperty("--kb")');
+    // The chat root owns NO keyboard reservation of its own (single owner).
+    expect(chatSrc).not.toContain('root.style.setProperty("--kb"');
+    expect(chatSrc).not.toContain('style={{ paddingBottom: "var(--kb, 0px)" }}');
   });
 
-  it("keeps the newest message visible while the keyboard is open", () => {
+  it("keeps the newest message visible while the keyboard is open (chat-side effect)", () => {
+    // The chat's visualViewport listener is SCROLL-ONLY: it pins the list to
+    // the bottom while typing, it never writes layout CSS.
     const keyboardBlock = chatSrc.slice(
       chatSrc.indexOf("const onViewportChange"),
       chatSrc.indexOf('vv.removeEventListener("resize"'),
     );
     expect(keyboardBlock).toContain("stickToBottom.current = true");
     expect(keyboardBlock).toContain("el.scrollTop = el.scrollHeight");
-    expect(keyboardBlock).toContain("if (measure() <= 0) return");
+    expect(keyboardBlock).toContain("if (covered <= 0) return;");
+    expect(keyboardBlock).not.toContain("--kb");
   });
 });
 
@@ -137,6 +153,7 @@ describe("Messenger-like scrolling", () => {
     // The only timer allowed is the LOCAL (in-memory) typing-state prune —
     // no interval may ever touch the network (that would be polling).
     expect(chatSrc.match(/setInterval\(/g)).toHaveLength(1);
+    expect((shellSrc.match(/setInterval\(/g) ?? [])).toHaveLength(0);
     expect(chatSrc).toContain(
       "window.setInterval(refreshTyping, TYPING_PRUNE_INTERVAL_MS)",
     );
@@ -175,7 +192,7 @@ describe("send + realtime delivery contract (optimistic UI)", () => {
 
   it("blocks double submits while a POST is in flight", () => {
     expect(chatSrc).toContain("if (submitting) return;");
-    expect(chatSrc).toContain("disabled={submitting ||");
+    expect(composerSrc).toContain("disabled={submitting ||");
     expect(chatSrc).toContain("if (inFlightRef.current.has(m.id)) return;");
   });
 
@@ -185,7 +202,7 @@ describe("send + realtime delivery contract (optimistic UI)", () => {
     // proves the send persisted: the row flips to "sent").
     expect(chatSrc).toContain("const dup = knownIds.current.has(incoming.id);");
     expect(chatSrc).toContain(
-      "mergeCommunityMessages(prev, [{ ...incoming, author: null }], {",
+      "[{ ...incoming, author: null, reactions: [], replyTo: null }]",
     );
     expect(chatSrc).toContain("preferIncoming: true");
     expect(chatSrc).toContain(
@@ -239,14 +256,15 @@ describe("realtime session wiring (production root-cause guard)", () => {
     );
   });
 
-  it("creates at most ONE channel per mount (idempotent subscribe, single call site)", () => {
+  it("subscribes a DYNAMIC per-room channel (one per mount, idempotent)", () => {
     // The join is id-guarded: a second call (late auth event, StrictMode
     // double-effect, whatever) is a no-op.
     expect(chatSrc).toContain("if (disposed || channel) return;");
-    // Exactly one .channel() call site for the message channel — the typing
-    // indicator rides the same channel (broadcast), never a second one.
+    // Exactly one .channel() call site — the channel name is DERIVED FROM
+    // THE ROOM (postgres_changes filter room_id = eq.<room.id>), so each
+    // room gets its own stream and typing/edits/deletes ride the same one.
     expect(chatSrc.match(/\.channel\(/g)).toHaveLength(1);
-    expect(chatSrc).toContain('.channel("community-messages")');
+    expect(chatSrc).toContain(".channel(`community-room:${room.id}`)");
     // And unmount tears it down.
     expect(chatSrc).toContain("if (channel) void client.removeChannel(channel);");
   });
@@ -254,14 +272,20 @@ describe("realtime session wiring (production root-cause guard)", () => {
 
 describe("image pipeline and security untouched", () => {
   it("still validates type and size client-side and posts the same form", () => {
+    // The composer filters the picker to the allowed MIME types…
+    expect(composerSrc).toContain("COMMUNITY_IMAGE_MIMES");
+    // …and the single type+size gate lives in the room chat (one source of
+    // truth, with translated error copy).
     expect(chatSrc).toContain("COMMUNITY_IMAGE_MIMES");
     expect(chatSrc).toContain("COMMUNITY_MAX_IMAGE_BYTES");
+    expect(chatSrc).toContain('setImageError("invalidImage")');
+    expect(chatSrc).toContain('setImageError("imageTooLarge")');
     expect(chatSrc).toContain('form.set("image", p.file, "image")');
   });
 
   it("still renders message text as plain text (memoized row component)", () => {
     expect(chatSrc).not.toContain("dangerouslySetInnerHTML");
-    const rowSrc = readSrc("src/components/community-message-row.tsx");
+    const rowSrc = readSrc("src/components/community/message-row.tsx");
     expect(rowSrc).not.toContain("dangerouslySetInnerHTML");
     expect(rowSrc).toContain("whitespace-pre-wrap");
     expect(rowSrc).toContain("break-words");

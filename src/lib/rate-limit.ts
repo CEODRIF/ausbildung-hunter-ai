@@ -51,10 +51,37 @@ export type RateLimitScope =
   | "register"
   | "login"
   | "verify_resend"
-  // Community group chat (per session user).
+  // Community (per session user).
   | "community_message"
   | "community_history"
-  | "community_onboarding";
+  | "community_onboarding"
+  // Community v2 — message-level actions (per session user).
+  | "community_edit"
+  | "community_react"
+  | "community_delete"
+  // Community Phase 2 — the social layer (per session user).
+  | "community_friend"
+  | "community_block"
+  | "community_profile"
+  | "community_presence"
+  | "community_dm_send"
+  | "community_dm_history"
+  | "community_dm_edit"
+  | "community_dm_react"
+  | "community_dm_delete"
+  // Community Phase 3 — preference + mute changes (rare human gestures).
+  | "community_prefs"
+  // Community Phase 4 — voice join tokens + count sync (per session user).
+  | "community_voice"
+  // Community Phase 5 — advanced community (per session user).
+  | "community_search"
+  | "community_question"
+  | "community_answer"
+  | "community_report"
+  | "community_pin"
+  | "community_moderation"
+  | "community_role"
+  | "community_room_settings";
 
 /**
  * Per-scope budgets. Rationale:
@@ -119,13 +146,63 @@ export const RATE_LIMITS: Record<
   register: { max: 8, windowSeconds: 600 },
   login: { max: 15, windowSeconds: 600 },
   verify_resend: { max: 5, windowSeconds: 600 },
-  // Community group chat (per session user): 20 messages/min is comfortably
-  // above normal human typing in a group chat and far below a flooding rate
+  // Community (per session user): 20 messages/min is comfortably above
+  // normal human typing in a group chat and far below a flooding rate
   // (it also caps the realtime fan-out and storage writes per user); 30/min
-  // for "load older" pagination; 5/min for the one-time onboarding upsert.
+  // for "load older" / room-directory / member-list reads; 5/min for
+  // onboarding + the occasional identity edit (both are rare upserts).
   community_message: { max: 20, windowSeconds: 60 },
   community_history: { max: 30, windowSeconds: 60 },
   community_onboarding: { max: 5, windowSeconds: 60 },
+  // Message-level actions: editing is cheap but chatty when spammed
+  // (60/min); a reaction toggle is one tiny row — 60/min covers even a
+  // reaction-heavy discussion; deletes are rarer and each one fans out to
+  // storage cleanup, so 20/min.
+  community_edit: { max: 60, windowSeconds: 60 },
+  community_react: { max: 60, windowSeconds: 60 },
+  community_delete: { max: 20, windowSeconds: 60 },
+  // Phase 2 social layer: friend-request lifecycle actions are rare human
+  // gestures (20/min stops request spam while never touching normal use);
+  // blocking is sensitive and can be weaponized for harassment, so it gets
+  // the tightest budget (10/min); profile-card reads are 30/min (same class
+  // as room-directory reads); the presence heartbeat fires every ~30 s per
+  // open tab, so 60/min per user covers several devices; DM sends are a
+  // 1:1 conversation (30/min, slightly above the room budget — no fan-out);
+  // DM edit/react/delete mirror the room budgets.
+  community_friend: { max: 20, windowSeconds: 60 },
+  community_block: { max: 10, windowSeconds: 60 },
+  community_profile: { max: 30, windowSeconds: 60 },
+  community_presence: { max: 60, windowSeconds: 60 },
+  community_dm_send: { max: 30, windowSeconds: 60 },
+  community_dm_history: { max: 30, windowSeconds: 60 },
+  community_dm_edit: { max: 60, windowSeconds: 60 },
+  community_dm_react: { max: 60, windowSeconds: 60 },
+  community_dm_delete: { max: 20, windowSeconds: 60 },
+  // Phase 3: settings/mute toggles are rare; 30/min stops bulk flipping
+  // without ever touching normal use.
+  community_prefs: { max: 30, windowSeconds: 60 },
+  // Phase 4: voice joins mint a signed SFU token + create the active
+  // conversation row; 20/min stops join/leave churning + token spam while
+  // leaving plenty of room for legitimate reconnects.
+  community_voice: { max: 20, windowSeconds: 60 },
+  // Phase 5: every search runs a GIN-indexed FTS across five tables —
+  // 30/min is comfortable for interactive use and far below a scraping
+  // rate. Questions are the most expensive user write (title + body +
+  // tags + optional image + notifications), 10/min. Answers mirror the
+  // room-message budget class (20/min — a discussion can be lively, a
+  // flood cannot). Reports are a sensitive, moderation-load-bearing
+  // action: 5/min stops report flooding without blocking real use.
+  // Pins are rare human gestures (10/min). Moderation actions + role +
+  // room-setting changes are admin workflows: 30/min and 10/min are
+  // generous for humans and tight for scripts.
+  community_search: { max: 30, windowSeconds: 60 },
+  community_question: { max: 10, windowSeconds: 60 },
+  community_answer: { max: 20, windowSeconds: 60 },
+  community_report: { max: 5, windowSeconds: 60 },
+  community_pin: { max: 10, windowSeconds: 60 },
+  community_moderation: { max: 30, windowSeconds: 60 },
+  community_role: { max: 10, windowSeconds: 60 },
+  community_room_settings: { max: 10, windowSeconds: 60 },
 };
 
 export function rateLimitKey(scope: RateLimitScope, userId: string): string {

@@ -8,46 +8,39 @@ import {
 } from "@/lib/rate-limit";
 import {
   buildCommunityImagePath,
+  COMMUNITY_DEFAULT_ROOM_SLUG,
   COMMUNITY_MAX_MESSAGE_LENGTH,
-  COMMUNITY_PAGE_SIZE,
-  type CommunityMessageView,
+  extractMentionUsernames,
   validateCommunityImage,
 } from "@/lib/community";
+import {
+  fetchRoomBySlug,
+  fetchRoomMessagePage,
+  persistMentions,
+} from "@/lib/community/rooms";
+import { createSocialNotification, notifyMentions, socialSendKey } from "@/lib/community/social";
+import { fetchCommunityWriteGate } from "@/lib/community/roles";
+import { checkCommunityImageQuota } from "@/lib/community/image-quota";
 
 /**
- * Community chat message API.
+ * Community v2 — room-scoped message API.
  *
- * GET  — newest N messages (optionally older than `before_at`), enriched with
- *        the author's community profile. Feeds the initial render and the
- *        "load older" scroll-up pagination.
- * POST — create a message (multipart/form-data: `message` text and/or
- *        `image` file). The sender's identity ALWAYS comes from the
- *        authenticated session; the RLS policy makes impersonation fail at
- *        the database level as well.
+ * GET  — one room's newest page (optionally older than `before_at`), enriched
+ *        with authors, reactions and reply-to previews (fixed batch queries,
+ *        no N+1). `?room=<slug>` selects the room (default: public-chat).
+ * POST — create a message in a room (multipart/form-data: `message` text
+ *        and/or `image` file, optional `room` slug, optional `reply_to`
+ *        message id, optional client `id` for idempotent retries).
+ *
+ * The sender's identity ALWAYS comes from the authenticated session; RLS
+ * makes impersonation fail at the database level as well.
  *
  * Images: only image/jpeg|png|webp, ≤ 2 MB, re-validated server-side from
  * the actual bytes (MIME allowlist + magic bytes). Storage paths are
  * generated server-side as {user_id}/{message_id}/image.{ext}.
  */
 
-async function loadAuthors(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  userIds: string[],
-): Promise<Record<string, { display_name: string; avatar_id: string }>> {
-  if (userIds.length === 0) return {};
-  const { data: profiles } = await supabase
-    .from("community_profiles")
-    .select("user_id,display_name,avatar_id")
-    .in("user_id", userIds);
-  const byUser: Record<string, { display_name: string; avatar_id: string }> = {};
-  for (const p of profiles ?? []) {
-    byUser[p.user_id] = {
-      display_name: p.display_name,
-      avatar_id: p.avatar_id,
-    };
-  }
-  return byUser;
-}
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(request: Request) {
   const { user } = await getCurrentUserAndProfile();
@@ -58,32 +51,29 @@ export async function GET(request: Request) {
   if (!limited.allowed) return tooManyRequests(limited);
 
   const url = new URL(request.url);
+  const roomSlug = url.searchParams.get("room") ?? COMMUNITY_DEFAULT_ROOM_SLUG;
   const beforeAt = url.searchParams.get("before_at");
   if (beforeAt && Number.isNaN(Date.parse(beforeAt))) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
 
   const supabase = await createClient();
-  let query = supabase
-    .from("community_messages")
-    .select("id,user_id,message,image_path,created_at,updated_at")
-    .order("created_at", { ascending: false })
-    .limit(COMMUNITY_PAGE_SIZE);
-  if (beforeAt) query = query.lt("created_at", beforeAt);
-  const { data: messages, error } = await query;
-  if (error)
+  const { room, unavailable } = await fetchRoomBySlug(supabase, roomSlug);
+  if (unavailable)
+    return NextResponse.json({ error: "Could not load room." }, { status: 500 });
+  if (!room)
+    return NextResponse.json({ error: "room_not_found" }, { status: 404 });
+
+  const page = await fetchRoomMessagePage(supabase, room.id, user.id, {
+    beforeAt,
+  });
+  if (page.unavailable)
     return NextResponse.json({ error: "Could not load messages." }, { status: 500 });
 
-  const items = (messages ?? []) as CommunityMessageView[];
-  const byUser = await loadAuthors(
-    supabase,
-    [...new Set(items.map((m) => m.user_id))],
+  return NextResponse.json(
+    { room, items: page.messages },
+    { headers: rateLimitHeaders(limited) },
   );
-  const views = items
-    .map((m) => ({ ...m, author: byUser[m.user_id] ?? null }))
-    .sort((a, b) => a.created_at.localeCompare(b.created_at));
-
-  return NextResponse.json({ items: views }, { headers: rateLimitHeaders(limited) });
 }
 
 export async function POST(request: Request) {
@@ -108,8 +98,7 @@ export async function POST(request: Request) {
   }
 
   const file = form.get("image");
-  // A message needs at least one of: text or image. Empty messages and
-  // empty image messages are both forbidden.
+  // A message needs at least one of: text or image.
   if (!text && !(file instanceof File)) {
     return NextResponse.json({ error: "empty_message" }, { status: 400 });
   }
@@ -119,11 +108,51 @@ export async function POST(request: Request) {
   // Senders must have completed the community onboarding (profile exists).
   const { data: profile } = await supabase
     .from("community_profiles")
-    .select("id")
+    .select("id,display_name")
     .eq("user_id", user.id)
     .maybeSingle();
   if (!profile) {
     return NextResponse.json({ error: "profile_required" }, { status: 409 });
+  }
+
+  // Phase 5 moderation gate: suspended / timed-out users cannot post
+  // (server-stamped flags; the client can never set them).
+  const gate = await fetchCommunityWriteGate(user.id);
+  if (!gate.writable) {
+    return NextResponse.json({ error: gate.code }, { status: 403 });
+  }
+
+  // Target room (slug from the client — resolved server-side; unknown or
+  // disabled rooms are rejected, so a room id can never be smuggled in).
+  const rawRoom = form.get("room");
+  const roomSlug =
+    typeof rawRoom === "string" && rawRoom.trim().length > 0
+      ? rawRoom.trim().toLowerCase()
+      : COMMUNITY_DEFAULT_ROOM_SLUG;
+  const { room, unavailable: roomUnavailable } = await fetchRoomBySlug(
+    supabase,
+    roomSlug,
+  );
+  if (roomUnavailable)
+    return NextResponse.json({ error: "Could not load room." }, { status: 500 });
+  if (!room)
+    return NextResponse.json({ error: "room_not_found" }, { status: 404 });
+
+  // Optional reply target: must exist and live in the SAME room.
+  const rawReply = form.get("reply_to");
+  const replyToMessageId =
+    typeof rawReply === "string" && UUID.test(rawReply) ? rawReply : null;
+  let replyParentUserId: string | null = null;
+  if (replyToMessageId) {
+    const { data: parent } = await supabase
+      .from("community_messages")
+      .select("id,room_id,user_id")
+      .eq("id", replyToMessageId)
+      .maybeSingle();
+    if (!parent || (parent as { room_id: string }).room_id !== room.id) {
+      return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+    }
+    replyParentUserId = (parent as { user_id: string }).user_id;
   }
 
   // Idempotency: the client MAY supply its own UUID so that a retry after a
@@ -132,17 +161,14 @@ export async function POST(request: Request) {
   // row (the RLS insert policy enforces user_id = auth.uid()).
   const rawId = form.get("id");
   const clientMessageId =
-    typeof rawId === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      rawId,
-    )
-      ? rawId
-      : null;
+    typeof rawId === "string" && UUID.test(rawId) ? rawId : null;
 
   if (clientMessageId) {
     const { data: existing } = await supabase
       .from("community_messages")
-      .select("id,user_id,message,image_path,created_at,updated_at")
+      .select(
+        "id,user_id,room_id,message,image_path,reply_to_message_id,created_at,updated_at",
+      )
       .eq("id", clientMessageId)
       .maybeSingle();
     if (existing) {
@@ -174,6 +200,15 @@ export async function POST(request: Request) {
         { status: verdict.code === "image_too_large" ? 413 : 415 },
       );
     }
+    // Phase 6A: per-user storage quota — server-side, BEFORE the upload
+    // (a rejected upload must never create a storage object).
+    const quota = await checkCommunityImageQuota(user.id, file.size);
+    if (!quota.ok) {
+      return NextResponse.json(
+        { error: quota.code },
+        { status: quota.code === "storage_quota" ? 413 : 500 },
+      );
+    }
     const path = buildCommunityImagePath(user.id, messageId, verdict.ext);
     if (!path)
       return NextResponse.json({ error: "Invalid request." }, { status: 400 });
@@ -201,10 +236,14 @@ export async function POST(request: Request) {
       id: messageId,
       // Always the session user — a user_id sent in the form body is ignored.
       user_id: user.id,
+      room_id: room.id,
       message: text || null,
       image_path: imagePath,
+      reply_to_message_id: replyToMessageId,
     })
-    .select("id,user_id,message,image_path,created_at,updated_at")
+    .select(
+      "id,user_id,room_id,message,image_path,reply_to_message_id,created_at,updated_at",
+    )
     .single();
   if (error) {
     // 23505 = primary-key violation: a concurrent retry (two tabs, or the
@@ -213,7 +252,9 @@ export async function POST(request: Request) {
     if ((error as { code?: string }).code === "23505") {
       const { data: existing } = await supabase
         .from("community_messages")
-        .select("id,user_id,message,image_path,created_at,updated_at")
+        .select(
+          "id,user_id,room_id,message,image_path,reply_to_message_id,created_at,updated_at",
+        )
         .eq("id", messageId)
         .maybeSingle();
       if (existing) {
@@ -224,6 +265,33 @@ export async function POST(request: Request) {
       }
     }
     return NextResponse.json({ error: "Could not send message." }, { status: 500 });
+  }
+
+  // Mentions: resolve @-tokens to members and persist the mention rows
+  // (service role — members have no insert policy). Never blocks the send.
+  void persistMentions(messageId, extractMentionUsernames(text));
+
+  // Phase 3: mentioned members get a typed (idempotent, recipient-only)
+  // notification. Non-fatal by design.
+  void notifyMentions(messageId, extractMentionUsernames(text), {
+    actorId: user.id,
+    actorName: profile.display_name,
+    roomName: room.name,
+    roomId: room.id,
+  });
+
+  // Phase 3: the reply's PARENT author gets a "replied to you" notification
+  // (never yourself; re-checked server-side in createSocialNotification).
+  if (replyParentUserId && replyParentUserId !== user.id) {
+    void createSocialNotification({
+      targetUserId: replyParentUserId,
+      actorUserId: user.id,
+      title: "reply",
+      content: "",
+      roomId: room.id,
+      roomMessageId: messageId,
+      sendKey: socialSendKey(`reply:${replyParentUserId}`, messageId),
+    });
   }
 
   return NextResponse.json(

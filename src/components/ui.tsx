@@ -4,6 +4,7 @@ import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
+  Ref,
   TextareaHTMLAttributes,
 } from "react";
 import { useEffect } from "react";
@@ -55,6 +56,11 @@ export function Button({
 }
 
 type InputProps = InputHTMLAttributes<HTMLInputElement> & {
+  /**
+   * React 19: `ref` is a regular prop on function components. It reaches the
+   * DOM input through the `...props` spread below (forwarded, never captured).
+   */
+  ref?: Ref<HTMLInputElement>;
   label?: string;
   hint?: string;
   error?: string;

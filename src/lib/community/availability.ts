@@ -1,21 +1,21 @@
 /**
- * Community — availability switch.
+ * Community — availability switch (production state: LIVE).
  *
- * The community chat is temporarily withdrawn from the product, so the whole
- * feature is parked behind ONE boolean:
+ * The Community v2 feature (Discord-like rooms) is live. The whole feature
+ * stays behind ONE boolean so it can be pulled again without a deploy-config
+ * change:
  *
- *   true  → `/community` renders the Coming Soon page instead of the chat.
- *           No profile lookup, no message fetch, no realtime subscription —
- *           opening the route must not start (or even prepare) any data access.
- *   false → the original behaviour returns unchanged: onboarding, the real-
- *           time chat, the unread badge and /api/community/* all work again.
+ *   true  → /community renders the "Coming Soon" state (no data access at
+ *           all — not even the auth check), and the shell/nav hide the
+ *           Community entry + unread badge.
+ *   false → the feature is live (identity onboarding → room home →
+ *           per-room chat with replies, reactions, mentions, edit/delete),
+ *           with no other code change required.
  *
- * Deliberately NOT a deletion: the chat components, realtime channel, Supabase
- * server helpers, migrations, RLS policies and the API route are all still in
- * place — only the entry point is switched off. Flipping this constant back to
- * `false` restores the feature with no other change.
+ * Flipping this constant back to `true` is the entire "park the feature" —
+ * no migration, no feature-flag service, no deploy config.
  *
- * Scope: this module is imported by the `/community` page only. It must never
- * be used to gate anything else.
+ * Keep this the ONLY gate: the route, the metadata, the nav and the badge
+ * all read it, so one change switches the whole feature consistently.
  */
-export const COMMUNITY_COMING_SOON = true;
+export const COMMUNITY_COMING_SOON = false;

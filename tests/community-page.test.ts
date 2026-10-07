@@ -1,13 +1,15 @@
 /**
- * /community page — regression tests for the post-onboarding white page.
+ * /community page — v2 home (Shell + Home) regression suite.
  *
- * Root cause reproduced here: after the Community profile exists, the page
- * renders the chat branch, which called fetchInitialCommunityMessages() ->
- * createAdminClient() with NO error handling. createAdminClient() throws when
- * SUPABASE_SERVICE_ROLE_KEY (or NEXT_PUBLIC_SUPABASE_URL) is unavailable at
- * runtime, and the exception escaped the Server Component render up to
- * src/app/error.tsx ("This page could not load"). These tests fail on the
- * old code and pass only when the page degrades gracefully instead.
+ * Root cause still reproduced here: any part of the home data path
+ * (room directory, unread summary, member count, recent activity) must
+ * degrade gracefully instead of escalating into the global error boundary
+ * ("This page could not load"). The unread summary legitimately uses the
+ * service-role client — but its failure is non-fatal chrome.
+ *
+ * The availability flag is pinned to FALSE for this suite (it covers the
+ * live path); the Coming Soon state itself is covered by
+ * tests/community-coming-soon.test.ts in both flag states.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { translate } from "@/lib/i18n/core";
@@ -15,51 +17,84 @@ import { translate } from "@/lib/i18n/core";
 vi.mock("@/lib/auth", () => ({ getCurrentUserAndProfile: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
-vi.mock("@/lib/supabase/client", () => ({ createClient: vi.fn(() => ({})) }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-// The chat is currently parked behind the Coming Soon gate
-// (src/lib/community/availability). This suite exercises the PRESERVED chat
-// path, so the flag is pinned to false here — flipping the constant in
-// production code does not change what this suite covers.
-vi.mock("@/lib/community/availability", () => ({ COMMUNITY_COMING_SOON: false }));
+vi.mock("@/lib/community/availability", () => ({
+  COMMUNITY_COMING_SOON: false,
+}));
 
 const { getCurrentUserAndProfile } = await import("@/lib/auth");
 const { createClient } = await import("@/lib/supabase/server");
 const { createAdminClient } = await import("@/lib/supabase/admin");
-const CommunityPage = (await import("@/app/community/page")).default;
-const { CommunityChat } = await import("@/components/community-chat");
+const { default: CommunityPage, generateMetadata } = await import(
+  "@/app/community/page"
+);
+const { CommunityShell } = await import(
+  "@/components/community/community-shell"
+);
+const { CommunityHome } = await import("@/components/community/community-home");
 const { CommunityOnboarding } = await import("@/components/community-onboarding");
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
+const ROOM_ID = "b1000000-0000-4000-8000-000000000001";
 
 function mockSession(userId: string | null = USER_ID, active = true) {
   vi.mocked(getCurrentUserAndProfile).mockResolvedValue({
     user: userId ? { id: userId } : null,
-    profile: userId ? { id: userId, account_status: active ? "active" : "blocked" } : null,
+    profile: userId
+      ? { id: userId, account_status: active ? "active" : "blocked" }
+      : null,
+  } as never);
+}
+
+/** Admin client: the unread summary (rpc). Throws by default in this suite? No —
+ *  resolves empty; the regression test overrides it to throw. */
+function mockAdminUnread(
+  rows: Array<{ room_id: string; unread: number }> = [],
+) {
+  vi.mocked(createAdminClient).mockReturnValue({
+    rpc: async (fn: string) => {
+      if (fn === "community_room_unread_summary")
+        return { data: rows, error: null };
+      return {
+        data: { allowed: true, count: 1, limit: 100, retry_after: 0 },
+        error: null,
+      };
+    },
   } as never);
 }
 
 /**
- * Session client (RLS-enforced) — the ONLY client the page is allowed to need:
- *   community_profiles.eq(...).maybeSingle()  → the viewer's profile
- *   community_messages.order().limit()        → the newest page
- *   community_profiles.in(...)                → author labels
+ * Session client mock for the home data path:
+ *   community_profiles maybeSingle            → the viewer's profile
+ *   community_room_categories (select/order)  → directory categories
+ *   community_rooms (select/eq/order)         → directory rooms
+ *   community_messages (select/order/limit)   → recent activity
+ *   community_rooms .in(                       → room names for recent
+ *   community_profiles .in(                    → author labels for recent
+ *   community_profiles select {count, head}    → member count
  */
 function mockSessionClient(opts: {
   profile?: Record<string, unknown> | null;
-  error?: { message: string } | null;
-  messages?: Array<Record<string, unknown>>;
-  messagesError?: { message: string } | null;
+  profileError?: { message: string } | null;
+  categories?: Array<Record<string, unknown>>;
+  rooms?: Array<Record<string, unknown>>;
+  directoryError?: { message: string } | null;
+  recent?: Array<Record<string, unknown>>;
+  recentError?: { message: string } | null;
   authors?: Array<Record<string, unknown>>;
-  authorsError?: { message: string } | null;
-}) {
+  memberCount?: number;
+} = {}) {
   vi.mocked(createClient).mockResolvedValue({
     from(table: string) {
-      let usedIn = false;
       const chain: Record<string, unknown> = {};
-      chain.select = () => chain;
-      chain.eq = () => chain;
+      let isCount = false;
+      let usedIn = false;
+      chain.select = (_q?: unknown, o?: { count?: string }) => {
+        if (o?.count) isCount = true;
+        return chain;
+      };
       chain.order = () => chain;
+      chain.eq = () => chain;
       chain.limit = () => chain;
       chain.in = () => {
         usedIn = true;
@@ -67,31 +102,54 @@ function mockSessionClient(opts: {
       };
       chain.maybeSingle = async () => ({
         data: opts.profile ?? null,
-        error: opts.error ?? null,
+        error: opts.profileError ?? null,
       });
       chain.then = (onF?: unknown, onR?: unknown) =>
         Promise.resolve(
-          table === "community_messages"
-            ? { data: opts.messages ?? [], error: opts.messagesError ?? null }
-            : {
-                data: usedIn ? (opts.authors ?? []) : [],
-                error: usedIn ? (opts.authorsError ?? null) : null,
-              },
+          isCount
+            ? { data: null, count: opts.memberCount ?? 0, error: null }
+            : table === "community_messages"
+              ? { data: opts.recent ?? [], error: opts.recentError ?? null }
+              : table === "community_profiles"
+                ? { data: usedIn ? (opts.authors ?? []) : [], error: null }
+                : table === "community_room_categories"
+                  ? { data: opts.categories ?? [], error: opts.directoryError ?? null }
+                  : table === "community_rooms"
+                    ? { data: opts.rooms ?? [], error: opts.directoryError ?? null }
+                    : { data: [], error: null },
         ).then(onF as never, onR as never);
       return chain;
     },
   } as never);
 }
 
-const PROFILE_ROW = { display_name: "Anna", avatar_id: "avatar-1" };
+const PROFILE_ROW = { display_name: "SilverFox", avatar_id: "avatar-1" };
+const CATEGORY_ROW = {
+  id: "b0000000-0000-4000-8000-000000000001",
+  slug: "allgemein",
+  name: "ALLGEMEIN",
+  position: 1,
+};
+const ROOM_ROW = {
+  id: ROOM_ID,
+  slug: "public-chat",
+  name: "Public Chat",
+  category_id: CATEGORY_ROW.id,
+  description: null,
+  icon: "hash",
+  position: 1,
+  enabled: true,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockSession();
+  mockAdminUnread();
+  mockSessionClient({ profile: PROFILE_ROW });
 });
 
 // ---------------------------------------------------------------------------
-// THE regression: admin client unavailable (missing service-role env)
+// THE regression: the service-role client must not be able to kill the page
 // ---------------------------------------------------------------------------
 
 describe("/community page — the white-page regression", () => {
@@ -100,120 +158,186 @@ describe("/community page — the white-page regression", () => {
     vi.mocked(createAdminClient).mockImplementation(() => {
       throw new Error("Missing Supabase server environment variables.");
     });
-    // On the broken code this rejected and Next.js rendered src/app/error.tsx
-    // ("This page could not load"). It must now resolve.
-    const tree = await CommunityPage();
-    expect((tree as { type: unknown }).type).toBe(CommunityChat);
-    // …and the render path must no longer touch the service-role client at all.
-    expect(createAdminClient).not.toHaveBeenCalled();
-  });
-
-  it("loads the history through the member's RLS-backed client even without a service-role key", async () => {
-    mockSessionClient({
-      profile: PROFILE_ROW,
-      messages: [
-        {
-          id: "m1",
-          user_id: USER_ID,
-          message: "hallo",
-          image_path: null,
-          created_at: "2026-01-01T09:00:00.000Z",
-          updated_at: "2026-01-01T09:00:00.000Z",
-        },
-      ],
-    });
-    vi.mocked(createAdminClient).mockImplementation(() => {
-      throw new Error("Missing Supabase server environment variables.");
-    });
+    // On the broken code this rejected and Next.js rendered src/app/error.tsx.
     const tree = (await CommunityPage()) as {
-      props: { initialMessages: Array<{ id: string }>; historyUnavailable?: boolean };
+      type: unknown;
+      props: { unread: Record<string, number> };
     };
-    // No degradation at all: the missing key is simply irrelevant here.
-    expect(tree.props.initialMessages.map((m) => m.id)).toEqual(["m1"]);
-    expect(tree.props.historyUnavailable).toBe(false);
+    expect(tree.type).toBe(CommunityShell);
+    // The unread chrome degrades to "nothing unread" — the page itself is fine.
+    expect(tree.props.unread).toEqual({});
   });
 
-  it("still renders the chat when the messages query errors (DB temporarily unavailable)", async () => {
+  it("renders the shell when the room directory read fails (degraded, not fatal)", async () => {
     mockSessionClient({
       profile: PROFILE_ROW,
-      messagesError: { message: "connection terminated" },
+      directoryError: { message: "connection terminated" },
     });
     const tree = (await CommunityPage()) as {
       type: unknown;
-      props: { initialMessages: unknown[]; historyUnavailable?: boolean };
+      props: { categories: unknown[]; children: unknown };
     };
-    expect(tree.type).toBe(CommunityChat);
-    expect(tree.props.initialMessages).toEqual([]);
-    expect(tree.props.historyUnavailable).toBe(true);
+    expect(tree.type).toBe(CommunityShell);
+    expect(tree.props.categories).toEqual([]);
+    const home = tree.props.children as {
+      type: unknown;
+      props: { roomsUnavailable: boolean };
+    };
+    expect(home.type).toBe(CommunityHome);
+    expect(home.props.roomsUnavailable).toBe(true);
+  });
+
+  it("recent-activity failures degrade to an empty feed, not an error page", async () => {
+    mockSessionClient({
+      profile: PROFILE_ROW,
+      recentError: { message: "connection terminated" },
+    });
+    const tree = (await CommunityPage()) as {
+      type: unknown;
+      props: { children: unknown };
+    };
+    expect(tree.type).toBe(CommunityShell);
+    const home = tree.props.children as { props: { recent: unknown[] } };
+    expect(home.props.recent).toEqual([]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// The happy paths must keep working (no behaviour change)
+// The profile-lookup states (never a white page, never a false onboarding)
 // ---------------------------------------------------------------------------
 
-describe("/community page — normal operation", () => {
-  it("loads the chat for an existing community profile", async () => {
-    mockSessionClient({
-      profile: PROFILE_ROW,
-      messages: [
-        {
-          id: "m1",
-          user_id: USER_ID,
-          message: "hallo",
-          image_path: null,
-          created_at: "2026-01-01T09:00:00.000Z",
-          updated_at: "2026-01-01T09:00:00.000Z",
-        },
-      ],
-      authors: [{ user_id: USER_ID, display_name: "Anna", avatar_id: "avatar-1" }],
-    });
-    const tree = (await CommunityPage()) as {
-      type: unknown;
-      props: {
-        me: { userId: string; displayName: string; avatarId: string };
-        initialMessages: Array<{ id: string; author: unknown }>;
-        historyUnavailable?: boolean;
-      };
-    };
-    expect(tree.type).toBe(CommunityChat);
-    expect(tree.props.me).toEqual({
-      userId: USER_ID,
-      displayName: "Anna",
-      avatarId: "avatar-1",
-    });
-    expect(tree.props.initialMessages.map((m) => m.id)).toEqual(["m1"]);
-    expect(tree.props.initialMessages[0].author).toEqual({
-      user_id: USER_ID,
-      display_name: "Anna",
-      avatar_id: "avatar-1",
-    });
-    expect(tree.props.historyUnavailable).toBe(false);
-  });
-
+describe("/community page — profile states", () => {
   it("shows onboarding when no community profile exists yet", async () => {
     mockSessionClient({ profile: null });
     const tree = await CommunityPage();
     expect((tree as { type: unknown }).type).toBe(CommunityOnboarding);
   });
 
-  it("keeps the empty chat state when there are no messages", async () => {
-    mockSessionClient({ profile: PROFILE_ROW, messages: [] });
-    const tree = (await CommunityPage()) as { props: { initialMessages: unknown[] } };
-    expect(tree.props.initialMessages).toEqual([]);
-  });
-
-  it("does not crash when the profile lookup itself fails (DB unavailable)", async () => {
-    mockSessionClient({ profile: null, error: { message: "connection terminated" } });
-    // Must not reject: the page has to show a retryable state instead.
+  it("a FAILED profile lookup renders the retryable state — NOT onboarding", async () => {
+    mockSessionClient({
+      profile: null,
+      profileError: { message: "connection terminated" },
+    });
     const tree = await CommunityPage();
     expect(tree).toBeTruthy();
+    expect((tree as { type: unknown }).type).not.toBe(CommunityOnboarding);
+    expect((tree as { type: unknown }).type).not.toBe(CommunityShell);
+    // The retryable state is a distinct (async server) component — a function
+    // type, not a raw host element or any of the known community branches.
+    expect(typeof (tree as { type: unknown }).type).toBe("function");
+  });
+
+  it("does not crash when the profile lookup itself throws (transport error)", async () => {
+    vi.mocked(createClient).mockResolvedValue({
+      from: () => {
+        throw new Error("connection terminated");
+      },
+    } as never);
+    const tree = await CommunityPage();
     expect((tree as { type: unknown }).type).not.toBe(CommunityOnboarding);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Access control
+// The happy paths
+// ---------------------------------------------------------------------------
+
+describe("/community page — normal operation", () => {
+  it("loads the home: shell + home with identity, directory, unread, members, recent", async () => {
+    mockAdminUnread([
+      { room_id: ROOM_ID, unread: 3 },
+      { room_id: "b1000000-0000-4000-8000-000000000004", unread: 0 }, // filtered out
+    ]);
+    mockSessionClient({
+      profile: PROFILE_ROW,
+      categories: [CATEGORY_ROW],
+      rooms: [ROOM_ROW],
+      recent: [
+        {
+          id: "m1",
+          user_id: USER_ID,
+          room_id: ROOM_ID,
+          message: "hallo",
+          image_path: null,
+          reply_to_message_id: null,
+          created_at: "2026-01-01T09:00:00.000Z",
+          updated_at: "2026-01-01T09:00:00.000Z",
+        },
+      ],
+      authors: [{ user_id: USER_ID, display_name: "SilverFox", avatar_id: "avatar-1" }],
+      memberCount: 42,
+    });
+    const tree = (await CommunityPage()) as {
+      type: unknown;
+      props: {
+        me: { userId: string; displayName: string; avatarId: string };
+        categories: unknown[];
+        unread: Record<string, number>;
+        activeSlug: string | null;
+        children: unknown;
+      };
+    };
+    expect(tree.type).toBe(CommunityShell);
+    expect(tree.props.me).toEqual({
+      userId: USER_ID,
+      displayName: "SilverFox",
+      avatarId: "avatar-1",
+    });
+    expect(tree.props.unread).toEqual({ [ROOM_ID]: 3 });
+    expect(tree.props.activeSlug).toBeNull();
+    const home = (tree.props.children as {
+      type: unknown;
+      props: {
+        categories: unknown[];
+        roomsUnavailable: boolean;
+        memberCount: number;
+        recent: Array<{ message: { id: string }; roomName: string }>;
+      };
+    });
+    expect(home.type).toBe(CommunityHome);
+    expect(home.props.roomsUnavailable).toBe(false);
+    expect(home.props.memberCount).toBe(42);
+    expect(home.props.recent).toHaveLength(1);
+    expect(home.props.recent[0].roomName).toBe("Public Chat");
+    expect(home.props.recent[0].message.id).toBe("m1");
+  });
+
+  it("keeps the empty home states when nothing exists yet", async () => {
+    mockSessionClient({
+      profile: PROFILE_ROW,
+      categories: [],
+      rooms: [],
+      recent: [],
+      memberCount: 1,
+    });
+    const tree = (await CommunityPage()) as {
+      props: { categories: unknown[]; children: unknown };
+    };
+    expect(tree.props.categories).toEqual([]);
+    const home = tree.props.children as { props: { recent: unknown[] } };
+    expect(home.props.recent).toEqual([]);
+  });
+
+  it("a missing service-role key does not degrade the directory or the feed", async () => {
+    mockSessionClient({
+      profile: PROFILE_ROW,
+      categories: [CATEGORY_ROW],
+      rooms: [ROOM_ROW],
+      recent: [],
+    });
+    vi.mocked(createAdminClient).mockImplementation(() => {
+      throw new Error("Missing Supabase server environment variables.");
+    });
+    const tree = (await CommunityPage()) as {
+      props: { categories: Array<{ id: string }>; unread: unknown };
+    };
+    expect(tree.props.categories).toHaveLength(1);
+    expect(tree.props.unread).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Access control + metadata
 // ---------------------------------------------------------------------------
 
 describe("/community page — access control", () => {
@@ -230,6 +354,10 @@ describe("/community page — access control", () => {
       digest: expect.stringContaining("NEXT_REDIRECT"),
     });
   });
+
+  it("generateMetadata: no absolute title while the feature is live", () => {
+    expect(generateMetadata()).toEqual({});
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -237,7 +365,7 @@ describe("/community page — access control", () => {
 // ---------------------------------------------------------------------------
 
 describe("graceful-state copy", () => {
-  it("has a translated notice for an unloadable message history", () => {
+  it("has translated notices for the degraded home states", () => {
     for (const lang of ["de", "en", "fr", "ar"] as const) {
       expect(translate(lang, "community.historyUnavailable")).not.toBe(
         "community.historyUnavailable",
@@ -245,6 +373,7 @@ describe("graceful-state copy", () => {
       expect(translate(lang, "community.historyUnavailableRetry")).not.toBe(
         "community.historyUnavailableRetry",
       );
+      expect(translate(lang, "community.homeTitle")).not.toBe("community.homeTitle");
     }
   });
 });

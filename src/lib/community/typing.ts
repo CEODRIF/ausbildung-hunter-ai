@@ -9,8 +9,9 @@ import { COMMUNITY_MAX_NAME_LENGTH } from "../community";
  *
  * Design:
  *  - `typing_start` / `typing_stop` are broadcast over the EXISTING
- *    `community-messages` realtime channel (event `community_typing`).
- *    No new channel, no new table, no DB write, no polling.
+ *    per-room realtime channel (event `community_typing`) and, in Phase 2,
+ *    the per-conversation DM channel (event `community_dm_typing`).
+ *    No new channel per feature, no new table, no DB write, no polling.
  *  - The state is ephemeral client memory only.
  *  - Every peer carries the receive-time of its latest `typing_start`;
  *    peers older than TYPING_TTL_MS are pruned (client-side timers only)
@@ -30,8 +31,15 @@ import { COMMUNITY_MAX_NAME_LENGTH } from "../community";
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Broadcast event name on the existing `community-messages` channel. */
+/**
+ * Broadcast event name. Rides the EXISTING per-room channel
+ * (`community-room:<room_id>`); the handler guards on the room id so
+ * cross-room events are dropped.
+ */
 export const TYPING_BROADCAST_EVENT = "community_typing";
+
+/** Phase 2: DM typing rides the per-conversation channel (same guard model). */
+export const DM_TYPING_BROADCAST_EVENT = "community_dm_typing";
 
 /** Debounce before a `typing_stop` is sent after the last keystroke. */
 export const TYPING_STOP_DELAY_MS = 1600;
