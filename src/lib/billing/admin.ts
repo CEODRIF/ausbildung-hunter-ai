@@ -26,20 +26,34 @@ export function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_RE.test(value);
 }
 
-/** Session user + admin check (server-side only). */
-export async function requireAdmin(): Promise<Profile | null> {
+/**
+ * The /admin gate check WITH a diagnostic reason.
+ *
+ * Production incident (2026-10-08): the designated platform admin was
+ * bounced from /admin to /dashboard with no trace of WHY. The gate below
+ * is the same check as before (session → `public.admins` membership →
+ * `profiles` row, all server-side), but it reports which step failed so
+ * the layout can log it and render an explicit 403 instead of a silent
+ * redirect.
+ */
+export type AdminAccess =
+  | { status: "ok"; profile: Profile }
+  | { status: "unauthenticated" }
+  | { status: "forbidden"; reason: "no_membership" | "no_profile"; userId: string };
+
+/** Session user + admin check with a diagnostic reason (server-side only). */
+export async function diagnoseAdminAccess(): Promise<AdminAccess> {
   const supabase = await createClient();
   const { data } = await supabase.auth.getUser();
   const user = data.user;
-  if (!user) return null;
-  if (!isUuid(user.id)) return null;
+  if (!user || !isUuid(user.id)) return { status: "unauthenticated" };
   const admin = createAdminClient();
   const { data: membership } = await admin
     .from("admins")
     .select("user_id")
     .eq("user_id", user.id)
     .maybeSingle();
-  if (!membership) return null;
+  if (!membership) return { status: "forbidden", reason: "no_membership", userId: user.id };
   const { data: profile } = await admin
     .from("profiles")
     .select(
@@ -47,8 +61,14 @@ export async function requireAdmin(): Promise<Profile | null> {
     )
     .eq("id", user.id)
     .maybeSingle();
-  if (!profile) return null;
-  return profile as Profile;
+  if (!profile) return { status: "forbidden", reason: "no_profile", userId: user.id };
+  return { status: "ok", profile: profile as Profile };
+}
+
+/** Session user + admin check (server-side only). */
+export async function requireAdmin(): Promise<Profile | null> {
+  const access = await diagnoseAdminAccess();
+  return access.status === "ok" ? access.profile : null;
 }
 
 export type AdminAction =
