@@ -270,6 +270,27 @@ export type LocalMessage = CommunityMessageClient & {
 };
 
 /**
+ * Messenger-style chat alignment — message ownership, the single source of
+ * truth for the left/right placement of a chat row.
+ *
+ * SENDER-BASED, direction-agnostic: a row belongs to the current user if and
+ * only if the message's stable database user ID equals the authenticated
+ * user's stable ID. Ownership is NEVER derived from display names,
+ * usernames, emails, avatars, the interface language, or the text direction
+ * (RTL/LTR) — so the alignment is identical in German/English/French and in
+ * Arabic (where it must still be: other users LEFT, own messages RIGHT).
+ *
+ * Pure + unit-tested (tests/community-messenger-alignment.test.ts).
+ */
+export function isOwnMessage(
+  messageUserId: string | null | undefined,
+  currentUserId: string | null | undefined,
+): boolean {
+  if (!messageUserId || !currentUserId) return false;
+  return messageUserId === currentUserId;
+}
+
+/**
  * Build the optimistic row that appears in the UI the instant Send is
  * pressed — BEFORE the network round-trip. The client generates the UUID
  * (`id`), which the API route accepts (idempotency): every retry reuses the

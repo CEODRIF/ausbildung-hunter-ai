@@ -18,7 +18,12 @@ export function formatMessageTime(iso: string, locale: string): string {
 
 export interface MessageRowProps {
   message: LocalMessage;
-  /** The row belongs to the current user. */
+  /**
+   * The row belongs to the current user — computed by the parent via
+   * `isOwnMessage(m.user_id, me.userId)` (stable-ID comparison, never a
+   * display name / locale / direction). Drives the Messenger-style
+   * alignment: own = RIGHT (blue bubble), other = LEFT (neutral bubble).
+   */
   mine: boolean;
   /** First row of a consecutive group (same author, < 5 min gap). */
   firstOfGroup: boolean;
@@ -70,8 +75,21 @@ export interface MessageRowProps {
 }
 
 /**
- * One community message row — Discord-inspired (avatar column always on the
- * start side, name + time header, grouped consecutive messages).
+ * One community message row — Messenger/Facebook-style alignment:
+ *
+ *   - OTHER users: avatar + name/time on the LEFT, neutral light bubble.
+ *   - OWN messages: RIGHT, blue (app accent) bubble, white text, no avatar
+ *     and no repeated username — a small timestamp sits under the bubble.
+ *
+ * ALIGNMENT IS SENDER-BASED, NOT DIRECTION-BASED. The cluster uses PHYSICAL
+ * auto margins (`ml-auto` / `mr-auto`) plus a forced `direction: ltr` on the
+ * avatar/content order, so in Arabic (RTL) own messages are STILL on the
+ * right and other users' on the left — CSS `dir` never flips the semantics.
+ * The message TEXT re-establishes its own bidi flow with `dir="auto"`.
+ *
+ * Grouping: consecutive same-author messages (< 5 min) drop the avatar and
+ * tighten to 2px — bubbles stack, reactions/replies/attachments stay inside
+ * the row and follow the alignment.
  *
  * React.memo'd: with dozens of rows per room, a realtime INSERT must
  * re-render ONLY the new/changed row. The parent resolves every display
@@ -173,20 +191,35 @@ function MessageRowInner({
       onClick={() => onActivate(active ? null : m.id)}
       className={`group relative ${
         firstOfGroup ? "mt-2.5 first:mt-0" : "mt-[2px]"
-      } rounded-xl px-3 py-1 transition-colors hover:bg-surface-2/60 ${
+      } rounded-xl px-3 py-0.5 transition-colors hover:bg-surface-2/40 ${
         highlight
           ? "bg-accent-soft/70 ring-1 ring-accent/40"
           : active
-            ? "bg-surface-2/80"
+            ? "bg-surface-2/60"
             : ""
       }`}
     >
-      <div className="flex gap-3">
-        {firstOfGroup ? avatar : <span className="w-10 shrink-0" aria-hidden="true" />}
-        <div className="min-w-0 flex-1">
-          {firstOfGroup && (
-            <p className="flex flex-wrap items-baseline gap-x-2 leading-tight">
-              {onOpenAuthor && !mine ? (
+      {/*
+        The message cluster (avatar + content). PHYSICAL auto margins keep
+        the sender-based side in every locale: own → right (ml-auto), other
+        → left (mr-auto). [direction:ltr] pins the avatar/content ORDER
+        physically (the avatar stays on the left even in Arabic); the text
+        itself flows via dir="auto" below.
+      */}
+      <div
+        className={`relative flex w-fit items-start gap-2 [direction:ltr] ${
+          mine ? "ml-auto" : "mr-auto"
+        } max-w-[78%] md:max-w-[68%] lg:max-w-[56%]`}
+      >
+        {/* Own messages: no avatar (Messenger-style); others: start column. */}
+        {!mine && avatar}
+
+        <div className="min-w-0">
+          {/* Name + time header — OTHER users only (own rows skip the
+              username; the timestamp lives under the bubble instead). */}
+          {firstOfGroup && !mine && (
+            <p className="flex flex-wrap items-baseline gap-x-2 pb-0.5 leading-tight">
+              {onOpenAuthor ? (
                 <button
                   type="button"
                   onClick={(event) => {
@@ -201,34 +234,31 @@ function MessageRowInner({
                 <span className="text-sm font-bold text-ink">{name}</span>
               )}
               {authorIsAdmin && <AdminBadge label={t("community.adminBadge")} />}
-               <time dateTime={m.created_at} className="text-[11px] text-faint">
-                 {time}
-               </time>
-               {isPinned && (
-                 <span
-                   className="inline-flex items-center gap-0.5 text-[10px] font-bold text-accent"
-                   title={t("community.pinnedBy", { name })}
-                   aria-label={t("community.pinnedBy", { name })}
-                 >
-                   <Icon name="pin" size={10} />
-                 </span>
-               )}
-             </p>
-           )}
-
-          {m.replyTo && (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onJumpToMessage(m.replyTo!.id);
-              }}
-              className="-ms-1.5 me-1.5 mt-0.5 flex max-w-full items-center gap-1.5 rounded-md border-s-2 border-accent ps-2 pe-1 py-0.5 text-xs text-muted hover:bg-surface-2"
-              aria-label={t("community.replyToLabel", { name: replyAuthorName })}
-            >
-              <span className="font-semibold text-ink-soft">@{replyAuthorName}</span>
-              <span className="truncate text-faint">{replySnippet}</span>
-            </button>
+              <time dateTime={m.created_at} className="text-[11px] text-faint">
+                {time}
+              </time>
+              {isPinned && (
+                <span
+                  className="inline-flex items-center gap-0.5 text-[10px] font-bold text-accent"
+                  title={t("community.pinnedBy", { name })}
+                  aria-label={t("community.pinnedBy", { name })}
+                >
+                  <Icon name="pin" size={10} />
+                </span>
+              )}
+            </p>
+          )}
+          {/* Pinned marker for own rows (header is hidden on own). */}
+          {firstOfGroup && mine && isPinned && (
+            <p className="flex justify-end pb-0.5">
+              <span
+                className="inline-flex items-center gap-0.5 text-[10px] font-bold text-accent"
+                title={t("community.pinnedBy", { name })}
+                aria-label={t("community.pinnedBy", { name })}
+              >
+                <Icon name="pin" size={10} />
+              </span>
+            </p>
           )}
 
           {editing ? (
@@ -238,8 +268,9 @@ function MessageRowInner({
                 onChange={(event) => setEditText(event.target.value.slice(0, 2000))}
                 rows={2}
                 autoFocus
+                dir="auto"
                 aria-label={t("community.editMessage")}
-                className="w-full resize-none rounded-xl border border-line-strong bg-surface p-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
+                className="w-72 max-w-full resize-none rounded-xl border border-line-strong bg-surface p-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
               />
               <div className="mt-1 flex items-center gap-2">
                 <Button
@@ -266,7 +297,39 @@ function MessageRowInner({
               </div>
             </div>
           ) : (
-            <>
+            /* The bubble — Messenger geometry: strong rounding, the OUTER
+               corner (bottom-right for own / bottom-left for other) tighter.
+               Own: app accent (blue) + white text; other: neutral surface. */
+            <div
+              className={`px-3 py-1.5 shadow-sm ${
+                mine
+                  ? "rounded-2xl rounded-br-md bg-accent"
+                  : "rounded-2xl rounded-bl-md bg-surface-2"
+              }`}
+            >
+              {m.replyTo && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onJumpToMessage(m.replyTo!.id);
+                  }}
+                  aria-label={t("community.replyToLabel", { name: replyAuthorName })}
+                  className={`-ms-1.5 me-1.5 mt-0.5 flex max-w-full items-center gap-1.5 rounded-md border-s-2 ps-2 pe-1 py-0.5 text-xs ${
+                    mine
+                      ? "border-white/60 bg-white/15 text-white hover:bg-white/25"
+                      : "border-accent text-muted hover:bg-surface"
+                  }`}
+                >
+                  <span className={`font-semibold ${mine ? "text-white" : "text-ink-soft"}`}>
+                    @{replyAuthorName}
+                  </span>
+                  <span className={`truncate ${mine ? "text-white/75" : "text-faint"}`}>
+                    {replySnippet}
+                  </span>
+                </button>
+              )}
+
               {imageUrl && (
                 <button
                   type="button"
@@ -292,17 +355,26 @@ function MessageRowInner({
                   <span className="block h-32 w-44 animate-pulse rounded-xl bg-surface-2/70" aria-hidden="true" />
                 )}
               {m.message && (
-                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">
-                  <MentionText text={m.message} knownMembers={knownMembers} />
+                <p
+                  dir="auto"
+                  className={`whitespace-pre-wrap break-words text-sm leading-relaxed ${
+                    mine ? "text-white" : "text-ink"
+                  }`}
+                >
+                  <MentionText
+                    text={m.message}
+                    knownMembers={knownMembers}
+                    tone={mine ? "on-accent" : undefined}
+                  />
                 </p>
               )}
-            </>
+            </div>
           )}
 
-          {/* Reactions */}
+          {/* Reactions — stay with the bubble and follow the alignment. */}
           {m.reactions.length > 0 && (
             <div
-              className="mt-1 flex flex-wrap gap-1"
+              className={`mt-1 flex flex-wrap gap-1 ${mine ? "justify-end" : ""}`}
               role="group"
               aria-label={t("community.reactionAria")}
             >
@@ -329,10 +401,10 @@ function MessageRowInner({
             </div>
           )}
 
-          {/* Failed send (own optimistic row) */}
+          {/* Failed send (own optimistic row) — right-aligned with the row. */}
           {failed && (
             <div
-              className="mt-1 flex items-center gap-1.5 px-1 text-[11px] font-medium text-danger"
+              className="mt-1 flex items-center justify-end gap-1.5 px-0.5 text-[11px] font-medium text-danger"
               onClick={(event) => event.stopPropagation()}
             >
               <Icon name="alert" size={11} />
@@ -354,91 +426,109 @@ function MessageRowInner({
               </button>
             </div>
           )}
-          {sending && !failed && (
-            <span className="mt-0.5 flex items-center gap-1 px-1 text-[10px] text-faint">
-              <Icon name="clock" size={10} />
-              {t("community.sending")}
+
+          {/* Own rows: timestamp (or "sending…") under the bubble, right. */}
+          {mine && (
+            <div className="mt-0.5 flex items-center justify-end gap-1 px-0.5">
+              {sending && !failed ? (
+                <span className="flex items-center gap-1 text-[10px] text-faint">
+                  <Icon name="clock" size={10} />
+                  {t("community.sending")}
+                </span>
+              ) : (
+                <time dateTime={m.created_at} className="text-[10px] text-faint">
+                  {time}
+                </time>
+              )}
+              {edited && !failed && (
+                <span className="text-[10px] text-faint">({t("community.editedLabel")})</span>
+              )}
+            </div>
+          )}
+          {/* Other rows: "edited" hint stays left, under the bubble. */}
+          {!mine && edited && !failed && (
+            <span className="ms-1 mt-0.5 inline-block text-[10px] text-faint">
+              ({t("community.editedLabel")})
             </span>
           )}
-          {edited && !failed && (
-            <span className="ms-1 text-[10px] text-faint">({t("community.editedLabel")})</span>
-          )}
         </div>
-      </div>
 
-      {/* Action bar: hover on pointer devices, tap-selected on touch. */}
-      {showActions && (
-        <div
-          className="absolute -top-3.5 end-3 z-10 hidden items-center overflow-visible rounded-xl border border-line bg-surface shadow-sm group-hover:flex data-[active]:flex"
-          data-active={active ? "" : undefined}
-          onClick={(event) => event.stopPropagation()}
-          role="toolbar"
-          aria-label={t("community.editMessage")}
-        >
-          <RowAction icon="reply" label={t("community.replyToLabel", { name })} onClick={() => onReply(m)} />
-          <div className="relative">
-            <RowAction
-              icon="smile"
-              label={t("community.addReaction")}
-              onClick={() => setEmojiOpen((v) => !v)}
-            />
-            {emojiOpen && (
-              <div className="absolute -bottom-10 end-0 flex gap-0.5 rounded-xl border border-line bg-surface p-1 shadow-md">
-                {COMMUNITY_REACTION_EMOJIS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    onClick={() => {
-                      setEmojiOpen(false);
-                      onToggleReaction(m.id, emoji);
-                    }}
-                    aria-label={emoji}
-                    className="flex h-7 w-7 items-center justify-center rounded-lg text-base hover:bg-surface-2"
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
+        {/* Action bar: hover on pointer devices, tap-selected on touch.
+            Anchored to the CLUSTER (not the row) so it hugs the bubble
+            side it belongs to. */}
+        {showActions && (
+          <div
+            className="absolute -top-3.5 end-3 z-10 hidden items-center overflow-visible rounded-xl border border-line bg-surface shadow-sm group-hover:flex data-[active]:flex"
+            data-active={active ? "" : undefined}
+            onClick={(event) => event.stopPropagation()}
+            role="toolbar"
+            aria-label={t("community.editMessage")}
+          >
+            <RowAction icon="reply" label={t("community.replyToLabel", { name })} onClick={() => onReply(m)} />
+            <div className="relative">
+              <RowAction
+                icon="smile"
+                label={t("community.addReaction")}
+                onClick={() => setEmojiOpen((v) => !v)}
+              />
+              {emojiOpen && (
+                <div className="absolute -bottom-10 end-0 flex gap-0.5 rounded-xl border border-line bg-surface p-1 shadow-md">
+                  {COMMUNITY_REACTION_EMOJIS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => {
+                        setEmojiOpen(false);
+                        onToggleReaction(m.id, emoji);
+                      }}
+                      aria-label={emoji}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg text-base hover:bg-surface-2"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {mine && (
+              <RowAction icon="edit" label={t("community.editMessage")} onClick={() => setEditing(true)} />
             )}
-          </div>
-          {mine && (
-            <RowAction icon="edit" label={t("community.editMessage")} onClick={() => setEditing(true)} />
-          )}
-          {mine &&
-            (confirmDelete ? (
-              <span className="flex items-center gap-1 px-1 text-[11px] font-semibold text-danger">
-                {t("community.confirmDeleteTitle")}
-                <button
-                  type="button"
-                  onClick={() => onDelete(m.id)}
-                  className="rounded-lg bg-danger px-2 py-0.5 text-white hover:opacity-90"
-                >
-                  {t("community.confirmDeleteAction")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(false)}
-                  aria-label={t("community.cancelReply")}
-                  className="rounded-lg px-1.5 py-0.5 text-muted hover:bg-surface-2"
-                >
-                  {t("community.cancelReply")}
-                </button>
-              </span>
-            ) : (
-              <RowAction icon="trash" label={t("community.deleteMessage")} onClick={() => setConfirmDelete(true)} danger />
-            ))}
-          {canModerate && onPinToggle && (
-            <RowAction
-              icon="pin"
-              label={isPinned ? t("community.unpinMessage") : t("community.pinMessage")}
-              onClick={() => onPinToggle(m.id)}
-            />
-          )}
-          {!mine && onReportMessage && (
-            <RowAction icon="flag" label={t("community.report")} onClick={() => onReportMessage(m.id)} />
-          )}
-         </div>
-       )}
+            {mine &&
+              (confirmDelete ? (
+                <span className="flex items-center gap-1 px-1 text-[11px] font-semibold text-danger">
+                  {t("community.confirmDeleteTitle")}
+                  <button
+                    type="button"
+                    onClick={() => onDelete(m.id)}
+                    className="rounded-lg bg-danger px-2 py-0.5 text-white hover:opacity-90"
+                  >
+                    {t("community.confirmDeleteAction")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                    aria-label={t("community.cancelReply")}
+                    className="rounded-lg px-1.5 py-0.5 text-muted hover:bg-surface-2"
+                  >
+                    {t("community.cancelReply")}
+                  </button>
+                </span>
+              ) : (
+                <RowAction icon="trash" label={t("community.deleteMessage")} onClick={() => setConfirmDelete(true)} danger />
+              ))}
+            {canModerate && onPinToggle && (
+              <RowAction
+                icon="pin"
+                label={isPinned ? t("community.unpinMessage") : t("community.pinMessage")}
+                onClick={() => onPinToggle(m.id)}
+              />
+            )}
+            {!mine && onReportMessage && (
+              <RowAction icon="flag" label={t("community.report")} onClick={() => onReportMessage(m.id)} />
+            )}
+           </div>
+         )}
+      </div>
     </div>
   );
 }

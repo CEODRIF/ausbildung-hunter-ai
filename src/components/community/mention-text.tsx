@@ -90,6 +90,12 @@ export interface MentionTextProps {
   onMentionClick?: (username: string) => void;
   /** Extra classes for the text container (color, size). */
   className?: string;
+  /**
+   * "on-accent": mention chips rendered legible on a saturated bubble
+   * (own messages, Messenger-style blue) instead of the light-surface
+   * default. Links are unaffected (they inherit the bubble text color).
+   */
+  tone?: "default" | "on-accent";
 }
 
 /**
@@ -102,6 +108,7 @@ export function MentionText({
   knownMembers,
   onMentionClick,
   className,
+  tone = "default",
 }: MentionTextProps) {
   const tokens = tokenizeMessage(text, knownMembers);
   return (
@@ -126,7 +133,13 @@ export function MentionText({
           return <Fragment key={i}>@{token.value}</Fragment>;
         }
         const chip = (
-          <span className="rounded-md bg-accent-soft px-0.5 font-semibold text-accent">
+          <span
+            className={`rounded-md px-0.5 font-semibold ${
+              tone === "on-accent"
+                ? "bg-white/25 text-white"
+                : "bg-accent-soft text-accent"
+            }`}
+          >
             @{token.value}
           </span>
         );

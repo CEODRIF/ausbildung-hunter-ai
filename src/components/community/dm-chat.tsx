@@ -19,6 +19,7 @@ import {
   COMMUNITY_PAGE_SIZE,
   communityAvatarUrl,
   createOptimisticMessage,
+  isOwnMessage,
   mergeCommunityMessages,
   setSendStatus,
   type CommunityAuthor,
@@ -1192,7 +1193,9 @@ export function DmChat({
                   <p className="py-1 text-center text-xs font-medium text-faint">{t("common.loading")}</p>
                 )}
                 {messages.map((m, i) => {
-                  const mine = m.user_id === me.userId;
+                  // Messenger-style alignment: sender-based ownership via the
+                  // STABLE user IDs (never display name / locale / direction).
+                  const mine = isOwnMessage(m.user_id, me.userId);
                   const prev = i > 0 ? messages[i - 1] : null;
                   const firstOfGroup =
                     !prev ||
