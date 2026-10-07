@@ -11,13 +11,19 @@ import {
 } from "@/lib/community";
 import { generateCommunityUsername } from "@/lib/community/identity";
 import { isPlatformAdminId } from "@/lib/community/platform-admin";
-import type { PresenceMode } from "@/lib/community/presence";
 import {
+  buildViewerSettings,
   fetchNotifications,
+  VIEWER_SETTINGS_SELECT,
   type NotificationPageCursor,
   type NotificationView,
+  type ViewerCommunitySettings,
 } from "@/lib/community/social";
 import { fetchCommunityBanState } from "@/lib/community/roles";
+import {
+  classifySettingsError,
+  type CommunitySettingsResult,
+} from "@/lib/community/settings";
 
 /**
  * Community v2 server actions — all writes go through the user's own session
@@ -241,22 +247,57 @@ export async function markRoomRead(roomId: string): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Community settings — the persistence contract (production incident fix).
+//
+// Every EXPLICIT setting write must:
+//   1. derive the actor from the authenticated session (never the client),
+//   2. write ONLY its own whitelisted column(s) on the own row,
+//   3. VERIFY the write by an RLS-scoped read-back (a zero-row UPDATE is a
+//      FAILURE, not a silent success — PostgREST returns no error for it),
+//   4. classify the failure (SQLSTATE → stable code) and log a safe
+//      structured diagnostic (no user content, no SQL, no stack),
+//   5. report the outcome so the UI can revert the optimistic state and
+//      tell the user the truth.
+//
+// `ignoreDuplicates: true` is deliberately NEVER used here: it turns the
+// upsert into ON CONFLICT DO NOTHING — a silent no-op on the row every
+// real member already has (the original production bug).
+// ---------------------------------------------------------------------------
+
 /**
- * Phase 3 presence heartbeat — touch the viewer's last_seen_at and report
- * the declared mode (online/away, never a DND override).
+ * Safe structured diagnostic (requirement J): setting + outcome + code only
+ * — no message text, no row data, no SQL, no stack.
+ */
+function logSettingsUpdate(
+  userId: string,
+  setting: string,
+  result: "success" | "failure",
+  code: string,
+): void {
+  const line = `[community] settings_update user=${userId} setting=${setting} result=${result} code=${code}`;
+  if (result === "success") console.info(line);
+  else console.error(`${line} (settings_update_failed)`);
+}
+
+/**
+ * Phase 3 presence HEARTBEAT — stamps the viewer's last_seen_at ONLY.
  *
  * Fire-and-forget from the community shell (one throttled write per 30 s
  * while the tab is visible — the ONLY sanctioned periodic community
- * traffic). "Online" is a SERVER-SIDE derivation (≤ 2 minutes), so the
- * client never asserts its own presence — it only reports a heartbeat.
+ * traffic). "Online" is a SERVER-SIDE derivation (≤ 2 minutes of
+ * last_seen_at freshness), so the client never asserts its own presence.
  *
- * DND guard: a heartbeat can never clear a MANUAL Do Not Disturb. Only
- * setPresenceMode("online"|"away") below can leave DND.
+ * THE heartbeat NEVER writes presence_mode: a manually selected DND or AWAY
+ * is explicit user state and must survive every heartbeat. Only the
+ * explicit setPresenceMode below changes the stored mode.
+ *
+ * Deliberately NO ignoreDuplicates: a plain onConflict upsert UPDATES the
+ * existing row (every real member has one) and INSERTS only when the row is
+ * genuinely missing (column defaults apply, incl. presence_mode='online').
  * Failures are swallowed: presence is chrome.
  */
-export async function touchCommunityPresence(
-  mode: PresenceMode = "online",
-): Promise<void> {
+export async function touchCommunityPresence(): Promise<void> {
   try {
     const supabase = await createClient();
     const {
@@ -267,22 +308,9 @@ export async function touchCommunityPresence(
   const limited = await checkRateLimit("community_presence", user.id);
   if (!limited.allowed) return;
   const values = { user_id: user.id, last_seen_at: new Date().toISOString() };
-    // NOTE: deliberately NO ignoreDuplicates — every real member already has
-    // a profile row (created at onboarding), and an upsert with
-    // ignoreDuplicates is a SILENT NO-OP on existing rows: the heartbeat
-    // would never stamp last_seen_at and presence would go stale for
-    // everyone. A plain onConflict upsert UPDATES the existing row (insert
-    // only happens when the row is genuinely missing).
-    let query = supabase
+    const { error } = await supabase
       .from("community_profiles")
-      .upsert({ ...values, presence_mode: mode }, { onConflict: "user_id" });
-    if (mode !== "dnd") {
-      // The heartbeat must not flip a manual DND back to online/away. The
-      // filter applies to the on-conflict UPDATE branch (a missing row is
-      // still inserted).
-      query = query.not("presence_mode", "eq", "dnd");
-    }
-    const { error } = await query;
+      .upsert(values, { onConflict: "user_id" });
     if (error)
       console.error(
         `[community] presence heartbeat failed code=${error.code ?? "unknown"} message=${error.message.slice(0, 200)}`,
@@ -294,55 +322,106 @@ export async function touchCommunityPresence(
 
 /**
  * Phase 3 manual presence control — DND / Away / Online. An EXPLICIT user
- * choice: it bypasses the heartbeat's DND guard (this is how DND is left)
- * and stamps last_seen when (re)appearing, so "online" shows immediately.
+ * choice: this is the ONLY path that writes presence_mode (besides the
+ * row-creating onboarding insert). Stamps last_seen when (re)appearing so
+ * "online" shows immediately; DND never touches last_seen (a hidden user
+ * must not look freshly present).
  */
-export async function setPresenceMode(mode: "online" | "away" | "dnd"): Promise<void> {
-  if (!["online", "away", "dnd"].includes(mode)) return;
+export async function setPresenceMode(
+  mode: "online" | "away" | "dnd",
+): Promise<CommunitySettingsResult> {
+  if (!["online", "away", "dnd"].includes(mode)) return { ok: false, code: "generic" };
   try {
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-  if (!user) return;
-  if (await isCommunityBanned(user.id)) return; // Phase 10
+  if (!user) return { ok: false, code: "unauthenticated" };
+  if (await isCommunityBanned(user.id)) return { ok: false, code: "banned" }; // Phase 10
   const limited = await checkRateLimit("community_presence", user.id);
-  if (!limited.allowed) return;
+  if (!limited.allowed) {
+    logSettingsUpdate(user.id, "presence_mode", "failure", "rate_limited");
+    return { ok: false, code: "rate_limited" };
+  }
   const values: Record<string, unknown> = { user_id: user.id, presence_mode: mode };
     if (mode !== "dnd") values.last_seen_at = new Date().toISOString();
-    // Plain onConflict upsert: for every real member the row already exists,
-    // so the conflict branch must UPDATE it — ignoreDuplicates would make
-    // the manual choice a silent no-op and the setting would never persist.
+    // Plain onConflict upsert: the row exists for every real member, so the
+    // conflict branch must UPDATE it; a missing row is INSERTed. Never
+    // ignoreDuplicates (silent no-op on existing rows — the incident).
     const { error } = await supabase
       .from("community_profiles")
       .upsert(values, { onConflict: "user_id" });
-    if (error)
+    if (error) {
+      const c = classifySettingsError(error);
+      logSettingsUpdate(user.id, "presence_mode", "failure", c.sqlstate ?? c.code);
       console.error(
         `[community] set presence mode failed code=${error.code ?? "unknown"} message=${error.message.slice(0, 200)}`,
       );
+      return { ok: false, code: c.code, sqlstate: c.sqlstate };
+    }
+    // Read-back verification (RLS-scoped: the session can only ever see its
+    // OWN row — a missing/wrong value means the write did not land).
+    const { data: row, error: readError } = await supabase
+      .from("community_profiles")
+      .select("presence_mode")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (readError) {
+      const c = classifySettingsError(readError);
+      logSettingsUpdate(user.id, "presence_mode", "failure", c.sqlstate ?? c.code);
+      return { ok: false, code: c.code, sqlstate: c.sqlstate };
+    }
+    if (!row || (row as { presence_mode: string }).presence_mode !== mode) {
+      logSettingsUpdate(user.id, "presence_mode", "failure", "row_not_affected");
+      return { ok: false, code: "not_found" };
+    }
+    logSettingsUpdate(user.id, "presence_mode", "success", "200");
+    return { ok: true, code: "success" };
   } catch (thrown) {
     console.error("[community] set presence mode threw:", thrown);
+    return { ok: false, code: "generic" };
   }
 }
 
-/** Phase 3 privacy toggle — "show my online status". */
-export async function setShowPresence(show: boolean): Promise<void> {
+/** Phase 3 privacy toggle — "show my online status" (verified write). */
+export async function setShowPresence(show: boolean): Promise<CommunitySettingsResult> {
   try {
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-  if (!user) return;
-  if (await isCommunityBanned(user.id)) return; // Phase 10
+  if (!user) return { ok: false, code: "unauthenticated" };
+  if (await isCommunityBanned(user.id)) return { ok: false, code: "banned" }; // Phase 10
   const limited = await checkRateLimit("community_prefs", user.id);
-  if (!limited.allowed) return;
-  const { error } = await supabase
+  if (!limited.allowed) {
+    logSettingsUpdate(user.id, "show_online_status", "failure", "rate_limited");
+    return { ok: false, code: "rate_limited" };
+  }
+  // .select() makes the write self-verifying: a zero-row UPDATE (missing or
+  // RLS-hidden row) yields no row → failure instead of a silent success.
+  const { data: row, error } = await supabase
     .from("community_profiles")
     .update({ show_presence: show })
-      .eq("user_id", user.id);
-    if (error) console.error("[community] set show presence failed:", error.message);
+      .eq("user_id", user.id)
+      .select("show_presence")
+      .maybeSingle();
+    if (error) {
+      const c = classifySettingsError(error);
+      logSettingsUpdate(user.id, "show_online_status", "failure", c.sqlstate ?? c.code);
+      console.error(
+        `[community] set show presence failed code=${error.code ?? "unknown"} message=${error.message.slice(0, 200)}`,
+      );
+      return { ok: false, code: c.code, sqlstate: c.sqlstate };
+    }
+    if (!row || (row as { show_presence: boolean }).show_presence !== show) {
+      logSettingsUpdate(user.id, "show_online_status", "failure", "row_not_affected");
+      return { ok: false, code: "not_found" };
+    }
+    logSettingsUpdate(user.id, "show_online_status", "success", "200");
+    return { ok: true, code: "success" };
   } catch (thrown) {
     console.error("[community] set show presence threw:", thrown);
+    return { ok: false, code: "generic" };
   }
 }
 
@@ -355,41 +434,107 @@ export interface CommunityPreferenceInput {
   sound?: boolean;
 }
 
-/** Phase 3 notification preferences — whitelisted booleans, own row only. */
-/** Returns true when the preference was written (the settings sheet reverts
- *  its optimistic state on false). */
+/** One whitelisted toggle → its one DB column (never a batch of columns). */
+const PREFERENCE_COLUMNS = {
+  friendRequests: "notify_friend_requests",
+  mentions: "notify_mentions",
+  replies: "notify_replies",
+  reactions: "notify_reactions",
+  directMessages: "notify_direct_messages",
+  sound: "notify_sound",
+} as const;
+
+/**
+ * Phase 3 notification preferences — whitelisted booleans, own row only.
+ * Each call updates ONLY the column(s) present in `input`, so one toggle
+ * can never clobber its siblings. Verified by read-back: a zero-row UPDATE
+ * is a failure (the settings sheet reverts its optimistic state on !ok).
+ */
 export async function updateNotificationPreferences(
   input: CommunityPreferenceInput,
-): Promise<boolean> {
+): Promise<CommunitySettingsResult> {
   const values: Record<string, boolean> = {};
-  if (typeof input.friendRequests === "boolean") values.notify_friend_requests = input.friendRequests;
-  if (typeof input.mentions === "boolean") values.notify_mentions = input.mentions;
-  if (typeof input.replies === "boolean") values.notify_replies = input.replies;
-  if (typeof input.reactions === "boolean") values.notify_reactions = input.reactions;
-  if (typeof input.directMessages === "boolean") values.notify_direct_messages = input.directMessages;
-  if (typeof input.sound === "boolean") values.notify_sound = input.sound;
-  if (Object.keys(values).length === 0) return true;
+  for (const key of Object.keys(PREFERENCE_COLUMNS) as Array<keyof typeof PREFERENCE_COLUMNS>) {
+    const value = input[key];
+    if (typeof value === "boolean") values[PREFERENCE_COLUMNS[key]] = value;
+  }
+  if (Object.keys(values).length === 0) return { ok: true, code: "success" };
+  const setting = Object.keys(values).join("+");
   try {
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return false;
-    if (await isCommunityBanned(user.id)) return false; // Phase 10
+    if (!user) return { ok: false, code: "unauthenticated" };
+    if (await isCommunityBanned(user.id)) return { ok: false, code: "banned" }; // Phase 10
     const limited = await checkRateLimit("community_prefs", user.id);
-    if (!limited.allowed) return false;
-    const { error } = await supabase
+    if (!limited.allowed) {
+      logSettingsUpdate(user.id, setting, "failure", "rate_limited");
+      return { ok: false, code: "rate_limited" };
+    }
+    const { data: row, error } = await supabase
       .from("community_profiles")
       .update(values)
-      .eq("user_id", user.id);
+      .eq("user_id", user.id)
+      .select(Object.keys(values).join(","))
+      .maybeSingle();
     if (error) {
-      console.error("[community] update preferences failed:", error.message);
-      return false;
+      const c = classifySettingsError(error);
+      logSettingsUpdate(user.id, setting, "failure", c.sqlstate ?? c.code);
+      console.error(
+        `[community] update preferences failed code=${error.code ?? "unknown"} message=${error.message.slice(0, 200)}`,
+      );
+      return { ok: false, code: c.code, sqlstate: c.sqlstate };
     }
-    return true;
+    if (!row) {
+      logSettingsUpdate(user.id, setting, "failure", "row_not_affected");
+      return { ok: false, code: "not_found" };
+    }
+    // `values` holds only whitelisted notify_* columns; the dynamic select
+    // string defeats row-type inference, so read the row generically.
+    const rowData = row as unknown as Record<string, unknown>;
+    for (const [column, expected] of Object.entries(values)) {
+      if (rowData[column] !== expected) {
+        logSettingsUpdate(user.id, setting, "failure", "value_not_persisted");
+        return { ok: false, code: "database" };
+      }
+    }
+    logSettingsUpdate(user.id, setting, "success", "200");
+    return { ok: true, code: "success" };
   } catch (thrown) {
     console.error("[community] update preferences threw:", thrown);
-    return false;
+    return { ok: false, code: "generic" };
+  }
+}
+
+/**
+ * Settings reload (requirement I): the CURRENT database state of the
+ * viewer's own row, read through the session client (RLS: own row only —
+ * no client-supplied id). The settings sheet calls this when it opens, so
+ * it always shows the persisted truth, never stale page props. Null on any
+ * failure (the sheet then keeps its current state — never a blank slate).
+ */
+export async function refreshCommunitySettings(): Promise<ViewerCommunitySettings | null> {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data: row, error } = await supabase
+    .from("community_profiles")
+    .select(VIEWER_SETTINGS_SELECT)
+    .eq("user_id", user.id)
+    .maybeSingle();
+    if (error) {
+      console.error("[community] refresh settings failed:", error.message);
+      return null;
+    }
+    if (!row) return null;
+    return buildViewerSettings(row as Parameters<typeof buildViewerSettings>[0]);
+  } catch (thrown) {
+    console.error("[community] refresh settings threw:", thrown);
+    return null;
   }
 }
 

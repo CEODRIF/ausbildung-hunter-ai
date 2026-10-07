@@ -10,22 +10,35 @@
  *   Notifications: friend requests / mentions / replies / reactions / DMs
  *                  sound on/off
  *
+ * PERSISTENCE CONTRACT (production incident fix):
+ *   - mode + "show online status" are rendered from the SHELL (the ack-aware
+ *     presence hook) — the sheet never holds its own copy of them, so a
+ *     rejected write visibly reverts;
+ *   - notification toggles are optimistic per toggle and REVERT on a
+ *     rejected server write (each write updates exactly its own column and
+ *     is verified by a server read-back — a zero-row update is a failure);
+ *   - opening the sheet reloads the CURRENT database state
+ *     (refreshCommunitySettings, own RLS row) — no stale page props;
+ *   - any failure shows a localized error (never a silent lie).
+ *
  * All writes go through the rate-limited, field-whitelisted server actions
- * (own row only, RLS-backed). Optimistic UI with revert on failure.
+ * (own row only, RLS-backed — the session's auth.uid(), never client ids).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/icon";
 import { useI18n } from "@/lib/i18n";
 import {
+  refreshCommunitySettings,
   updateNotificationPreferences,
   type CommunityPreferenceInput,
 } from "@/app/community/actions";
+import type { ViewerCommunitySettings } from "@/lib/community/social";
 import type { PresenceMode } from "@/lib/community/presence";
 
-export interface CommunitySettingsState {
-  mode: PresenceMode;
-  showPresence: boolean;
+/** The six notification toggles (everything except mode/showPresence,
+ *  which the shell's ack-aware presence hook owns). */
+export interface CommunitySettingsPrefs {
   friendRequests: boolean;
   mentions: boolean;
   replies: boolean;
@@ -34,12 +47,33 @@ export interface CommunitySettingsState {
   sound: boolean;
 }
 
+export interface CommunitySettingsState extends CommunitySettingsPrefs {
+  mode: PresenceMode;
+  showPresence: boolean;
+}
+
 export interface CommunitySettingsProps {
+  /**
+   * The shell's current state. `mode`/`showPresence` come from the
+   * ack-aware presence hook (server-confirmed values); the prefs are the
+   * sheet's optimistic copy (seeded from the shell, refreshed on open).
+   */
   initial: CommunitySettingsState;
   /** Presence mode change (the shell's hook — explicit write + broadcast). */
   onSetMode: (mode: PresenceMode) => void;
   /** "Show my online status" (the shell's hook — write + (re)publish). */
   onToggleShowPresence: () => void;
+  /**
+   * Called with the DATABASE-confirmed settings when the sheet opens
+   * (refreshCommunitySettings). The shell applies it to its state (and
+   * syncs the presence hook) so the whole community sees the truth.
+   */
+  onRefreshed?: (fresh: ViewerCommunitySettings) => void;
+  /**
+   * A localized error for a REJECTED presence/visibility write (the
+   * shell's hook reports it; rendered as the sheet's error alert).
+   */
+  error?: string | null;
   onClose: () => void;
 }
 
@@ -61,16 +95,71 @@ const MODES: Array<{ value: PresenceMode; icon: "sun" | "clock" | "moon"; labelK
   { value: "dnd", icon: "moon", labelKey: "community.presence.dnd" },
 ];
 
+function prefsOf(initial: CommunitySettingsState): CommunitySettingsPrefs {
+  return {
+    friendRequests: initial.friendRequests,
+    mentions: initial.mentions,
+    replies: initial.replies,
+    reactions: initial.reactions,
+    directMessages: initial.directMessages,
+    sound: initial.sound,
+  };
+}
+
 export function CommunitySettings({
   initial,
   onSetMode,
   onToggleShowPresence,
+  onRefreshed,
+  error: shellError,
   onClose,
 }: CommunitySettingsProps) {
   const { t, lang } = useI18n();
   const locale = lang === "de" ? "de-DE" : lang === "fr" ? "fr-FR" : lang === "ar" ? "ar" : "en-US";
-  const [state, setState] = useState<CommunitySettingsState>(initial);
+
+  // Mode + "show online status" are NOT local state — they are the shell's
+  // ack-aware values (a rejected write reverts them there, and this sheet
+  // re-renders with the confirmed value). Local state = the six optimistic
+  // notification toggles only.
+  const [prefs, setPrefs] = useState<CommunitySettingsPrefs>(() => prefsOf(initial));
   const [saving, setSaving] = useState(false);
+  const [prefError, setPrefError] = useState<string | null>(null);
+
+  const error = shellError ?? prefError;
+
+  // Auto-clear the error after a few seconds (the user keeps the values).
+  useEffect(() => {
+    if (!error) return;
+    const timer = window.setTimeout(() => setPrefError(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [error]);
+
+  // SETTINGS RELOAD (requirement I): on open, load the CURRENT database
+  // state of the own row (RLS-scoped; never stale page props). The sheet
+  // is mounted only while open, so mount == open. Ref-guarded callback so
+  // the effect stays mount-only (no re-fetch loop on shell re-renders).
+  const onRefreshedRef = useRef(onRefreshed);
+  useEffect(() => {
+    onRefreshedRef.current = onRefreshed;
+  }, [onRefreshed]);
+  useEffect(() => {
+    let disposed = false;
+    void refreshCommunitySettings().then((fresh) => {
+      if (disposed || !fresh) return;
+      setPrefs({
+        friendRequests: fresh.friendRequests,
+        mentions: fresh.mentions,
+        replies: fresh.replies,
+        reactions: fresh.reactions,
+        directMessages: fresh.directMessages,
+        sound: fresh.sound,
+      });
+      onRefreshedRef.current?.(fresh);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   // Phase 5: "My reports" — fetched ONCE when the sheet opens (the sheet is
   // mounted only while open; user-initiated, never polled).
@@ -102,42 +191,48 @@ export function CommunitySettings({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const setPref = useCallback(
-    (patch: Partial<CommunityPreferenceInput>) => {
-      const prev = state;
-      const next = {
-        ...state,
-        ...(patch.friendRequests !== undefined && { friendRequests: patch.friendRequests }),
-        ...(patch.mentions !== undefined && { mentions: patch.mentions }),
-        ...(patch.replies !== undefined && { replies: patch.replies }),
-        ...(patch.reactions !== undefined && { reactions: patch.reactions }),
-        ...(patch.directMessages !== undefined && { directMessages: patch.directMessages }),
-        ...(patch.sound !== undefined && { sound: patch.sound }),
-      };
-      setState(next); // optimistic
-      setSaving(true);
-      void updateNotificationPreferences(patch).then((ok) => {
-        setSaving(false);
-        if (!ok) setState(prev); // revert on failure (Step 23)
-      });
-    },
-    [state],
-  );
+  /**
+   * One notification toggle — optimistic, ONE column per call (the server
+   * whitelists + verifies the write). On a rejected write the toggle
+   * reverts to the last confirmed value and the error alert shows.
+   */
+  const setPref = useCallback((patch: Partial<CommunityPreferenceInput>) => {
+    const prev = prefs;
+    const next: CommunitySettingsPrefs = {
+      ...prefs,
+      ...(patch.friendRequests !== undefined && { friendRequests: patch.friendRequests }),
+      ...(patch.mentions !== undefined && { mentions: patch.mentions }),
+      ...(patch.replies !== undefined && { replies: patch.replies }),
+      ...(patch.reactions !== undefined && { reactions: patch.reactions }),
+      ...(patch.directMessages !== undefined && { directMessages: patch.directMessages }),
+      ...(patch.sound !== undefined && { sound: patch.sound }),
+    };
+    setPrefs(next); // optimistic
+    setSaving(true);
+    setPrefError(null);
+    void updateNotificationPreferences(patch).then((result) => {
+      setSaving(false);
+      if (!result.ok) {
+        setPrefs(prev); // revert on failure (the DB value is the truth)
+        setPrefError(t("community.settings.saveError"));
+      }
+    });
+  }, [prefs, t]);
 
-  const toggle = (key: keyof CommunityPreferenceInput & keyof CommunitySettingsState) => {
-    const current = state[key];
+  const toggle = (key: keyof CommunityPreferenceInput & keyof CommunitySettingsPrefs) => {
+    const current = prefs[key];
     if (typeof current === "boolean") {
       setPref({ [key]: !current } as Partial<CommunityPreferenceInput>);
     }
   };
 
   const prefRow = (
-    key: keyof CommunityPreferenceInput & keyof CommunitySettingsState,
+    key: keyof CommunityPreferenceInput & keyof CommunitySettingsPrefs,
     labelKey: string,
   ) => (
     <ToggleRow
       label={t(labelKey)}
-      on={Boolean(state[key])}
+      on={Boolean(prefs[key])}
       disabled={saving}
       onToggle={() => toggle(key)}
     />
@@ -169,7 +264,16 @@ export function CommunitySettings({
           </button>
         </div>
 
-        {/* Presence */}
+        {error && (
+          <p
+            role="alert"
+            className="mb-3 rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-xs font-medium text-danger"
+          >
+            {error}
+          </p>
+        )}
+
+        {/* Presence — mode + visibility are the shell's ack-aware values. */}
         <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-faint">
           {t("community.settings.presenceSection")}
         </p>
@@ -179,10 +283,10 @@ export function CommunitySettings({
               key={m.value}
               type="button"
               role="radio"
-              aria-checked={state.mode === m.value}
-              onClick={() => state.mode !== m.value && onSetMode(m.value)}
+              aria-checked={initial.mode === m.value}
+              onClick={() => initial.mode !== m.value && onSetMode(m.value)}
               className={`flex flex-col items-center gap-1 rounded-xl border px-2 py-2.5 text-xs font-semibold transition-colors ${
-                state.mode === m.value
+                initial.mode === m.value
                   ? "border-accent bg-accent-soft/60 text-accent"
                   : "border-line bg-surface text-muted hover:bg-surface-2"
               }`}
@@ -196,7 +300,7 @@ export function CommunitySettings({
           className="mt-1.5"
           label={t("community.settings.showPresence")}
           hint={t("community.settings.showPresenceHint")}
-          on={state.showPresence}
+          on={initial.showPresence}
           onToggle={onToggleShowPresence}
         />
 

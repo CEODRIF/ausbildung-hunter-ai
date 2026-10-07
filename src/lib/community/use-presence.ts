@@ -47,6 +47,13 @@ export interface UseCommunityPresenceArgs {
   showPresence: boolean;
   /** Flips showPresence in the parent (after a successful server write). */
   onShowPresenceChanged?: (show: boolean) => void;
+  /**
+   * A settings write was REJECTED by the server (rate limit, RLS, …) —
+   * the hook reverted the optimistic state; the parent surfaces a
+   * localized error. Codes are the safe stable classifications from
+   * the server actions (never SQL/stack).
+   */
+  onError?: (code: string) => void;
 }
 
 export interface UseCommunityPresence {
@@ -56,6 +63,11 @@ export interface UseCommunityPresence {
   /** Manual presence control (DND / Away / Online) — an explicit write. */
   setMode: (mode: PresenceMode) => void;
   toggleShowPresence: () => void;
+  /**
+   * Pure state sync from a server-confirmed read (settings reload) —
+   * performs NO write: the database is already the source of truth.
+   */
+  syncState: (mode: PresenceMode, showPresence: boolean) => void;
 }
 
 type PresenceChannel = {
@@ -68,6 +80,7 @@ export function useCommunityPresence({
   initialMode,
   showPresence: initialShow,
   onShowPresenceChanged,
+  onError,
 }: UseCommunityPresenceArgs): UseCommunityPresence {
   const [mode, setModeState] = useState<PresenceMode>(initialMode);
   const [showPresence, setShowPresenceState] = useState<boolean>(initialShow);
@@ -117,16 +130,17 @@ export function useCommunityPresence({
       const now = Date.now();
       if (document.visibilityState !== "visible") return;
       if (!immediate && now - lastSentRef.current < PRESENCE_THROTTLE_MS) return;
+      // TRANSIENT view for THIS broadcast only (an idle "online" tab may
+      // show as away to peers). `next` never mutates the user's DECLARED
+      // mode state — an explicit Away/DND always wins over the heartbeat.
       const next = declaredModeForActivity(lastActivityRef.current, modeRef.current, now);
       if (!immediate && next === sentModeRef.current) return; // nothing changed
       lastSentRef.current = now;
       sentModeRef.current = next;
-      if (next !== modeRef.current) {
-        modeRef.current = next;
-        setModeState(next);
-      }
       // Server-stamped + rate-limited; never throws (presence is chrome).
-      await touchCommunityPresence(next);
+      // The heartbeat writes last_seen_at ONLY — it can never change a
+      // manually selected presence mode.
+      await touchCommunityPresence();
       publish(next);
     },
     [publish],
@@ -149,30 +163,67 @@ export function useCommunityPresence({
 
   const setMode = useCallback(
     (next: PresenceMode) => {
-      if (!isPresenceMode(next)) return;
+      if (!isPresenceMode(next) || next === modeRef.current) return;
+      const prev = modeRef.current;
+      // Optimistic — the explicit choice is the last word; if the write
+      // is rejected the hook reverts to the last CONFIRMED value (G).
       modeRef.current = next;
       sentModeRef.current = next;
       setModeState(next);
       lastActivityRef.current = Date.now();
       lastSentRef.current = Date.now(); // explicit write just happened
       void (async () => {
-        await setPresenceMode(next);
+        const result = await setPresenceMode(next);
+        if (!result.ok) {
+          modeRef.current = prev;
+          sentModeRef.current = prev;
+          setModeState(prev);
+          onError?.(result.code);
+          return;
+        }
         publish(next);
       })();
     },
-    [publish],
+    [publish, onError],
   );
 
   const toggleShowPresence = useCallback(() => {
-    const next = !showRef.current;
+    const prev = showRef.current;
+    const next = !prev;
     showRef.current = next;
     setShowPresenceState(next);
     onShowPresenceChanged?.(next);
-    void setShowPresence(next);
-    if (next) void send(true); // re-appear: report immediately
-    // Hiding: simply stop publishing — stale broadcasts age out through
-    // the 2-minute freshness window (no farewell event, no extra write).
-  }, [onShowPresenceChanged, send]);
+    void (async () => {
+      const result = await setShowPresence(next);
+      if (!result.ok) {
+        // Revert to the last confirmed database value + tell the user.
+        showRef.current = prev;
+        setShowPresenceState(prev);
+        onShowPresenceChanged?.(prev);
+        onError?.(result.code);
+        return;
+      }
+      if (next) void send(true); // re-appear: report immediately
+      // Hiding: simply stop publishing — stale broadcasts age out through
+      // the 2-minute freshness window (no farewell event, no extra write).
+    })();
+  }, [onShowPresenceChanged, send, onError]);
+
+  // Server-confirmed state sync (the settings sheet's on-open reload).
+  // NO write: the database already holds these values.
+  const syncState = useCallback(
+    (mode: PresenceMode, show: boolean) => {
+      if (isPresenceMode(mode)) {
+        modeRef.current = mode;
+        sentModeRef.current = mode;
+        setModeState(mode);
+      }
+      showRef.current = show;
+      setShowPresenceState(show);
+      onShowPresenceChanged?.(show);
+    },
+    [onShowPresenceChanged],
+  );
 
   // The heartbeat + activity listeners (the single sanctioned timer of
   // the hook — the messenger components themselves stay interval-free).
@@ -252,5 +303,5 @@ export function useCommunityPresence({
     };
   }, [myId]);
 
-  return { mode, showPresence, setMode, toggleShowPresence };
+  return { mode, showPresence, setMode, toggleShowPresence, syncState };
 }

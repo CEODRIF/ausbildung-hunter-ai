@@ -145,10 +145,12 @@ describe("declaredModeForActivity — the inactivity threshold", () => {
     expect(declaredModeForActivity(NOW - COMMUNITY_AWAY_AFTER_MS, "online", NOW)).toBe("away");
   });
 
-  it("a manual away (non-DND) is restored by activity like online", () => {
+  it("a manual away is STICKY — activity (and the heartbeat) never clears it", () => {
     const t0 = NOW - 10 * 60_000;
     expect(declaredModeForActivity(t0, "away", NOW)).toBe("away");
-    expect(declaredModeForActivity(NOW, "away", NOW)).toBe("online");
+    // (incident fix: an explicit Away is only changed by an explicit user
+    // action — fresh activity must not flip it back to online)
+    expect(declaredModeForActivity(NOW, "away", NOW)).toBe("away");
   });
 });
 

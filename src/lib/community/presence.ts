@@ -57,13 +57,19 @@ export function derivePresenceState(
  * Local inactivity → declared mode (client-side flip, NO write by itself:
  * the flip rides the next allowed heartbeat, or an immediate one when it
  * goes away → online again).
+ *
+ * STICKY EXPLICIT MODES: a MANUAL choice (away / dnd) is never cleared by
+ * activity or inactivity — only an explicit user action (selecting another
+ * mode) changes it. Only the "online" declaration auto-flips to "away" when
+ * the tab goes idle. This is what keeps a manually selected Away/DND from
+ * being silently overwritten by the heartbeat loop.
  */
 export function declaredModeForActivity(
   lastActivityAt: number,
   manualMode: PresenceMode,
   now: number = Date.now(),
 ): PresenceMode {
-  if (manualMode === "dnd") return "dnd";
+  if (manualMode === "dnd" || manualMode === "away") return manualMode;
   return now - lastActivityAt >= COMMUNITY_AWAY_AFTER_MS ? "away" : "online";
 }
 

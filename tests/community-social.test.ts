@@ -69,6 +69,7 @@ import {
   setPresenceMode,
   setShowPresence,
   touchCommunityPresence,
+  updateNotificationPreferences,
 } from "@/app/community/actions";
 
 // ---------------------------------------------------------------------------
@@ -2137,7 +2138,7 @@ describe("realtime architecture (source guards)", () => {
     expect(presenceHookSource).toContain('window.addEventListener("scroll", onActivity, { passive: true })');
     expect(presenceHookSource).toContain('window.removeEventListener("scroll", onActivity)');
     // It writes through the rate-limited server action (never a direct table write):
-    expect(presenceHookSource).toContain("touchCommunityPresence(next)");
+    expect(presenceHookSource).toContain("touchCommunityPresence()");
   });
 });
 
@@ -2425,9 +2426,13 @@ describe("incident — community settings persistence (BUG 2)", () => {
   it("setPresenceMode upserts WITHOUT ignoreDuplicates — the existing row is UPDATED (the choice persists)", async () => {
     mockAuth(ALICE);
     mockAdmin();
-    const { client } = makeUserClient();
+    // queues: [upsert write, RLS-scoped read-back verification]
+    const { client } = makeUserClient({
+      queues: { community_profiles: [ok(null), ok({ presence_mode: "away" })] },
+    });
     vi.mocked(createClient).mockResolvedValue(client);
-    await setPresenceMode("away");
+    const result = await setPresenceMode("away");
+    expect(result).toEqual({ ok: true, code: "success" });
     const upsert = client.calls.find((c) => c.table === "community_profiles" && c.op === "upsert");
     expect(upsert).toBeTruthy();
     expect(upsert?.args[1]).toEqual({ onConflict: "user_id" });
@@ -2440,9 +2445,12 @@ describe("incident — community settings persistence (BUG 2)", () => {
   it("setPresenceMode('dnd') persists dnd WITHOUT stamping last_seen (hidden state stays hidden)", async () => {
     mockAuth(ALICE);
     mockAdmin();
-    const { client } = makeUserClient();
+    const { client } = makeUserClient({
+      queues: { community_profiles: [ok(null), ok({ presence_mode: "dnd" })] },
+    });
     vi.mocked(createClient).mockResolvedValue(client);
-    await setPresenceMode("dnd");
+    const result = await setPresenceMode("dnd");
+    expect(result).toEqual({ ok: true, code: "success" });
     const upsert = client.calls.find((c) => c.table === "community_profiles" && c.op === "upsert");
     const values = upsert?.args[0] as Record<string, unknown>;
     expect(values.presence_mode).toBe("dnd");
@@ -2450,37 +2458,83 @@ describe("incident — community settings persistence (BUG 2)", () => {
     expect(upsert?.args[1]).toEqual({ onConflict: "user_id" });
   });
 
-  it("the heartbeat updates existing rows again (no ignoreDuplicates) and keeps the DND guard", async () => {
+  it("setPresenceMode verifies the write by read-back and classifies failures (42501 / rate limit / zero-row)", async () => {
     mockAuth(ALICE);
     mockAdmin();
-    const { client } = makeUserClient();
-    vi.mocked(createClient).mockResolvedValue(client);
-    await touchCommunityPresence("online");
-    const upsert = client.calls.find((c) => c.table === "community_profiles" && c.op === "upsert");
-    expect(upsert?.args[1]).toEqual({ onConflict: "user_id" });
-    expect(client.calls.find((c) => c.op === "not")?.args).toEqual(["presence_mode", "eq", "dnd"]);
-
-    // A dnd-mode heartbeat carries no filter (it only writes last_seen for
-    // non-dnd rows; the dnd row is never touched by the heartbeat).
-    const dndClient = makeUserClient();
-    vi.mocked(createClient).mockResolvedValue(dndClient.client);
-    await touchCommunityPresence("dnd");
-    expect(dndClient.calls.some((c) => c.op === "not")).toBe(false);
+    // read-back yields no row (missing or RLS-hidden) → classified failure, never a silent ok
+    const missing = makeUserClient({ queues: { community_profiles: [ok(null), ok(null)] } });
+    vi.mocked(createClient).mockResolvedValue(missing.client);
+    expect(await setPresenceMode("online")).toEqual({ ok: false, code: "not_found" });
+    // read-back hit RLS (42501) → rls_blocked with the SQLSTATE
+    const rls = makeUserClient({
+      queues: {
+        community_profiles: [ok(null), fail("new row violates row-level security policy", "42501")],
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(rls.client);
+    expect(await setPresenceMode("online")).toEqual({ ok: false, code: "rls_blocked", sqlstate: "42501" });
+    // rate limited → rate_limited, the table is never touched
+    mockAdmin({ rateLimit: { allowed: false, count: 61, limit: 60, retry_after: 12 } });
+    const quiet = makeUserClient();
+    vi.mocked(createClient).mockResolvedValue(quiet.client);
+    expect(await setPresenceMode("away")).toEqual({ ok: false, code: "rate_limited" });
+    expect(quiet.calls.some((c) => c.table === "community_profiles")).toBe(false);
   });
 
-  it("setShowPresence persists via a plain own-row UPDATE", async () => {
+  it("the heartbeat writes last_seen_at ONLY — a manual DND/AWAY is never touched by it", async () => {
     mockAuth(ALICE);
     mockAdmin();
     const { client } = makeUserClient();
     vi.mocked(createClient).mockResolvedValue(client);
-    await setShowPresence(false);
+    await touchCommunityPresence();
+    const upsert = client.calls.find((c) => c.table === "community_profiles" && c.op === "upsert");
+    expect(upsert?.args[1]).toEqual({ onConflict: "user_id" });
+    const values = upsert?.args[0] as Record<string, unknown>;
+    expect(values.user_id).toBe(ALICE);
+    expect(typeof values.last_seen_at).toBe("string");
+    // the heartbeat carries NO mode — it cannot overwrite a manual choice:
+    expect("presence_mode" in values).toBe(false);
+    expect(client.calls.some((c) => c.op === "not")).toBe(false);
+  });
+
+  it("setShowPresence persists via a VERIFIED own-row UPDATE (zero-row = failure)", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const { client } = makeUserClient({
+      queues: { community_profiles: [ok({ show_presence: false })] },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const result = await setShowPresence(false);
+    expect(result).toEqual({ ok: true, code: "success" });
     const update = client.calls.find((c) => c.table === "community_profiles" && c.op === "update");
     expect(update?.args[0]).toEqual({ show_presence: false });
+    // a zero-row update (missing row) is a failure, never a silent success
+    const empty = makeUserClient({ queues: { community_profiles: [ok(null)] } });
+    vi.mocked(createClient).mockResolvedValue(empty.client);
+    expect(await setShowPresence(true)).toEqual({ ok: false, code: "not_found" });
+  });
+
+  it("updateNotificationPreferences writes ONLY the toggled column and verifies it", async () => {
+    mockAuth(ALICE);
+    mockAdmin();
+    const { client } = makeUserClient({
+      queues: { community_profiles: [ok({ notify_mentions: false })] },
+    });
+    vi.mocked(createClient).mockResolvedValue(client);
+    const result = await updateNotificationPreferences({ mentions: false });
+    expect(result).toEqual({ ok: true, code: "success" });
+    const update = client.calls.find((c) => c.table === "community_profiles" && c.op === "update");
+    // exactly ONE column — the other five preferences are untouched:
+    expect(update?.args[0]).toEqual({ notify_mentions: false });
+    // and a zero-row update fails (the sheet reverts):
+    const empty = makeUserClient({ queues: { community_profiles: [ok(null)] } });
+    vi.mocked(createClient).mockResolvedValue(empty.client);
+    expect(await updateNotificationPreferences({ sound: false })).toEqual({ ok: false, code: "not_found" });
   });
 
   it("the settings modal reverts optimistic state on failure and never reloads the page", () => {
     const SHEET = readSrc("src/components/community/community-settings.tsx");
-    expect(SHEET).toContain("if (!ok) setState(prev)");
+    expect(SHEET).toContain("setPrefs(prev)");
     expect(SHEET).not.toContain("router.refresh");
     expect(SHEET).not.toContain("window.location");
   });

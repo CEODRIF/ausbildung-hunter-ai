@@ -21,6 +21,7 @@ import {
 } from "@/lib/community/notification-bus";
 import { socialKindOf } from "@/lib/community/notification-kinds";
 import { useCommunityPresence } from "@/lib/community/use-presence";
+import type { ViewerCommunitySettings } from "@/lib/community/social";
 import { playNotificationChime } from "@/lib/community/chime";
 import { toggleRoomMute } from "@/app/community/actions";
 import { RoomNav } from "./room-nav";
@@ -183,6 +184,30 @@ export function CommunityShell({
     prefsRef.current = prefs;
   }, [prefs]);
 
+  // Settings error (a presence/visibility write was REJECTED server-side).
+  // The hook reverts its optimistic state itself; this surfaces the
+  // localized message. Auto-cleared — the confirmed values stay in place.
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!settingsError) return;
+    const timer = window.setTimeout(() => setSettingsError(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [settingsError]);
+
+  const onShowPresenceChanged = useCallback(
+    (show: boolean) => setPrefs((p) => ({ ...p, showPresence: show })),
+    [],
+  );
+  const onPresenceError = useCallback(
+    (code: string) => {
+      // The structured server diagnostic (setting + SQLSTATE) is logged by
+      // the server action; here we only surface the user-facing message.
+      void code;
+      setSettingsError(t("community.settings.saveError"));
+    },
+    [t],
+  );
+
   // Phase 3 presence — the ONE heartbeat hook (throttled writes while the
   // tab is visible, immediate on visibility/activity flips, per-user
   // broadcast channel for the DM peer + profile card).
@@ -190,16 +215,40 @@ export function CommunityShell({
     myId: me.userId,
     initialMode: settings?.mode ?? "online",
     showPresence: settings?.showPresence ?? true,
-    onShowPresenceChanged: (show) => setPrefs((p) => ({ ...p, showPresence: show })),
+    onShowPresenceChanged,
+    onError: onPresenceError,
   });
-  // Keep the settings sheet in sync with the hook's mode (activity flips) —
-  // the render-phase state-adjustment pattern (an effect here would only add
-  // a cascading render).
+  // Keep the settings sheet in sync with the hook's mode — the render-phase
+  // state-adjustment pattern (an effect here would only add a cascading
+  // render).
   const [syncedPresenceMode, setSyncedPresenceMode] = useState(presence.mode);
   if (presence.mode !== syncedPresenceMode) {
     setSyncedPresenceMode(presence.mode);
     setPrefs((p) => (p.mode === presence.mode ? p : { ...p, mode: presence.mode }));
   }
+
+  // The settings sheet's on-open reload: apply the DATABASE-confirmed
+  // state to the shell + the presence hook (syncState performs NO write —
+  // the database already holds these values).
+  const syncPresence = presence.syncState;
+  const handleSettingsRefresh = useCallback(
+    (fresh: ViewerCommunitySettings) => {
+      syncPresence(fresh.mode, fresh.showPresence);
+      setPrefs((p) => ({
+        ...p,
+        mode: fresh.mode,
+        showPresence: fresh.showPresence,
+        friendRequests: fresh.friendRequests,
+        mentions: fresh.mentions,
+        replies: fresh.replies,
+        reactions: fresh.reactions,
+        directMessages: fresh.directMessages,
+        sound: fresh.sound,
+      }));
+      setMuted(new Set(fresh.mutedRooms));
+    },
+    [syncPresence],
+  );
 
   const openProfile = useCallback(
     (userId: string) => {
@@ -613,9 +662,6 @@ export function CommunityShell({
     />
   );
 
-  const setPref = (patch: Partial<CommunitySettingsState>) =>
-    setPrefs((p) => ({ ...p, ...patch }));
-
   return (
     <div
       ref={rootRef}
@@ -772,12 +818,13 @@ export function CommunityShell({
             showPresence: presence.showPresence,
           }}
           onSetMode={(m) => {
-            setPref({ mode: m });
             presence.setMode(m);
           }}
           onToggleShowPresence={() => {
             presence.toggleShowPresence();
           }}
+          onRefreshed={handleSettingsRefresh}
+          error={settingsError}
           onClose={() => setSettingsOpen(false)}
         />
       )}
