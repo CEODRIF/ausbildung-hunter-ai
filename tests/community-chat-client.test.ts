@@ -93,9 +93,18 @@ describe("room chat — browser client unavailable (missing public env)", () => 
     expect(chatSource).not.toMatch(/useState\(\s*\(\)\s*=>\s*createClient\(\)/);
     // …it is created lazily, on first use after mount, and cached in a ref.
     expect(chatSource).toContain("clientRef.current = createClient();");
-    // A client that cannot be built is logged + reported (degraded state),
-    // never thrown.
+    // A client that cannot be built is logged, never thrown — both in the
+    // surface's lazy client and in the shared realtime layer's resolver.
     expect(chatSource).toContain('console.error("[community] realtime client unavailable:", error)');
+    const sharedSource = readFileSync(
+      resolve(root, "src/lib/community/conversation-realtime.ts"),
+      "utf8",
+    );
+    expect(sharedSource).toContain('console.error("[community] realtime client unavailable:", error)');
+    // A missing client degrades the banner (the chat keeps working through
+    // the RLS-backed API routes).
+    expect(chatSource).toContain("if (resolveCommunityRealtimeClient() === null)");
+    expect(chatSource).toContain('setConnection("disconnected")');
     // Every consumer tolerates a missing client.
     // (Phase 10: author enrichment no longer touches the browser client at
     // all — it goes through the secure session-gated member endpoint with
@@ -104,10 +113,10 @@ describe("room chat — browser client unavailable (missing public env)", () => 
     expect(chatSource).toContain("if (userId in authorsRef.current) return;");
     expect(chatSource).toContain("if (!UUID_RE.test(userId)) return;");
     expect(chatSource).toContain("const client = getClient();\n    if (!client)");
-    // Realtime setup and image signing are wrapped, so an effect error cannot
-    // reach the error boundary either.
-    expect(chatSource).toContain('console.error("[community] realtime subscribe failed:", error)');
-    expect(chatSource).toContain('console.error("[community] image signing failed:", error)');
-    expect(chatSource).toContain("reportDegraded()");
+    // Realtime setup is wrapped in the shared layer (and releases the
+    // registry on failure), so a setup error cannot reach the error
+    // boundary or leak a subscription.
+    expect(sharedSource).toContain('console.error("[community] realtime setup failed:", error)');
+    expect(sharedSource).toContain("registry.release(client, name);");
   });
 });

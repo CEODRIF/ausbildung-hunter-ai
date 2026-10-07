@@ -18,6 +18,7 @@ import {
 } from "@/lib/community/notification-bus";
 import { socialKindOf } from "@/lib/community/notification-kinds";
 import { useCommunityShell } from "./community-shell";
+import { ActionSpinner, COMMUNITY_PRESS_CLASS, useCommunityToast } from "./action-feedback";
 import { AdminBadge } from "./admin-badge";
 
 /**
@@ -142,6 +143,7 @@ export function NotificationsView({
   const { t } = useI18n();
   const router = useRouter();
   const { members } = useCommunityShell();
+  const toast = useCommunityToast();
 
   const [items, setItems] = useState<CenterNotification[]>(initial);
   const [cursor, setCursor] = useState<CenterCursor | null>(initialCursor);
@@ -327,20 +329,30 @@ export function NotificationsView({
   );
 
   const markAll = useCallback(async () => {
-    if (markingAll) return;
+    if (markingAll) return; // double-submit guard
     setMarkingAll(true);
     const snapshot = items;
     setReadError(false);
     setItems((prev) => prev.map((i) => (i.read ? i : { ...i, read: true })));
     try {
       await markAllNotificationsRead();
+      toast.notify({
+        kind: "success",
+        text: t("community.toast.allRead"),
+        dedupeKey: "mark-all-read",
+      });
     } catch {
-      setItems(snapshot);
+      setItems(snapshot); // revert (the UI never lies)
       setReadError(true);
+      toast.notify({
+        kind: "error",
+        text: t("community.toast.actionError"),
+        dedupeKey: "mark-all-read",
+      });
     } finally {
       setMarkingAll(false);
     }
-  }, [items, markingAll]);
+  }, [items, markingAll, t, toast]);
 
   // --- Cursor pagination ---------------------------------------------------
   const loadMore = useCallback(async () => {
@@ -421,8 +433,20 @@ export function NotificationsView({
               variant="ghost"
               onClick={() => void markAll()}
               disabled={markingAll}
+              aria-busy={markingAll || undefined}
             >
-              {t("community.markAllRead")}
+              {/* Stacked labels: the width never jumps while marking. */}
+              <span className="relative grid">
+                <span className={`col-start-1 row-start-1 ${markingAll ? "invisible" : ""}`}>
+                  {t("community.markAllRead")}
+                </span>
+                <span
+                  className={`col-start-1 row-start-1 flex items-center justify-center gap-1.5 ${markingAll ? "" : "invisible"}`}
+                >
+                  {markingAll && <ActionSpinner className="h-3.5 w-3.5" />}
+                  {t("community.markAllRead")}
+                </span>
+              </span>
             </Button>
           )}
         </div>
@@ -436,7 +460,7 @@ export function NotificationsView({
               role="tab"
               aria-selected={tab === value}
               onClick={() => setTab(value)}
-              className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+              className={`rounded-full px-3.5 py-1.5 text-xs font-semibold ${COMMUNITY_PRESS_CLASS} ${
                 tab === value
                   ? "bg-accent-soft text-accent"
                   : "text-muted hover:bg-surface-2 hover:text-ink"
@@ -535,7 +559,7 @@ export function NotificationsView({
                             type="button"
                             onClick={() => openItem(item)}
                             aria-label={`${text.title}. ${text.content}${item.read ? "" : ` (${t("community.unreadAria")})`}`}
-                            className="flex w-full items-center gap-2.5 rounded-xl border border-line bg-surface px-2.5 py-2 text-start transition-colors hover:border-line-strong hover:bg-surface-2/60"
+                            className={`flex w-full items-center gap-2.5 rounded-xl border border-line bg-surface px-2.5 py-2 text-start ${COMMUNITY_PRESS_CLASS} active:bg-surface-2 hover:border-line-strong hover:bg-surface-2/60`}
                           >
                             {inner}
                           </button>
@@ -570,8 +594,20 @@ export function NotificationsView({
                 variant="ghost"
                 onClick={() => void loadMore()}
                 disabled={loadingMore}
+                aria-busy={loadingMore || undefined}
               >
-                {loadingMore ? t("common.loading") : t("community.loadMore")}
+                {/* Stacked labels: the width never jumps while loading. */}
+                <span className="relative grid">
+                  <span className={`col-start-1 row-start-1 ${loadingMore ? "invisible" : ""}`}>
+                    {t("community.loadMore")}
+                  </span>
+                  <span
+                    className={`col-start-1 row-start-1 flex items-center justify-center gap-1.5 ${loadingMore ? "" : "invisible"}`}
+                  >
+                    {loadingMore && <ActionSpinner className="h-3.5 w-3.5" />}
+                    {t("community.loadMore")}
+                  </span>
+                </span>
               </Button>
             ) : (
               !loadError && (

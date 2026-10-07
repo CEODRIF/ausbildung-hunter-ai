@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { useFriendshipsRealtime } from "@/lib/community/conversation-realtime";
+import type { RealtimeLikeChannel } from "@/lib/community/realtime-core";
+import { ActionSpinner, useCommunityToast } from "./action-feedback";
 import { Icon } from "@/components/icon";
 import { Button, Card, ErrorState } from "@/components/ui";
 import { useI18n } from "@/lib/i18n";
@@ -133,6 +135,7 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
   const [error, setError] = useState(false);
   const refetchTimer = useRef<number | null>(null);
   const refetching = useRef(false);
+  const toast = useCommunityToast();
 
   const refetch = useCallback(async () => {
     if (refetching.current) return;
@@ -152,95 +155,62 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
   }, []);
 
   // Realtime: relationship rows change (incoming request, acceptance, …).
-  // The postgres stream is RLS-scoped — only the viewer's own rows arrive —
-  // which requires the JWT attached to the socket BEFORE joining (same
-  // pattern as RoomChat; a token-less join streams zero rows).
-  const clientRef = useRef<ReturnType<typeof createClient> | null>(null);
-  const getClient = useCallback((): ReturnType<typeof createClient> | null => {
-    if (clientRef.current) return clientRef.current;
-    try {
-      clientRef.current = createClient();
-    } catch (error) {
-      console.error("[community] realtime client unavailable:", error);
-      return null;
-    }
-    return clientRef.current;
-  }, []);
+  // The postgres stream is RLS-scoped — only the viewer's own rows arrive.
+  // The subscription lives in the shared community realtime layer (stable
+  // channel name, registry, JWT handshake, teardown, reconnect tracking);
+  // the 250ms debounce below is the ≤500ms coalescing window for rapid
+  // events.
+  const scheduleRefetch = useCallback(() => {
+    if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
+    refetchTimer.current = window.setTimeout(() => void refetch(), REALTIME_REFETCH_DEBOUNCE_MS);
+  }, [refetch]);
+
+  const registerFriendshipsHandlers = useCallback(
+    (channel: RealtimeLikeChannel) => {
+      channel
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "community_friendships" },
+          () => scheduleRefetch(),
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "community_friendships" },
+          () => scheduleRefetch(),
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "community_friendships" },
+          () => scheduleRefetch(),
+        );
+    },
+    [scheduleRefetch],
+  );
+
+  useFriendshipsRealtime(me.userId, {
+    registerHandlers: registerFriendshipsHandlers,
+    // Reconnect recovery: ONE targeted summary refetch — never a poll.
+    onMissedSync: () => {
+      if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
+      void refetch();
+    },
+  });
 
   useEffect(() => {
-    let disposed = false;
-    let channel: ReturnType<ReturnType<typeof createClient>["channel"]> | null = null;
-    const scheduleRefetch = () => {
-      if (disposed) return;
-      if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
-      refetchTimer.current = window.setTimeout(() => void refetch(), REALTIME_REFETCH_DEBOUNCE_MS);
-    };
-    const client = getClient();
-    if (!client) return;
-    const subscribeChannel = () => {
-      if (disposed || channel) return;
-      try {
-        channel = client
-          .channel(`community-friendships-${me.userId}`)
-          .on(
-            "postgres_changes",
-            { event: "INSERT", schema: "public", table: "community_friendships" },
-            () => scheduleRefetch(),
-          )
-          .on(
-            "postgres_changes",
-            { event: "UPDATE", schema: "public", table: "community_friendships" },
-            () => scheduleRefetch(),
-          )
-          .on(
-            "postgres_changes",
-            { event: "DELETE", schema: "public", table: "community_friendships" },
-            () => scheduleRefetch(),
-          )
-          .subscribe();
-      } catch (error) {
-        console.error("[community] friends realtime failed:", error);
-      }
-    };
-    void (async () => {
-      try {
-        await client.auth.initialize();
-      } catch {
-        /* restored-session failure: the join simply stays pending */
-      }
-      if (disposed) return;
-      const {
-        data: { session },
-      } = await client.auth.getSession();
-      if (disposed) return;
-      if (session?.access_token) {
-        await client.realtime.setAuth(session.access_token).catch(() => {});
-        if (!disposed) subscribeChannel();
-      }
-    })();
-    // Session restored AFTER the first getSession(): join then.
-    const authSub = client.auth.onAuthStateChange((event, session) => {
-      if (session?.access_token) {
-        void client.realtime
-          .setAuth(session.access_token)
-          .then(() => {
-            if (event === "INITIAL_SESSION" || event === "SIGNED_IN") subscribeChannel();
-          })
-          .catch(() => {});
-      }
-    });
+    const timer = refetchTimer;
     return () => {
-      disposed = true;
-      if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
-      authSub.data.subscription.unsubscribe();
-      if (channel) void client.removeChannel(channel);
+      if (timer.current) window.clearTimeout(timer.current);
     };
-  }, [getClient, me.userId, refetch]);
+  }, []);
 
-  /** Perform a relationship action, then converge (optimistic + server). */
+  /** Perform a relationship action, then converge (optimistic + server).
+   *  The pending state is set SYNCHRONOUSLY (the clicked button shows its
+   *  spinner the same frame — the rest of the page stays interactive);
+   *  success is a small localized toast, failure keeps the row + refetches. */
   const act = useCallback(
     async (row: FriendRow, action: "accept" | "decline" | "cancel" | "message" | "unblock") => {
       const key = `${row.userId}:${action}`;
+      if (busy === key) return; // double-submit guard
       setBusy(key);
       setError(false);
       try {
@@ -259,6 +229,11 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
               ...prev.friends.filter((r) => r.userId !== row.userId),
             ],
           }));
+          toast.notify({
+            kind: "success",
+            text: t("community.toast.nowFriends", { name: row.displayName }),
+            dedupeKey: `friend-accept-${row.userId}`,
+          });
         } else if (action === "decline" && row.friendshipId) {
           const response = await fetch(`/api/community/friends/requests/${row.friendshipId}`, {
             method: "POST",
@@ -270,6 +245,11 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
             ...prev,
             incoming: prev.incoming.filter((r) => r.userId !== row.userId),
           }));
+          toast.notify({
+            kind: "success",
+            text: t("community.toast.requestDeclined"),
+            dedupeKey: `friend-decline-${row.userId}`,
+          });
         } else if (action === "cancel" && row.friendshipId) {
           const response = await fetch(`/api/community/friends/requests/${row.friendshipId}`, {
             method: "DELETE",
@@ -279,6 +259,11 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
             ...prev,
             outgoing: prev.outgoing.filter((r) => r.userId !== row.userId),
           }));
+          toast.notify({
+            kind: "success",
+            text: t("community.toast.requestCanceled"),
+            dedupeKey: `friend-cancel-${row.userId}`,
+          });
         } else if (action === "message") {
           const response = await fetch("/api/community/dm", {
             method: "POST",
@@ -298,15 +283,25 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
             ...prev,
             blocked: prev.blocked.filter((r) => r.userId !== row.userId),
           }));
+          toast.notify({
+            kind: "success",
+            text: t("community.toast.unblocked", { name: row.displayName }),
+            dedupeKey: `friend-unblock-${row.userId}`,
+          });
         }
       } catch {
         setError(true);
+        toast.notify({
+          kind: "error",
+          text: t("community.toast.actionError"),
+          dedupeKey: "friend-action-error",
+        });
         await refetch(); // converge to the server truth
       } finally {
         setBusy(null);
       }
     },
-    [refetch, router],
+    [busy, refetch, router, t, toast],
   );
 
   if (data.unavailable) {
@@ -371,10 +366,15 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
           size="sm"
           variant="secondary"
           disabled={busy !== null}
+          aria-busy={busy === `${row.userId}:message` || undefined}
           onClick={() => void act(row, "message")}
           aria-label={`${t("community.message")} — ${row.displayName}`}
         >
-          <Icon name="message" size={13} />
+          {busy === `${row.userId}:message` ? (
+            <ActionSpinner className="h-3.5 w-3.5" />
+          ) : (
+            <Icon name="message" size={13} />
+          )}
           <span className="hidden sm:inline">{t("community.message")}</span>
         </Button>
       </div>
@@ -427,10 +427,15 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
               type="button"
               size="sm"
               disabled={busy !== null}
+              aria-busy={busy === `${row.userId}:accept` || undefined}
               onClick={() => void act(row, "accept")}
               aria-label={`${t("community.acceptRequest")} — ${row.displayName}`}
             >
-              <Icon name="check" size={13} />
+              {busy === `${row.userId}:accept` ? (
+                <ActionSpinner className="h-3.5 w-3.5" />
+              ) : (
+                <Icon name="check" size={13} />
+              )}
               <span className="hidden sm:inline">{t("community.acceptRequest")}</span>
             </Button>
             <Button
@@ -438,10 +443,15 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
               size="sm"
               variant="secondary"
               disabled={busy !== null}
+              aria-busy={busy === `${row.userId}:decline` || undefined}
               onClick={() => void act(row, "decline")}
               aria-label={`${t("community.declineRequest")} — ${row.displayName}`}
             >
-              <Icon name="x" size={13} />
+              {busy === `${row.userId}:decline` ? (
+                <ActionSpinner className="h-3.5 w-3.5" />
+              ) : (
+                <Icon name="x" size={13} />
+              )}
             </Button>
           </div>
         ) : (
@@ -450,9 +460,11 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
             size="sm"
             variant="secondary"
             disabled={busy !== null}
+            aria-busy={busy === `${row.userId}:cancel` || undefined}
             onClick={() => void act(row, "cancel")}
             aria-label={`${t("community.cancelRequest")} — ${row.displayName}`}
           >
+            {busy === `${row.userId}:cancel` && <ActionSpinner className="h-3.5 w-3.5" />}
             {t("community.cancelRequest")}
           </Button>
         )}
@@ -590,7 +602,9 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
                         )
                       }
                       aria-label={`${t("community.unblock")} — ${row.displayName}`}
+                      aria-busy={busy === `${row.userId}:unblock` || undefined}
                     >
+                      {busy === `${row.userId}:unblock` && <ActionSpinner className="h-3.5 w-3.5" />}
                       {t("community.unblock")}
                     </Button>
                   </div>

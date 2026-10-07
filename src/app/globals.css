@@ -447,6 +447,18 @@ textarea:focus-visible,
   }
 }
 
+/* Community action toasts: a small slide/fade (150ms, motion-reduce safe). */
+@keyframes community-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .anim-fade-up {
   animation: fade-up 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }

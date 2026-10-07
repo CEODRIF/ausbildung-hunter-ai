@@ -18,6 +18,12 @@ import {
 import { presenceDotClass, PresenceIndicator } from "./presence-indicator";
 import { ReportDialog } from "./report-dialog";
 import { AdminBadge } from "./admin-badge";
+import {
+  ActionSpinner,
+  CommunityActionButton,
+  useCommunityAction,
+  useCommunityToast,
+} from "./action-feedback";
 
 /**
  * The member PROFILE CARD (Phase 2 social layer).
@@ -99,7 +105,12 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
   const [data, setData] = useState<CardData | null>(null);
   const [stats, setStats] = useState<ReputationStats | null>(null);
   const [loadError, setLoadError] = useState(false);
-  const [busy, setBusy] = useState<CardAction | null>(null);
+  // The ONE shared action state machine (idle → pending → success/error):
+  // pending is set SYNCHRONOUSLY on click (the button answers <100ms),
+  // double submissions are ignored, success is transient, error is
+  // recoverable (the next click re-runs the action).
+  const action = useCommunityAction();
+  const toast = useCommunityToast();
   // Classified action failure (incident: production showed only the generic
   // message, so the user could not tell self-request / blocked / not-found /
   // rate-limit / server error apart). The server is the classifier; the card
@@ -220,16 +231,19 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
   }, []);
 
   const run = useCallback(
-    async (action: CardAction) => {
-      if (busy || !data) return;
-      setBusy(action);
+    (cardAction: CardAction) => {
+      if (!data) return;
       setActionError(false);
       setConfirming(null);
       const rel = data.relationship;
-      try {
-        const json = (response: Response) =>
-          response.json().catch(() => null) as Promise<Record<string, unknown> | null>;
-        if (action === "send_request") {
+      // The state machine sets "pending" SYNCHRONOUSLY — the button answers
+      // the click on the same frame; a second click while pending is
+      // ignored (no duplicate requests); success auto-resets to idle.
+      void action
+        .run(async () => {
+          const json = (response: Response) =>
+            response.json().catch(() => null) as Promise<Record<string, unknown> | null>;
+          if (cardAction === "send_request") {
           const response = await fetch("/api/community/friends", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -263,13 +277,21 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
               friendshipId: row.id,
             });
           }
-        } else if (action === "cancel_request" && rel.friendshipId) {
+          // A small confirmation toast — the action is explicit and the
+          // user benefits from knowing it landed (the button's success
+          // label covers the rest).
+          toast.notify({
+            kind: "success",
+            text: t("community.toast.friendRequestSent"),
+            dedupeKey: `send-request-${targetUserId}`,
+          });
+        } else if (cardAction === "cancel_request" && rel.friendshipId) {
           const response = await fetch(`/api/community/friends/requests/${rel.friendshipId}`, {
             method: "DELETE",
           });
           if (!response.ok) throw new Error(`cancel_request ${response.status}`);
           setRelationship({ state: "none", friendshipId: null });
-        } else if (action === "accept_request" && rel.friendshipId) {
+        } else if (cardAction === "accept_request" && rel.friendshipId) {
           const response = await fetch(`/api/community/friends/requests/${rel.friendshipId}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -277,7 +299,7 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
           });
           if (!response.ok) throw new Error(`accept_request ${response.status}`);
           setRelationship({ state: "friends" });
-        } else if (action === "decline_request" && rel.friendshipId) {
+        } else if (cardAction === "decline_request" && rel.friendshipId) {
           const response = await fetch(`/api/community/friends/requests/${rel.friendshipId}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -285,19 +307,19 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
           });
           if (!response.ok) throw new Error(`decline_request ${response.status}`);
           setRelationship({ state: "none", friendshipId: null });
-        } else if (action === "remove_friend") {
+        } else if (cardAction === "remove_friend") {
           const response = await fetch(`/api/community/friends/${targetUserId}`, {
             method: "DELETE",
           });
           if (!response.ok) throw new Error(`remove_friend ${response.status}`);
           setRelationship({ state: "none", friendshipId: null });
-        } else if (action === "block") {
+        } else if (cardAction === "block") {
           const response = await fetch(`/api/community/blocks/${targetUserId}`, {
             method: "POST",
           });
           if (!response.ok) throw new Error(`block ${response.status}`);
           setRelationship({ state: "blocked_by_me" });
-        } else if (action === "unblock") {
+        } else if (cardAction === "unblock") {
           const response = await fetch(`/api/community/blocks/${targetUserId}`, {
             method: "DELETE",
           });
@@ -305,7 +327,7 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
           // The underlying friendship (if any) decides the new state —
           // re-read the canonical card data.
           await load();
-        } else if (action === "message") {
+        } else if (cardAction === "message") {
           const response = await fetch("/api/community/dm", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -315,7 +337,6 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
             const body = (await json(response)) as { error?: string } | null;
             if (body?.error === "not_friends") {
               setActionError("generic");
-              setBusy(null);
               setRelationship({ state: "none" });
               return;
             }
@@ -328,7 +349,8 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
           router.push(`/community/messages/${conversationId}`);
           return;
         }
-      } catch (error) {
+        },
+      ).catch((error) => {
         // The server is the truth: on ANY failure the local state is left
         // untouched and the user can retry (or re-open the card, which
         // re-fetches). A tagged friend-error keeps its classification;
@@ -338,11 +360,9 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
             ? error.message.slice("friend_error:".length)
             : "generic";
         setActionError(tag as "generic" | "self_request" | "blocked" | "not_found" | "rate_limited");
-      } finally {
-        setBusy(null);
-      }
+      });
     },
-    [busy, data, load, me.userId, onClose, router, setRelationship, targetUserId],
+    [action, data, load, me.userId, onClose, router, setRelationship, t, targetUserId, toast],
   );
 
   const member = data?.member ?? null;
@@ -376,11 +396,54 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
             return [{ action: a, label: t("community.block"), variant: "ghost", danger: true, confirmFirst: "block" }];
           case "unblock":
             return [{ action: a, label: t("community.unblock"), variant: "primary" }];
-          case "message":
-            return [{ action: a, label: t("community.message"), variant: "primary" }];
-        }
-      })
-    : [];
+           case "message":
+             return [{ action: a, label: t("community.message"), variant: "primary" }];
+         }
+       })
+     : [];
+
+  // The pending / success labels (the button stacks all three so its width
+  // never jumps: Add Friend → Adding… → Request sent ✓).
+  const pendingLabelFor = (a: CardAction): string | undefined => {
+    switch (a) {
+      case "send_request":
+        return t("community.actions.addingFriend");
+      case "cancel_request":
+        return t("community.actions.cancellingRequest");
+      case "accept_request":
+        return t("community.actions.acceptingRequest");
+      case "decline_request":
+        return t("community.actions.decliningRequest");
+      case "remove_friend":
+        return t("community.actions.removingFriend");
+      case "block":
+        return t("community.actions.blocking");
+      case "unblock":
+        return t("community.actions.unblocking");
+      case "message":
+        return t("community.actions.openingChat");
+    }
+  };
+  const successLabelFor = (a: CardAction): string | undefined => {
+    switch (a) {
+      case "send_request":
+        return t("community.actions.addFriendSent");
+      case "cancel_request":
+        return t("community.actions.requestCanceled");
+      case "accept_request":
+        return t("community.actions.friendsNow");
+      case "decline_request":
+        return t("community.actions.requestDeclined");
+      case "remove_friend":
+        return t("community.actions.friendRemoved");
+      case "block":
+        return t("community.actions.blockedNow");
+      case "unblock":
+        return t("community.actions.unblockedNow");
+      case "message":
+        return undefined; // the card closes + navigates on success
+    }
+  };
 
   return (
     <div
@@ -515,22 +578,22 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
                   {t("community.blocksYouNote")}
                 </p>
               ) : (
-                actions.map(({ action, label, variant, danger, confirmFirst }) => (
-                  <Button
-                    key={action}
-                    type="button"
+                actions.map(({ action: actionKind, label, variant, danger, confirmFirst }) => (
+                  <CommunityActionButton
+                    key={actionKind}
+                    action={action}
+                    label={label}
+                    pendingLabel={pendingLabelFor(actionKind)}
+                    successLabel={successLabelFor(actionKind)}
                     variant={variant}
                     size="sm"
-                    disabled={busy !== null}
                     className={`w-full ${danger && variant === "ghost" ? "text-danger hover:text-danger" : ""}`}
                     aria-label={`${label} — ${member.displayName}`}
                     onClick={() => {
                       if (confirmFirst) setConfirming(confirmFirst);
-                      else void run(action);
+                      else run(actionKind);
                     }}
-                  >
-                    {label}
-                  </Button>
+                  />
                 ))
               )}
               {/* Phase 5: report this member (never for one's own card —
@@ -573,16 +636,18 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
                     type="button"
                     size="sm"
                     variant={confirming === "block" ? "dark" : "secondary"}
-                    disabled={busy !== null}
-                    onClick={() => void run(confirming === "block" ? "block" : "remove_friend")}
+                    disabled={action.phase === "pending"}
+                    aria-busy={action.phase === "pending" || undefined}
+                    onClick={() => run(confirming === "block" ? "block" : "remove_friend")}
                   >
+                    {action.phase === "pending" && <ActionSpinner className="h-3.5 w-3.5" />}
                     {confirming === "block" ? t("community.block") : t("community.removeFriend")}
                   </Button>
                   <Button
                     type="button"
                     size="sm"
                     variant="ghost"
-                    disabled={busy !== null}
+                    disabled={action.phase === "pending"}
                     onClick={() => setConfirming(null)}
                   >
                     {t("common.cancel")}

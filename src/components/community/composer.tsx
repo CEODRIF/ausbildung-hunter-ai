@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icon";
-import { Button } from "@/components/ui";
+import { buttonStyles } from "@/components/ui";
+import { ActionSpinner, COMMUNITY_PRESS_CLASS } from "./action-feedback";
 import {
   COMMUNITY_IMAGE_MIMES,
   COMMUNITY_MAX_MESSAGE_LENGTH,
@@ -289,7 +290,7 @@ export function Composer({
               onClick={() => fileRef.current?.click()}
               aria-label={t("community.attachImage")}
               title={t("community.attachImage")}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-2 hover:text-ink"
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted hover:bg-surface-2 hover:text-ink ${COMMUNITY_PRESS_CLASS}`}
             >
               <Icon name="image" size={18} />
             </button>
@@ -304,15 +305,21 @@ export function Composer({
               aria-label={placeholder}
               className="max-h-36 min-h-9 flex-1 resize-none bg-transparent px-1.5 py-2 text-sm text-ink outline-none placeholder:text-faint"
             />
-            <Button
+            {/* Send: the message is already optimistic (the row appears the
+                same frame) — while the POST is in flight the button enters
+                its SENDING state (spinner in the same fixed 36px box, no
+                layout shift) so the click is visibly confirmed. */}
+            <button
+              type="button"
               onClick={onSend}
               disabled={submitting || (text.trim().length === 0 && !pendingImage)}
-              aria-label={t("community.send")}
-              title={t("community.send")}
-              className="h-9 w-9 shrink-0 rounded-xl px-0"
+              aria-label={submitting ? t("community.actions.sending") : t("community.send")}
+              title={submitting ? t("community.actions.sending") : t("community.send")}
+              aria-busy={submitting || undefined}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl px-0 disabled:cursor-not-allowed disabled:opacity-60 ${buttonStyles.primary} ${COMMUNITY_PRESS_CLASS}`}
             >
-              <Icon name="send" size={16} />
-            </Button>
+              {submitting ? <ActionSpinner className="h-4 w-4" /> : <Icon name="send" size={16} />}
+            </button>
           </div>
         </div>
         {error && (

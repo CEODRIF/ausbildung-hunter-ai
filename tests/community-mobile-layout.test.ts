@@ -141,7 +141,11 @@ describe("iOS keyboard handling", () => {
 describe("Messenger-like scrolling", () => {
   it("offers a COUNTED 'new messages' pill instead of yanking the reader down", () => {
     expect(chatSrc).toContain("const [newCount, setNewCount] = useState(0)");
-    expect(chatSrc).toContain("if (!dup && !stickToBottom.current) setNewCount((c) => c + 1)");
+    // The batched INSERT applier counts only genuinely NEW rows (the echo of
+    // our own send is a dup) and only when the reader is NOT at the bottom.
+    expect(chatSrc).toContain(
+      "if (appended > 0 && !stickToBottom.current) setNewCount((c) => c + appended);",
+    );
     expect(chatSrc).toContain('t("community.newMessagesCount", { count: newCount })');
     expect(chatSrc).toContain("jumpToLatest");
   });
@@ -150,38 +154,36 @@ describe("Messenger-like scrolling", () => {
     expect(chatSrc).toContain("if (atBottom) setNewCount(0)");
   });
 
-  it("never reloads the page; delivery is realtime + ONE controlled 1s poll", () => {
+  it("never reloads the page; delivery is pure realtime (no polling)", () => {
     // Hard rule (unchanged): never a page reload / navigation as a "refresh".
     expect(chatSrc).not.toMatch(/location\.reload|window\.location\.reload|router\.refresh\(\)/);
-    // Exactly TWO timers, both local + guarded:
-    //   1) the in-memory typing-state prune (never touches the network)
-    //   2) the 1s background poll of the ACTIVE room (the realtime fallback,
-    //      added because the postgres stream is unreliable on mobile).
-    expect(chatSrc.match(/setInterval\(/g)).toHaveLength(2);
+    // Exactly ONE timer: the in-memory typing-state prune (never touches the
+    // network). The old 1s room poll is GONE — Supabase Realtime is the
+    // transport; reconnects and visibility returns run ONE targeted sync.
+    expect(chatSrc.match(/setInterval\(/g)).toHaveLength(1);
     expect((shellSrc.match(/setInterval\(/g) ?? [])).toHaveLength(0);
     expect(chatSrc).toContain(
       "window.setInterval(refreshTyping, TYPING_PRUNE_INTERVAL_MS)",
     );
-    expect(chatSrc).toContain("window.setInterval(tick, 1000)");
-    // No interval ever inlines a network call; the poll goes through the
-    // guarded tick() (in-flight + visibility + cleanup).
+    expect(chatSrc).not.toContain("window.setInterval(tick, 1000)");
+    // No interval ever inlines a network call.
     expect(chatSrc).not.toMatch(/setInterval\([^)]*fetch/);
   });
 
-  it("the 1s poll is controlled: visibility-gated, overlap-free, room-scoped, cleaned up", () => {
-    // Pauses while the tab/app is hidden; catches up once on return.
+  it("catch-up is EVENT-DRIVEN: visibility return + reconnect (ONE targeted sync)", () => {
+    // Phones suspend the socket while the tab is hidden; returning performs a
+    // single targeted resync (a silent no-op when nothing changed) — no
+    // periodic polling while hidden.
     expect(chatSrc).toContain('document.visibilityState !== "visible"');
-    expect(chatSrc).toContain('document.addEventListener("visibilitychange", onVisibility)');
-    // Never overlaps a still-running request.
-    expect(chatSrc).toContain("if (disposed || inFlight) return;");
-    // Only the ACTIVE room's newest page — via the dedicated poll bucket.
+    expect(chatSrc).toContain('document.addEventListener("visibilitychange", onVisibilityChange)');
+    expect(chatSrc).toContain('void resyncRecent("visibility")');
+    // The realtime reconnect path runs the same single targeted resync.
+    expect(chatSrc).toContain('void resyncRecent("reconnect")');
+    // The resync hits ONLY the active room's newest page (poll rate bucket).
     expect(chatSrc).toContain("encodeURIComponent(room.slug)}&poll=1");
-    // One timer per room, cleared on unmount / room change.
-    expect(chatSrc).toContain("window.clearInterval(timer)");
-    expect(chatSrc).toContain('document.removeEventListener("visibilitychange", onVisibility)');
   });
 
-  it("the poll is a silent no-op when nothing new/changed (no flash, no re-render)", () => {
+  it("the targeted sync is a silent no-op when nothing new/changed (no flash)", () => {
     expect(chatSrc).toContain("if (!changed) return;");
   });
 });
@@ -237,61 +239,78 @@ describe("send + realtime delivery contract (optimistic UI)", () => {
 
   it("resyncs after a reconnect and when the phone comes back to the foreground", () => {
     // (and clears the stale typing state that the gap may have left behind)
-    expect(chatSrc).toMatch(
-      /if \(sawDisconnected\.current\) \{\s*void resyncRecent\(\);\s*clearTyping\(\);/,
-    );
+    expect(chatSrc).toContain('void resyncRecent("reconnect");');
+    expect(chatSrc).toContain("clearTyping();");
     expect(chatSrc).toContain('document.addEventListener("visibilitychange"');
+    expect(chatSrc).toContain('void resyncRecent("visibility");');
   });
 });
 
 describe("realtime session wiring (production root-cause guard)", () => {
+  // The handshake, the stable channel names, the ref-counted registry and
+  // the teardown all live in the ONE shared layer now (every Community
+  // surface — rooms, DMs, inbox, friends, notifications — is pinned through
+  // it; room-chat only registers its handlers).
+  const sharedSrc = readSrc("src/lib/community/conversation-realtime.ts");
+  const coreSrc = readSrc("src/lib/community/realtime-core.ts");
+
   it("attaches the user JWT to the realtime socket BEFORE joining the channel", () => {
     // Without auth.initialize() the browser socket has no user JWT and the
     // RLS-filtered postgres INSERT stream delivers ZERO rows — the message
     // "only appears after refresh" bug.
-    expect(chatSrc).toContain("await client.auth.initialize()");
-    expect(chatSrc).toContain("client.realtime.setAuth(session.access_token)");
-    // …and the join happens after the token is attached, inside the same
-    // async bootstrap (subscribeChannel is only called after setAuth).
-    const rtEffect = chatSrc.slice(
-      chatSrc.indexOf("const subscribeChannel = () =>"),
-      chatSrc.indexOf("return () => {", chatSrc.indexOf("const subscribeChannel = () =>")),
+    expect(sharedSrc).toContain("await client.auth.initialize()");
+    expect(sharedSrc).toContain("client.realtime.setAuth(session.access_token)");
+    // …and the join (setup) happens only after the token is attached, inside
+    // the same async bootstrap:
+    const bootstrap = sharedSrc.slice(
+      sharedSrc.indexOf("void (async () => {"),
+      sharedSrc.indexOf("const authSub ="),
     );
-    expect(rtEffect.indexOf("client.realtime.setAuth(session.access_token)")).toBeLessThan(
-      rtEffect.indexOf("subscribeChannel();"),
-    );
+    expect(bootstrap.indexOf("await client.realtime.setAuth(session.access_token)")).toBeGreaterThanOrEqual(0);
+    expect(
+      bootstrap.indexOf("await client.realtime.setAuth(session.access_token)"),
+    ).toBeLessThan(bootstrap.indexOf("if (!disposed) setup();"));
+    // …and the room chat is wired through that shared hook:
+    expect(chatSrc).toContain("useRoomRealtime(room.id, {");
   });
 
   it("keeps the socket token fresh across refreshes and sign-out", () => {
-    expect(chatSrc).toContain("client.auth.onAuthStateChange");
-    expect(chatSrc).toContain("client.realtime.setAuth();");
+    expect(sharedSrc).toContain("client.auth.onAuthStateChange");
+    // A refreshed session re-attaches the token and (re)joins; …
+    expect(sharedSrc).toContain(
+      'if (event === "INITIAL_SESSION" || event === "SIGNED_IN") setup();',
+    );
+    // …sign-out disposes the wiring (a join is never kept on a dead token).
+    expect(sharedSrc).toContain('} else if (event === "SIGNED_OUT" && handle) {');
+    expect(sharedSrc).toContain("handle.dispose();");
   });
 
   it("NEVER joins a channel without a JWT (RLS-backed realtime would stream zero rows)", () => {
     // Fast path: the join sits INSIDE the token guard — no token, no join.
-    const rtEffect = chatSrc.slice(
-      chatSrc.indexOf("const subscribeChannel = () =>"),
-      chatSrc.indexOf("return () => {", chatSrc.indexOf("const subscribeChannel = () =>")),
-    );
-    expect(rtEffect).toContain("if (session?.access_token) {");
+    expect(sharedSrc).toContain("if (session?.access_token) {");
+    expect(sharedSrc).toContain("NEVER join without a JWT");
     // Slow path: while the session is still restoring, INITIAL_SESSION /
-    // SIGNED_IN attach the token and THEN join (same guarded function).
-    expect(rtEffect).toContain(
-      'if (event === "INITIAL_SESSION" || event === "SIGNED_IN") subscribeChannel();',
+    // SIGNED_IN attach the token and THEN join (the same guarded setup).
+    expect(sharedSrc).toContain(
+      'if (event === "INITIAL_SESSION" || event === "SIGNED_IN") setup();',
     );
   });
 
   it("subscribes a DYNAMIC per-room channel (one per mount, idempotent)", () => {
+    // The channel name is DERIVED FROM THE ROOM in the shared naming
+    // scheme (postgres_changes filter room_id = eq.<room.id>), so each room
+    // gets its own stream and typing/edits/deletes ride the same one — and
+    // two mounts of the same room share ONE live channel (ref-counted
+    // registry, no duplicate subscriptions).
+    expect(sharedSrc).toContain("`community-room:${target.id}`");
+    expect(chatSrc).toContain("useRoomRealtime(room.id, {");
     // The join is id-guarded: a second call (late auth event, StrictMode
     // double-effect, whatever) is a no-op.
-    expect(chatSrc).toContain("if (disposed || channel) return;");
-    // Exactly one .channel() call site — the channel name is DERIVED FROM
-    // THE ROOM (postgres_changes filter room_id = eq.<room.id>), so each
-    // room gets its own stream and typing/edits/deletes ride the same one.
-    expect(chatSrc.match(/\.channel\(/g)).toHaveLength(1);
-    expect(chatSrc).toContain(".channel(`community-room:${room.id}`)");
-    // And unmount tears it down.
-    expect(chatSrc).toContain("if (channel) void client.removeChannel(channel);");
+    expect(sharedSrc).toContain("if (disposed || handle) return;");
+    expect(coreSrc).toContain("entry.refs += 1;");
+    // And unmount releases the ref (the registry removeChannel's at 0).
+    expect(sharedSrc).toContain("registry.release(client, name);");
+    expect(coreSrc).toContain("void entry.client.removeChannel(entry.channel);");
   });
 });
 

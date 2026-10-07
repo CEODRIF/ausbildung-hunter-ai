@@ -7,6 +7,7 @@ import type { LocalMessage } from "@/lib/community";
 import { COMMUNITY_REACTION_EMOJIS } from "@/lib/community";
 import { MentionText } from "./mention-text";
 import { AdminBadge } from "./admin-badge";
+import { ActionSpinner, COMMUNITY_PRESS_CLASS } from "./action-feedback";
 
 /** "14:32" today, "12.03. 14:32" on other days (locale-aware). */
 export function formatMessageTime(iso: string, locale: string): string {
@@ -53,9 +54,11 @@ export interface MessageRowProps {
   onRemoveFailed: (id: string) => void;
   onReply: (message: LocalMessage) => void;
   onToggleReaction: (messageId: string, emoji: string) => void;
-  onSaveEdit: (messageId: string, text: string) => void;
+  /** Async-capable: the row shows a LOCALIZED pending state while it runs. */
+  onSaveEdit: (messageId: string, text: string) => Promise<void> | void;
   onCancelEdit: () => void;
-  onDelete: (messageId: string) => void;
+  /** Async-capable: the row shows a LOCALIZED pending state while it runs. */
+  onDelete: (messageId: string) => Promise<void> | void;
   /**
    * Phase 2: open the author's profile card (other members only). Omitted →
    * the name stays plain text (Phase 1 behavior, unchanged).
@@ -131,6 +134,10 @@ function MessageRowInner({
   const [editText, setEditText] = useState(m.message ?? "");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  // Localized pending states (the click answers immediately; only THIS row's
+  // control shows the spinner — the rest of the chat stays interactive).
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
 
   // Switching the selected row (or the message list) resets transient state —
@@ -142,6 +149,8 @@ function MessageRowInner({
     if (!active) {
       setEmojiOpen(false);
       setConfirmDelete(false);
+      setSavingEdit(false);
+      setDeleting(false);
     }
   }
 
@@ -272,15 +281,22 @@ function MessageRowInner({
                 aria-label={t("community.editMessage")}
                 className="w-72 max-w-full resize-none rounded-xl border border-line-strong bg-surface p-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
               />
-              <div className="mt-1 flex items-center gap-2">
+                <div className="mt-1 flex items-center gap-2">
                 <Button
                   size="sm"
-                  onClick={() => {
-                    onSaveEdit(m.id, editText);
-                    setEditing(false);
+                  aria-busy={savingEdit || undefined}
+                  onClick={async () => {
+                    setSavingEdit(true);
+                    try {
+                      await onSaveEdit(m.id, editText);
+                    } finally {
+                      setSavingEdit(false);
+                      setEditing(false);
+                    }
                   }}
-                  disabled={editText.trim().length === 0}
+                  disabled={editText.trim().length === 0 || savingEdit}
                 >
+                  {savingEdit && <ActionSpinner className="h-3.5 w-3.5" />}
                   {t("community.saveEdit")}
                 </Button>
                 <Button
@@ -388,7 +404,7 @@ function MessageRowInner({
                   }}
                   aria-pressed={r.mine}
                   aria-label={`${r.emoji} ${r.count}`}
-                  className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors ${
+                  className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${COMMUNITY_PRESS_CLASS} ${
                     r.mine
                       ? "border-accent/60 bg-accent-soft text-accent"
                       : "border-line bg-surface text-muted hover:border-line-strong"
@@ -482,7 +498,7 @@ function MessageRowInner({
                         onToggleReaction(m.id, emoji);
                       }}
                       aria-label={emoji}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg text-base hover:bg-surface-2"
+                      className={`flex h-7 w-7 items-center justify-center rounded-lg text-base hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${COMMUNITY_PRESS_CLASS}`}
                     >
                       {emoji}
                     </button>
@@ -499,9 +515,19 @@ function MessageRowInner({
                   {t("community.confirmDeleteTitle")}
                   <button
                     type="button"
-                    onClick={() => onDelete(m.id)}
-                    className="rounded-lg bg-danger px-2 py-0.5 text-white hover:opacity-90"
+                    aria-busy={deleting || undefined}
+                    disabled={deleting}
+                    onClick={async () => {
+                      setDeleting(true);
+                      try {
+                        await onDelete(m.id);
+                      } finally {
+                        setDeleting(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg bg-danger px-2 py-0.5 text-white hover:opacity-90 disabled:opacity-70"
                   >
+                    {deleting && <ActionSpinner className="h-3 w-3" />}
                     {t("community.confirmDeleteAction")}
                   </button>
                   <button
@@ -538,11 +564,13 @@ function RowAction({
   label,
   onClick,
   danger = false,
+  pending = false,
 }: {
   icon: "reply" | "smile" | "edit" | "trash" | "pin" | "flag";
   label: string;
   onClick: () => void;
   danger?: boolean;
+  pending?: boolean;
 }) {
   return (
     <button
@@ -550,11 +578,13 @@ function RowAction({
       onClick={onClick}
       aria-label={label}
       title={label}
-      className={`flex h-7 w-7 items-center justify-center rounded-lg ${
+      aria-busy={pending || undefined}
+      disabled={pending}
+      className={`flex h-7 w-7 items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${COMMUNITY_PRESS_CLASS} ${
         danger ? "text-danger hover:bg-danger-soft" : "text-muted hover:bg-surface-2 hover:text-ink"
-      }`}
+      } ${pending ? "opacity-70" : ""}`}
     >
-      <Icon name={icon} size={14} />
+      {pending ? <ActionSpinner className="h-3.5 w-3.5" /> : <Icon name={icon} size={14} />}
     </button>
   );
 }

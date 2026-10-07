@@ -7,6 +7,7 @@ import {
   communityAvatarUrl,
   type CommunityRoomGroup,
 } from "@/lib/community";
+import { COMMUNITY_PRESS_CLASS, useCommunityToast } from "./action-feedback";
 
 /**
  * The community room navigation — Discord-inspired but data-driven:
@@ -75,6 +76,7 @@ export function RoomNav({
   showModeration = false,
 }: RoomNavProps) {
   const { t } = useI18n();
+  const toast = useCommunityToast();
   const totalUnread = Object.values(unread).reduce((sum, n) => sum + n, 0);
 
   const socialItem = (
@@ -266,27 +268,42 @@ export function RoomNav({
                         />
                       )}
                     </Link>
-                    {onToggleMute && (
-                      <button
-                        type="button"
-                        onClick={() => onToggleMute(room.id)}
-                        aria-label={
-                          isMuted
-                            ? t("community.roomUnmute", { room: room.name })
-                            : t("community.roomMute", { room: room.name })
-                        }
-                        title={
-                          isMuted
-                            ? t("community.roomUnmute", { room: room.name })
-                            : t("community.roomMute", { room: room.name })
-                        }
-                        className={`mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-surface-2 hover:text-ink focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 ${
-                          isMuted ? "opacity-100" : ""
-                        }`}
-                      >
-                        <Icon name="bell" size={12} />
-                      </button>
-                    )}
+                     {onToggleMute && (
+                       <button
+                         type="button"
+                         onClick={() => {
+                           const muting = !isMuted;
+                           onToggleMute(room.id);
+                           // The state flips optimistically (the icon + row
+                           // dim immediately); the toast confirms the toggle.
+                           toast.notify({
+                             kind: "success",
+                             text: t(
+                               muting
+                                 ? "community.toast.roomMuted"
+                                 : "community.toast.roomUnmuted",
+                               { room: room.name },
+                             ),
+                             dedupeKey: `room-mute-${room.id}`,
+                           });
+                         }}
+                         aria-label={
+                           isMuted
+                             ? t("community.roomUnmute", { room: room.name })
+                             : t("community.roomMute", { room: room.name })
+                         }
+                         title={
+                           isMuted
+                             ? t("community.roomUnmute", { room: room.name })
+                             : t("community.roomMute", { room: room.name })
+                         }
+                         className={`mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-faint ${COMMUNITY_PRESS_CLASS} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 hover:bg-surface-2 hover:text-ink focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 ${
+                           isMuted ? "opacity-100" : ""
+                         }`}
+                       >
+                         <Icon name="bell" size={12} />
+                       </button>
+                     )}
                   </li>
                 );
               })}
@@ -313,7 +330,7 @@ export function RoomNav({
           onClick={onOpenIdentity}
           aria-label={t("community.editIdentity")}
           title={t("community.editIdentity")}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-ink"
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted ${COMMUNITY_PRESS_CLASS} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 hover:bg-surface-2 hover:text-ink`}
         >
           <Icon name="edit" size={15} />
         </button>
@@ -323,7 +340,7 @@ export function RoomNav({
             onClick={onOpenSettings}
             aria-label={t("community.settings.title")}
             title={t("community.settings.title")}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-ink"
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted ${COMMUNITY_PRESS_CLASS} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 hover:bg-surface-2 hover:text-ink`}
           >
             <Icon name="settings" size={15} />
           </button>

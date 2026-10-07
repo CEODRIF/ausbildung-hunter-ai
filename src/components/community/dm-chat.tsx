@@ -50,6 +50,16 @@ import {
   PRESENCE_BROADCAST_EVENT,
   type PresenceState,
 } from "@/lib/community/presence";
+import {
+  resolveCommunityRealtimeClient,
+  useDMRealtime,
+} from "@/lib/community/conversation-realtime";
+import {
+  createEventBatcher,
+  type EventBatcher,
+  type RealtimeLikeChannel,
+} from "@/lib/community/realtime-core";
+import { useCommunityToast } from "./action-feedback";
 import { MessageRow } from "./message-row";
 import { Composer } from "./composer";
 import { useCommunityShell } from "./community-shell";
@@ -93,6 +103,14 @@ type ConnectionState = "connected" | "disconnected";
 type RealtimeClient = ReturnType<typeof createClient>;
 type RealtimeChannel = ReturnType<RealtimeClient["channel"]>;
 
+/** One coalesced realtime INSERT (applied as a batch to the DM list). */
+interface DmInsertEvent {
+  row: LocalMessage;
+  /** Already known (the echo of our own optimistic row). */
+  dup: boolean;
+  mine: boolean;
+}
+
 function localeFor(lang: string): string {
   return lang === "de" ? "de-DE" : lang === "fr" ? "fr-FR" : lang === "ar" ? "ar" : "en-US";
 }
@@ -113,6 +131,10 @@ export function DmChat({
 }: DmChatProps) {
   const { t, lang } = useI18n();
   const { openProfile } = useCommunityShell();
+  // Localized action feedback (the shared system — see action-feedback.tsx):
+  // failures surface as small deduplicated toasts; the chat itself keeps
+  // working (optimistic rows + retry + realtime echo convergence).
+  const toast = useCommunityToast();
   const locale = useMemo(() => localeFor(lang), [lang]);
   const [messages, setMessages] = useState<LocalMessage[]>(initialMessages);
   const [authors, setAuthors] = useState<Record<string, CommunityAuthor>>(() => {
@@ -294,215 +316,199 @@ export function DmChat({
     setTypingPeers([]);
   }, []);
 
-  // --- Realtime: ONE channel for this conversation ---
-  useEffect(() => {
-    let disposed = false;
-    let channel: RealtimeChannel | null = null;
-    let degradedTimer: number | null = null;
-    const reportDegraded = () => {
-      degradedTimer = window.setTimeout(() => {
-        sawDisconnected.current = true;
-        setConnection("disconnected");
-      }, 0);
-    };
-    const client = getClient();
-    if (!client) {
-      reportDegraded();
-      return () => {
-        if (degradedTimer) window.clearTimeout(degradedTimer);
-      };
-    }
+  // --- Realtime: ONE shared channel for this conversation (event-driven,
+  // no polling). The subscription machinery (JWT handshake, stable channel
+  // name, ref-counted registry, teardown on unmount/conversation switch,
+  // reconnect tracking) lives in the shared community realtime layer; this
+  // surface registers its handlers. INSERTs flow through a
+  // leading-edge-immediate batcher: a single DM is applied synchronously
+  // (effectively instant), a burst of rapid incoming messages flushes at
+  // most 500ms apart with ONE setState per batch (no re-render per event).
+  const insertBatcherRef = useRef<EventBatcher<DmInsertEvent> | null>(null);
 
-    const applyReactionDelta = (
-      set: boolean,
-      message_id: string,
-      emoji: string,
-      userId: string,
-    ) => {
-      if (!knownIds.current.has(message_id)) return; // not this conversation's state
-      const mine = userId === me.userId;
+  const applyInsertBatch = useCallback(
+    (batch: readonly DmInsertEvent[]) => {
       setMessages((prev) =>
-        prev.map((m) => {
-          if (m.id !== message_id) return m;
-          const agg: CommunityMessageReactionAgg[] = m.reactions.map((r) => ({ ...r }));
-          const found = agg.find((r) => r.emoji === emoji);
-          if (set) {
-            if (found) {
-              found.count += 1;
-              if (mine) found.mine = true;
-            } else {
-              agg.push({ emoji, count: 1, mine });
-            }
-          } else if (found) {
-            found.count -= 1;
-            if (mine) found.mine = false;
-            const next = agg.filter((r) => r.count > 0);
-            return { ...m, reactions: next };
-          }
-          return { ...m, reactions: agg };
-        }),
+        mergeCommunityMessages(
+          prev,
+          batch.map((e) => e.row),
+          { preferIncoming: true },
+        ),
       );
-    };
+      for (const e of batch) {
+        if (!e.dup && !e.mine) {
+          if (!stickToBottom.current) setNewCount((c) => c + 1);
+          scheduleMarkRead();
+        }
+      }
+    },
+    [scheduleMarkRead],
+  );
 
-    const subscribeChannel = () => {
-      if (disposed || channel) return;
-      try {
-        const convFilter = `conversation_id=eq.${conversation.id}`;
-        channel = client
-          .channel(`community-dm:${conversation.id}`)
-          .on(
-            "postgres_changes",
-            { event: "INSERT", schema: "public", table: "community_direct_messages", filter: convFilter },
-            (payload) => {
-              const incoming = payload.new as LocalMessage;
-              if (!incoming?.id) return;
-              const dup = knownIds.current.has(incoming.id);
-              knownIds.current.add(incoming.id);
-              const mine = incoming.user_id === me.userId;
-              setMessages((prev) =>
-                mergeCommunityMessages(
-                  prev,
-                  [{ ...incoming, author: mine ? myAuthor : null, reactions: [], replyTo: null }],
-                  { preferIncoming: true },
-                ),
-              );
-              if (!dup && !mine && !stickToBottom.current) setNewCount((c) => c + 1);
-              if (!dup && !mine) scheduleMarkRead();
-            },
-          )
-          .on(
-            "postgres_changes",
-            { event: "UPDATE", schema: "public", table: "community_direct_messages", filter: convFilter },
-            (payload) => {
-              const incoming = payload.new as LocalMessage;
-              if (!incoming?.id) return;
-              // RLS: my edits only — merge (the broadcast reaches the peer).
-              setMessages((prev) =>
-                mergeCommunityMessages(
-                  prev,
-                  [{ ...incoming, author: myAuthor, reactions: [], replyTo: null }],
-                  { preferIncoming: true },
-                ),
-              );
-            },
-          )
-          .on(
-            "postgres_changes",
-            { event: "DELETE", schema: "public", table: "community_direct_messages", filter: convFilter },
-            (payload) => {
-              const deleted = (payload.old as { id?: string })?.id;
-              if (!deleted) return;
-              // RLS: only my own deletions reach this stream.
-              knownIds.current.delete(deleted);
-              setMessages((prev) => prev.filter((m) => m.id !== deleted));
-            },
-          )
-          .on(
-            "postgres_changes",
-            { event: "INSERT", schema: "public", table: "community_dm_reactions" },
-            (payload) => {
-              const row = payload.new as { message_id?: string; emoji?: string; user_id?: string };
-              if (!row?.message_id || !row.emoji || !row.user_id) return;
-              applyReactionDelta(true, row.message_id, row.emoji, row.user_id);
-            },
-          )
-          .on(
-            "postgres_changes",
-            { event: "DELETE", schema: "public", table: "community_dm_reactions" },
-            (payload) => {
-              const row = payload.old as { message_id?: string; emoji?: string; user_id?: string };
-              if (!row?.message_id || !row.emoji || !row.user_id) return;
-              applyReactionDelta(false, row.message_id, row.emoji, row.user_id);
-            },
-          )
-          .on("broadcast", { event: DM_TYPING_BROADCAST_EVENT }, (payload) => {
-            const wire = payload?.payload as { conversationId?: unknown } | undefined;
-            if (typeof wire?.conversationId !== "string" || wire.conversationId !== conversation.id) {
-              return; // conversation guard (shared socket)
+  const registerDmHandlers = useCallback(
+    (channel: RealtimeLikeChannel) => {
+      const convFilter = `conversation_id=eq.${conversation.id}`;
+      const applyReactionDelta = (
+        set: boolean,
+        message_id: string,
+        emoji: string,
+        userId: string,
+      ) => {
+        if (!knownIds.current.has(message_id)) return; // not this conversation's state
+        const mine = userId === me.userId;
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== message_id) return m;
+            const agg: CommunityMessageReactionAgg[] = m.reactions.map((r) => ({ ...r }));
+            const found = agg.find((r) => r.emoji === emoji);
+            if (set) {
+              if (found) {
+                found.count += 1;
+                if (mine) found.mine = true;
+              } else {
+                agg.push({ emoji, count: 1, mine });
+              }
+            } else if (found) {
+              found.count -= 1;
+              if (mine) found.mine = false;
+              const next = agg.filter((r) => r.count > 0);
+              return { ...m, reactions: next };
             }
-            const broadcast = parseTypingBroadcast(payload?.payload);
-            if (!broadcast) return;
-            typingStateRef.current = applyTypingEvent(typingStateRef.current, broadcast, Date.now());
-            refreshTyping();
-          })
-          .on("broadcast", { event: DM_MESSAGE_UPDATE_BROADCAST_EVENT }, (payload) => {
-            const update = parseDmMessageUpdateBroadcast(payload?.payload);
-            if (!update || update.conversationId !== conversation.id) return;
+            return { ...m, reactions: agg };
+          }),
+        );
+      };
+      insertBatcherRef.current?.dispose();
+      insertBatcherRef.current = createEventBatcher({ onFlush: applyInsertBatch });
+      channel
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "community_direct_messages", filter: convFilter },
+          (payload) => {
+            const incoming = payload.new as LocalMessage;
+            if (!incoming?.id) return;
+            const dup = knownIds.current.has(incoming.id);
+            knownIds.current.add(incoming.id);
+            const mine = incoming.user_id === me.userId;
+            insertBatcherRef.current?.push({
+              row: { ...incoming, author: mine ? myAuthor : null, reactions: [], replyTo: null },
+              dup,
+              mine,
+            });
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "community_direct_messages", filter: convFilter },
+          (payload) => {
+            const incoming = payload.new as LocalMessage;
+            if (!incoming?.id) return;
+            // RLS: my edits only — merge (the broadcast reaches the peer).
             setMessages((prev) =>
               mergeCommunityMessages(
                 prev,
-                [{ ...update.message, room_id: conversation.id, author: null, reactions: [], replyTo: null } as LocalMessage],
+                [{ ...incoming, author: myAuthor, reactions: [], replyTo: null }],
                 { preferIncoming: true },
               ),
             );
-          })
-          .on("broadcast", { event: DM_MESSAGE_DELETE_BROADCAST_EVENT }, (payload) => {
-            const del = parseDmMessageDeleteBroadcast(payload?.payload);
-            if (!del || del.conversationId !== conversation.id) return;
-            knownIds.current.delete(del.id);
-            setMessages((prev) => prev.filter((m) => m.id !== del.id));
-          })
-          .subscribe((status) => {
-            if (status === "SUBSCRIBED") {
-              setConnection("connected");
-              if (sawDisconnected.current) {
-                void resyncRecent();
-                clearTyping();
-              }
-            } else if (
-              status === "TIMED_OUT" ||
-              status === "CLOSED" ||
-              status === "CHANNEL_ERROR"
-            ) {
-              sawDisconnected.current = true;
-              setConnection("disconnected");
-              senderRef.current?.commit();
-            }
-          });
-        channelRef.current = channel;
-      } catch (error) {
-        console.error("[community] dm realtime subscribe failed:", error);
-        reportDegraded();
-      }
-    };
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "community_direct_messages", filter: convFilter },
+          (payload) => {
+            const deleted = (payload.old as { id?: string })?.id;
+            if (!deleted) return;
+            // RLS: only my own deletions reach this stream.
+            knownIds.current.delete(deleted);
+            setMessages((prev) => prev.filter((m) => m.id !== deleted));
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "community_dm_reactions" },
+          (payload) => {
+            const row = payload.new as { message_id?: string; emoji?: string; user_id?: string };
+            if (!row?.message_id || !row.emoji || !row.user_id) return;
+            applyReactionDelta(true, row.message_id, row.emoji, row.user_id);
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "community_dm_reactions" },
+          (payload) => {
+            const row = payload.old as { message_id?: string; emoji?: string; user_id?: string };
+            if (!row?.message_id || !row.emoji || !row.user_id) return;
+            applyReactionDelta(false, row.message_id, row.emoji, row.user_id);
+          },
+        )
+        .on("broadcast", { event: DM_TYPING_BROADCAST_EVENT }, (payload) => {
+          const wire = payload?.payload as { conversationId?: unknown } | undefined;
+          if (typeof wire?.conversationId !== "string" || wire.conversationId !== conversation.id) {
+            return; // conversation guard (shared socket)
+          }
+          const broadcast = parseTypingBroadcast(payload?.payload);
+          if (!broadcast) return;
+          typingStateRef.current = applyTypingEvent(typingStateRef.current, broadcast, Date.now());
+          refreshTyping();
+        })
+        .on("broadcast", { event: DM_MESSAGE_UPDATE_BROADCAST_EVENT }, (payload) => {
+          const update = parseDmMessageUpdateBroadcast(payload?.payload);
+          if (!update || update.conversationId !== conversation.id) return;
+          setMessages((prev) =>
+            mergeCommunityMessages(
+              prev,
+              [{ ...update.message, room_id: conversation.id, author: null, reactions: [], replyTo: null } as LocalMessage],
+              { preferIncoming: true },
+            ),
+          );
+        })
+        .on("broadcast", { event: DM_MESSAGE_DELETE_BROADCAST_EVENT }, (payload) => {
+          const del = parseDmMessageDeleteBroadcast(payload?.payload);
+          if (!del || del.conversationId !== conversation.id) return;
+          knownIds.current.delete(del.id);
+          setMessages((prev) => prev.filter((m) => m.id !== del.id));
+        });
+    },
+    [applyInsertBatch, conversation.id, me.userId, myAuthor, refreshTyping],
+  );
 
-    void (async () => {
-      try {
-        await client.auth.initialize();
-      } catch {
-        /* no session yet — INITIAL_SESSION below covers the restore */
+  useDMRealtime(conversation.id, {
+    registerHandlers: registerDmHandlers,
+    // Reconnect recovery: ONE targeted recent-window resync (a no-op when
+    // nothing was missed) — never a periodic poll.
+    onMissedSync: () => {
+      void resyncRecent();
+      clearTyping();
+    },
+    onConnection: (state) => {
+      if (state === "disconnected") {
+        sawDisconnected.current = true;
+        // Flush pending outgoing typing so the peer never sees a stale dot.
+        senderRef.current?.commit();
       }
-      if (disposed) return;
-      const {
-        data: { session },
-      } = await client.auth.getSession();
-      if (disposed) return;
-      if (session?.access_token) {
-        await client.realtime.setAuth(session.access_token).catch(() => {});
-        if (!disposed) subscribeChannel();
-      }
-    })();
+      setConnection(state);
+    },
+    onChannel: (ch) => {
+      // Invoked by the shared layer outside render (setup/teardown); the ref
+      // mirrors the live channel for broadcast sends.
+      channelRef.current = (ch as RealtimeChannel | null) ?? null;
+      if (ch === null) insertBatcherRef.current?.flush();
+    },
+  });
 
-    const authSub = client.auth.onAuthStateChange((event, session) => {
-      if (session?.access_token) {
-        void client.realtime
-          .setAuth(session.access_token)
-          .then(() => {
-            if (event === "INITIAL_SESSION" || event === "SIGNED_IN") subscribeChannel();
-          })
-          .catch(() => {});
-      } else if (event === "SIGNED_OUT") client.realtime.setAuth();
-    });
+  // No realtime client available (env missing) → report degraded.
+  useEffect(() => {
+    if (resolveCommunityRealtimeClient() === null) {
+      sawDisconnected.current = true;
+      // One-shot degraded state on mount (env missing), not a cascade.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setConnection("disconnected");
+    }
+  }, []);
 
-    return () => {
-      disposed = true;
-      if (degradedTimer) window.clearTimeout(degradedTimer);
-      authSub.data.subscription.unsubscribe();
-      channelRef.current = null;
-      if (channel) void client.removeChannel(channel);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversation.id, getClient]);
+  // Batch teardown on unmount (the registry tears the channel itself down).
+  useEffect(() => () => insertBatcherRef.current?.dispose(), []);
 
   // Outgoing typing controller (declared after the realtime effect so its
   // dispose runs while the channel still exists).
@@ -732,13 +738,13 @@ export function DmChat({
     };
   }, []);
 
-  // Phones suspend the realtime socket while backgrounded.
+  // Phones suspend the realtime socket while backgrounded. Returning to the
+  // tab performs ONE targeted catch-up resync (a silent no-op when nothing
+  // new/changed arrived) — never a periodic poll.
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
-      if (sawDisconnected.current || connectionRef.current !== "connected") {
-        void resyncRecent();
-      }
+      void resyncRecent();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -810,10 +816,16 @@ export function DmChat({
         const data = (await response.json()) as { reactions: CommunityMessageReactionAgg[] };
         withPrev(data.reactions);
       } catch {
+        // Revert (the UI never lies) + a small deduplicated error toast.
         withPrev(prev);
+        toast.notify({
+          kind: "error",
+          text: t("community.toast.actionError"),
+          dedupeKey: "reaction",
+        });
       }
     },
-    [messages],
+    [messages, toast, t],
   );
 
   const saveEdit = useCallback(
@@ -879,9 +891,14 @@ export function DmChat({
         });
       } catch {
         setSendError("send_failed");
+        toast.notify({
+          kind: "error",
+          text: t("community.toast.deleteFailed"),
+          dedupeKey: "delete-message",
+        });
       }
     },
-    [conversation.id, replyTo],
+    [conversation.id, replyTo, toast, t],
   );
 
   // --- Sending -------------------------------------------------------------

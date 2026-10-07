@@ -978,14 +978,15 @@ describe("client invariants (Phase 5 surface)", () => {
     }
   });
 
-  it("room-chat has exactly TWO timers: the typing prune + the controlled 1s poll", () => {
+  it("room-chat has exactly ONE timer: the typing prune (no polling)", () => {
     const src = read("src/components/community/room-chat.tsx");
-    // The typing prune (local-only, never hits the network) and the 1s
-    // background poll of the ACTIVE room (the realtime fallback, added for
-    // mobile) are the ONLY timers; no interval ever inlines a fetch call.
-    expect(src.match(/setInterval\s*\(/g)).toHaveLength(2);
+    // The typing prune (local-only, never hits the network) is the ONLY
+    // timer — the realtime stream is the transport; reconnects and
+    // visibility returns run ONE targeted resync (event-driven). No
+    // interval ever inlines a fetch call.
+    expect(src.match(/setInterval\s*\(/g)).toHaveLength(1);
     expect(src).toContain("window.setInterval(refreshTyping, TYPING_PRUNE_INTERVAL_MS)");
-    expect(src).toContain("window.setInterval(tick, 1000)");
+    expect(src).not.toContain("window.setInterval(tick, 1000)");
     expect(src).not.toMatch(/setInterval\([^)]*fetch/);
   });
 

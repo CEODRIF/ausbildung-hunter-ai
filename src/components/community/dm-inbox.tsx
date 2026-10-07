@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
+import { useConversationListRealtime } from "@/lib/community/conversation-realtime";
+import type { RealtimeLikeChannel } from "@/lib/community/realtime-core";
 import { Icon } from "@/components/icon";
 import { ErrorState } from "@/components/ui";
 import { useI18n } from "@/lib/i18n";
@@ -78,82 +79,58 @@ export function DmInbox({
 
   // New messages (any direction) → converge the summaries. The postgres
   // stream is RLS-scoped to the viewer's conversations, so no conversation
-  // filter is needed (and none is possible — one stream per user).
-  const clientRef = useRef<ReturnType<typeof createClient> | null>(null);
-  const getClient = useCallback((): ReturnType<typeof createClient> | null => {
-    if (clientRef.current) return clientRef.current;
-    try {
-      clientRef.current = createClient();
-    } catch (error) {
-      console.error("[community] realtime client unavailable:", error);
-      return null;
-    }
-    return clientRef.current;
-  }, []);
+  // filter is needed (and none is possible — one stream per user). The
+  // subscription itself lives in the shared community realtime layer
+  // (stable channel name, registry, teardown, reconnect tracking); the
+  // 300ms debounce below is the ≤500ms coalescing window for rapid events.
+  const scheduleRefetch = useCallback(() => {
+    if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
+    refetchTimer.current = window.setTimeout(() => void refetch(), REFETCH_DEBOUNCE_MS);
+  }, [refetch]);
+
+  const registerInboxHandlers = useCallback(
+    (channel: RealtimeLikeChannel) => {
+      // INSERT: a new message (new preview, +1 unread, list moves).
+      // UPDATE: the last message was edited (preview text changes).
+      // DELETE: a message was removed (preview / count change).
+      // All three converge with ONE debounced SQL summary refetch — the
+      // list never downloads message content on realtime events.
+      channel
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "community_direct_messages" },
+          () => scheduleRefetch(),
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "community_direct_messages" },
+          () => scheduleRefetch(),
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "community_direct_messages" },
+          () => scheduleRefetch(),
+        );
+    },
+    [scheduleRefetch],
+  );
+
+  useConversationListRealtime(me.userId, {
+    registerHandlers: registerInboxHandlers,
+    // Reconnect recovery: ONE targeted summary refetch (a no-op-ish small
+    // SQL query) — never a periodic poll.
+    onMissedSync: () => {
+      if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
+      void refetch();
+    },
+  });
 
   useEffect(() => {
-    let disposed = false;
-    let channel: ReturnType<ReturnType<typeof createClient>["channel"]> | null = null;
-    const scheduleRefetch = () => {
-      if (disposed) return;
-      if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
-      refetchTimer.current = window.setTimeout(() => void refetch(), REFETCH_DEBOUNCE_MS);
-    };
-    const client = getClient();
-    if (!client) return;
-    const subscribeChannel = () => {
-      if (disposed || channel) return;
-      try {
-        channel = client
-          .channel(`community-dm-inbox-${me.userId}`)
-          .on(
-            "postgres_changes",
-            { event: "INSERT", schema: "public", table: "community_direct_messages" },
-            () => scheduleRefetch(),
-          )
-          .on(
-            "postgres_changes",
-            { event: "DELETE", schema: "public", table: "community_direct_messages" },
-            () => scheduleRefetch(),
-          )
-          .subscribe();
-      } catch (error) {
-        console.error("[community] dm inbox realtime failed:", error);
-      }
-    };
-    void (async () => {
-      try {
-        await client.auth.initialize();
-      } catch {
-        /* session restore failure: the join stays pending */
-      }
-      if (disposed) return;
-      const {
-        data: { session },
-      } = await client.auth.getSession();
-      if (disposed) return;
-      if (session?.access_token) {
-        await client.realtime.setAuth(session.access_token).catch(() => {});
-        if (!disposed) subscribeChannel();
-      }
-    })();
-    const authSub = client.auth.onAuthStateChange((event, session) => {
-      if (session?.access_token) {
-        void client.realtime
-          .setAuth(session.access_token)
-          .then(() => {
-            if (event === "INITIAL_SESSION" || event === "SIGNED_IN") subscribeChannel();
-          })
-          .catch(() => {});
-      }
-    });
+    const timer = refetchTimer;
     return () => {
-      disposed = true;
-      if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
-      authSub.data.subscription.unsubscribe();
-      if (channel) void client.removeChannel(channel);
+      if (timer.current) window.clearTimeout(timer.current);
     };
-  }, [getClient, me.userId, refetch]);
+  }, []);
 
   if (failed && conversations.length === 0) {
     return (

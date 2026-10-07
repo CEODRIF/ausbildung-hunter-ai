@@ -50,6 +50,16 @@ import {
   parsePinBroadcast,
   parsePinRemoveBroadcast,
 } from "@/lib/community/events";
+import {
+  resolveCommunityRealtimeClient,
+  useRoomRealtime,
+} from "@/lib/community/conversation-realtime";
+import {
+  createEventBatcher,
+  type EventBatcher,
+  type RealtimeLikeChannel,
+} from "@/lib/community/realtime-core";
+import { ActionSpinner, useCommunityAction, useCommunityToast } from "./action-feedback";
 import { pinMessageAction, unpinMessageAction } from "@/app/community/advanced-actions";
 import Link from "next/link";
 import { MessageRow } from "./message-row";
@@ -144,6 +154,15 @@ type ConnectionState = "connected" | "disconnected";
 type RealtimeClient = ReturnType<typeof createClient>;
 type RealtimeChannel = ReturnType<RealtimeClient["channel"]>;
 
+/** One coalesced realtime INSERT (applied as a batch to the message list). */
+interface RoomInsertEvent {
+  row: LocalMessage;
+  /** Already known (the echo of our own optimistic row). */
+  dup: boolean;
+  mine: boolean;
+  userId: string;
+}
+
 function localeFor(lang: string): string {
   return lang === "de" ? "de-DE" : lang === "fr" ? "fr-FR" : lang === "ar" ? "ar" : "en-US";
 }
@@ -206,6 +225,11 @@ export function RoomChat({
   const { t, lang } = useI18n();
   const { members, membersOpen, toggleMembers, openProfile, reportVoiceState } =
     useCommunityShell();
+  // Localized action feedback (the shared system — see action-feedback.tsx):
+  // pending states are LOCALIZED to the clicked control, errors surface as
+  // small deduplicated toasts + the inline composer error.
+  const toast = useCommunityToast();
+  const refreshAction = useCommunityAction();
   // Phase 4: the voice session — ONE per room mount (RoomChat is keyed by
   // room.id, so a room switch tears it down: no cross-room bleed, no second
   // media session). The microphone is only ever touched by the explicit join.
@@ -470,10 +494,10 @@ export function RoomChat({
     if (markReadTimer.current) window.clearTimeout(markReadTimer.current);
   }, [room.id]);
 
-  // Resync the newest page of the ACTIVE room after a dropped connection has
-  // recovered, and (every second) as the authoritative background fallback for
-  // the realtime stream. `?poll=1` uses the higher poll rate bucket. The fetch
-  // is room-scoped only — never the whole dataset, never other rooms.
+  // Resync the newest page of the ACTIVE room — EVENT-DRIVEN only (realtime
+  // reconnect + tab visibility return; never a periodic poll). `?poll=1`
+  // uses the higher rate bucket for these targeted calls. The fetch is
+  // room-scoped only — never the whole dataset, never other rooms.
   const resyncRecent = useCallback(async (reason?: string) => {
     devLog("sync", "resync", { room: room.slug, reason: reason ?? "reconnect" });
     try {
@@ -481,14 +505,14 @@ export function RoomChat({
         `/api/community/messages?room=${encodeURIComponent(room.slug)}&poll=1`,
         { cache: "no-store" },
       );
-      if (!response.ok) return; // e.g. 429 — keep state; the next tick retries
+      if (!response.ok) return; // e.g. 429 — keep state; the next event retries
       const data = (await response.json()) as { items: CommunityMessageClient[] };
       setHistoryMissing(false);
       const before = new Set(knownIds.current);
-      // NO-OP when nothing new AND nothing changed: a 1s tick against a quiet
-      // room must not re-render the list (no flash, no scroll reset, no
-      // duplicate rows). mergeCommunityMessages always returns a NEW array, so
-      // we must skip the setState entirely when there is nothing to apply.
+      // NO-OP when nothing new AND nothing changed: a targeted sync against
+      // a quiet room must not re-render the list (no flash, no scroll reset,
+      // no duplicate rows). mergeCommunityMessages always returns a NEW
+      // array, so we must skip the setState entirely when nothing changed.
       const localById = new Map(
         messagesRef.current.map((m) => [m.id, m] as const),
       );
@@ -528,47 +552,17 @@ export function RoomChat({
         return next;
       });
     } catch {
-      /* keep the current state; the next tick retries */
+      /* keep the current state; the next event retries */
     }
   }, [room.slug]);
 
-  // --- 1s invisible background refresh of the ACTIVE room ---------------
-  // Realtime (postgres_changes INSERT) is the fast primary path. This poll is
-  // the authoritative fallback so a message the realtime stream missed (mobile
-  // socket drops, iOS app lifecycle, RLS edge cases) still appears within ~1s
-  // WITHOUT a page reload or navigation. resyncRecent() is a no-op when nothing
-  // new/changed arrived, so a quiet room costs one small room-scoped fetch and
-  // causes NO re-render. One timer per room; a still-running request is never
-  // overlapped; a hidden tab pauses (and catches up once on return).
-  useEffect(() => {
-    let disposed = false;
-    let inFlight = false;
-    let timer: number | null = null;
-    const tick = () => {
-      if (disposed || inFlight) return; // overlap guard
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      inFlight = true;
-      void resyncRecent("poll")
-        .catch(() => {
-          /* network error: keep state; the next tick retries silently */
-        })
-        .finally(() => {
-          inFlight = false;
-        });
-    };
-    const onVisibility = () => {
-      // Returning to the tab: one immediate catch-up poll.
-      tick();
-    };
-    tick(); // fill any gap since (re)mount
-    timer = window.setInterval(tick, 1000);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      disposed = true;
-      if (timer != null) window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [resyncRecent]);
+  // --- No periodic polling (the realtime stream is the transport) -------
+  // Missed events can only happen in a missed WINDOW (socket drop, phone
+  // suspending the tab) — and every such window ends with exactly ONE
+  // targeted synchronization: resyncRecent() on the reconnect
+  // (onMissedSync below) and on visibility return (the effect further
+  // down). resyncRecent() is a no-op when nothing new/changed arrived, so
+  // these syncs cost nothing in the common case.
 
   // --- Typing indicator (ephemeral presence, over the room channel) ---
 
@@ -618,216 +612,194 @@ export function RoomChat({
     setTypingPeers([]);
   }, []);
 
-  // Realtime subscription (event-driven; no polling) — ONE channel per room.
-  useEffect(() => {
-    let disposed = false;
-    let channel: RealtimeChannel | null = null;
-    let degradedTimer: number | null = null;
-    const reportDegraded = () => {
-      degradedTimer = window.setTimeout(() => {
-        sawDisconnected.current = true;
-        setConnection("disconnected");
-      }, 0);
-    };
-    const client = getClient();
-    if (!client) {
-      reportDegraded();
-      return () => {
-        if (degradedTimer) window.clearTimeout(degradedTimer);
-      };
-    }
+  // --- Realtime (event-driven; no polling) — ONE shared channel per room.
+  // The subscription machinery (JWT handshake, the stable channel name, the
+  // ref-counted channel registry, teardown on unmount/room-switch, reconnect
+  // tracking) lives in the shared community realtime layer; this surface
+  // only registers its handlers. Burst coalescing: INSERTs flow through a
+  // leading-edge-immediate batcher — a single message is applied
+  // synchronously (effectively instant, never held 500ms), while a burst
+  // flushes at most 500ms apart with ONE setState per batch.
+  const insertBatcherRef = useRef<EventBatcher<RoomInsertEvent> | null>(null);
 
-    const subscribeChannel = () => {
-      if (disposed || channel) return;
-      try {
-        const roomFilter = `room_id=eq.${room.id}`;
-        channel = client
-          .channel(`community-room:${room.id}`)
-          .on(
-            "postgres_changes",
-            { event: "INSERT", schema: "public", table: "community_messages", filter: roomFilter },
-            (payload) => {
-              const incoming = payload.new as CommunityMessage;
-              if (!incoming?.id) return;
-              // Dedupe happens in the merge (by stable id): a duplicate echo
-              // of our own optimistic row is NOT skipped here — it is the
-              // proof the send persisted, so the row flips to "sent".
-              const dup = knownIds.current.has(incoming.id);
-              const mine = incoming.user_id === me.userId;
-              devLog("rt", "insert", { id: incoming.id, mine, dup });
-              knownIds.current.add(incoming.id);
-              // Realtime rows carry no author/reactions; the merge fills what
-              // it can, and ensureAuthor/ensureReply upgrade the labels.
-              setMessages((prev) =>
-                mergeCommunityMessages(
-                  prev,
-                  [{ ...incoming, author: null, reactions: [], replyTo: null }],
-                  { preferIncoming: true },
-                ),
-              );
-              if (!dup && !authorOf(incoming)) void ensureAuthor(incoming.user_id);
-              if (!dup && !stickToBottom.current) setNewCount((c) => c + 1);
-              scheduleMarkRead();
-            },
-          )
-          .on(
-            "postgres_changes",
-            { event: "UPDATE", schema: "public", table: "community_messages", filter: roomFilter },
-            (payload) => {
-              const incoming = payload.new as CommunityMessage;
-              if (!incoming?.id) return;
-              // RLS: this UPDATE stream only ever carries MY edits — merge
-              // them (the broadcast below reaches everyone else).
-              setMessages((prev) =>
-                mergeCommunityMessages(
-                  prev,
-                  [{ ...incoming, author: null, reactions: [], replyTo: null }],
-                  { preferIncoming: true },
-                ),
-              );
-            },
-          )
-          .on(
-            "postgres_changes",
-            { event: "DELETE", schema: "public", table: "community_messages", filter: roomFilter },
-            (payload) => {
-              const deleted = (payload.old as { id?: string })?.id;
-              if (!deleted) return;
-              // RLS: only my own deletions reach this stream.
-              setMessages((prev) => prev.filter((m) => m.id !== deleted));
-            },
-          )
-          .on("broadcast", { event: TYPING_BROADCAST_EVENT }, (payload) => {
-            const broadcast = parseTypingBroadcast(payload?.payload);
-            if (!broadcast) return;
-            // Room guard: ignore typing from other rooms (shared socket).
-            const wireRoom = (payload?.payload as { roomId?: unknown } | undefined)?.roomId;
-            if (typeof wireRoom === "string" && wireRoom !== room.id) return;
-            typingStateRef.current = applyTypingEvent(
-              typingStateRef.current,
-              broadcast,
-              Date.now(),
-            );
-            refreshTyping();
-          })
-          .on("broadcast", { event: MESSAGE_UPDATE_BROADCAST_EVENT }, (payload) => {
-            const update = parseMessageUpdateBroadcast(payload?.payload);
-            if (!update || update.roomId !== room.id) return;
+  const applyInsertBatch = useCallback(
+    (batch: readonly RoomInsertEvent[]) => {
+      // Every merge goes through mergeCommunityMessages (id-keyed dedupe):
+      // a duplicate echo of our own optimistic row is NOT a second row — it
+      // is the proof the send persisted, so the row flips to "sent".
+      setMessages((prev) =>
+        mergeCommunityMessages(
+          prev,
+          batch.map((e) => e.row),
+          { preferIncoming: true },
+        ),
+      );
+      let appended = 0;
+      for (const e of batch) {
+        if (e.dup) continue; // already known (the echo of our own send)
+        if (!authorOf(e.row)) void ensureAuthor(e.userId);
+        appended += 1;
+      }
+      if (appended > 0 && !stickToBottom.current) setNewCount((c) => c + appended);
+      scheduleMarkRead();
+    },
+    [authorOf, ensureAuthor, scheduleMarkRead],
+  );
+
+  const registerRoomHandlers = useCallback(
+    (channel: RealtimeLikeChannel) => {
+      const roomFilter = `room_id=eq.${room.id}`;
+      insertBatcherRef.current?.dispose();
+      insertBatcherRef.current = createEventBatcher({ onFlush: applyInsertBatch });
+      channel
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "community_messages", filter: roomFilter },
+          (payload) => {
+            const incoming = payload.new as CommunityMessage;
+            if (!incoming?.id) return;
+            const dup = knownIds.current.has(incoming.id);
+            const mine = incoming.user_id === me.userId;
+            devLog("rt", "insert", { id: incoming.id, mine, dup });
+            knownIds.current.add(incoming.id);
+            // Realtime rows carry no author/reactions; the merge fills what
+            // it can, and ensureAuthor/ensureReply upgrade the labels.
+            insertBatcherRef.current?.push({
+              row: { ...incoming, author: null, reactions: [], replyTo: null },
+              dup,
+              mine,
+              userId: incoming.user_id,
+            });
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "community_messages", filter: roomFilter },
+          (payload) => {
+            const incoming = payload.new as CommunityMessage;
+            if (!incoming?.id) return;
+            // RLS: this UPDATE stream only ever carries MY edits — merge
+            // them (the broadcast below reaches everyone else).
             setMessages((prev) =>
               mergeCommunityMessages(
                 prev,
-                [{ ...update.message, author: null, reactions: [], replyTo: null }],
+                [{ ...incoming, author: null, reactions: [], replyTo: null }],
                 { preferIncoming: true },
               ),
             );
-          })
-          .on("broadcast", { event: MESSAGE_DELETE_BROADCAST_EVENT }, (payload) => {
-            const del = parseMessageDeleteBroadcast(payload?.payload);
-            if (!del || del.roomId !== room.id) return;
-            setMessages((prev) => prev.filter((m) => m.id !== del.id));
-          })
-          // Phase 5: pin metadata from another moderator (the pin rows are
-          // admin-written — this broadcast is the members' realtime view).
-          .on("broadcast", { event: PIN_BROADCAST_EVENT }, (payload) => {
-            const pin = parsePinBroadcast(payload?.payload);
-            if (!pin || pin.roomId !== room.id) return;
-            setPins((prev) => {
-              if (prev.some((p) => p.messageId === pin.messageId)) return prev;
-              const msg = messagesRef.current.find((m) => m.id === pin.messageId);
-              return [
-                {
-                  pinId: `rt-${pin.messageId}`,
-                  messageId: pin.messageId,
-                  pinnedAt: new Date().toISOString(),
-                  pinnedByName: null,
-                  preview: msg?.message?.trim().slice(0, 160) ?? "",
-                  authorName: msg
-                    ? msg.user_id === me.userId
-                      ? me.displayName
-                      : (authorsRef.current[msg.user_id]?.display_name ?? null)
-                    : null,
-                },
-                ...prev,
-              ];
-            });
-          })
-          .on("broadcast", { event: PIN_REMOVE_BROADCAST_EVENT }, (payload) => {
-            const del = parsePinRemoveBroadcast(payload?.payload);
-            if (!del || del.roomId !== room.id) return;
-            setPins((prev) => prev.filter((p) => p.messageId !== del.messageId));
-          })
-          .subscribe((status) => {
-            devLog("rt", "status", { status, room: room.slug });
-            if (status === "SUBSCRIBED") {
-              setConnection("connected");
-              if (sawDisconnected.current) {
-                void resyncRecent();
-                clearTyping();
-              }
-            } else if (
-              status === "TIMED_OUT" ||
-              status === "CLOSED" ||
-              status === "CHANNEL_ERROR"
-            ) {
-              sawDisconnected.current = true;
-              setConnection("disconnected");
-              senderRef.current?.commit();
-            }
-          });
-        channelRef.current = channel;
-      } catch (error) {
-        // A realtime setup failure must never reach the error boundary.
-        console.error("[community] realtime subscribe failed:", error);
-        reportDegraded();
-      }
-    };
-
-    void (async () => {
-      try {
-        await client.auth.initialize();
-      } catch (error) {
-        devLog("auth", "initialize failed", { error: String(error) });
-      }
-      if (disposed) return;
-      const {
-        data: { session },
-      } = await client.auth.getSession();
-      if (disposed) return;
-      if (session?.access_token) {
-        // Awaited on purpose: the join payload must carry the JWT from its
-        // first byte — a token-less join streams zero RLS rows.
-        devLog("auth", "realtime token", { hasToken: true });
-        await client.realtime.setAuth(session.access_token).catch((error) =>
-          devLog("auth", "realtime setAuth failed", { error: String(error) }),
-        );
-        if (!disposed) subscribeChannel();
-      }
-      // No session (yet): NEVER join without a JWT. If auth.initialize() is
-      // still restoring the session, the INITIAL_SESSION event below does it.
-    })();
-
-    const sub = client.auth.onAuthStateChange((event, session) => {
-      if (session?.access_token) {
-        void client.realtime
-          .setAuth(session.access_token)
-          .then(() => {
-            if (event === "INITIAL_SESSION" || event === "SIGNED_IN") subscribeChannel();
-          })
-          .catch((error) =>
-            devLog("auth", "realtime setAuth failed", { error: String(error) }),
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "community_messages", filter: roomFilter },
+          (payload) => {
+            const deleted = (payload.old as { id?: string })?.id;
+            if (!deleted) return;
+            // RLS: only my own deletions reach this stream.
+            setMessages((prev) => prev.filter((m) => m.id !== deleted));
+          }
+        )
+        .on("broadcast", { event: TYPING_BROADCAST_EVENT }, (payload) => {
+          const broadcast = parseTypingBroadcast(payload?.payload);
+          if (!broadcast) return;
+          // Room guard: ignore typing from other rooms (shared socket).
+          const wireRoom = (payload?.payload as { roomId?: unknown } | undefined)?.roomId;
+          if (typeof wireRoom === "string" && wireRoom !== room.id) return;
+          typingStateRef.current = applyTypingEvent(
+            typingStateRef.current,
+            broadcast,
+            Date.now(),
           );
-      } else if (event === "SIGNED_OUT") client.realtime.setAuth();
-    });
+          refreshTyping();
+        })
+        .on("broadcast", { event: MESSAGE_UPDATE_BROADCAST_EVENT }, (payload) => {
+          const update = parseMessageUpdateBroadcast(payload?.payload);
+          if (!update || update.roomId !== room.id) return;
+          setMessages((prev) =>
+            mergeCommunityMessages(
+              prev,
+              [{ ...update.message, author: null, reactions: [], replyTo: null }],
+              { preferIncoming: true },
+            ),
+          );
+        })
+        .on("broadcast", { event: MESSAGE_DELETE_BROADCAST_EVENT }, (payload) => {
+          const del = parseMessageDeleteBroadcast(payload?.payload);
+          if (!del || del.roomId !== room.id) return;
+          setMessages((prev) => prev.filter((m) => m.id !== del.id));
+        })
+        // Phase 5: pin metadata from another moderator (the pin rows are
+        // admin-written — this broadcast is the members' realtime view).
+        .on("broadcast", { event: PIN_BROADCAST_EVENT }, (payload) => {
+          const pin = parsePinBroadcast(payload?.payload);
+          if (!pin || pin.roomId !== room.id) return;
+          setPins((prev) => {
+            if (prev.some((p) => p.messageId === pin.messageId)) return prev;
+            const msg = messagesRef.current.find((m) => m.id === pin.messageId);
+            return [
+              {
+                pinId: `rt-${pin.messageId}`,
+                messageId: pin.messageId,
+                pinnedAt: new Date().toISOString(),
+                pinnedByName: null,
+                preview: msg?.message?.trim().slice(0, 160) ?? "",
+                authorName: msg
+                  ? msg.user_id === me.userId
+                    ? me.displayName
+                    : (authorsRef.current[msg.user_id]?.display_name ?? null)
+                  : null,
+              },
+              ...prev,
+            ];
+          });
+        })
+        .on("broadcast", { event: PIN_REMOVE_BROADCAST_EVENT }, (payload) => {
+          const del = parsePinRemoveBroadcast(payload?.payload);
+          if (!del || del.roomId !== room.id) return;
+          setPins((prev) => prev.filter((p) => p.messageId !== del.messageId));
+        });
+    },
+    [applyInsertBatch, me, refreshTyping, room.id],
+  );
 
-    return () => {
-      disposed = true;
-      if (degradedTimer) window.clearTimeout(degradedTimer);
-      sub.data.subscription.unsubscribe();
-      channelRef.current = null;
-      if (channel) void client.removeChannel(channel);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getClient, room.id, room.slug]);
+  useRoomRealtime(room.id, {
+    registerHandlers: registerRoomHandlers,
+    // Reconnect recovery: ONE targeted synchronization of the recent window
+    // (a no-op when nothing was missed) — never a periodic poll.
+    onMissedSync: () => {
+      void resyncRecent("reconnect");
+      clearTyping();
+    },
+    onConnection: (state) => {
+      if (state === "disconnected") {
+        sawDisconnected.current = true;
+        // Flush pending outgoing typing so the peer never sees a stale dot.
+        senderRef.current?.commit();
+      }
+      setConnection(state);
+    },
+    onChannel: (ch) => {
+      // Invoked by the shared layer outside render (setup/teardown); the ref
+      // mirrors the live channel for broadcast sends.
+      // eslint-disable-next-line react-hooks/immutability
+      channelRef.current = (ch as RealtimeChannel | null) ?? null;
+      if (ch === null) insertBatcherRef.current?.flush();
+    },
+  });
+
+  // No realtime client available (env missing) → report degraded, same as
+  // before the shared layer existed.
+  useEffect(() => {
+    if (resolveCommunityRealtimeClient() === null) {
+      sawDisconnected.current = true;
+      // One-shot degraded state on mount (env missing), not a cascade.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setConnection("disconnected");
+    }
+  }, []);
+
+  // Batch teardown on unmount (the registry tears the channel itself down).
+  useEffect(() => () => insertBatcherRef.current?.dispose(), []);
 
   // Outgoing typing controller (declared AFTER the realtime effect so that
   // on unmount its dispose runs while the channel still exists).
@@ -1114,12 +1086,12 @@ export function RoomChat({
   }, []);
 
   // Phones suspend the realtime socket while the tab is backgrounded.
+  // Returning to the tab performs ONE targeted catch-up sync (a silent
+  // no-op when nothing new/changed arrived) — never a periodic poll.
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
-      if (sawDisconnected.current || connectionRef.current !== "connected") {
-        void resyncRecent("visibility");
-      }
+      void resyncRecent("visibility");
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -1205,11 +1177,18 @@ export function RoomChat({
         const data = (await response.json()) as { reactions: NonNullable<typeof previous> };
         withPrev(data.reactions);
       } catch {
-        // Revert: the UI never lies about a reaction that failed.
+        // Revert: the UI never lies about a reaction that failed — and the
+        // user is TOLD (small deduplicated toast; the tap itself already got
+        // immediate pressed feedback).
         withPrev(prev ?? []);
+        toast.notify({
+          kind: "error",
+          text: t("community.toast.actionError"),
+          dedupeKey: "reaction",
+        });
       }
     },
-    [messages],
+    [messages, toast, t],
   );
 
   const saveEdit = useCallback(
@@ -1268,9 +1247,14 @@ export function RoomChat({
         });
       } catch {
         setSendError("send_failed");
+        toast.notify({
+          kind: "error",
+          text: t("community.toast.deleteFailed"),
+          dedupeKey: "delete-message",
+        });
       }
     },
-    [replyTo, room.id],
+    [replyTo, room.id, toast, t],
   );
 
   // --- Sending -------------------------------------------------------------
@@ -1637,11 +1621,24 @@ export function RoomChat({
                 <span className="inline-flex flex-wrap items-center justify-center gap-1.5 rounded-full border border-warning/30 bg-warning-soft px-3 py-1 text-xs font-semibold text-warning">
                   <Icon name="alert" size={12} />
                   {t("community.historyUnavailable")}
-                  <button
+                   <button
                     type="button"
-                    onClick={() => void resyncRecent("manual")}
-                    className="underline underline-offset-2"
+                    aria-busy={refreshAction.phase === "pending" || undefined}
+                    onClick={() => {
+                      if (refreshAction.phase === "pending") return;
+                      void refreshAction.run(async () => {
+                        try {
+                          await resyncRecent("manual");
+                        } catch {
+                          throw new Error("resync_failed");
+                        }
+                      });
+                    }}
+                    className="inline-flex items-center gap-1 underline underline-offset-2"
                   >
+                    {refreshAction.phase === "pending" && (
+                      <ActionSpinner className="h-3 w-3" />
+                    )}
                     {t("community.historyUnavailableRetry")}
                   </button>
                 </span>

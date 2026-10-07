@@ -3121,10 +3121,16 @@ describe("typing indicator (source guard)", () => {
 
   it("rides the PER-ROOM realtime channel — no extra channel, table or polling", () => {
     expect(TYPING_BROADCAST_EVENT).toBe("community_typing");
-    expect(chatSrc).toContain(".channel(`community-room:${room.id}`)");
-    // Exactly ONE channel per mount (typing + edits + deletes ride it).
-    expect(chatSrc.match(/\.channel\(/g)).toHaveLength(1);
-    // The listener is wired through the shared constant (single source of truth).
+    // The subscription itself now lives in the SHARED community realtime
+    // layer (stable per-room channel name, ref-counted registry): room-chat
+    // constructs NO channels of its own anymore — typing + edits + deletes
+    // ride the shared per-room channel.
+    expect(chatSrc).not.toContain(".channel(");
+    expect(chatSrc).toContain("useRoomRealtime(room.id, {");
+    const sharedSrc = readSrc("src/lib/community/conversation-realtime.ts");
+    expect(sharedSrc).toContain("`community-room:${target.id}`");
+    // The listener is registered on that shared channel through the shared
+    // constant (single source of truth).
     expect(chatSrc).toContain('.on("broadcast", { event: TYPING_BROADCAST_EVENT }');
     // Room guard: typing from another room is dropped (shared socket).
     expect(chatSrc).toContain("wireRoom !== room.id");
@@ -3186,58 +3192,96 @@ describe("typing indicator (source guard)", () => {
 
 describe("production realtime wiring (source guard)", () => {
   const chatSrc = readSrc("src/components/community/room-chat.tsx");
+  // The shared layer OWNS the handshake, the channel registry, the reconnect
+  // tracking and the teardown — every Community surface (rooms, DMs, inbox,
+  // friends, notifications) is pinned through it.
+  const sharedSrc = readSrc("src/lib/community/conversation-realtime.ts");
+  const coreSrc = readSrc("src/lib/community/realtime-core.ts");
 
   it("initializes the browser session and attaches the JWT before joining", () => {
-    expect(chatSrc).toContain("await client.auth.initialize()");
-    expect(chatSrc).toContain("client.realtime.setAuth(session.access_token)");
-    // …and the join happens after the token is attached (same async bootstrap).
-    const rtEffect = chatSrc.slice(
-      chatSrc.indexOf("const subscribeChannel = () =>"),
-      chatSrc.indexOf("return () => {", chatSrc.indexOf("const subscribeChannel = () =>")),
+    expect(sharedSrc).toContain("await client.auth.initialize()");
+    expect(sharedSrc).toContain("client.realtime.setAuth(session.access_token)");
+    // …and the join (setup) happens after the token is attached, inside the
+    // same async bootstrap:
+    const bootstrap = sharedSrc.slice(
+      sharedSrc.indexOf("void (async () => {"),
+      sharedSrc.indexOf("const authSub ="),
     );
-    expect(rtEffect.indexOf("client.realtime.setAuth(session.access_token)")).toBeLessThan(
-      rtEffect.indexOf("subscribeChannel();"),
-    );
+    expect(bootstrap.indexOf("await client.realtime.setAuth(session.access_token)")).toBeGreaterThanOrEqual(0);
+    expect(
+      bootstrap.indexOf("await client.realtime.setAuth(session.access_token)"),
+    ).toBeLessThan(bootstrap.indexOf("if (!disposed) setup();"));
+    // …and the room chat is wired through that shared hook:
+    expect(chatSrc).toContain("useRoomRealtime(room.id, {");
   });
 
   it("keeps the socket token fresh across refreshes and sign-out", () => {
-    expect(chatSrc).toContain("client.auth.onAuthStateChange");
-    expect(chatSrc).toContain("client.realtime.setAuth();");
+    expect(sharedSrc).toContain("client.auth.onAuthStateChange");
+    // A refreshed session re-attaches the token and (re)joins; …
+    expect(sharedSrc).toContain(
+      'if (event === "INITIAL_SESSION" || event === "SIGNED_IN") setup();',
+    );
+    // …sign-out disposes the wiring (a join is never kept on a dead token).
+    expect(sharedSrc).toContain('} else if (event === "SIGNED_OUT" && handle) {');
+    expect(sharedSrc).toContain("handle.dispose();");
   });
 
   it("NEVER joins a channel without a JWT (RLS-backed realtime would stream zero rows)", () => {
-    const rtEffect = chatSrc.slice(
-      chatSrc.indexOf("const subscribeChannel = () =>"),
-      chatSrc.indexOf("return () => {", chatSrc.indexOf("const subscribeChannel = () =>")),
-    );
-    expect(rtEffect).toContain("if (session?.access_token) {");
-    expect(rtEffect).toContain(
-      'if (event === "INITIAL_SESSION" || event === "SIGNED_IN") subscribeChannel();',
+    // The join sits INSIDE the token guard — no token, no setup:
+    expect(sharedSrc).toContain("if (session?.access_token) {");
+    expect(sharedSrc).toContain("NEVER join without a JWT");
+    // Slow path: while the session is still restoring, INITIAL_SESSION /
+    // SIGNED_IN attach the token and THEN join (the same guarded setup).
+    expect(sharedSrc).toContain(
+      'if (event === "INITIAL_SESSION" || event === "SIGNED_IN") setup();',
     );
   });
 
   it("creates at most ONE channel per mount (idempotent subscribe), torn down on unmount", () => {
-    expect(chatSrc).toContain("if (disposed || channel) return;");
-    expect(chatSrc).toContain("if (channel) void client.removeChannel(channel);");
+    // Idempotent setup: a second call (late auth event, StrictMode
+    // double-effect, whatever) is a no-op.
+    expect(sharedSrc).toContain("if (disposed || handle) return;");
+    // The ref-counted registry: one live channel per name (the shared socket
+    // is never re-subscribed while a ref is alive) …
+    expect(coreSrc).toContain("entry.refs += 1;");
+    // …and removeChannel when the LAST ref releases the name.
+    expect(coreSrc).toContain("void entry.client.removeChannel(entry.channel);");
+    // Unmount disposes the wiring (registry release + onChannel(null)).
+    expect(sharedSrc).toContain("hooks.onChannel?.(null);");
+    expect(sharedSrc).toContain("registry.release(client, name);");
   });
 
   it("never treats CONNECTING as a failure (no banner flash on load)", () => {
-    expect(chatSrc).toContain('status === "TIMED_OUT"');
-    expect(chatSrc).toContain('status === "CLOSED"');
-    expect(chatSrc).toContain('status === "CHANNEL_ERROR"');
+    // The one-shot reconnect tracker (shared core) only flips to
+    // "disconnected" for real failure statuses; every other transitional
+    // status (CONNECTING included) falls through untouched — the banner
+    // never flashes on a normal load.
+    expect(coreSrc).toContain('export const RT_STATUS_SUBSCRIBED = "SUBSCRIBED";');
+    expect(coreSrc).toContain('export const RT_STATUS_TIMED_OUT = "TIMED_OUT";');
+    expect(coreSrc).toContain('export const RT_STATUS_CLOSED = "CLOSED";');
+    expect(coreSrc).toContain('export const RT_STATUS_CHANNEL_ERROR = "CHANNEL_ERROR";');
+    expect(coreSrc).not.toContain("RT_STATUS_CONNECTING");
+    // The room chat surfaces the tracker's state as the banner (it does no
+    // local socket-status parsing of its own).
+    expect(chatSrc).toContain("onConnection: (state) => {");
   });
 
-  it("resyncs on foreground return ONLY after a real gap (no tab-switch polling)", () => {
-    expect(chatSrc).toContain(
-      "if (sawDisconnected.current || connectionRef.current !== \"connected\")",
-    );
+  it("resyncs on foreground return — ONE targeted sync, never a periodic poll", () => {
+    // Phones suspend the socket while the tab is hidden; returning performs a
+    // single targeted resync (a silent no-op when nothing new/changed) —
+    // there is no timer behind it.
+    expect(chatSrc).toContain('document.visibilityState !== "visible"');
+    expect(chatSrc).toContain('void resyncRecent("visibility")');
+    expect(chatSrc).not.toContain("window.setInterval(tick, 1000)");
+    expect(chatSrc).not.toMatch(/setInterval\([^)]*fetch/);
   });
 
   it("dev diagnostics are NODE_ENV-gated and never log secrets", () => {
     expect(chatSrc).toContain('const LOG_DEV = process.env.NODE_ENV === "development"');
-    // The token is only ever logged as a boolean presence, never its value.
-    expect(chatSrc).toContain('{ hasToken: true }');
-    expect(chatSrc).not.toMatch(/devLog\([^)]*access_token\b(?!\))/);
+    // No token value is ever logged anywhere in the realtime stack:
+    expect(chatSrc).not.toMatch(/devLog\([^)]*access_token/);
+    expect(sharedSrc).not.toMatch(/console\.\w+\([^)]*access_token/);
+    expect(coreSrc).not.toMatch(/console\.\w+\([^)]*access_token/);
   });
 
   it("no router.refresh / location.reload / polling of any kind", () => {

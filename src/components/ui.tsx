@@ -17,7 +17,7 @@ import { Icon } from "@/components/icon";
  * class branching in components.
  */
 
-const buttonStyles = {
+export const buttonStyles = {
   primary:
     "btn-neon text-white shadow-[0_8px_22px_rgba(var(--glow-accent-rgb),0.3)] hover:shadow-[0_10px_26px_rgba(var(--glow-accent-rgb),0.38)]",
   secondary:

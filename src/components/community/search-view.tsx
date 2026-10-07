@@ -6,6 +6,7 @@ import { Icon, type IconName } from "@/components/icon";
 import { useI18n } from "@/lib/i18n";
 import { Button, LoadingState } from "@/components/ui";
 import { EmptyState, ErrorState } from "@/components/ui/feedback";
+import { ActionSpinner, COMMUNITY_PRESS_CLASS } from "./action-feedback";
 import { AdminBadge } from "./admin-badge";
 
 /**
@@ -226,8 +227,24 @@ export function SearchView({
               className="w-full rounded-2xl border border-line bg-surface py-2.5 pr-3 ps-9 text-sm text-ink placeholder:text-faint focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none"
             />
           </div>
-          <Button type="submit" disabled={searching || query.trim().length < 2}>
-            {searching ? t("community.searching") : t("community.searchSubmit")}
+          <Button
+            type="submit"
+            disabled={searching || query.trim().length < 2}
+            aria-busy={searching || undefined}
+          >
+            {/* Stacked labels: the width never jumps between
+                "Search" and "Searching…". */}
+            <span className="relative grid">
+              <span className={`col-start-1 row-start-1 ${searching ? "invisible" : ""}`}>
+                {t("community.searchSubmit")}
+              </span>
+              <span
+                className={`col-start-1 row-start-1 flex items-center justify-center gap-1.5 ${searching ? "" : "invisible"}`}
+              >
+                {searching && <ActionSpinner className="h-3.5 w-3.5" />}
+                {t("community.searching")}
+              </span>
+            </span>
           </Button>
         </div>
 
@@ -240,7 +257,7 @@ export function SearchView({
               role="tab"
               aria-selected={kind === tab.id}
               onClick={() => onKind(tab.id)}
-              className={`rounded-full px-3 py-1.5 text-xs font-bold transition-colors ${
+              className={`rounded-full px-3 py-1.5 text-xs font-bold ${COMMUNITY_PRESS_CLASS} ${
                 kind === tab.id
                   ? "bg-accent-soft text-accent"
                   : "bg-surface text-muted hover:bg-surface-2 hover:text-ink"
@@ -290,7 +307,7 @@ export function SearchView({
                 setDate("all");
                 if (q.length >= 2) void runSearch({ q, kind, roomSlug: "", date: "all" });
               }}
-              className="text-xs font-bold text-accent hover:underline"
+              className={`text-xs font-bold text-accent hover:underline ${COMMUNITY_PRESS_CLASS}`}
             >
               {t("community.searchClearFilters")}
             </button>
@@ -379,13 +396,21 @@ export function SearchView({
                 type="button"
                 variant="secondary"
                 disabled={loadingMore || !cursor}
+                aria-busy={loadingMore || undefined}
                 onClick={() => void runSearch({ q: query.trim(), kind, roomSlug, date }, true)}
               >
-                {cursor
-                  ? loadingMore
-                    ? t("community.searching")
-                    : t("community.searchLoadMore")
-                  : t("community.searchNoMore")}
+                {/* Stacked labels: the width never jumps while loading. */}
+                <span className="relative grid">
+                  <span className={`col-start-1 row-start-1 ${loadingMore ? "invisible" : ""}`}>
+                    {cursor ? t("community.searchLoadMore") : t("community.searchNoMore")}
+                  </span>
+                  <span
+                    className={`col-start-1 row-start-1 flex items-center justify-center gap-1.5 ${loadingMore ? "" : "invisible"}`}
+                  >
+                    {loadingMore && <ActionSpinner className="h-3.5 w-3.5" />}
+                    {t("community.searchLoadMore")}
+                  </span>
+                </span>
               </Button>
             </div>
           </>

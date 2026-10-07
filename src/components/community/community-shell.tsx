@@ -11,7 +11,6 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { Icon } from "@/components/icon";
 import { useI18n } from "@/lib/i18n";
 import type { CommunityAuthor, CommunityRoomGroup } from "@/lib/community";
@@ -22,8 +21,11 @@ import {
 import { socialKindOf } from "@/lib/community/notification-kinds";
 import { useCommunityPresence } from "@/lib/community/use-presence";
 import type { ViewerCommunitySettings } from "@/lib/community/social";
+import { useNotificationsRealtime } from "@/lib/community/conversation-realtime";
+import type { RealtimeLikeChannel } from "@/lib/community/realtime-core";
 import { playNotificationChime } from "@/lib/community/chime";
 import { toggleRoomMute } from "@/app/community/actions";
+import { CommunityToastProvider } from "./action-feedback";
 import { RoomNav } from "./room-nav";
 import { MembersPanel } from "./members-panel";
 import { IdentityDialog } from "./identity-dialog";
@@ -432,141 +434,99 @@ export function CommunityShell({
 
   // Phase 3 — the shell's ONE notifications channel (RLS delivers only
   // this recipient's rows + platform updates). The notification center
-  // page consumes emitCommunityNotification — never a second channel.
-  useEffect(() => {
-    let disposed = false;
-    let channel: ReturnType<ReturnType<typeof createClient>["channel"]> | null = null;
-    let client: ReturnType<typeof createClient>;
-    try {
-      client = createClient();
-    } catch (error) {
-      console.error("[community] realtime client unavailable:", error);
-      return;
+  // page consumes emitCommunityNotification — never a second channel. The
+  // subscription itself lives in the shared community realtime layer
+  // (stable name, registry, teardown, reconnect tracking).
+  const onNotificationRow = useCallback((payload: { new?: Record<string, unknown> }) => {
+    const row = payload.new;
+    if (!row || typeof row.id !== "string" || !row.id) return;
+    const n: BusNotification = {
+      id: row.id,
+      title: typeof row.title === "string" ? row.title : "",
+      content: typeof row.content === "string" ? row.content : "",
+      type: typeof row.type === "string" ? row.type : "info",
+      target_type: row.target_type === "all" ? "all" : "user",
+      actor_id: typeof row.actor_id === "string" ? row.actor_id : null,
+      room_id: typeof row.room_id === "string" ? row.room_id : null,
+      room_message_id: typeof row.room_message_id === "string" ? row.room_message_id : null,
+      conversation_id: typeof row.conversation_id === "string" ? row.conversation_id : null,
+      dm_message_id: typeof row.dm_message_id === "string" ? row.dm_message_id : null,
+      reaction_emoji: typeof row.reaction_emoji === "string" ? row.reaction_emoji : null,
+      question_id: typeof row.question_id === "string" ? row.question_id : null,
+      answer_id: typeof row.answer_id === "string" ? row.answer_id : null,
+      created_at: typeof row.created_at === "string" ? row.created_at : new Date().toISOString(),
+    };
+    // Normalize the stored representation to the effective kind before the
+    // bus: social rows carry the marker in `title`, legacy rows in `type`.
+    const kind = socialKindOf(n);
+    if (kind) n.type = kind;
+    emitCommunityNotification(n);
+    setBadges((b) => (b ? { ...b, notifications: b.notifications + 1 } : b));
+    // Toast gate (see pushToast callers): social + visible + not DND +
+    // not already inside the relevant room/conversation + pref on.
+    if (n.target_type !== "user" || !SOCIAL_TOAST_TYPES.has(n.type)) return;
+    if (prefsRef.current.mode === "dnd") return;
+    if (document.visibilityState !== "visible") return;
+    if (
+      n.type === "direct_message" &&
+      n.conversation_id &&
+      pathnameRef.current === `/community/messages/${n.conversation_id}`
+    ) {
+      return; // the message is on screen — nothing to toast
     }
-    const onRow = (payload: { new?: Record<string, unknown> }) => {
-      const row = payload.new;
-      if (!row || typeof row.id !== "string" || !row.id) return;
-      const n: BusNotification = {
-        id: row.id,
-        title: typeof row.title === "string" ? row.title : "",
-        content: typeof row.content === "string" ? row.content : "",
-        type: typeof row.type === "string" ? row.type : "info",
-        target_type: row.target_type === "all" ? "all" : "user",
-        actor_id: typeof row.actor_id === "string" ? row.actor_id : null,
-        room_id: typeof row.room_id === "string" ? row.room_id : null,
-        room_message_id: typeof row.room_message_id === "string" ? row.room_message_id : null,
-        conversation_id: typeof row.conversation_id === "string" ? row.conversation_id : null,
-        dm_message_id: typeof row.dm_message_id === "string" ? row.dm_message_id : null,
-        reaction_emoji: typeof row.reaction_emoji === "string" ? row.reaction_emoji : null,
-        question_id: typeof row.question_id === "string" ? row.question_id : null,
-        answer_id: typeof row.answer_id === "string" ? row.answer_id : null,
-        created_at: typeof row.created_at === "string" ? row.created_at : new Date().toISOString(),
-      };
-      // Normalize the stored representation to the effective kind before the
-      // bus: social rows carry the marker in `title`, legacy rows in `type`.
-      const kind = socialKindOf(n);
-      if (kind) n.type = kind;
-      emitCommunityNotification(n);
-      setBadges((b) => (b ? { ...b, notifications: b.notifications + 1 } : b));
-      // Toast gate (see pushToast callers): social + visible + not DND +
-      // not already inside the relevant room/conversation + pref on.
-      if (n.target_type !== "user" || !SOCIAL_TOAST_TYPES.has(n.type)) return;
-      if (prefsRef.current.mode === "dnd") return;
-      if (document.visibilityState !== "visible") return;
-      if (
-        n.type === "direct_message" &&
-        n.conversation_id &&
-        pathnameRef.current === `/community/messages/${n.conversation_id}`
-      ) {
-        return; // the message is on screen — nothing to toast
-      }
-      if (
-        (n.type === "mention" || n.type === "reply" || n.type === "reaction") &&
-        n.room_id
-      ) {
-        const slug = roomIdToSlugRef.current.get(n.room_id);
-        if (slug && pathnameRef.current === `/community/${slug}`) return;
-      }
-      if (
-        (n.type === "answer" || n.type === "answer_accepted") &&
-        n.question_id &&
-        pathnameRef.current === `/community/questions/${n.question_id}`
-      ) {
-        return; // the question is on screen — nothing to toast
-      }
-      const prefKey =
-        n.type === "friend_request"
+    if (
+      (n.type === "mention" || n.type === "reply" || n.type === "reaction") &&
+      n.room_id
+    ) {
+      const slug = roomIdToSlugRef.current.get(n.room_id);
+      if (slug && pathnameRef.current === `/community/${slug}`) return;
+    }
+    if (
+      (n.type === "answer" || n.type === "answer_accepted") &&
+      n.question_id &&
+      pathnameRef.current === `/community/questions/${n.question_id}`
+    ) {
+      return; // the question is on screen — nothing to toast
+    }
+    const prefKey =
+      n.type === "friend_request"
+        ? "friendRequests"
+        : n.type === "friend_accepted"
           ? "friendRequests"
-          : n.type === "friend_accepted"
-            ? "friendRequests"
-            : n.type === "mention"
-              ? "mentions"
-              : n.type === "reply"
-                ? "replies"
-                : n.type === "reaction"
-                  ? "reactions"
-                  : n.type === "answer"
+          : n.type === "mention"
+            ? "mentions"
+            : n.type === "reply"
+              ? "replies"
+              : n.type === "reaction"
+                ? "reactions"
+                : n.type === "answer"
+                  ? "replies"
+                  : n.type === "answer_accepted"
                     ? "replies"
-                    : n.type === "answer_accepted"
-                      ? "replies"
-                      : "directMessages";
-      if (prefsRef.current[prefKey] === false) return;
-      pushToast(n);
-    };
-    let joinedOnce = false;
-    const subscribeChannel = () => {
-      if (disposed || channel) return;
-      try {
-        channel = client
-          .channel(`community-notifications-${me.userId}`)
-          .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications" }, onRow)
-          .subscribe((status) => {
-            // Reconnect recovery: when the socket drops and returns, the
-            // channel re-joins and this fires SUBSCRIBED a second time —
-            // only the badge COUNTS need a bounded refresh (the stream
-            // re-subscribes itself). The first join is a no-op (the badges
-            // arrive as props). No timer, no polling, no reload.
-            if (status === "SUBSCRIBED") {
-              if (joinedOnce) resyncBadges();
-              joinedOnce = true;
-            }
-          });
-      } catch (error) {
-        console.error("[community] notifications realtime failed:", error);
-      }
-    };
-    void (async () => {
-      try {
-        await client.auth.initialize();
-      } catch {
-        /* session restore failure: the join stays pending */
-      }
-      if (disposed) return;
-      const {
-        data: { session },
-      } = await client.auth.getSession();
-      if (disposed) return;
-      if (session?.access_token) {
-        await client.realtime.setAuth(session.access_token).catch(() => {});
-        if (!disposed) subscribeChannel();
-      }
-    })();
-    const authSub = client.auth.onAuthStateChange((event, session) => {
-      if (session?.access_token) {
-        void client.realtime
-          .setAuth(session.access_token)
-          .then(() => {
-            if (event === "INITIAL_SESSION" || event === "SIGNED_IN") subscribeChannel();
-          })
-          .catch(() => {});
-      }
-    });
-    return () => {
-      disposed = true;
-      authSub.data.subscription.unsubscribe();
-      if (channel) void client.removeChannel(channel);
-    };
-  }, [me.userId, pushToast, resyncBadges]);
+                    : "directMessages";
+    if (prefsRef.current[prefKey] === false) return;
+    pushToast(n);
+  }, [pushToast]);
+
+  const registerNotificationHandlers = useCallback(
+    (channel: RealtimeLikeChannel) => {
+      channel.on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "notifications" },
+        onNotificationRow,
+      );
+    },
+    [onNotificationRow],
+  );
+
+  useNotificationsRealtime(me.userId, {
+    registerHandlers: registerNotificationHandlers,
+    // Reconnect recovery: the stream re-subscribes itself; only the badge
+    // COUNTS need a bounded refresh — and only AFTER a real missed window
+    // (the first join is never a sync: the badges arrive as props). No
+    // timer, no polling, no reload.
+    onMissedSync: () => resyncBadges(),
+  });
 
   // iOS Safari: the keyboard shrinks the VISUAL viewport without resizing the
   // layout viewport, so 100dvh alone cannot follow it. Reserve precisely the
@@ -663,6 +623,9 @@ export function CommunityShell({
   );
 
   return (
+    // The action-feedback toast layer (one per shell; the store is global —
+    // every Community action surfaces through the same small stack).
+    <CommunityToastProvider>
     <div
       ref={rootRef}
       className="absolute inset-0 flex min-h-0"
@@ -840,5 +803,6 @@ export function CommunityShell({
         />
       )}
     </div>
+    </CommunityToastProvider>
   );
 }

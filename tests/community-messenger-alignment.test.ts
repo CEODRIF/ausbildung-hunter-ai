@@ -272,19 +272,24 @@ describe("mention chips on the accent bubble", () => {
 // 12 — backend contract untouched
 // ---------------------------------------------------------------------------
 
-describe("message API / realtime / 1s polling untouched", () => {
-  it("the 1-second authoritative polling tick is still there", () => {
-    expect(roomSrc).toContain("timer = window.setInterval(tick, 1000);");
+describe("message API / realtime / delivery contract", () => {
+  it("no periodic polling: delivery is realtime + ONE targeted sync (reconnect / visibility)", () => {
+    expect(roomSrc).not.toContain("window.setInterval(tick, 1000)");
+    expect(roomSrc).toContain('void resyncRecent("reconnect")');
+    expect(roomSrc).toContain('void resyncRecent("visibility")');
   });
 
-  it("the realtime channel subscription is still there (per-room, deduped)", () => {
-    expect(roomSrc).toContain(".channel(`community-room:${room.id}`)");
+  it("the realtime channel subscription is still there (per-room, shared layer, deduped)", () => {
+    // The subscription lives in the SHARED community realtime layer (stable
+    // per-room channel name, ref-counted registry, JWT handshake, teardown):
+    expect(roomSrc).toContain("useRoomRealtime(room.id, {");
     expect(roomSrc).toContain("const dup = knownIds.current.has(incoming.id);");
     expect(roomSrc).toContain("knownIds.current.add(incoming.id);");
   });
 
   it("still loads/sends through the SAME community message endpoints", () => {
-    // list (incl. the 1s poll tick with ?poll=1), load-older, send, edit:
+    // targeted resync (reconnect / visibility return) with the ?poll=1
+    // rate bucket, load-older, send, edit:
     expect(roomSrc).toContain(
       "`/api/community/messages?room=${encodeURIComponent(room.slug)}&poll=1`",
     );

@@ -2079,6 +2079,11 @@ describe("realtime architecture (source guards)", () => {
   let friendsSource: string;
   let shellSource: string;
   let presenceHookSource: string;
+  // The channel NAMES are derived in the shared layer (one naming scheme —
+  // two surfaces can never create two channels for the same conversation);
+  // the SURFACES only register their handlers on the shared channel.
+  let sharedSrc: string;
+  let coreSrc: string;
 
   // Loaded once at module scope (after the vi.mocks above).
   beforeAll(async () => {
@@ -2092,10 +2097,13 @@ describe("realtime architecture (source guards)", () => {
     friendsSource = read("src/components/community/friends-view.tsx");
     shellSource = read("src/components/community/community-shell.tsx");
     presenceHookSource = read("src/lib/community/use-presence.ts");
+    sharedSrc = read("src/lib/community/conversation-realtime.ts");
+    coreSrc = read("src/lib/community/realtime-core.ts");
   });
 
   it("DM chat uses ONE conversation-scoped channel (community-dm:<id>) — no cross-conversation bleed", () => {
-    expect(dmChatSource).toContain('`community-dm:${conversation.id}`');
+    expect(sharedSrc).toContain("`community-dm:${target.id}`");
+    expect(dmChatSource).toContain("useDMRealtime(conversation.id, {");
     // The postgres stream is filtered to THIS conversation:
     expect(dmChatSource).toContain('`conversation_id=eq.${conversation.id}`');
     // …and the actor re-broadcasts (edits/deletes) are guarded by conversationId:
@@ -2105,25 +2113,33 @@ describe("realtime architecture (source guards)", () => {
     expect(dmChatSource).toContain("wire.conversationId !== conversation.id");
     // Reactions have no conversation column → guarded by the known message ids:
     expect(dmChatSource).toContain("!knownIds.current.has(message_id)");
+    // No conversation channel is constructed in the surface itself (the ONE
+    // remaining .channel( is the pre-existing peer-presence broadcast).
+    expect(dmChatSource).not.toContain(".channel(`community-dm");
   });
 
-  it("the DM channel is torn down on unmount (removeChannel — no duplicate subscriptions)", () => {
-    expect(dmChatSource).toContain("if (channel) void client.removeChannel(channel);");
-    expect(dmChatSource).toContain("channelRef.current = null;");
+  it("the DM channel is torn down on unmount (registry release — no duplicate subscriptions)", () => {
+    // Teardown flows through the shared layer: onChannel(null) clears the
+    // surface's channel ref, then the registry releases the name — and
+    // removeChannel fires when the LAST ref goes.
+    expect(dmChatSource).toContain("channelRef.current = (ch as RealtimeChannel | null) ?? null;");
+    expect(sharedSrc).toContain("hooks.onChannel?.(null);");
+    expect(sharedSrc).toContain("registry.release(client, name);");
+    expect(coreSrc).toContain("void entry.client.removeChannel(entry.channel);");
     // A disposed flag prevents the async auth handshake from subscribing late:
-    expect(dmChatSource).toContain("if (disposed || channel) return;");
+    expect(sharedSrc).toContain("if (disposed || handle) return;");
   });
 
   it("the DM inbox subscribes to ONE user-scoped stream (RLS already scopes to my conversations)", () => {
-    expect(dmInboxSource).toContain('`community-dm-inbox-${me.userId}`');
+    expect(sharedSrc).toContain("`community-dm-inbox-${target.userId}`");
+    expect(dmInboxSource).toContain("useConversationListRealtime(me.userId, {");
     expect(dmInboxSource).toContain("table: \"community_direct_messages\"");
-    expect(dmInboxSource).toContain("void client.removeChannel(channel);");
   });
 
   it("the friends view uses ONE user-scoped channel for relationship events", () => {
-    expect(friendsSource).toContain('`community-friendships-${me.userId}`');
+    expect(sharedSrc).toContain("`community-friendships-${target.userId}`");
+    expect(friendsSource).toContain("useFriendshipsRealtime(me.userId, {");
     expect(friendsSource).toContain("table: \"community_friendships\"");
-    expect(friendsSource).toContain("void client.removeChannel(channel);");
   });
 
   it("presence is activity-driven — the shell stays interval-free; ONE throttled heartbeat lives in the hook", () => {
