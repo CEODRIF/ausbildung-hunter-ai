@@ -120,12 +120,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "member_not_found" }, { status: 404 });
   }
 
-  // Block check — both directions.
+  // Block check — both directions. PostgREST or= syntax: the comma separates
+  // alternatives; AND only exists as a composite group with dotted filters
+  // inside: and(col.eq.v,col2.eq.v). (The old chained shorthand
+  // colA.eq.X.and.colB.eq.Y is invalid and made every social write fail
+  // with 400 "invalid input syntax for type uuid".)
   const blockRes = await supabase
     .from("community_blocks")
     .select("blocker_id,blocked_id")
     .or(
-      `blocker_id.eq.${user.id}.and.blocked_id.eq.${rawUserId},blocker_id.eq.${rawUserId}.and.blocked_id.eq.${user.id}`,
+      `and(blocker_id.eq.${user.id},blocked_id.eq.${rawUserId}),and(blocker_id.eq.${rawUserId},blocked_id.eq.${user.id})`,
     );
   if (blockRes.error) {
     logFriendRequestFailure("block", user.id, rawUserId, blockRes.error.code, blockRes.error.message);
@@ -148,7 +152,7 @@ export async function POST(request: Request) {
         .from("community_friendships")
         .select("id,requester_id,requestee_id,status,created_at")
         .or(
-          `requester_id.eq.${user.id}.and.requestee_id.eq.${rawUserId},requester_id.eq.${rawUserId}.and.requestee_id.eq.${user.id}`,
+          `and(requester_id.eq.${user.id},requestee_id.eq.${rawUserId}),and(requester_id.eq.${rawUserId},requestee_id.eq.${user.id})`,
         )
         .maybeSingle();
        if (!existingRes.error && existingRes.data) {

@@ -152,7 +152,8 @@ export async function POST(
     .select("id")
     .eq("status", "accepted")
     .or(
-      `requester_id.eq.${user.id}.and.requestee_id.eq.${otherId},requester_id.eq.${otherId}.and.requestee_id.eq.${user.id}`,
+      // PostgREST or= syntax: comma = alternatives, AND = composite group.
+      `and(requester_id.eq.${user.id},requestee_id.eq.${otherId}),and(requester_id.eq.${otherId},requestee_id.eq.${user.id})`,
     )
     .limit(1);
   if (friendshipRes.error) {
@@ -167,7 +168,7 @@ export async function POST(
     .from("community_blocks")
     .select("id")
     .or(
-      `blocker_id.eq.${user.id}.and.blocked_id.eq.${otherId},blocker_id.eq.${otherId}.and.blocked_id.eq.${user.id}`,
+      `and(blocker_id.eq.${user.id},blocked_id.eq.${otherId}),and(blocker_id.eq.${otherId},blocked_id.eq.${user.id})`,
     )
     .limit(1);
   if (blockRes.error) {

@@ -581,12 +581,19 @@ export async function openDmConversation(
     const profiles = await fetchProfiles(supabase, [otherId]);
     if (!profiles.has(otherId)) return { conversation: null, error: "member_not_found" };
 
+    // PostgREST or= filter syntax: the comma separates ALTERNATIVES, and AND
+    // only exists as a composite group with dotted filters inside:
+    // and(col.eq.value,col2.eq.value). The chained dotted shorthand
+    // colA.eq.X.and.colB.eq.Y is NOT valid — PostgREST rejected every
+    // social write with 400 "invalid input syntax for type uuid" (production
+    // incident: friend requests / DMs failed while all reads worked; the DB
+    // layer was proven healthy by the v2 verification probes).
     const friendshipRes = await supabase
       .from("community_friendships")
       .select("id,requester_id,requestee_id,status")
       .eq("status", "accepted")
       .or(
-        `requester_id.eq.${me}.and.requestee_id.eq.${otherId},requester_id.eq.${otherId}.and.requestee_id.eq.${me}`,
+        `and(requester_id.eq.${me},requestee_id.eq.${otherId}),and(requester_id.eq.${otherId},requestee_id.eq.${me})`,
       );
     if (friendshipRes.error) throw new Error(friendshipRes.error.message);
     const friendship = (friendshipRes.data ?? [])[0] as FriendshipRowLike | undefined;
@@ -596,7 +603,7 @@ export async function openDmConversation(
       .from("community_blocks")
       .select("blocker_id,blocked_id")
       .or(
-        `blocker_id.eq.${me}.and.blocked_id.eq.${otherId},blocker_id.eq.${otherId}.and.blocked_id.eq.${me}`,
+        `and(blocker_id.eq.${me},blocked_id.eq.${otherId}),and(blocker_id.eq.${otherId},blocked_id.eq.${me})`,
       );
     if (blockRes.error) throw new Error(blockRes.error.message);
     if ((blockRes.data ?? []).length > 0)
@@ -607,7 +614,7 @@ export async function openDmConversation(
       .from("community_conversations")
       .select("id,member_a,member_b,created_at,updated_at")
       .or(
-        `member_a.eq.${me}.and.member_b.eq.${otherId},member_a.eq.${otherId}.and.member_b.eq.${me}`,
+        `and(member_a.eq.${me},member_b.eq.${otherId}),and(member_a.eq.${otherId},member_b.eq.${me})`,
       );
     if (existingRes.error) throw new Error(existingRes.error.message);
     const existing = (existingRes.data ?? [])[0] as DmConversation | undefined;
@@ -627,7 +634,7 @@ export async function openDmConversation(
           .from("community_conversations")
           .select("id,member_a,member_b,created_at,updated_at")
           .or(
-            `member_a.eq.${me}.and.member_b.eq.${otherId},member_a.eq.${otherId}.and.member_b.eq.${me}`,
+            `and(member_a.eq.${me},member_b.eq.${otherId}),and(member_a.eq.${otherId},member_b.eq.${me})`,
           );
         if (!retry.error) {
           const row = (retry.data ?? [])[0] as DmConversation | undefined;

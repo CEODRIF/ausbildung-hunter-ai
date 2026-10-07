@@ -47,7 +47,8 @@ export async function DELETE(
     .delete()
     .eq("status", "accepted")
     .or(
-      `requester_id.eq.${user.id}.and.requestee_id.eq.${targetId},requester_id.eq.${targetId}.and.requestee_id.eq.${user.id}`,
+      // PostgREST or= syntax: comma = alternatives, AND = composite group.
+      `and(requester_id.eq.${user.id},requestee_id.eq.${targetId}),and(requester_id.eq.${targetId},requestee_id.eq.${user.id})`,
     )
     .select("id");
   if (error) {

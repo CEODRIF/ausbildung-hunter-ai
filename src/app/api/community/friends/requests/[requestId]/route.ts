@@ -132,7 +132,8 @@ export async function POST(
       .from("community_blocks")
       .select("blocker_id,blocked_id")
       .or(
-        `blocker_id.eq.${user.id}.and.blocked_id.eq.${row.requester_id},blocker_id.eq.${row.requester_id}.and.blocked_id.eq.${user.id}`,
+        // PostgREST or= syntax: comma = alternatives, AND = composite group.
+        `and(blocker_id.eq.${user.id},blocked_id.eq.${row.requester_id}),and(blocker_id.eq.${row.requester_id},blocked_id.eq.${user.id})`,
       );
     if (blockRes.error) {
       return NextResponse.json({ error: "Could not accept request." }, { status: 500 });

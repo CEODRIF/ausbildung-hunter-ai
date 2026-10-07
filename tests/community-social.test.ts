@@ -892,8 +892,11 @@ describe("friendship (DELETE /api/community/friends/:userId)", () => {
     const orArg = client.calls
       .filter((c) => c.table === "community_friendships" && c.op === "or")
       .map((c) => c.args[0])[0] as string;
-    expect(orArg).toContain(`requester_id.eq.${ALICE}.and.requestee_id.eq.${BOB}`);
-    expect(orArg).toContain(`requester_id.eq.${BOB}.and.requestee_id.eq.${ALICE}`);
+    // Valid PostgREST or= syntax: composite groups with dotted filters
+    // inside (the old chained `.and.` shorthand is rejected by PostgREST —
+    // see the "regression — PostgREST or= filter syntax" suite).
+    expect(orArg).toContain(`and(requester_id.eq.${ALICE},requestee_id.eq.${BOB})`);
+    expect(orArg).toContain(`and(requester_id.eq.${BOB},requestee_id.eq.${ALICE})`);
   });
 
   it("removing a non-friend (pending only) → 404 not_friends", async () => {
@@ -2803,5 +2806,42 @@ describe("incident — friendship action failure classification (accept/decline/
       expect(actionRoute, `action route must log step=${marker}`).toContain(`logFriendshipActionFailure("${marker}"`);
     }
     expect(actionRoute).toContain("friendship_action_failed step=");
+  });
+});
+
+describe("regression — PostgREST or= filter syntax (production incident)", () => {
+  // Every social WRITE gate (friend request/accept/decline, remove-friend,
+  // open conversation, DM send) went through an `.or(...)` filter. Two
+  // syntactic forms are NOT valid PostgREST and both were verified to be
+  // rejected by real PostgREST 16 (PGRST100 / 22P02):
+  //   1. chained dotted AND: `colA.eq.X.and.colB.eq.Y` (the production bug —
+  //      surfaced to users as generic 500s, reads worked fine)
+  //   2. eq-form inside composite groups: `and(col=eq.X,...)`
+  // The comma in or= separates ALTERNATIVES; AND only exists as a composite
+  // group with DOTTED filters inside: `and(col.eq.X,col2.eq.Y)`.
+  // Unit tests never caught form 1 because the mock Supabase client accepts
+  // any .or() string — only real PostgREST validates it.
+  const FILES = [
+    "src/lib/community/social.ts",
+    "src/app/api/community/friends/route.ts",
+    "src/app/api/community/friends/[userId]/route.ts",
+    "src/app/api/community/friends/requests/[requestId]/route.ts",
+    "src/app/api/community/dm/[conversationId]/messages/route.ts",
+  ];
+
+  it("no query filter string uses an invalid PostgREST or= form", () => {
+    const chainedAnd = /\.eq\.[^`]*\.and\./; // form 1: the production bug
+    const eqForm = /=eq\./; // form 2: invalid inside and(...) groups
+    for (const file of FILES) {
+      const source = readSrc(file);
+      const offenders = [...source.matchAll(/`([^`]*)`/g)]
+        .map((m) => m[1])
+        .filter((t) => chainedAnd.test(t) || eqForm.test(t));
+      expect(
+        offenders,
+        `${file}: invalid PostgREST or= filter. Use composite groups with ` +
+          `dotted filters: .or(\`and(a.eq.X,b.eq.Y),and(b.eq.Y,a.eq.X)\`)`,
+      ).toEqual([]);
+    }
   });
 });
