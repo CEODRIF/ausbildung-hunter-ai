@@ -67,6 +67,9 @@ const JUMP_MAX_OLDER_PAGES = 8;
 /** Phase 3 deep link: how long the target row stays highlighted (one-shot
  *  timeout, NOT an interval). */
 const JUMP_HIGHLIGHT_MS = 2500;
+/** UUID guard for ensureAuthor — realtime rows carry ids, but a malformed
+ *  value must never reach the member endpoint. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ---------------------------------------------------------------------------
 // Development-only diagnostics. Gated on NODE_ENV so the checks (and every
@@ -90,7 +93,7 @@ function seedAuthorsFrom(
 }
 
 interface RoomChatProps {
-  me: { userId: string; displayName: string; avatarId: string };
+  me: { userId: string; displayName: string; avatarId: string; platformAdmin?: boolean };
   room: CommunityRoom;
   initialMessages: CommunityMessageClient[];
   /**
@@ -367,7 +370,14 @@ export function RoomChat({
   const [typingPeers, setTypingPeers] = useState<TypingPeer[]>([]);
 
   const myAuthor = useMemo<CommunityAuthor>(
-    () => ({ user_id: me.userId, display_name: me.displayName, avatar_id: me.avatarId }),
+    () => ({
+      user_id: me.userId,
+      display_name: me.displayName,
+      avatar_id: me.avatarId,
+      // Server-computed flag (the page stamps it from the session profile) —
+      // never derived from client state, so the own-row badge is spoof-proof.
+      platform_admin: me.platformAdmin === true,
+    }),
     [me],
   );
 
@@ -405,28 +415,45 @@ export function RoomChat({
     [me, myAuthor],
   );
 
-  const ensureAuthor = useCallback(
-    async (userId: string) => {
-      const client = getClient();
-      if (!client || userId in authorsRef.current) return;
-      const { data } = await client
-        .from("community_profiles")
-        .select("user_id,display_name,avatar_id")
-        .eq("user_id", userId)
-        .maybeSingle();
-      if (data) {
+  const ensureAuthor = useCallback(async (userId: string) => {
+    if (userId in authorsRef.current) return;
+    if (!UUID_RE.test(userId)) return;
+    // Phase 10: the flag must travel from the SERVER. The direct
+    // community_profiles query cannot produce platform_admin (the column
+    // does not exist there), so realtime-inserted rows — whose only author
+    // resolution path is this callback — now go through the secure member
+    // endpoint, which stamps the flag from the database user id and requires
+    // the session (no service role, no client input). A 404/429 degrades to
+    // the same neutral name fallback the direct query produced; the 1s poll
+    // upgrades the author map with the authoritative flag on the next tick.
+    try {
+      const response = await fetch(`/api/community/members/${encodeURIComponent(userId)}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        member?: {
+          userId: string;
+          displayName: string;
+          avatarId: string;
+          isPlatformAdmin?: boolean;
+        } | null;
+      };
+      if (data.member) {
         setAuthors((prev) => ({
           ...prev,
           [userId]: {
-            user_id: data.user_id,
-            display_name: data.display_name,
-            avatar_id: data.avatar_id,
+            user_id: data.member!.userId,
+            display_name: data.member!.displayName,
+            avatar_id: data.member!.avatarId,
+            platform_admin: data.member!.isPlatformAdmin === true,
           },
         }));
       }
-    },
-    [getClient],
-  );
+    } catch {
+      /* network error: keep the fallback name; the poll repairs it */
+    }
+  }, []);
 
   const scheduleMarkRead = useCallback(() => {
     if (markReadTimer.current) window.clearTimeout(markReadTimer.current);
@@ -1663,6 +1690,7 @@ export function RoomChat({
                        mine={mine}
                        firstOfGroup={firstOfGroup}
                        name={name}
+                       authorIsAdmin={author?.platform_admin === true}
                        avatarUrl={avatarUrl}
                        locale={locale}
                        imageUrl={imageUrl}

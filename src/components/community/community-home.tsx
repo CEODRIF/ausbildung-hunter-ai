@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Icon, type IconName } from "@/components/icon";
+import { AdminBadge } from "./admin-badge";
 import { useI18n } from "@/lib/i18n";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 import {
@@ -87,6 +88,8 @@ export interface HomeQuestionItem {
   roomSlug: string;
   answerCount: number;
   authorName: string;
+  /** Phase 10: server-trusted platform-admin flag of the author (badge). */
+  authorIsAdmin?: boolean;
   createdAt: string;
 }
 
@@ -176,7 +179,14 @@ function HomeQuestionRow({ item, locale }: { item: HomeQuestionItem; locale: str
                 ? t("community.questionOneAnswer")
                 : t("community.questionAnswers", { count: item.answerCount })}
             </span>
-            {item.authorName && <span>· {item.authorName}</span>}
+            {item.authorName && (
+              <span className="flex items-center gap-1">
+                · {item.authorName}
+                {item.authorIsAdmin === true && (
+                  <AdminBadge size={11} label={t("community.adminBadge")} />
+                )}
+              </span>
+            )}
           </span>
         </span>
         <Icon name="chevronRight" size={14} className="shrink-0 text-faint rtl:-scale-x-100" />
@@ -458,8 +468,13 @@ export function CommunityHome({
                       )}
                       <div className="min-w-0 flex-1">
                         <p className="flex flex-wrap items-baseline gap-x-1.5 text-[13px]">
-                          <span className="font-bold text-ink">
-                            {author?.display_name ?? t("community.member")}
+                          <span className="flex items-center gap-1">
+                            <span className="font-bold text-ink">
+                              {author?.display_name ?? t("community.member")}
+                            </span>
+                            {author?.platform_admin === true && (
+                              <AdminBadge size={12} label={t("community.adminBadge")} />
+                            )}
                           </span>
                           <span className="text-[11px] font-semibold text-accent">
                             #{item.roomName}

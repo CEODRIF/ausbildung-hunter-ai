@@ -7,8 +7,10 @@ import { Icon } from "@/components/icon";
 import { useI18n } from "@/lib/i18n";
 import {
   COMMUNITY_AVATAR_IDS,
+  COMMUNITY_ADMIN_MAX_NAME_LENGTH,
   COMMUNITY_MAX_USERNAME_LENGTH,
   communityAvatarUrl,
+  isValidAdminCommunityName,
   isValidCommunityUsername,
 } from "@/lib/community";
 import { updateCommunityIdentity } from "@/app/community/actions";
@@ -23,7 +25,7 @@ import { updateCommunityIdentity } from "@/app/community/actions";
  */
 
 export interface IdentityDialogProps {
-  me: { displayName: string; avatarId: string };
+  me: { displayName: string; avatarId: string; platformAdmin?: boolean };
   onClose: () => void;
 }
 
@@ -45,11 +47,17 @@ export function IdentityDialog({ me, onClose }: IdentityDialogProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Phase 10: the designated platform admin (server-stamped flag — the same
+  // value the server action re-validates) may use a custom name (1–40 chars,
+  // no control characters). Normal users keep the exact username rules.
+  const isAdmin = me.platformAdmin === true;
   const trimmed = name.trim();
   const nameChanged = trimmed !== me.displayName;
   const avatarChanged = avatarId !== me.avatarId;
   const dirty = nameChanged || avatarChanged;
-  const nameValid = trimmed.length === 0 || isValidCommunityUsername(trimmed);
+  const nameValid =
+    trimmed.length === 0 ||
+    (isAdmin ? isValidAdminCommunityName(trimmed) : isValidCommunityUsername(trimmed));
 
   const submit = () => {
     if (!dirty || pending || !nameValid) return;
@@ -130,7 +138,7 @@ export function IdentityDialog({ me, onClose }: IdentityDialogProps) {
             label={t("community.nameLabel")}
             hint={t("community.nameHelp")}
             value={name}
-            maxLength={COMMUNITY_MAX_USERNAME_LENGTH}
+            maxLength={isAdmin ? COMMUNITY_ADMIN_MAX_NAME_LENGTH : COMMUNITY_MAX_USERNAME_LENGTH}
             autoComplete="off"
             spellCheck={false}
             onChange={(event) => {

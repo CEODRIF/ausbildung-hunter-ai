@@ -7,6 +7,7 @@ import {
   tooManyRequests,
 } from "@/lib/rate-limit";
 import { mapVisiblePresence } from "@/lib/community/presence";
+import { isPlatformAdminId } from "@/lib/community/platform-admin";
 
 /**
  * GET /api/community/members — the community member list for the members
@@ -45,7 +46,7 @@ export async function GET() {
       last_seen_at: string | null;
       presence_mode: "online" | "away" | "dnd" | null;
       show_presence: boolean | null;
-    }>).map((row) => {
+     }>).map((row) => {
       const mapped = mapVisiblePresence(row, row.user_id === user.id);
       return {
         user_id: row.user_id,
@@ -53,6 +54,8 @@ export async function GET() {
         avatar_id: row.avatar_id,
         presence: mapped.state,
         last_seen_at: mapped.lastSeenAt,
+        // Phase 10: the server-trusted platform-admin flag (red badge).
+        platform_admin: isPlatformAdminId(row.user_id),
       };
     });
 

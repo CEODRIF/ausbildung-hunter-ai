@@ -1711,11 +1711,13 @@ describe("GET /api/community/messages", () => {
     expect(body.items[0].reactions).toEqual([
       { emoji: "👍", count: 1, mine: false },
     ]);
-    // v2 authors carry the full identity row (user_id included).
+    // v2 authors carry the full identity row (user_id included); Phase 10
+    // adds the server-computed platform-admin flag (false for a member).
     expect(body.items[1].author).toEqual({
       user_id: OTHER_USER_ID,
       display_name: "Lena",
       avatar_id: "avatar-2",
+      platform_admin: false,
     });
     // The reply preview carries the parent's trimmed data + author.
     expect(body.items[2].replyTo).toMatchObject({
@@ -1867,6 +1869,7 @@ describe("GET /api/community/members", () => {
       avatar_id: "avatar-1",
       presence: "offline",
       last_seen_at: null,
+      platform_admin: false,
     });
     expect(body.items[1].presence).toBe("offline");
     // The SELECT clause is the contract: exactly identity + presence columns.
@@ -3125,13 +3128,14 @@ describe("typing indicator (source guard)", () => {
     expect(chatSrc).toContain('.on("broadcast", { event: TYPING_BROADCAST_EVENT }');
     // Room guard: typing from another room is dropped (shared socket).
     expect(chatSrc).toContain("wireRoom !== room.id");
-    // Only the two Supabase reads (author enrichment + image signing):
-    // typing added no database access.
-    expect(chatSrc.match(/\.from\(/g)).toHaveLength(2);
-    // Seven event-driven fetches (resync, load older, reaction toggle, edit,
-    // delete, send, bounded deep-link walk) — typing added none, and none of
-    // them poll.
-    expect(chatSrc.match(/\bfetch\(/g)).toHaveLength(7);
+    // Only ONE remaining Supabase read (image signing): Phase 10 moved
+    // author enrichment to the secure session-gated member endpoint, so
+    // typing still adds no database access.
+    expect(chatSrc.match(/\.from\(/g)).toHaveLength(1);
+    // Eight event-driven fetches (resync, load older, reaction toggle, edit,
+    // delete, send, bounded deep-link walk, author enrichment via the member
+    // endpoint) — typing added none, and none of them poll.
+    expect(chatSrc.match(/\bfetch\(/g)).toHaveLength(8);
   });
 
   it("stale cleanup is a local timer; reconnect clears stale peers; disconnect stops", () => {

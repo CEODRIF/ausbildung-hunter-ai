@@ -17,6 +17,7 @@ import {
 } from "@/lib/community/presence";
 import { presenceDotClass, PresenceIndicator } from "./presence-indicator";
 import { ReportDialog } from "./report-dialog";
+import { AdminBadge } from "./admin-badge";
 
 /**
  * The member PROFILE CARD (Phase 2 social layer).
@@ -50,6 +51,8 @@ export interface SocialProfileClient {
   presence?: PresenceState;
   /** Phase 3: privacy-mapped last seen (null = hidden / never). */
   lastSeenAt?: string | null;
+  /** Phase 10: server-trusted platform-admin flag (drives the red badge). */
+  isPlatformAdmin?: boolean;
 }
 
 export interface RelationshipClient {
@@ -440,7 +443,12 @@ export function ProfileCard({ targetUserId, me, onClose }: ProfileCardProps) {
                 />
               </span>
               <div className="min-w-0 flex-1 pt-0.5">
-                <p className="truncate text-base font-bold text-ink">{member.displayName}</p>
+                <p className="flex min-w-0 items-center gap-1.5 text-base font-bold text-ink">
+                  <span className="truncate">{member.displayName}</span>
+                  {member.isPlatformAdmin === true && (
+                    <AdminBadge size={14} label={t("community.adminBadge")} />
+                  )}
+                </p>
                 <div className="mt-0.5">
                   <PresenceIndicator
                     state={presenceState}

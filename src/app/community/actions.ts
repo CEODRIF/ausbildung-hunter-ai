@@ -6,15 +6,18 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import {
   COMMUNITY_AVATAR_IDS,
   communityProfileSchema,
+  isValidAdminCommunityName,
   isValidCommunityUsername,
 } from "@/lib/community";
 import { generateCommunityUsername } from "@/lib/community/identity";
+import { isPlatformAdminId } from "@/lib/community/platform-admin";
 import type { PresenceMode } from "@/lib/community/presence";
 import {
   fetchNotifications,
   type NotificationPageCursor,
   type NotificationView,
 } from "@/lib/community/social";
+import { fetchCommunityBanState } from "@/lib/community/roles";
 
 /**
  * Community v2 server actions — all writes go through the user's own session
@@ -38,6 +41,25 @@ export type CommunityActionResult =
   | { ok: false; code: OnboardingErrorCode };
 
 /**
+ * Phase 10: the BANNED gate for server actions. A platform-banned user makes
+ * NO community mutations — presence, preferences, read cursors, mutes,
+ * notification receipts or identity changes all abort here. Suspended /
+ * muted users are deliberately NOT covered: they keep reading (and therefore
+ * cursor/presence chrome) while only their WRITES are gated in the API
+ * routes. Never throws — a read failure fails OPEN like the limiter (the
+ * RLS community_is_banned() policies are the database backstop).
+ */
+async function isCommunityBanned(userId: string): Promise<boolean> {
+  try {
+    const ban = await fetchCommunityBanState(userId);
+    return ban.banned;
+  } catch (thrown) {
+    console.error("[community] ban state check threw:", thrown);
+    return false;
+  }
+}
+
+/**
  * First-time community identity: save the generated (or user-confirmed)
  * username + one of the four predefined avatars. The username must match
  * the community format (letters/digits, 3–24) — it is NEVER a real first
@@ -52,6 +74,7 @@ export async function completeOnboarding(input: {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, code: "generic" };
+  if (await isCommunityBanned(user.id)) return { ok: false, code: "generic" };
 
   const parsed = communityProfileSchema.safeParse(input);
   if (!parsed.success) {
@@ -139,12 +162,19 @@ export async function updateCommunityIdentity(input: {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, code: "generic" };
+  if (await isCommunityBanned(user.id)) return { ok: false, code: "generic" };
 
   const updates: Record<string, string> = {};
   if (input.displayName !== undefined) {
     const name = input.displayName.trim();
-    if (!isValidCommunityUsername(name))
+    // Phase 10: the DESIGNATED platform admin (stable session user id → the
+    // admins table; the client can never assert this) may use a custom
+    // display name (1–40 chars, no control characters). Every other user
+    // keeps the exact username rules — this check only relaxes ONE branch.
+    const isAdmin = isPlatformAdminId(user.id);
+    if (!isAdmin ? !isValidCommunityUsername(name) : !isValidAdminCommunityName(name)) {
       return { ok: false, code: "username_invalid" };
+    }
     updates.display_name = name;
   }
   if (input.avatarId !== undefined) {
@@ -194,6 +224,7 @@ export async function markRoomRead(roomId: string): Promise<void> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return;
+  if (await isCommunityBanned(user.id)) return; // Phase 10
   try {
     const { error } = await supabase.from("community_room_read_state").upsert(
       {
@@ -231,10 +262,11 @@ export async function touchCommunityPresence(
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
-    const limited = await checkRateLimit("community_presence", user.id);
-    if (!limited.allowed) return;
-    const values = { user_id: user.id, last_seen_at: new Date().toISOString() };
+  if (!user) return;
+  if (await isCommunityBanned(user.id)) return; // Phase 10
+  const limited = await checkRateLimit("community_presence", user.id);
+  if (!limited.allowed) return;
+  const values = { user_id: user.id, last_seen_at: new Date().toISOString() };
     // NOTE: deliberately NO ignoreDuplicates — every real member already has
     // a profile row (created at onboarding), and an upsert with
     // ignoreDuplicates is a SILENT NO-OP on existing rows: the heartbeat
@@ -272,10 +304,11 @@ export async function setPresenceMode(mode: "online" | "away" | "dnd"): Promise<
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
-    const limited = await checkRateLimit("community_presence", user.id);
-    if (!limited.allowed) return;
-    const values: Record<string, unknown> = { user_id: user.id, presence_mode: mode };
+  if (!user) return;
+  if (await isCommunityBanned(user.id)) return; // Phase 10
+  const limited = await checkRateLimit("community_presence", user.id);
+  if (!limited.allowed) return;
+  const values: Record<string, unknown> = { user_id: user.id, presence_mode: mode };
     if (mode !== "dnd") values.last_seen_at = new Date().toISOString();
     // Plain onConflict upsert: for every real member the row already exists,
     // so the conflict branch must UPDATE it — ignoreDuplicates would make
@@ -299,12 +332,13 @@ export async function setShowPresence(show: boolean): Promise<void> {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
-    const limited = await checkRateLimit("community_prefs", user.id);
-    if (!limited.allowed) return;
-    const { error } = await supabase
-      .from("community_profiles")
-      .update({ show_presence: show })
+  if (!user) return;
+  if (await isCommunityBanned(user.id)) return; // Phase 10
+  const limited = await checkRateLimit("community_prefs", user.id);
+  if (!limited.allowed) return;
+  const { error } = await supabase
+    .from("community_profiles")
+    .update({ show_presence: show })
       .eq("user_id", user.id);
     if (error) console.error("[community] set show presence failed:", error.message);
   } catch (thrown) {
@@ -341,6 +375,7 @@ export async function updateNotificationPreferences(
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) return false;
+    if (await isCommunityBanned(user.id)) return false; // Phase 10
     const limited = await checkRateLimit("community_prefs", user.id);
     if (!limited.allowed) return false;
     const { error } = await supabase
@@ -366,10 +401,11 @@ export async function toggleRoomMute(roomId: string): Promise<void> {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
-    const limited = await checkRateLimit("community_prefs", user.id);
-    if (!limited.allowed) return;
-    const { data: row, error: selectError } = await supabase
+  if (!user) return;
+  if (await isCommunityBanned(user.id)) return; // Phase 10
+  const limited = await checkRateLimit("community_prefs", user.id);
+  if (!limited.allowed) return;
+  const { data: row, error: selectError } = await supabase
       .from("community_profiles")
       .select("muted_room_ids")
       .eq("user_id", user.id)
@@ -401,6 +437,7 @@ export async function markDmRead(conversationId: string): Promise<void> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return;
+  if (await isCommunityBanned(user.id)) return; // Phase 10
   try {
     const { error } = await supabase.from("community_dm_read_state").upsert(
       {
@@ -452,6 +489,7 @@ export async function markNotificationRead(notificationId: string): Promise<void
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return;
+  if (await isCommunityBanned(user.id)) return; // Phase 10
   try {
     const { error } = await supabase.from("notification_reads").upsert(
       { notification_id: notificationId, user_id: user.id },
@@ -549,6 +587,7 @@ export async function markAllNotificationsRead(): Promise<void> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return;
+  if (await isCommunityBanned(user.id)) return; // Phase 10
   try {
     const [ownRes, readsRes] = await Promise.all([
       supabase

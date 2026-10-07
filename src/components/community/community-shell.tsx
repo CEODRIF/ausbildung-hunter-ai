@@ -58,7 +58,7 @@ export interface SocialUnread {
 }
 
 export interface CommunityShellProps {
-  me: { userId: string; displayName: string; avatarId: string };
+  me: { userId: string; displayName: string; avatarId: string; platformAdmin?: boolean };
   categories: CommunityRoomGroup[];
   /** room_id → unread count (0/missing = read). */
   unread: Record<string, number>;
@@ -752,7 +752,14 @@ export function CommunityShell({
 
       {identityOpen && (
         <IdentityDialog
-          me={{ displayName: me.displayName, avatarId: me.avatarId }}
+          me={{
+            displayName: me.displayName,
+            avatarId: me.avatarId,
+            // Server-stamped flag (page → shell) — the dialog only relaxes the
+            // client-side hint for the designated admin; the server action
+            // re-validates with its own session check.
+            platformAdmin: me.platformAdmin === true,
+          }}
           onClose={() => setIdentityOpen(false)}
         />
       )}

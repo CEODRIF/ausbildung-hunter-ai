@@ -6,6 +6,7 @@ import { Icon, type IconName } from "@/components/icon";
 import { useI18n } from "@/lib/i18n";
 import { Button, LoadingState } from "@/components/ui";
 import { EmptyState, ErrorState } from "@/components/ui/feedback";
+import { AdminBadge } from "./admin-badge";
 
 /**
  * Community Phase 5 — the global search UI (client island inside the shell).
@@ -31,6 +32,8 @@ export interface SearchViewItem {
   roomName: string | null;
   authorId: string | null;
   authorName: string | null;
+  /** Phase 10: server-trusted platform-admin flag of the author (badge). */
+  authorIsAdmin?: boolean;
   content: string;
   createdAt: string;
   questionId: string | null;
@@ -333,7 +336,12 @@ export function SearchView({
                           <span className="text-[11px] font-semibold text-accent">#{item.roomName}</span>
                         )}
                         {item.authorName && (
-                          <span className="text-[11px] text-faint">{item.authorName}</span>
+                          <span className="flex items-center gap-1 text-[11px] text-faint">
+                            {item.authorName}
+                            {item.authorIsAdmin === true && (
+                              <AdminBadge size={11} label={t("community.adminBadge")} />
+                            )}
+                          </span>
                         )}
                         <span className="text-[10px] text-faint">
                           {new Date(item.createdAt).toLocaleString(locale)}

@@ -14,9 +14,19 @@ import {
   type CommunityRoom,
   type CommunityRoomGroup,
 } from "@/lib/community";
+import { isPlatformAdminId } from "./platform-admin";
 
 /** The request-scoped client (RLS-enforced) used for member-readable data. */
 type SessionClient = Awaited<ReturnType<typeof createClient>>;
+
+/**
+ * Phase 10: stamp the server-trusted platform-admin flag onto an author row
+ * (the id comes from the database — never client input). Pure; no extra
+ * query.
+ */
+function withAdminFlag(p: CommunityAuthor): CommunityAuthor {
+  return { ...p, platform_admin: isPlatformAdminId(p.user_id) };
+}
 
 /**
  * Phase 4: the room's active voice conversation — AGGREGATE METADATA ONLY.
@@ -279,7 +289,8 @@ export async function fetchRoomMessagePage(
       console.error("[community] reply lookup failed:", (repliesRes as { error: { message: string } }).error.message);
 
     const authors: Record<string, CommunityAuthor> = {};
-    for (const p of (profilesRes.data ?? []) as CommunityAuthor[]) authors[p.user_id] = p;
+    for (const p of (profilesRes.data ?? []) as CommunityAuthor[])
+      authors[p.user_id] = withAdminFlag(p);
 
     const reactionsByMessage = aggregateReactions(
       (reactionsRes.data ?? []) as ReactionRow[],
@@ -297,7 +308,8 @@ export async function fetchRoomMessagePage(
         .from("community_profiles")
         .select("user_id,display_name,avatar_id")
         .in("user_id", replyAuthorIds);
-      for (const p of (extra ?? []) as CommunityAuthor[]) replyAuthors[p.user_id] = p;
+      for (const p of (extra ?? []) as CommunityAuthor[])
+        replyAuthors[p.user_id] = withAdminFlag(p);
     }
 
     const repliesById: Record<string, CommunityReplyPreview> = {};
@@ -374,7 +386,7 @@ export async function fetchHomeRecent(
       ),
     );
     const authors = new Map(
-      ((profilesRes.data ?? []) as CommunityAuthor[]).map((a) => [a.user_id, a]),
+      ((profilesRes.data ?? []) as CommunityAuthor[]).map((a) => [a.user_id, withAdminFlag(a)]),
     );
 
     return items.map((m) => {

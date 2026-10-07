@@ -10,6 +10,7 @@ import {
   fetchDmSummary,
   openDmConversation,
 } from "@/lib/community/social";
+import { fetchCommunityWriteGate } from "@/lib/community/roles";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -26,6 +27,10 @@ export async function POST(request: Request) {
   }
   const limited = await checkRateLimit("community_dm_history", user.id);
   if (!limited.allowed) return tooManyRequests(limited);
+
+  // Phase 10: platform ban — banned users make no community mutations.
+  const gate = await fetchCommunityWriteGate(user.id);
+  if (!gate.writable) return NextResponse.json({ error: gate.code }, { status: 403 });
 
   let body: unknown;
   try {

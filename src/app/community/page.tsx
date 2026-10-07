@@ -117,6 +117,8 @@ export default async function CommunityPage() {
     userId: user.id,
     displayName: communityProfile.display_name,
     avatarId: communityProfile.avatar_id,
+    // Phase 10: server-computed platform-admin flag (badge on own rows).
+    platformAdmin: profile.isPlatformAdmin === true,
   };
   // Phase 3: presence + notification preferences (own row, one query).
   const viewer = buildViewerSettings(communityProfile);
@@ -130,6 +132,7 @@ export default async function CommunityPage() {
     roomSlug: q.room?.slug ?? "",
     answerCount: q.answerCount,
     authorName: q.author?.display_name ?? "",
+    authorIsAdmin: q.author?.platform_admin === true,
     createdAt: q.created_at,
   });
   const homeQuestionFeeds = {

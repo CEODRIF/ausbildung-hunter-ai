@@ -270,7 +270,7 @@ describe("/community page — normal operation", () => {
     const tree = (await CommunityPage()) as {
       type: unknown;
       props: {
-        me: { userId: string; displayName: string; avatarId: string };
+        me: { userId: string; displayName: string; avatarId: string; platformAdmin: boolean };
         categories: unknown[];
         unread: Record<string, number>;
         activeSlug: string | null;
@@ -282,6 +282,8 @@ describe("/community page — normal operation", () => {
       userId: USER_ID,
       displayName: "SilverFox",
       avatarId: "avatar-1",
+      // Phase 10: server-computed flag (false for a normal member)
+      platformAdmin: false,
     });
     expect(tree.props.unread).toEqual({ [ROOM_ID]: 3 });
     expect(tree.props.activeSlug).toBeNull();

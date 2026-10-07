@@ -26,6 +26,11 @@ export interface SocialMe {
   userId: string;
   displayName: string;
   avatarId: string;
+  /**
+   * Phase 10: server-computed platform-admin flag (session user id → admins
+   * table). Drives the badge on the viewer's own rows; never client-set.
+   */
+  platformAdmin?: boolean;
 }
 
 export type SocialPageContext =
@@ -81,6 +86,7 @@ export async function loadSocialPageContext(): Promise<SocialPageContext> {
     userId: user.id,
     displayName: communityProfile.display_name,
     avatarId: communityProfile.avatar_id,
+    platformAdmin: profile.isPlatformAdmin === true,
   };
 
   const [directory, unread, socialUnread, viewerRole] = await Promise.all([

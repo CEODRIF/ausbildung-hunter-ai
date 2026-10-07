@@ -52,6 +52,7 @@ import {
 import { MessageRow } from "./message-row";
 import { Composer } from "./composer";
 import { useCommunityShell } from "./community-shell";
+import { AdminBadge } from "./admin-badge";
 import type { SocialProfileClient } from "./profile-card";
 import { presenceDotClass, PresenceIndicator } from "./presence-indicator";
 
@@ -79,7 +80,7 @@ const TYPING_PRUNE_INTERVAL_MS = 1000;
  */
 
 interface DmChatProps {
-  me: { userId: string; displayName: string; avatarId: string };
+  me: { userId: string; displayName: string; avatarId: string; platformAdmin?: boolean };
   conversation: { id: string };
   /** The other member (server-resolved; null when their profile is gone). */
   other: SocialProfileClient | null;
@@ -173,7 +174,13 @@ export function DmChat({
   const [typingPeers, setTypingPeers] = useState<TypingPeer[]>([]);
 
   const myAuthor = useMemo<CommunityAuthor>(
-    () => ({ user_id: me.userId, display_name: me.displayName, avatar_id: me.avatarId }),
+    () => ({
+      user_id: me.userId,
+      display_name: me.displayName,
+      avatar_id: me.avatarId,
+      // Server-stamped in the page (session user id → admins table).
+      platform_admin: me.platformAdmin === true,
+    }),
     [me],
   );
 
@@ -185,6 +192,8 @@ export function DmChat({
         user_id: other.userId,
         display_name: other.displayName,
         avatar_id: other.avatarId,
+        // Server-trusted (the endpoint computes it from the database id).
+        platform_admin: other.isPlatformAdmin === true,
       };
       // Intentional: seed the known peer once per conversation mount.
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -1106,8 +1115,13 @@ export function DmChat({
             />
           </span>
           <span className="min-w-0">
-            <span className="block truncate text-sm font-bold leading-tight text-ink">
-              {otherName}
+            <span className="flex items-center gap-1.5">
+              <span className="block truncate text-sm font-bold leading-tight text-ink">
+                {otherName}
+              </span>
+              {other?.isPlatformAdmin === true && (
+                <AdminBadge size={13} label={t("community.adminBadge")} />
+              )}
             </span>
             <PresenceIndicator
               state={peerState}
@@ -1164,7 +1178,12 @@ export function DmChat({
                 <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-soft text-accent">
                   <Icon name="message" size={24} />
                 </span>
-                <h2 className="text-lg font-bold text-ink">{otherName}</h2>
+                <h2 className="flex items-center gap-1.5 text-lg font-bold text-ink">
+                  {otherName}
+                  {other?.isPlatformAdmin === true && (
+                    <AdminBadge size={14} label={t("community.adminBadge")} />
+                  )}
+                </h2>
                 <p className="max-w-sm text-sm leading-6 text-muted">{t("community.emptyCta")}</p>
               </div>
             ) : (
@@ -1195,9 +1214,10 @@ export function DmChat({
                       key={m.id}
                       message={m}
                       mine={mine}
-                      firstOfGroup={firstOfGroup}
-                      name={name}
-                      avatarUrl={avatarUrl}
+                       firstOfGroup={firstOfGroup}
+                       name={name}
+                       authorIsAdmin={author?.platform_admin === true}
+                       avatarUrl={avatarUrl}
                       locale={locale}
                       imageUrl={imageUrl}
                       knownMembers={NO_KNOWN_MEMBERS}

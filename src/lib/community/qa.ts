@@ -6,6 +6,7 @@ import type { CommunityRoom } from "@/lib/community";
 import { createSocialNotification, socialSendKey } from "@/lib/community/social";
 import type { CommunityRole } from "@/lib/community/roles";
 import { isModerator } from "@/lib/community/roles";
+import { isPlatformAdminId } from "./platform-admin";
 
 /**
  * Community Phase 5 — Q&A (questions + answers + accepted/solved).
@@ -59,6 +60,13 @@ export interface CommunityAuthorLite {
   user_id: string;
   display_name: string;
   avatar_id: string;
+  /** Phase 10: server-trusted platform-admin flag (drives the red badge). */
+  platform_admin?: boolean;
+}
+
+/** Phase 10: stamp the flag from the DATABASE user id (never client input). */
+function withLiteFlag(a: CommunityAuthorLite): CommunityAuthorLite {
+  return { ...a, platform_admin: isPlatformAdminId(a.user_id) };
 }
 
 export interface QuestionListItem extends CommunityQuestionRow {
@@ -83,8 +91,8 @@ const ROOM_SELECT = "id,slug,name,category_id,description,icon,position,enabled,
 
 function authorsById(rows: CommunityAuthorLite[], mine: { id: string; author: CommunityAuthorLite } | null): Record<string, CommunityAuthorLite> {
   const map: Record<string, CommunityAuthorLite> = {};
-  for (const a of rows) map[a.user_id] = a;
-  if (mine) map[mine.id] = mine.author;
+  for (const a of rows) map[a.user_id] = withLiteFlag(a);
+  if (mine) map[mine.id] = withLiteFlag(mine.author);
   return map;
 }
 
@@ -147,10 +155,11 @@ export async function fetchQuestionDetail(
         ? { id: me.id, author: { user_id: me.id, display_name: me.displayName, avatar_id: me.avatarId } }
         : null,
     );
-    const questionAuthor = (authorRes.data as CommunityAuthorLite | null) ??
-      (question.author_id === me.id
-        ? { user_id: me.id, display_name: me.displayName, avatar_id: me.avatarId }
-        : null);
+    const questionAuthor = (authorRes.data as CommunityAuthorLite | null)
+      ? withLiteFlag(authorRes.data as CommunityAuthorLite)
+      : question.author_id === me.id
+        ? withLiteFlag({ user_id: me.id, display_name: me.displayName, avatar_id: me.avatarId })
+        : null;
     return {
       question,
       author: questionAuthor,

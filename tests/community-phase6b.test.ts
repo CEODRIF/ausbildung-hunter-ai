@@ -914,7 +914,9 @@ describe("B-2 · eviction is server-authorized only", () => {
     const importers = srcFiles()
       .filter(([, c]) => c.includes('from "@/lib/voice/livekit-api"'))
       .map(([rel]) => rel);
-    expect(importers).toEqual(["src/lib/community/moderation.ts"]);
+    // Both importers are server-only sanction libs (moderation: moderator
+    // suspension; admin-ops: the platform-admin ban).
+    expect(importers).toEqual(["src/lib/community/admin-ops.ts", "src/lib/community/moderation.ts"]);
   });
 
   it("14 · the evicted identity is the sanctioned target (server-derived) — no route/client parameter selects it", () => {

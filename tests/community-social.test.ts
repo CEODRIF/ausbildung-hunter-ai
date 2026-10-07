@@ -467,9 +467,11 @@ describe("profile card (GET /api/community/members/:userId)", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { member: Record<string, unknown>; relationship: Record<string, unknown> };
     // The payload is exactly the privacy contract — nothing else exists.
-    // Phase 3 adds the server-derived presence + last-seen to the contract.
+    // Phase 3 adds the server-derived presence + last-seen to the contract;
+    // Phase 10 adds the server-computed platform-admin flag (a boolean
+    // derived from the database user id — no account field, no email).
     expect(Object.keys(body.member).sort()).toEqual(
-      ["avatarId", "bio", "displayName", "joinedAt", "lastSeenAt", "online", "presence", "userId"].sort(),
+      ["avatarId", "bio", "displayName", "isPlatformAdmin", "joinedAt", "lastSeenAt", "online", "presence", "userId"].sort(),
     );
     expect(body.member.displayName).toBe("BobBuilder");
     expect(body.member.online).toBe(true);

@@ -1,0 +1,25 @@
+-- ============================================================================
+-- Community Phase 10a — the 'announcement' enum value (deliberately standalone).
+--
+-- WHY ITS OWN MIGRATION FILE:
+--   `ALTER TYPE ... ADD VALUE` may only run inside a transaction block when
+--   `IF NOT EXISTS` is given — and a value added that way must NOT be
+--   referenced by any later statement in the SAME transaction. The Supabase
+--   SQL Editor wraps a whole script in one transaction and fails such
+--   references with the known 55P04 behavior; the production migration
+--   runner is equally atomic per file. v10 (20261104000000) re-creates the
+--   notifications_social_refs CHECK constraint, which must reference
+--   'announcement' — so this value has to be COMMITTED in a prior migration.
+--
+-- Properties:
+--   * single statement: safe as one transaction, safe in the SQL Editor,
+--     safe under the production migration runner,
+--   * ordered BEFORE v10 (20261103235900 < 20261104000000) and after every
+--     migration that defines/extends public.notification_type (v1…v6),
+--   * idempotent: IF NOT EXISTS — on a database where v10 already added the
+--     value (local shims / partially applied instances) this is a clean no-op.
+--
+-- No other statement belongs in this file, by design.
+-- ============================================================================
+
+alter type public.notification_type add value if not exists 'announcement';

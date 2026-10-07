@@ -12,6 +12,7 @@ import {
 } from "@/lib/community";
 import { aggregateReactions } from "@/lib/community/rooms";
 import { createSocialNotification, socialSendKey } from "@/lib/community/social";
+import { fetchCommunityWriteGate } from "@/lib/community/roles";
 
 /**
  * POST /api/community/messages/:id/reactions {emoji} — TOGGLE one reaction
@@ -34,6 +35,10 @@ export async function POST(
 
   const limited = await checkRateLimit("community_react", user.id);
   if (!limited.allowed) return tooManyRequests(limited);
+
+  // Phase 10: platform ban — banned users make no community mutations.
+  const gate = await fetchCommunityWriteGate(user.id);
+  if (!gate.writable) return NextResponse.json({ error: gate.code }, { status: 403 });
 
   const { id } = await context.params;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {

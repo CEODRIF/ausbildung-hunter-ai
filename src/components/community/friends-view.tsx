@@ -14,6 +14,7 @@ import type { PresenceState } from "@/lib/community/presence";
 import { useCommunityShell } from "./community-shell";
 import type { SocialProfileClient } from "./profile-card";
 import { presenceDotClass, PresenceIndicator } from "./presence-indicator";
+import { AdminBadge } from "./admin-badge";
 
 /**
  * The FRIENDS page (Phase 2):
@@ -39,6 +40,8 @@ export interface FriendRow {
   presence?: PresenceState;
   /** Phase 3: privacy-mapped last seen (null = hidden / never). */
   lastSeenAt?: string | null;
+  /** Phase 10: server-trusted platform-admin flag (drives the red badge). */
+  isPlatformAdmin?: boolean;
   state: RelationshipState;
   friendshipId: string | null;
 }
@@ -85,6 +88,7 @@ function toFriendRow(value: unknown): FriendRow | null {
     online: other.online === true,
     presence: other.presence,
     lastSeenAt: other.lastSeenAt ?? null,
+    isPlatformAdmin: other.isPlatformAdmin === true,
     state: view.state as RelationshipState,
     friendshipId: typeof view.friendshipId === "string" ? view.friendshipId : null,
   };
@@ -109,6 +113,7 @@ function normalizeFriendsPayload(body: unknown): FriendsViewData | null {
       online: b.online,
       presence: b.presence,
       lastSeenAt: b.lastSeenAt ?? null,
+      isPlatformAdmin: b.isPlatformAdmin,
     }));
   return {
     friends: toRows(body.friends),
@@ -346,8 +351,13 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
             />
           </span>
           <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold text-ink">
-              {row.displayName}
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="block truncate text-sm font-semibold text-ink">
+                {row.displayName}
+              </span>
+              {row.isPlatformAdmin === true && (
+                <AdminBadge size={13} label={t("community.adminBadge")} />
+              )}
             </span>
             <PresenceIndicator
               state={state}
@@ -396,8 +406,13 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
             />
           </span>
           <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold text-ink">
-              {row.displayName}
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="block truncate text-sm font-semibold text-ink">
+                {row.displayName}
+              </span>
+              {row.isPlatformAdmin === true && (
+                <AdminBadge size={13} label={t("community.adminBadge")} />
+              )}
             </span>
             <span className="block truncate text-[11px] text-faint">
               {section === "incoming"
@@ -548,8 +563,13 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
                         aria-hidden="true"
                       />
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-sm font-semibold text-muted">
-                      {row.displayName}
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                      <span className="truncate text-sm font-semibold text-muted">
+                        {row.displayName}
+                      </span>
+                      {row.isPlatformAdmin === true && (
+                        <AdminBadge size={13} label={t("community.adminBadge")} />
+                      )}
                     </span>
                     <Button
                       type="button"

@@ -9,6 +9,7 @@ import { useI18n } from "@/lib/i18n";
 import { communityAvatarUrl } from "@/lib/community";
 import { formatMessageTime } from "./message-row";
 import type { SocialProfileClient } from "./profile-card";
+import { AdminBadge } from "./admin-badge";
 import { presenceDotClass } from "./presence-indicator";
 
 /**
@@ -201,12 +202,17 @@ export function DmInbox({
                 />
               </span>
               <span className="min-w-0 flex-1">
-                <span
-                  className={`block truncate text-sm ${
-                    c.unread > 0 ? "font-bold text-ink" : "font-semibold text-ink-soft"
-                  }`}
-                >
-                  {c.other.displayName}
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    className={`block truncate text-sm ${
+                      c.unread > 0 ? "font-bold text-ink" : "font-semibold text-ink-soft"
+                    }`}
+                  >
+                    {c.other.displayName}
+                  </span>
+                  {c.other.isPlatformAdmin === true && (
+                    <AdminBadge size={12} label={t("community.adminBadge")} />
+                  )}
                 </span>
                 <span
                   className={`mt-0.5 flex items-center gap-1 truncate text-xs ${

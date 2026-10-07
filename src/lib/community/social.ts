@@ -21,6 +21,7 @@ import {
   type PresenceMode,
   type PresenceState,
 } from "@/lib/community/presence";
+import { isPlatformAdminId } from "./platform-admin";
 
 /**
  * Community Phase 2 — the social data layer (SERVER ONLY).
@@ -52,6 +53,12 @@ export interface SocialProfile {
   presence: PresenceState;
   /** Privacy-mapped last seen (null = never seen or hidden). */
   lastSeenAt: string | null;
+  /**
+   * Phase 10: server-trusted platform-admin flag (drives the red badge).
+   * Computed from the database user id in toSocialProfile — the single
+   * mapper, so every surface (profile card, DM, members) agrees.
+   */
+  isPlatformAdmin: boolean;
 }
 
 export interface RelationshipView {
@@ -100,6 +107,7 @@ function toSocialProfile(row: ProfileRow, viewerId: string | null = null): Socia
     online: mapped.state !== "offline",
     presence: mapped.state,
     lastSeenAt: mapped.lastSeenAt,
+    isPlatformAdmin: isPlatformAdminId(row.user_id),
   };
 }
 
@@ -684,6 +692,8 @@ export interface NotificationView {
   /** Phase 5 Q&A refs (null for every pre-Phase-5 kind). */
   questionId: string | null;
   answerId: string | null;
+  /** Phase 10: the announcement action link (null for every other row). */
+  linkUrl: string | null;
 }
 
 export interface NotificationPageCursor {
@@ -715,9 +725,9 @@ export async function fetchNotifications(
     // cursor (created_at, id) keeps "load more" an indexed backward walk.
     let query = supabase
       .from("notifications")
-      .select(
-        "id,title,content,type,target_type,actor_id,room_id,room_message_id,conversation_id,dm_message_id,reaction_emoji,question_id,answer_id,created_at",
-      )
+       .select(
+         "id,title,content,type,target_type,actor_id,room_id,room_message_id,conversation_id,dm_message_id,reaction_emoji,question_id,answer_id,link_url,created_at",
+       )
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(limit);
@@ -740,10 +750,11 @@ export async function fetchNotifications(
       conversation_id: string | null;
       dm_message_id: string | null;
       reaction_emoji: string | null;
-      question_id: string | null;
-      answer_id: string | null;
-      created_at: string;
-    }>;
+       question_id: string | null;
+       answer_id: string | null;
+       link_url: string | null;
+       created_at: string;
+     }>;
     if (rows.length === 0) return { items: [], cursor: null, unavailable: false };
     // PERSONAL read receipts: one bounded select over the page's ids.
     const readsRes = await supabase
@@ -770,10 +781,11 @@ export async function fetchNotifications(
       roomMessageId: r.room_message_id ?? null,
       conversationId: r.conversation_id ?? null,
       dmMessageId: r.dm_message_id ?? null,
-      reactionEmoji: r.reaction_emoji ?? null,
-      questionId: r.question_id ?? null,
-      answerId: r.answer_id ?? null,
-    }));
+       reactionEmoji: r.reaction_emoji ?? null,
+       questionId: r.question_id ?? null,
+       answerId: r.answer_id ?? null,
+       linkUrl: r.link_url ?? null,
+     }));
     const last = rows[rows.length - 1];
     return {
       items,

@@ -2,6 +2,7 @@ import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { isPlatformAdminId } from "@/lib/community/platform-admin";
 
 export type Profile = {
   id: string;
@@ -19,6 +20,13 @@ export type Profile = {
   daily_email_limit: number;
   created_at: string;
   updated_at: string;
+  /**
+   * Platform administrator (stable auth.id + public.admins membership —
+   * server-computed, never client-set). Only ever true for the designated
+   * account; the nav surface reads this, every PRIVILEGED OPERATION
+   * re-checks with isPlatformAdmin() at request time.
+   */
+  isPlatformAdmin?: boolean;
 };
 
 /**
@@ -46,6 +54,35 @@ function scrub(message: string): string {
     );
 }
 
+/**
+ * The platform-admin flag for the serialized profile: ZERO cost for every
+ * user except the designated account — the membership is only queried
+ * (one PK select, service role) when the stable id matches. Fail-closed:
+ * a read error → false. The flag is display/nav-only; privileged ops
+ * always re-run isPlatformAdmin() server-side at request time.
+ */
+async function withPlatformAdminFlag(
+  userId: string,
+  profile: Profile | null,
+): Promise<Profile | null> {
+  if (!profile) return null;
+  let isPlatform = false;
+  if (isPlatformAdminId(userId)) {
+    try {
+      const admin = createAdminClient();
+      const { data } = await admin
+        .from("admins")
+        .select("user_id")
+        .eq("user_id", userId)
+        .maybeSingle();
+      isPlatform = Boolean(data);
+    } catch {
+      isPlatform = false;
+    }
+  }
+  return { ...profile, isPlatformAdmin: isPlatform };
+}
+
 export async function getCurrentUserAndProfile() {
   const supabase = await createClient();
   const {
@@ -65,7 +102,7 @@ export async function getCurrentUserAndProfile() {
     console.error(
       `[auth] profile lookup failed user="${user.id}" error="${scrub(error.message)}"`,
     );
-  if (profile) return { user, profile };
+  if (profile) return { user, profile: await withPlatformAdminFlag(user.id, profile) };
 
   // RLS fallback: the RLS-gated query saw no row. That is either a
   // genuinely missing profile (trigger not run yet) or a broken access
@@ -84,7 +121,9 @@ export async function getCurrentUserAndProfile() {
     console.error(
       `[auth] profile visible only to service_role for user="${user.id}" — the profiles RLS policy/grant contract is incomplete in this database; apply migration 20261008000000_restore_profiles_access`,
     );
-  return { user, profile: adminProfile ?? null };
+  // Same Phase 10 enrichment as the main path — both resolutions must
+  // carry the (display-only) platform-admin flag.
+  return { user, profile: adminProfile ? await withPlatformAdminFlag(user.id, adminProfile) : null };
 }
 
 export async function requireActiveUser() {

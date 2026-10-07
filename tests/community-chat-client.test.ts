@@ -97,7 +97,12 @@ describe("room chat — browser client unavailable (missing public env)", () => 
     // never thrown.
     expect(chatSource).toContain('console.error("[community] realtime client unavailable:", error)');
     // Every consumer tolerates a missing client.
-    expect(chatSource).toContain("if (!client || userId in authorsRef.current) return;");
+    // (Phase 10: author enrichment no longer touches the browser client at
+    // all — it goes through the secure session-gated member endpoint with
+    // the same dedupe + uuid guards, so a broken client degrades nothing
+    // here; the realtime consumer below still guards a missing client.)
+    expect(chatSource).toContain("if (userId in authorsRef.current) return;");
+    expect(chatSource).toContain("if (!UUID_RE.test(userId)) return;");
     expect(chatSource).toContain("const client = getClient();\n    if (!client)");
     // Realtime setup and image signing are wrapped, so an effect error cannot
     // reach the error boundary either.

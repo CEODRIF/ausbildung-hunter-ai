@@ -9,6 +9,7 @@ import {
 import { COMMUNITY_REACTION_EMOJIS } from "@/lib/community";
 import { aggregateReactions } from "@/lib/community/rooms";
 import { createSocialNotification, socialSendKey } from "@/lib/community/social";
+import { fetchCommunityWriteGate } from "@/lib/community/roles";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -30,6 +31,10 @@ export async function POST(
   }
   const limited = await checkRateLimit("community_dm_react", user.id);
   if (!limited.allowed) return tooManyRequests(limited);
+
+  // Phase 10: platform ban — banned users make no community mutations.
+  const gate = await fetchCommunityWriteGate(user.id);
+  if (!gate.writable) return NextResponse.json({ error: gate.code }, { status: 403 });
 
   const id = (await params).messageId;
   if (!UUID.test(id)) {

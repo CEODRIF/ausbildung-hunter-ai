@@ -13,6 +13,7 @@ import {
   unsolveQuestionAction,
 } from "@/app/community/advanced-actions";
 import { ReportDialog, type ReportTargetType } from "./report-dialog";
+import { AdminBadge } from "./admin-badge";
 
 /**
  * Community Phase 5 — the question detail view.
@@ -41,6 +42,8 @@ export interface AnswerView {
   createdAt: string;
   authorName: string | null;
   authorId: string;
+  /** Phase 10: server-trusted platform-admin flag of the answer author. */
+  authorIsAdmin?: boolean;
 }
 
 export interface QuestionDetailProps {
@@ -53,6 +56,8 @@ export interface QuestionDetailProps {
   createdAt: string;
   authorName: string | null;
   authorId: string;
+  /** Phase 10: server-trusted platform-admin flag of the question author. */
+  authorIsAdmin?: boolean;
   room: { slug: string; name: string } | null;
   imagePath: string | null;
   answers: AnswerView[];
@@ -90,6 +95,7 @@ export function QuestionDetail({
   createdAt,
   authorName,
   authorId,
+  authorIsAdmin = false,
   room,
   imagePath,
   answers: initialAnswers,
@@ -354,7 +360,12 @@ export function QuestionDetail({
           <span>
             {t("community.questionAskedOn")} {new Date(createdAt).toLocaleDateString(locale)}
           </span>
-          {authorName && <span>· {authorName}</span>}
+          {authorName && (
+            <span className="flex items-center gap-1">
+              · {authorName}
+              {authorIsAdmin && <AdminBadge size={12} label={t("community.adminBadge")} />}
+            </span>
+          )}
         </div>
         <div className="flex items-start justify-between gap-3">
           <h1 className="text-xl font-bold leading-tight text-ink sm:text-2xl">{title}</h1>
@@ -447,8 +458,13 @@ export function QuestionDetail({
                 }`}
               >
                 <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <span className="font-bold text-ink">
-                    {answer.authorName ?? t("community.questionAnswers")}
+                  <span className="flex items-center gap-1">
+                    <span className="font-bold text-ink">
+                      {answer.authorName ?? t("community.questionAnswers")}
+                    </span>
+                    {answer.authorIsAdmin === true && (
+                      <AdminBadge size={12} label={t("community.adminBadge")} />
+                    )}
                   </span>
                   <span className="text-faint">
                     {new Date(answer.createdAt).toLocaleString(locale)}

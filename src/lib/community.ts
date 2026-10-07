@@ -61,6 +61,26 @@ export function isValidCommunityUsername(value: string): boolean {
   return COMMUNITY_USERNAME_REGEX.test(value.trim());
 }
 
+/**
+ * Phase 10 — the DESIGNATED platform admin's display-name rules. Only applied
+ * to that one stable user id (the server decides via isPlatformAdminId; a
+ * client can never claim admin). Everything else keeps the strict username
+ * rules above:
+ *   * 1–40 characters (after trim)
+ *   * no C0/C1 control characters anywhere
+ */
+export const COMMUNITY_ADMIN_MAX_NAME_LENGTH = 40;
+const ADMIN_NAME_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
+
+export function isValidAdminCommunityName(value: string): boolean {
+  const name = value.trim();
+  return (
+    name.length >= 1 &&
+    name.length <= COMMUNITY_ADMIN_MAX_NAME_LENGTH &&
+    !ADMIN_NAME_CONTROL_CHARS.test(name)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Schemas (server-side validation; the client mirrors them for UX only)
 // ---------------------------------------------------------------------------
@@ -125,6 +145,12 @@ export interface CommunityAuthor {
   presence?: "online" | "away" | "dnd" | "offline";
   /** Phase 3: privacy-mapped last seen (null = never / hidden). */
   last_seen_at?: string | null;
+  /**
+   * Phase 10: the platform-admin flag (server-computed from the database
+   * author id — never client-set, never derived from the display name).
+   * Drives the red verification badge.
+   */
+  platform_admin?: boolean;
 }
 
 export interface CommunityMessage {

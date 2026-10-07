@@ -79,8 +79,51 @@ describe("getCurrentUserAndProfile", () => {
     const { user, profile } = await getCurrentUserAndProfile();
 
     expect(user).toBe(USER);
-    expect(profile).toEqual(PROFILE);
+    // Phase 10: the profile is enriched with the server-computed
+    // platform-admin flag — false for every non-admin id, at zero
+    // service-role cost (the membership is only queried when the stable
+    // admin id matches, which "u1" never does).
+    expect(profile).toEqual({ ...PROFILE, isPlatformAdmin: false });
     expect(createAdminClient).not.toHaveBeenCalled();
+  });
+
+  it("the designated admin id pays exactly one service-role PK read (flag true)", async () => {
+    const ADMIN_ID = "6fa45036-1b86-427a-a7d0-54a3a3904767";
+    const adminUser = {
+      id: ADMIN_ID,
+      email: "jane@example.com",
+      email_confirmed_at: "2026-01-01T00:00:00Z",
+    } as never;
+    const serverClient = {
+      ...makeClient(async () => ({ data: { ...PROFILE, id: ADMIN_ID }, error: null })),
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: adminUser } }) },
+    };
+    const adminClient = makeClient(async () => ({ data: { user_id: ADMIN_ID }, error: null }));
+    vi.mocked(createClient).mockResolvedValue(serverClient as never);
+    vi.mocked(createAdminClient).mockReturnValue(adminClient as never);
+
+    const { profile } = await getCurrentUserAndProfile();
+    expect(profile).toMatchObject({ id: ADMIN_ID, isPlatformAdmin: true });
+    expect(createAdminClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("an admins read error fails the flag closed (false, no throw)", async () => {
+    const ADMIN_ID = "6fa45036-1b86-427a-a7d0-54a3a3904767";
+    const adminUser = {
+      id: ADMIN_ID,
+      email: "jane@example.com",
+      email_confirmed_at: "2026-01-01T00:00:00Z",
+    } as never;
+    const serverClient = {
+      ...makeClient(async () => ({ data: { ...PROFILE, id: ADMIN_ID }, error: null })),
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: adminUser } }) },
+    };
+    const adminClient = makeClient(async () => ({ data: null, error: { message: "boom" } }));
+    vi.mocked(createClient).mockResolvedValue(serverClient as never);
+    vi.mocked(createAdminClient).mockReturnValue(adminClient as never);
+
+    const { profile } = await getCurrentUserAndProfile();
+    expect(profile).toMatchObject({ id: ADMIN_ID, isPlatformAdmin: false });
   });
 
   it("falls back to the service role (same id) when RLS hides the row, and logs it", async () => {
@@ -95,7 +138,8 @@ describe("getCurrentUserAndProfile", () => {
 
     const { profile } = await getCurrentUserAndProfile();
 
-    expect(profile).toEqual(PROFILE);
+    // Phase 10: the fallback path carries the same (false for "u1") flag.
+    expect(profile).toEqual({ ...PROFILE, isPlatformAdmin: false });
     expect(createAdminClient).toHaveBeenCalled();
     const logged = spy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(logged).toContain("service_role");
@@ -130,7 +174,8 @@ describe("getCurrentUserAndProfile", () => {
 
     const { profile } = await getCurrentUserAndProfile();
 
-    expect(profile).toEqual(PROFILE);
+    // Phase 10: the fallback path carries the same (false for "u1") flag.
+    expect(profile).toEqual({ ...PROFILE, isPlatformAdmin: false });
     const logged = spy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(logged).toContain("permission denied for table profiles");
     expect(logged).toContain("service_role");

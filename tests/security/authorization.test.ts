@@ -38,6 +38,7 @@ const routeFiles = walk(apiDir, (file) => file.endsWith("route.ts")).sort();
 const AUTH_TOKENS = [
   "getCurrentUserAndProfile",
   "requireAdmin",
+  "isPlatformAdmin",
   "auth.getUser",
   "currentUser(",
   "EMAIL_WORKER_SECRET",
@@ -161,10 +162,12 @@ describe("identity is never taken from the request", () => {
   it("admin routes require an admin/owner role (vertical privilege escalation)", () => {
     const adminRoutes = routeFiles.filter((f) => rel(f).includes("src/app/api/admin/"));
     expect(adminRoutes.length).toBeGreaterThan(0);
-    // requireAdmin (billing/plan administration) or requirePlatformOwner (the
-    // notification console, which is stricter still).
+    // requireAdmin (billing/plan administration), requirePlatformOwner (the
+    // notification console), or isPlatformAdmin (the Phase 10 platform-admin
+    // surface: announcements + community moderation + bans — the strictest
+    // gate: stable id + session + public.admins membership, fail-closed).
     for (const file of adminRoutes) {
-      expect(read(file), rel(file)).toMatch(/requireAdmin|requirePlatformOwner/);
+      expect(read(file), rel(file)).toMatch(/requireAdmin|requirePlatformOwner|isPlatformAdmin/);
     }
   });
 });

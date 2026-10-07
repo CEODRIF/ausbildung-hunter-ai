@@ -483,14 +483,27 @@ export function AppShell({
   // The Community entry carries the unread counter (server-computed per
   // section layout); every other item is passed through untouched.
   const sections = useMemo(
-    () =>
-      NAV_SECTIONS.map((section) => ({
+    () => {
+      const base = NAV_SECTIONS.map((section) => ({
         ...section,
         items: section.items.map((item) =>
           item.href === "/community" ? { ...item, badge: communityUnread } : item,
         ),
-      })),
-    [communityUnread],
+      }));
+      // Phase 10: the Admin entry exists in the NAV DATA only for the
+      // platform admin — the flag is the SERVER-computed profile field
+      // (session user id → admins table), never CSS hiding, never a client
+      // claim. Ordinary users never receive the section at all. The /admin
+      // route itself stays gated by requirePlatformAdmin regardless.
+      if (profile?.isPlatformAdmin === true) {
+        base.push({
+          titleKey: "nav.admin",
+          items: [{ labelKey: "nav.admin", href: "/admin", icon: "shield" }],
+        });
+      }
+      return base;
+    },
+    [communityUnread, profile],
   );
   const closeMobile = useCallback(() => setMobileOpen(false), []);
 

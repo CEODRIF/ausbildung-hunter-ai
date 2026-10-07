@@ -11,6 +11,7 @@ import {
   fetchFriendsList,
   socialSendKey,
 } from "@/lib/community/social";
+import { fetchCommunityWriteGate } from "@/lib/community/roles";
 
 /**
  * GET /api/community/friends — the full friends view (friends + incoming +
@@ -83,6 +84,10 @@ export async function POST(request: Request) {
 
   const limited = await checkRateLimit("community_friend", user.id);
   if (!limited.allowed) return tooManyRequests(limited);
+
+  // Phase 10: platform ban — banned users make no community mutations.
+  const gate = await fetchCommunityWriteGate(user.id);
+  if (!gate.writable) return NextResponse.json({ error: gate.code }, { status: 403 });
 
   let body: unknown;
   try {

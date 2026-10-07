@@ -7,6 +7,7 @@ import {
   tooManyRequests,
 } from "@/lib/rate-limit";
 import { COMMUNITY_MAX_MESSAGE_LENGTH } from "@/lib/community";
+import { fetchCommunityWriteGate } from "@/lib/community/roles";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -41,6 +42,10 @@ export async function PATCH(
   }
   const limited = await checkRateLimit("community_dm_edit", user.id);
   if (!limited.allowed) return tooManyRequests(limited);
+
+  // Phase 10: platform ban — banned users make no community mutations.
+  const gate = await fetchCommunityWriteGate(user.id);
+  if (!gate.writable) return NextResponse.json({ error: gate.code }, { status: 403 });
 
   const id = (await params).messageId;
   if (!UUID.test(id)) {
@@ -104,6 +109,10 @@ export async function DELETE(
   }
   const limited = await checkRateLimit("community_dm_delete", user.id);
   if (!limited.allowed) return tooManyRequests(limited);
+
+  // Phase 10: platform ban — banned users make no community mutations.
+  const gate = await fetchCommunityWriteGate(user.id);
+  if (!gate.writable) return NextResponse.json({ error: gate.code }, { status: 403 });
 
   const id = (await params).messageId;
   if (!UUID.test(id)) {

@@ -5,6 +5,7 @@ import { Icon } from "@/components/icon";
 import { useI18n } from "@/lib/i18n";
 import { communityAvatarUrl, type CommunityAuthor } from "@/lib/community";
 import { presenceDotClass } from "./presence-indicator";
+import { AdminBadge } from "./admin-badge";
 
 /**
  * The members panel — identity only (avatar + username). NO real names, no
@@ -15,7 +16,7 @@ import { presenceDotClass } from "./presence-indicator";
  */
 
 export interface MembersPanelProps {
-  me: { userId: string; displayName: string; avatarId: string };
+  me: { userId: string; displayName: string; avatarId: string; platformAdmin?: boolean };
   members: CommunityAuthor[];
   variant: "desktop" | "sheet";
   onClose: () => void;
@@ -35,6 +36,8 @@ export function MembersPanel({ me, members, variant, onClose, onOpenProfile }: M
       user_id: me.userId,
       display_name: me.displayName,
       avatar_id: me.avatarId,
+      // Server-stamped in the page (session user id → admins table).
+      platform_admin: me.platformAdmin === true,
     };
     return [meEntry, ...others];
   }, [members, me]);
@@ -88,9 +91,16 @@ export function MembersPanel({ me, members, variant, onClose, onOpenProfile }: M
                     className={`absolute -bottom-0.5 -end-0.5 rounded-full ring-2 ring-surface ${presenceDotClass(state, "h-2.5 w-2.5")}`}
                   />
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
-                  {member.display_name}
-                </span>
+                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
+                   {member.display_name}
+                   {member.platform_admin === true && (
+                     <AdminBadge
+                       size={12}
+                       label={t("community.adminBadge")}
+                       className="ms-1"
+                     />
+                   )}
+                 </span>
                 {self && (
                   <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-bold text-accent">
                     {t("community.you")}

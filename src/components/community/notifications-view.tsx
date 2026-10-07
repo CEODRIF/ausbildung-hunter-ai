@@ -18,6 +18,7 @@ import {
 } from "@/lib/community/notification-bus";
 import { socialKindOf } from "@/lib/community/notification-kinds";
 import { useCommunityShell } from "./community-shell";
+import { AdminBadge } from "./admin-badge";
 
 /**
  * Phase 3 notification center.
@@ -170,6 +171,14 @@ export function NotificationsView({
   const actorName = useCallback(
     (id: string | null): string | null =>
       id ? (members.find((m) => m.user_id === id)?.display_name ?? null) : null,
+    [members],
+  );
+
+  // Phase 10: the actor's badge resolves from the SAME members directory as
+  // the name — the flag is server-computed there; no client input involved.
+  const actorIsAdmin = useCallback(
+    (id: string | null): boolean =>
+      id ? (members.find((m) => m.user_id === id)?.platform_admin === true) : false,
     [members],
   );
 
@@ -488,7 +497,7 @@ export function NotificationsView({
                         >
                           <Icon name={iconFor(socialKindOf(item))} size={15} />
                         </span>
-                        <span className="min-w-0 flex-1">
+                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-1.5">
                             <span
                               className={`truncate text-sm ${
@@ -497,6 +506,9 @@ export function NotificationsView({
                             >
                               {text.title}
                             </span>
+                            {actorIsAdmin(item.actorId) && (
+                              <AdminBadge size={12} label={t("community.adminBadge")} />
+                            )}
                             {!item.read && (
                               <span
                                 aria-hidden="true"

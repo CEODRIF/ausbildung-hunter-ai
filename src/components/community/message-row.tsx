@@ -6,6 +6,7 @@ import { Button } from "@/components/ui";
 import type { LocalMessage } from "@/lib/community";
 import { COMMUNITY_REACTION_EMOJIS } from "@/lib/community";
 import { MentionText } from "./mention-text";
+import { AdminBadge } from "./admin-badge";
 
 /** "14:32" today, "12.03. 14:32" on other days (locale-aware). */
 export function formatMessageTime(iso: string, locale: string): string {
@@ -23,6 +24,11 @@ export interface MessageRowProps {
   firstOfGroup: boolean;
   /** Display name (trusted profile name, or the fallback label). */
   name: string;
+  /**
+   * Phase 10 (server-computed): the author is the platform admin — render
+   * the red verification badge next to the name. Never set from the client.
+   */
+  authorIsAdmin?: boolean;
   /** Predefined avatar URL, or null → initials fallback. */
   avatarUrl: string | null;
   locale: string;
@@ -76,10 +82,11 @@ export interface MessageRowProps {
  */
 function MessageRowInner({
   message: m,
-  mine,
-  firstOfGroup,
-  name,
-  avatarUrl,
+   mine,
+   firstOfGroup,
+   name,
+   authorIsAdmin = false,
+   avatarUrl,
   locale,
   imageUrl,
   knownMembers,
@@ -193,6 +200,7 @@ function MessageRowInner({
               ) : (
                 <span className="text-sm font-bold text-ink">{name}</span>
               )}
+              {authorIsAdmin && <AdminBadge label={t("community.adminBadge")} />}
                <time dateTime={m.created_at} className="text-[11px] text-faint">
                  {time}
                </time>

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isPlatformAdminId } from "./platform-admin";
 
 /**
  * Community Phase 5 — global community search.
@@ -32,6 +33,8 @@ export interface SearchResultItem {
   roomName: string | null;
   authorId: string | null;
   authorName: string | null;
+  /** Phase 10: server-trusted platform-admin flag of the author (badge). */
+  authorIsAdmin: boolean;
   content: string;
   createdAt: string;
   /** Deep-link target for question/answer rows (null for other kinds). */
@@ -132,6 +135,10 @@ export async function runCommunitySearch(params: SearchParams): Promise<SearchPa
       roomName: r.room_name,
       authorId: r.author_id,
       authorName: r.author_name,
+      // The author id comes from the DATABASE row — never client input — so
+      // deriving the flag here is the same trusted-source contract as
+      // withAdminFlag (rooms.ts) / toSocialProfile (social.ts).
+      authorIsAdmin: r.author_id ? isPlatformAdminId(r.author_id) : false,
       content: r.content ?? "",
       createdAt: r.created_at,
       questionId:

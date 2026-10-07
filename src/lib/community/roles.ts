@@ -76,19 +76,56 @@ export async function fetchViewerRole(
   }
 }
 
+export type CommunityBanState =
+  | { banned: false }
+  | { banned: true; reason: string | null; expiresAt: string | null };
+
 /**
- * The write gate for moderation: is this user SUSPENDED (no community
- * writes at all) or TIMED OUT (muted until a server-stamped moment)?
- * Checked by every community write path (messages, DMs, Q&A, voice join).
+ * The user's ACTIVE platform ban (community_bans, service-role read).
+ * A ban is the platform-admin sanction: it removes community access
+ * entirely (reads AND writes), independently of the moderator-level
+ * suspend/mute flags. Never throws: a read failure degrades to
+ * "not banned" (the RLS policies that embed community_is_banned() are
+ * the database-level backstop — the same fail-open class as the limiter).
+ */
+export async function fetchCommunityBanState(userId: string): Promise<CommunityBanState> {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from("community_bans")
+      .select("reason,expires_at")
+      .eq("user_id", userId)
+      .is("revoked_at", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return { banned: false };
+    const row = data as { reason: string | null; expires_at: string | null };
+    if (row.expires_at && Date.parse(row.expires_at) <= Date.now()) return { banned: false };
+    return { banned: true, reason: row.reason ?? null, expiresAt: row.expires_at ?? null };
+  } catch (error) {
+    console.error("[community] ban state read threw:", error);
+    return { banned: false };
+  }
+}
+
+/**
+ * The write gate for moderation: is this user BANNED (platform sanction —
+ * no community access at all), SUSPENDED (no community writes at all) or
+ * TIMED OUT (muted until a server-stamped moment)? Checked by every
+ * community write path (messages, DMs, Q&A, voice join, friend requests)
+ * AND by the community layout for access control.
  * Never throws: a read failure degrades to "writable" (the rate limits +
  * RLS stay the backstop; a gate outage must not lock out the whole
  * community — same fail-open class as the limiter).
  */
 export async function fetchCommunityWriteGate(
   userId: string,
-): Promise<{ writable: true } | { writable: false; code: "suspended" | "muted" }> {
+): Promise<{ writable: true } | { writable: false; code: "banned" | "suspended" | "muted" }> {
   try {
     const admin = createAdminClient();
+    const ban = await fetchCommunityBanState(userId);
+    if (ban.banned) return { writable: false, code: "banned" };
     const { data, error } = await admin
       .from("community_profiles")
       .select("community_suspended,community_muted_until")

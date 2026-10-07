@@ -126,6 +126,10 @@ export default async function CommunityRoomPage({
     userId: user.id,
     displayName: communityProfile.display_name,
     avatarId: communityProfile.avatar_id,
+    // Phase 10: server-computed platform-admin flag (drives the badge on
+    // the viewer's OWN messages) — computed in getCurrentUserAndProfile
+    // from the session user id, never from client input.
+    platformAdmin: profile.isPlatformAdmin === true,
   };
   // Phase 3: presence + notification preferences (own row, one query).
   const viewer = buildViewerSettings(communityProfile);

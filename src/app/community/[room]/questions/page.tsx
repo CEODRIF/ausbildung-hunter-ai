@@ -6,6 +6,7 @@ import { loadSocialPageContext } from "@/lib/community/social-pages";
 import { fetchViewerSettings } from "@/lib/community/social";
 import { fetchRoomQuestions } from "@/lib/community/qa";
 import { CommunityShell } from "@/components/community/community-shell";
+import { AdminBadge } from "@/components/community/admin-badge";
 import { CommunityOnboarding } from "@/components/community-onboarding";
 import { CommunityComingSoon } from "@/components/community-coming-soon";
 import { SocialUnavailable } from "@/components/community/social-unavailable";
@@ -194,7 +195,14 @@ export default async function RoomQuestionsPage({
                             ? t("community.questionOneAnswer")
                             : t("community.questionAnswers", { count: item.answerCount })}
                         </span>
-                        {item.author?.display_name && <span>· {item.author.display_name}</span>}
+                        {item.author?.display_name && (
+                          <span className="flex items-center gap-1">
+                            · {item.author.display_name}
+                            {item.author.platform_admin === true && (
+                              <AdminBadge size={12} label={t("community.adminBadge")} />
+                            )}
+                          </span>
+                        )}
                         <span>
                           · {new Date(item.created_at).toLocaleDateString(dateLocale)}
                         </span>

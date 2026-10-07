@@ -85,6 +85,7 @@ export default async function QuestionPage({
         createdAt={detail.question.created_at}
         authorName={detail.author?.display_name ?? null}
         authorId={detail.question.author_id}
+        authorIsAdmin={detail.author?.platform_admin === true}
         room={
           detail.room ? { slug: detail.room.slug, name: detail.room.name } : null
         }
@@ -96,6 +97,7 @@ export default async function QuestionPage({
           createdAt: a.created_at,
           authorName: a.author?.display_name ?? null,
           authorId: a.author_id,
+          authorIsAdmin: a.author?.platform_admin === true,
         }))}
         me={{ userId: me.userId, displayName: me.displayName }}
         isAuthor={detail.question.author_id === me.userId}
