@@ -60,11 +60,17 @@ COPY --from=build --chown=nextjs:nodejs /app/public ./public
 USER nextjs
 EXPOSE 3000
 
-# Process-level liveness check via the app's own readiness endpoint
-# (GET /api/health: 200 when the app + database are healthy, 503 degraded).
-# Azure Container Apps can additionally configure its own probes on the
-# same path.
+# Probe split (mirrors the Azure Container Apps configuration):
+#   - LIVENESS (this HEALTHCHECK): dependency-free TCP connect to the app
+#     port — "is the process listening?". A DB outage must NOT kill a
+#     healthy process, so liveness never touches the application layer.
+#   - READINESS: GET /api/health — 200 when app + database are healthy,
+#     503 degraded. Configure this as the Azure readiness probe so
+#     traffic is drained (not the container restarted) during DB issues.
+# Azure Container Apps uses its own probes (liveness: tcp:3000,
+# readiness: httpGet /api/health); this HEALTHCHECK serves docker/compose
+# and other runtimes with the same liveness semantics.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||'3000')+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const s=require('net').connect(Number(process.env.PORT||3000),'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),4000)"
 
 CMD ["node", "server.js"]
