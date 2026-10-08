@@ -180,7 +180,7 @@ describe("production reproduction — friend request → accept → DM (real Pos
     if (!repro) return; // stack down: step reported in beforeAll
     setIdentity(USER_B);
     const route = await import("../src/app/api/community/friends/route");
-    const res = await route.GET();
+    const res = await route.GET(new Request("http://localhost/api/community/friends"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       incoming?: Array<{ friendshipId: string | null; other: { userId: string } }>;
@@ -209,7 +209,7 @@ describe("production reproduction — friend request → accept → DM (real Pos
 
     // And B's friends view now lists A as a friend (the DM button's precondition).
     const listRoute = await import("../src/app/api/community/friends/route");
-    const list = await listRoute.GET();
+    const list = await listRoute.GET(new Request("http://localhost/api/community/friends"));
     const listBody = (await list.json()) as { friends?: Array<{ other: { userId: string } }> };
     expect(listBody.friends?.some((f) => f.other.userId === USER_A)).toBe(true);
   });

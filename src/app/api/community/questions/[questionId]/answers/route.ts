@@ -7,7 +7,7 @@ import {
   tooManyRequests,
 } from "@/lib/rate-limit";
 import { fetchCommunityWriteGate } from "@/lib/community/roles";
-import { createAnswer } from "@/lib/community/qa";
+import { createAnswer, fetchQuestionDetail } from "@/lib/community/qa";
 
 /**
  * POST /api/community/questions/:questionId/answers — answer a question.
@@ -20,6 +20,72 @@ import { createAnswer } from "@/lib/community/qa";
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * GET /api/community/questions/:questionId/answers — the question's current
+ * status + ALL answers (the SAME bounded queries the detail page renders:
+ * ≤200 answers, RLS-scoped visibility). The question detail polls this every
+ * 1s while mounted (`?poll=1` → the higher community_poll bucket, 240/min);
+ * auth is IDENTICAL to a page visit, so a poll can never read more.
+ */
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ questionId: string }> },
+) {
+  const { user, profile } = await getCurrentUserAndProfile();
+  if (!user || !profile || profile.account_status !== "active") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const questionId = (await params).questionId;
+  if (!UUID.test(questionId)) {
+    return NextResponse.json({ error: "question_not_found" }, { status: 400 });
+  }
+
+  const isPoll = new URL(request.url).searchParams.get("poll") === "1";
+  const limited = await checkRateLimit(
+    isPoll ? "community_poll" : "community_profile",
+    user.id,
+  );
+  if (!limited.allowed) return tooManyRequests(limited);
+
+  try {
+    const supabase = await createClient();
+    // Community identity for the "own answer" flag (the page does the same).
+    const { data: communityProfile } = await supabase
+      .from("community_profiles")
+      .select("display_name,avatar_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    const detail = await fetchQuestionDetail(supabase, questionId, {
+      id: user.id,
+      displayName: communityProfile?.display_name ?? "",
+      avatarId: communityProfile?.avatar_id ?? "",
+    });
+    if (!detail) {
+      return NextResponse.json({ error: "question_not_found" }, { status: 404 });
+    }
+    return NextResponse.json(
+      {
+        status: detail.question.status,
+        acceptedAnswerId: detail.question.accepted_answer_id,
+        answers: detail.answers.map((a) => ({
+          id: a.id,
+          body: a.body,
+          accepted: a.accepted,
+          createdAt: a.created_at,
+          authorName: a.author?.display_name ?? null,
+          authorId: a.author_id,
+          authorIsAdmin: a.author?.platform_admin === true,
+        })),
+      },
+      { headers: rateLimitHeaders(limited) },
+    );
+  } catch (error) {
+    console.error("[community] answers read threw:", error);
+    return NextResponse.json({ error: "Could not load answers." }, { status: 500 });
+  }
+}
 
 export async function POST(
   request: Request,

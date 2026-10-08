@@ -22,6 +22,7 @@ import { socialKindOf } from "@/lib/community/notification-kinds";
 import { useCommunityPresence } from "@/lib/community/use-presence";
 import type { ViewerCommunitySettings } from "@/lib/community/social";
 import { useNotificationsRealtime } from "@/lib/community/conversation-realtime";
+import { useCommunityPolling } from "@/lib/community/community-polling";
 import type { RealtimeLikeChannel } from "@/lib/community/realtime-core";
 import { playNotificationChime } from "@/lib/community/chime";
 import { toggleRoomMute } from "@/app/community/actions";
@@ -334,26 +335,47 @@ export function CommunityShell({
     else setMembersSheetOpen((v) => !v);
   }, []);
 
-  // Phase 3 badge resync — EVENT-DRIVEN only (realtime RECONNECTED +
-  // network "online"): no polling. Fresh server counts replace the local
-  // state (converges the shell badge with the page badge).
-  const resyncBadges = useCallback(() => {
-    fetch("/api/community/badges", { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => {
-        const b = data as SocialUnread | null;
-        if (
-          b &&
-          typeof b.dms === "number" &&
-          typeof b.friendRequests === "number" &&
-          typeof b.notifications === "number"
-        ) {
-          setBadges(b);
-        }
-      })
-      .catch(() => {
-        /* badges are chrome */
+  // Badge resync — driven by the CENTRALIZED 1s poll (the synchronization
+  // guarantee) AND by events (realtime RECONNECTED, network "online").
+  // One guarded function for both paths; fresh server counts replace the
+  // local state ONLY when they differ (a quiet shell never re-renders).
+  const badgesRef = useRef(badges);
+  useEffect(() => {
+    badgesRef.current = badges;
+  }, [badges]);
+  const badgesResyncInFlight = useRef(false);
+  const resyncBadges = useCallback(async (signal?: AbortSignal) => {
+    if (badgesResyncInFlight.current) return; // overlap guard: skip, don't stack
+    badgesResyncInFlight.current = true;
+    try {
+      const response = await fetch("/api/community/badges?poll=1", {
+        cache: "no-store",
+        signal,
       });
+      if (!response.ok) return;
+      const b = (await response.json()) as SocialUnread | null;
+      if (
+        b &&
+        typeof b.dms === "number" &&
+        typeof b.friendRequests === "number" &&
+        typeof b.notifications === "number"
+      ) {
+        const prev = badgesRef.current;
+        if (
+          prev &&
+          prev.dms === b.dms &&
+          prev.friendRequests === b.friendRequests &&
+          prev.notifications === b.notifications
+        ) {
+          return; // unchanged → no state update, no re-render
+        }
+        setBadges(b);
+      }
+    } catch {
+      /* badges are chrome; the next cycle retries */
+    } finally {
+      badgesResyncInFlight.current = false;
+    }
   }, []);
 
   useEffect(() => {
@@ -522,10 +544,19 @@ export function CommunityShell({
   useNotificationsRealtime(me.userId, {
     registerHandlers: registerNotificationHandlers,
     // Reconnect recovery: the stream re-subscribes itself; only the badge
-    // COUNTS need a bounded refresh — and only AFTER a real missed window
-    // (the first join is never a sync: the badges arrive as props). No
-    // timer, no polling, no reload.
-    onMissedSync: () => resyncBadges(),
+    // COUNTS need a bounded refresh — in addition to the 1s poll below
+    // (same guarded function, no overlap possible). No reload, ever.
+    onMissedSync: () => {
+      void resyncBadges();
+    },
+  });
+
+  // THE 1s synchronization guarantee (all devices): the centralized poll
+  // refreshes ONLY the viewer's badge counts every 1000ms while the shell
+  // is mounted, pauses while hidden, and is a silent no-op when unchanged.
+  useCommunityPolling({
+    key: `badges:${me.userId}`,
+    fetcher: (signal) => resyncBadges(signal),
   });
 
   // iOS Safari: the keyboard shrinks the VISUAL viewport without resizing the

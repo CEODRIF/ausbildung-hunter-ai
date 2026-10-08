@@ -54,6 +54,7 @@ import {
   resolveCommunityRealtimeClient,
   useDMRealtime,
 } from "@/lib/community/conversation-realtime";
+import { useCommunityPolling } from "@/lib/community/community-polling";
 import {
   createEventBatcher,
   type EventBatcher,
@@ -187,6 +188,11 @@ export function DmChat({
     initialMessages.length > 0 ? initialMessages[initialMessages.length - 1].id : null,
   );
   const mountedRef = useRef(false);
+  // Latest rows for the poll's change-detection (single-writer mirror).
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const pendingFiles = useRef<Map<string, { file: File; url: string }>>(new Map());
   const [pendingImageUrls, setPendingImageUrls] = useState<Record<string, string>>({});
   const inFlightRef = useRef<Set<string>>(new Set());
@@ -251,30 +257,69 @@ export function DmChat({
     if (markReadTimer.current) window.clearTimeout(markReadTimer.current);
   }, [conversation.id]);
 
-  // Resync the newest page after a dropped connection has recovered.
-  const resyncRecent = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/community/dm/${conversation.id}`, {
-        cache: "no-store",
-      });
-      if (!response.ok) return;
-      const data = (await response.json()) as { messages: LocalMessage[] };
-      setHistoryMissing(false);
-      const before = new Set(knownIds.current);
-      for (const m of data.messages) knownIds.current.add(m.id);
-      setMessages((prev) => mergeCommunityMessages(prev, data.messages, { preferIncoming: true }));
-      const added = data.messages.filter((m) => !before.has(m.id)).length;
-      if (added > 0 && !stickToBottom.current) setNewCount((c) => c + added);
-      setAuthors((prev) => {
-        const next = { ...prev };
-        for (const m of data.messages) if (m.author) next[m.user_id] = m.author;
-        return next;
-      });
-      if (added > 0) scheduleMarkRead();
-    } catch {
-      /* keep current state; the next reconnect retries */
-    }
-  }, [conversation.id, scheduleMarkRead]);
+  // Resync the newest page of the ACTIVE conversation. Driven by the
+  // CENTRALIZED 1s poll (the synchronization guarantee, all devices) AND by
+  // events (realtime reconnect, tab visibility return). `?poll=1` uses the
+  // higher rate bucket; the fetch is conversation-scoped only. The in-flight
+  // guard makes poll + event calls share ONE canonical overlap protection.
+  const resyncInFlight = useRef(false);
+  const resyncRecent = useCallback(
+    async (signal?: AbortSignal) => {
+      if (resyncInFlight.current) return; // overlap guard: skip, don't stack
+      resyncInFlight.current = true;
+      try {
+        const response = await fetch(`/api/community/dm/${conversation.id}?poll=1`, {
+          cache: "no-store",
+          signal,
+        });
+        if (!response.ok) return; // e.g. 429 — keep state; the next cycle retries
+        const data = (await response.json()) as { messages: LocalMessage[] };
+        const before = new Set(knownIds.current);
+        // NO-OP when nothing new AND nothing changed: the 1s poll runs
+        // constantly — a quiet DM must not re-render every second.
+        const localById = new Map(messagesRef.current.map((m) => [m.id, m] as const));
+        let changed = false;
+        for (const m of data.messages) {
+          if (!before.has(m.id)) {
+            changed = true;
+            break;
+          }
+          const local = localById.get(m.id);
+          if (
+            local &&
+            (local.message !== m.message ||
+              (local.image_path ?? null) !== (m.image_path ?? null) ||
+              (local.reply_to_message_id ?? null) !== (m.reply_to_message_id ?? null) ||
+              local.updated_at !== m.updated_at ||
+              local.sendStatus !== m.sendStatus)
+          ) {
+            changed = true;
+            break;
+          }
+        }
+        setHistoryMissing(false);
+        if (!changed) return;
+        for (const m of data.messages) knownIds.current.add(m.id);
+        // Server rows win on id collision (the SAME canonical merge the
+        // realtime handlers use — an optimistic row is replaced, never
+        // duplicated, when its server twin arrives via poll or event).
+        setMessages((prev) => mergeCommunityMessages(prev, data.messages, { preferIncoming: true }));
+        const added = data.messages.filter((m) => !before.has(m.id)).length;
+        if (added > 0 && !stickToBottom.current) setNewCount((c) => c + added);
+        setAuthors((prev) => {
+          const next = { ...prev };
+          for (const m of data.messages) if (m.author) next[m.user_id] = m.author;
+          return next;
+        });
+        if (added > 0) scheduleMarkRead();
+      } catch {
+        /* keep current state; the next cycle retries (abort = unmount) */
+      } finally {
+        resyncInFlight.current = false;
+      }
+    },
+    [conversation.id, scheduleMarkRead],
+  );
 
   // --- Typing (ephemeral, over the conversation channel) ---
 
@@ -476,7 +521,7 @@ export function DmChat({
   useDMRealtime(conversation.id, {
     registerHandlers: registerDmHandlers,
     // Reconnect recovery: ONE targeted recent-window resync (a no-op when
-    // nothing was missed) — never a periodic poll.
+    // nothing was missed) — in addition to the 1s poll below.
     onMissedSync: () => {
       void resyncRecent();
       clearTyping();
@@ -495,6 +540,14 @@ export function DmChat({
       channelRef.current = (ch as RealtimeChannel | null) ?? null;
       if (ch === null) insertBatcherRef.current?.flush();
     },
+  });
+
+  // THE 1s synchronization guarantee (all devices): the centralized poll
+  // fetches ONLY this conversation's newest page every 1000ms while mounted,
+  // pauses while hidden, and is a silent no-op when nothing changed.
+  useCommunityPolling({
+    key: `dm:${conversation.id}`,
+    fetcher: (signal) => resyncRecent(signal),
   });
 
   // No realtime client available (env missing) → report degraded.

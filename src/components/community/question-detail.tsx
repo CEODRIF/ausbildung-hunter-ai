@@ -12,6 +12,7 @@ import {
   setQuestionClosedAction,
   unsolveQuestionAction,
 } from "@/app/community/advanced-actions";
+import { useCommunityPolling } from "@/lib/community/community-polling";
 import { ReportDialog, type ReportTargetType } from "./report-dialog";
 import { AdminBadge } from "./admin-badge";
 
@@ -24,10 +25,11 @@ import { AdminBadge } from "./admin-badge";
  * re-runs its own server-side check (role re-read on every call), so a
  * stale UI or a forged click cannot escalate anything.
  *
- * REALTIME: one channel on the EXISTING realtime socket (no second system,
- * no polling, no timers). Answer inserts/updates and question state changes
- * trigger a server re-render (router.refresh) — the server stays the source
- * of truth; the client only mirrors what the server sent it.
+ * SYNC: the centralized 1s poll (community-polling) refreshes this
+ * question's status + answers every 1000ms while mounted (bounded,
+ * RLS-scoped GET — a no-op render when unchanged); actions additionally
+ * re-render via router.refresh(). The server stays the source of truth;
+ * the client only mirrors what the server sent it.
  *
  * DEEP LINK: `#answer-{id}` scrolls + focuses that answer on mount (the
  * notification target and the search results use this exact shape).
@@ -124,6 +126,52 @@ export function QuestionDetail({
 
   const knownAnswerIds = useRef<Set<string>>(new Set(answers.map((a) => a.id)));
   const toastTimer = useRef<number | null>(null);
+
+  // --- Unified 1s polling (the synchronization guarantee) -----------------
+  // Polls ONLY this question's status + answers every 1000ms while mounted
+  // (pauses while hidden). The server ordering is canonical; an UNCHANGED
+  // payload causes zero setState (no re-render, no scroll movement).
+  const answersPollInFlight = useRef(false);
+  const pollAnswers = useCallback(
+    async (signal?: AbortSignal) => {
+      if (answersPollInFlight.current) return; // overlap guard: skip, don't stack
+      answersPollInFlight.current = true;
+      try {
+        const response = await fetch(
+          `/api/community/questions/${questionId}/answers?poll=1`,
+          { cache: "no-store", signal },
+        );
+        if (!response.ok) return; // keep the current state; the next cycle retries
+        const body = (await response.json()) as {
+          status?: string;
+          answers?: AnswerView[];
+        };
+        if (!Array.isArray(body.answers)) return;
+        const nextAnswers = body.answers;
+        setAnswers(
+          (prev) =>
+            JSON.stringify(prev) === JSON.stringify(nextAnswers) ? prev : nextAnswers,
+        );
+        if (
+          body.status === "open" ||
+          body.status === "solved" ||
+          body.status === "closed"
+        ) {
+          const nextStatus: QuestionStatus = body.status;
+          setStatus((prev) => (prev === nextStatus ? prev : nextStatus));
+        }
+      } catch {
+        /* keep the current state; the next cycle retries (abort = unmount) */
+      } finally {
+        answersPollInFlight.current = false;
+      }
+    },
+    [questionId],
+  );
+  useCommunityPolling({
+    key: `question:${questionId}`,
+    fetcher: (signal) => pollAnswers(signal),
+  });
 
   const flashToast = useCallback((text: string) => {
     setToast(text);

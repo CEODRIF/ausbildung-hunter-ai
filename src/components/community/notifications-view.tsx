@@ -17,6 +17,7 @@ import {
   type BusNotification,
 } from "@/lib/community/notification-bus";
 import { socialKindOf } from "@/lib/community/notification-kinds";
+import { useCommunityPolling } from "@/lib/community/community-polling";
 import { useCommunityShell } from "./community-shell";
 import { ActionSpinner, COMMUNITY_PRESS_CLASS, useCommunityToast } from "./action-feedback";
 import { AdminBadge } from "./admin-badge";
@@ -194,6 +195,64 @@ export function NotificationsView({
       }),
     [],
   );
+
+  // --- Unified 1s polling (the synchronization guarantee) -----------------
+  // Polls ONLY the viewer's newest notification page every 1000ms while
+  // this view is mounted (pauses while hidden). The merge:
+  //   - fresh page rows win (new rows prepend in server order, deduped by id)
+  //   - older rows the user paginated in are kept (cursor ≠ null)
+  //   - the read flag is monotonic in this UI (false→true): an optimistic
+  //     mark-as-read never flickers back to unread while its write commits
+  //   - unchanged payload → zero setState (no re-render, no flash)
+  const pollInFlight = useRef(false);
+  const pollNotifications = useCallback(
+    async (signal?: AbortSignal) => {
+      if (pollInFlight.current) return; // overlap guard: skip, don't stack
+      pollInFlight.current = true;
+      try {
+        const response = await fetch("/api/community/notifications?poll=1", {
+          cache: "no-store",
+          signal,
+        });
+        if (!response.ok) return; // keep the current list; the next cycle retries
+        const body = (await response.json()) as { items?: CenterNotification[] };
+        const fresh = Array.isArray(body.items) ? body.items : [];
+        setItems((prev) => {
+          const prevById = new Map(prev.map((n) => [n.id, n] as const));
+          let merged: CenterNotification[];
+          if (cursor === null) {
+            merged = fresh.map((n) => {
+              const local = prevById.get(n.id);
+              return local?.read && !n.read ? { ...n, read: true } : n;
+            });
+          } else {
+            const seen = new Set<string>();
+            merged = [];
+            for (const n of fresh) {
+              seen.add(n.id);
+              const local = prevById.get(n.id);
+              merged.push(local?.read && !n.read ? { ...n, read: true } : n);
+            }
+            for (const p of prev) if (!seen.has(p.id)) merged.push(p);
+          }
+          if (merged.length === prev.length && JSON.stringify(merged) === JSON.stringify(prev)) {
+            return prev; // unchanged → no state update, no re-render
+          }
+          return merged;
+        });
+      } catch {
+        /* keep the last good list; the next cycle retries (abort = unmount) */
+      } finally {
+        pollInFlight.current = false;
+      }
+    },
+    [cursor],
+  );
+
+  useCommunityPolling({
+    key: `notifications:${me.userId}`,
+    fetcher: (signal) => pollNotifications(signal),
+  });
 
   // --- Render text (structured → i18n; legacy rows keep stored text) ------
   const textFor = useCallback(

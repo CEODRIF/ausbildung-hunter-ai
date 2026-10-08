@@ -559,7 +559,7 @@ describe("friends list (GET /api/community/friends) — the convergence endpoint
       },
     });
     vi.mocked(createClient).mockResolvedValue(client);
-    const res = await friendsGET();
+    const res = await friendsGET(new Request("http://localhost/api/community/friends"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       friends: Array<{ state: string; other: { userId: string } }>;
@@ -587,7 +587,7 @@ describe("friends list (GET /api/community/friends) — the convergence endpoint
       queues: { community_friendships: [fail("db down")] },
     });
     vi.mocked(createClient).mockResolvedValue(client);
-    const res = await friendsGET();
+    const res = await friendsGET(new Request("http://localhost/api/community/friends"));
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "Could not load friends." });
   });
@@ -1156,7 +1156,7 @@ describe("DM inbox (GET /api/community/dm)", () => {
       },
     });
     vi.mocked(createClient).mockResolvedValue(client);
-    const res = await dmGET();
+    const res = await dmGET(new Request("http://localhost/api/community/dm"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { conversations: Array<Record<string, unknown>> };
     expect(body.conversations).toHaveLength(1);
@@ -1176,7 +1176,7 @@ describe("DM inbox (GET /api/community/dm)", () => {
       queues: { "rpc:community_dm_summary": [fail("db down")] },
     });
     vi.mocked(createClient).mockResolvedValue(client);
-    const res = await dmGET();
+    const res = await dmGET(new Request("http://localhost/api/community/dm"));
     expect(res.status).toBe(500);
   });
 });

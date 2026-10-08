@@ -1,7 +1,9 @@
 "use client";
 
+import { useCallback, useRef, useState } from "react";
 import Link from "next/link";
 import { Icon, type IconName } from "@/components/icon";
+import { useCommunityPolling } from "@/lib/community/community-polling";
 import { AdminBadge } from "./admin-badge";
 import { useI18n } from "@/lib/i18n";
 import { dictionaries } from "@/lib/i18n/dictionaries";
@@ -195,19 +197,86 @@ function HomeQuestionRow({ item, locale }: { item: HomeQuestionItem; locale: str
   );
 }
 
+/** The live slice the 1s poll converges (same shapes as the RSC props). */
+type HomeLiveSlice = {
+  memberCount: number;
+  recent: HomeRecentItem[];
+  activity: HomeActivityItem[];
+  onlineCount: number;
+  announcements: HomeAnnouncementItem[];
+  questionFeeds: HomeQuestionFeeds;
+};
+
 export function CommunityHome({
   me,
   categories,
   roomsUnavailable,
-  memberCount,
-  recent,
-  activity = [],
-  onlineCount = 0,
-  announcements = [],
-  questionFeeds = EMPTY_QUESTION_FEEDS,
+  memberCount: memberCountProp,
+  recent: recentProp,
+  activity: activityProp = [],
+  onlineCount: onlineCountProp = 0,
+  announcements: announcementsProp = [],
+  questionFeeds: questionFeedsProp = EMPTY_QUESTION_FEEDS,
 }: CommunityHomeProps) {
   const { t, lang } = useI18n();
   const locale = lang === "de" ? "de-DE" : lang === "fr" ? "fr-FR" : lang === "ar" ? "ar" : "en-US";
+
+  // --- Unified 1-second polling (the synchronization guarantee) ----------
+  // The first render uses the server data (props). While this page is
+  // mounted, the centralized poll refreshes the SAME bounded home queries
+  // every 1000ms (pauses while the tab is hidden). Unchanged payload →
+  // zero setState: a quiet home renders nothing every second.
+  const [live, setLive] = useState<HomeLiveSlice | null>(null);
+  const pollInFlight = useRef(false);
+  const pollHome = useCallback(async (signal?: AbortSignal) => {
+    if (pollInFlight.current) return; // overlap guard: skip, don't stack
+    pollInFlight.current = true;
+    try {
+      const response = await fetch("/api/community/home?poll=1", {
+        cache: "no-store",
+        signal,
+      });
+      if (!response.ok) return; // keep the current slice; the next cycle retries
+      const body = (await response.json()) as Record<string, unknown>;
+      if (typeof body.memberCount !== "number") return;
+      if (!Array.isArray(body.recent) || !Array.isArray(body.activity)) return;
+      if (typeof body.onlineCount !== "number") return;
+      if (!Array.isArray(body.announcements)) return;
+      const feeds = body.questionFeeds as HomeQuestionFeeds | undefined;
+      if (
+        !feeds ||
+        !Array.isArray(feeds.recent) ||
+        !Array.isArray(feeds.unanswered) ||
+        !Array.isArray(feeds.solved)
+      ) {
+        return;
+      }
+      const next: HomeLiveSlice = {
+        memberCount: body.memberCount,
+        recent: body.recent as HomeRecentItem[],
+        activity: body.activity as HomeActivityItem[],
+        onlineCount: body.onlineCount,
+        announcements: body.announcements as HomeAnnouncementItem[],
+        questionFeeds: feeds,
+      };
+      setLive((prev) =>
+        prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
+      );
+    } catch {
+      /* keep the last good slice; the next cycle retries (abort = unmount) */
+    } finally {
+      pollInFlight.current = false;
+    }
+  }, []);
+  useCommunityPolling({ key: "home", fetcher: (signal) => pollHome(signal) });
+
+  // The live slice wins over the server-rendered props once it arrives.
+  const memberCount = live?.memberCount ?? memberCountProp;
+  const recent = live?.recent ?? recentProp;
+  const activity = live?.activity ?? activityProp;
+  const onlineCount = live?.onlineCount ?? onlineCountProp;
+  const announcements = live?.announcements ?? announcementsProp;
+  const questionFeeds = live?.questionFeeds ?? questionFeedsProp;
   const totalRooms = categories.reduce((sum, c) => sum + c.rooms.length, 0);
 
   return (

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useFriendshipsRealtime } from "@/lib/community/conversation-realtime";
 import type { RealtimeLikeChannel } from "@/lib/community/realtime-core";
+import { useCommunityPolling } from "@/lib/community/community-polling";
 import { ActionSpinner, useCommunityToast } from "./action-feedback";
 import { Icon } from "@/components/icon";
 import { Button, Card, ErrorState } from "@/components/ui";
@@ -137,16 +138,28 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
   const refetching = useRef(false);
   const toast = useCommunityToast();
 
-  const refetch = useCallback(async () => {
-    if (refetching.current) return;
+  // One shared, overlap-guarded social-state refresh — used by the
+  // CENTRALIZED 1s poll (the synchronization guarantee) AND the realtime
+  // event path. `?poll=1` keeps background refreshes in the higher
+  // community_poll bucket. Change detection: an UNCHANGED payload causes
+  // zero setState, so a quiet friends page renders nothing every second.
+  const refetch = useCallback(async (signal?: AbortSignal) => {
+    if (refetching.current) return; // overlap guard: skip, don't stack
     refetching.current = true;
     try {
-      const response = await fetch("/api/community/friends", { cache: "no-store" });
-      if (!response.ok) return; // keep the current view; the next event retries
+      const response = await fetch("/api/community/friends?poll=1", {
+        cache: "no-store",
+        signal,
+      });
+      if (!response.ok) return; // keep the current view; the next cycle retries
       const next = normalizeFriendsPayload(await response.json());
-      if (next) {
-        setData((prev) => (prev.unavailable ? next : next.unavailable ? prev : next));
-      }
+      if (!next) return;
+      setData((prev) => {
+        const candidate = prev.unavailable ? next : next.unavailable ? prev : next;
+        if (candidate === prev) return prev;
+        if (JSON.stringify(candidate) === JSON.stringify(prev)) return prev; // unchanged
+        return candidate;
+      });
     } catch {
       /* chrome: keep the last good state */
     } finally {
@@ -189,11 +202,20 @@ export function FriendsView({ me, initial }: FriendsViewProps) {
 
   useFriendshipsRealtime(me.userId, {
     registerHandlers: registerFriendshipsHandlers,
-    // Reconnect recovery: ONE targeted summary refetch — never a poll.
+    // Reconnect recovery: ONE targeted summary refetch — in addition to the
+    // 1s poll below (same guarded function, no overlap possible).
     onMissedSync: () => {
       if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
       void refetch();
     },
+  });
+
+  // THE 1s synchronization guarantee (all devices): the centralized poll
+  // refreshes ONLY the viewer's friends/requests/blocks every 1000ms while
+  // this view is mounted, pauses while hidden, no-ops when unchanged.
+  useCommunityPolling({
+    key: `friends:${me.userId}`,
+    fetcher: (signal) => refetch(signal),
   });
 
   useEffect(() => {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useConversationListRealtime } from "@/lib/community/conversation-realtime";
 import type { RealtimeLikeChannel } from "@/lib/community/realtime-core";
+import { useCommunityPolling } from "@/lib/community/community-polling";
 import { Icon } from "@/components/icon";
 import { ErrorState } from "@/components/ui";
 import { useI18n } from "@/lib/i18n";
@@ -60,18 +61,35 @@ export function DmInbox({
   const [failed, setFailed] = useState(unavailable);
   const refetchTimer = useRef<number | null>(null);
   const refetching = useRef(false);
+  // Latest list for the poll's change detection (single-writer mirror).
+  const conversationsRef = useRef(conversations);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
-  const refetch = useCallback(async () => {
-    if (refetching.current) return;
+  // One shared, overlap-guarded summary refresh — used by the CENTRALIZED
+  // 1s poll (the synchronization guarantee) AND the realtime event path.
+  // `?poll=1` keeps every background refresh in the higher community_poll
+  // bucket. Change detection: an UNCHANGED summary causes zero setState,
+  // so a quiet inbox renders nothing every second.
+  const refetch = useCallback(async (signal?: AbortSignal) => {
+    if (refetching.current) return; // overlap guard: skip, don't stack
     refetching.current = true;
     try {
-      const response = await fetch("/api/community/dm", { cache: "no-store" });
+      const response = await fetch("/api/community/dm?poll=1", {
+        cache: "no-store",
+        signal,
+      });
       if (!response.ok) return;
       const body = (await response.json()) as { conversations: DmConversationRow[] };
-      setConversations(body.conversations);
+      const next = body.conversations;
+      if (JSON.stringify(next) === JSON.stringify(conversationsRef.current)) {
+        return; // identical → no state update, no re-render
+      }
+      setConversations(next);
       setFailed(false);
     } catch {
-      /* keep the last good list */
+      /* keep the last good list; the next cycle retries */
     } finally {
       refetching.current = false;
     }
@@ -117,12 +135,21 @@ export function DmInbox({
 
   useConversationListRealtime(me.userId, {
     registerHandlers: registerInboxHandlers,
-    // Reconnect recovery: ONE targeted summary refetch (a no-op-ish small
-    // SQL query) — never a periodic poll.
+    // Reconnect recovery: ONE targeted summary refetch — in addition to the
+    // 1s poll below (same guarded function, no overlap possible).
     onMissedSync: () => {
       if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
       void refetch();
     },
+  });
+
+  // THE 1s synchronization guarantee (all devices): the centralized poll
+  // refreshes ONLY the viewer's conversation summaries every 1000ms while
+  // this list is mounted, pauses while hidden, and is a silent no-op when
+  // the summary is unchanged.
+  useCommunityPolling({
+    key: `inbox:${me.userId}`,
+    fetcher: (signal) => refetch(signal),
   });
 
   useEffect(() => {

@@ -54,6 +54,7 @@ import {
   resolveCommunityRealtimeClient,
   useRoomRealtime,
 } from "@/lib/community/conversation-realtime";
+import { useCommunityPolling } from "@/lib/community/community-polling";
 import {
   createEventBatcher,
   type EventBatcher,
@@ -494,18 +495,24 @@ export function RoomChat({
     if (markReadTimer.current) window.clearTimeout(markReadTimer.current);
   }, [room.id]);
 
-  // Resync the newest page of the ACTIVE room — EVENT-DRIVEN only (realtime
-  // reconnect + tab visibility return; never a periodic poll). `?poll=1`
-  // uses the higher rate bucket for these targeted calls. The fetch is
-  // room-scoped only — never the whole dataset, never other rooms.
-  const resyncRecent = useCallback(async (reason?: string) => {
-    devLog("sync", "resync", { room: room.slug, reason: reason ?? "reconnect" });
-    try {
-      const response = await fetch(
-        `/api/community/messages?room=${encodeURIComponent(room.slug)}&poll=1`,
-        { cache: "no-store" },
-      );
-      if (!response.ok) return; // e.g. 429 — keep state; the next event retries
+  // Resync the newest page of the ACTIVE room. Driven by the CENTRALIZED
+  // 1s poll (the synchronization guarantee, all devices) AND by events
+  // (realtime reconnect, tab visibility return). `?poll=1` uses the higher
+  // rate bucket. The fetch is room-scoped only — never the whole dataset,
+  // never other rooms. The in-flight guard makes poll + event calls share
+  // ONE canonical overlap protection (the second is skipped, never queued).
+  const resyncInFlight = useRef(false);
+  const resyncRecent = useCallback(
+    async (reason?: string, signal?: AbortSignal) => {
+      if (resyncInFlight.current) return; // overlap guard: skip, don't stack
+      resyncInFlight.current = true;
+      devLog("sync", "resync", { room: room.slug, reason: reason ?? "reconnect" });
+      try {
+        const response = await fetch(
+          `/api/community/messages?room=${encodeURIComponent(room.slug)}&poll=1`,
+          { cache: "no-store", signal },
+        );
+        if (!response.ok) return; // e.g. 429 — keep state; the next cycle retries
       const data = (await response.json()) as { items: CommunityMessageClient[] };
       setHistoryMissing(false);
       const before = new Set(knownIds.current);
@@ -552,16 +559,20 @@ export function RoomChat({
         return next;
       });
     } catch {
-      /* keep the current state; the next event retries */
+      /* keep the current state; the next cycle retries (abort = unmount) */
+    } finally {
+      resyncInFlight.current = false;
     }
   }, [room.slug]);
 
-  // --- No periodic polling (the realtime stream is the transport) -------
-  // Missed events can only happen in a missed WINDOW (socket drop, phone
-  // suspending the tab) — and every such window ends with exactly ONE
-  // targeted synchronization: resyncRecent() on the reconnect
-  // (onMissedSync below) and on visibility return (the effect further
-  // down). resyncRecent() is a no-op when nothing new/changed arrived, so
+  // --- Unified 1-second polling (the synchronization guarantee) ---------
+  // The centralized poll (community-polling) drives resyncRecent every
+  // 1000ms while this room is mounted — the SAME targeted, deduped,
+  // no-op-when-quiet path the events below use. Realtime stays the fast
+  // path (instant inserts); the poll guarantees convergence even when a
+  // socket event is missed (drop, phone suspending the tab). Polling
+  // pauses automatically while the tab is hidden and runs one sync on
+  // return. resyncRecent() is a no-op when nothing new/changed arrived, so
   // these syncs cost nothing in the common case.
 
   // --- Typing indicator (ephemeral presence, over the room channel) ---
@@ -765,7 +776,7 @@ export function RoomChat({
   useRoomRealtime(room.id, {
     registerHandlers: registerRoomHandlers,
     // Reconnect recovery: ONE targeted synchronization of the recent window
-    // (a no-op when nothing was missed) — never a periodic poll.
+    // (a no-op when nothing was missed) — in addition to the 1s poll below.
     onMissedSync: () => {
       void resyncRecent("reconnect");
       clearTyping();
@@ -785,6 +796,14 @@ export function RoomChat({
       channelRef.current = (ch as RealtimeChannel | null) ?? null;
       if (ch === null) insertBatcherRef.current?.flush();
     },
+  });
+
+  // THE 1s synchronization guarantee (all devices): the centralized poll
+  // fetches ONLY this room's newest page every 1000ms while mounted,
+  // pauses while hidden, and is a silent no-op when nothing changed.
+  useCommunityPolling({
+    key: `room:${room.id}`,
+    fetcher: (signal) => resyncRecent("poll", signal),
   });
 
   // No realtime client available (env missing) → report degraded, same as

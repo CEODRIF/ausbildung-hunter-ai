@@ -18,12 +18,18 @@ import { fetchCommunityWriteGate } from "@/lib/community/roles";
  * outgoing + blocked). The page prefetches it server-side; the client calls
  * this after realtime relationship changes to converge.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const limited = await checkRateLimit("community_profile", user.id);
+  // `?poll=1` marks the 1s background poll of the friends view
+  // (community_poll bucket, 240/min) — auth + RLS identical to a normal load.
+  const isPoll = new URL(request.url).searchParams.get("poll") === "1";
+  const limited = await checkRateLimit(
+    isPoll ? "community_poll" : "community_profile",
+    user.id,
+  );
   if (!limited.allowed) return tooManyRequests(limited);
 
   const supabase = await createClient();

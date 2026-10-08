@@ -68,12 +68,18 @@ export async function POST(request: Request) {
  * member's identity, unread count, last-message shape and timestamp
  * (ONE SQL summary + ONE profile batch — never a message download).
  */
-export async function GET() {
+export async function GET(request: Request) {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const limited = await checkRateLimit("community_dm_history", user.id);
+  // `?poll=1` marks the 1s background poll of the conversation list
+  // (community_poll bucket, 240/min) — auth + RLS identical to a normal load.
+  const isPoll = new URL(request.url).searchParams.get("poll") === "1";
+  const limited = await checkRateLimit(
+    isPoll ? "community_poll" : "community_dm_history",
+    user.id,
+  );
   if (!limited.allowed) return tooManyRequests(limited);
 
   const supabase = await createClient();

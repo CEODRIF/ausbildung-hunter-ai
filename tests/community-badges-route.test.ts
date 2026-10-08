@@ -55,7 +55,7 @@ afterEach(() => {
 describe("GET /api/community/badges", () => {
   it("rejects unauthenticated requests with 401 (no badge work)", async () => {
     mockAuth(null);
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/community/badges"));
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "Unauthorized" });
     expect(fetchSocialBadges).not.toHaveBeenCalled();
@@ -63,7 +63,7 @@ describe("GET /api/community/badges", () => {
 
   it("rejects inactive accounts with 401", async () => {
     mockAuth(ALICE, "suspended");
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/community/badges"));
     expect(res.status).toBe(401);
     expect(fetchSocialBadges).not.toHaveBeenCalled();
   });
@@ -71,7 +71,7 @@ describe("GET /api/community/badges", () => {
   it("rate-limits on the community_profile scope → 429 + retry-after, no badge work", async () => {
     mockAuth(ALICE);
     mockRateLimit({ allowed: false, count: 31, limit: 30, retry_after: 12 });
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/community/badges"));
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("12");
     expect(fetchSocialBadges).not.toHaveBeenCalled();
@@ -82,7 +82,7 @@ describe("GET /api/community/badges", () => {
     mockRateLimit();
     vi.mocked(createClient).mockResolvedValue({} as never);
     vi.mocked(fetchSocialBadges).mockResolvedValue(null);
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/community/badges"));
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "Could not load badges." });
   });
@@ -92,7 +92,7 @@ describe("GET /api/community/badges", () => {
     mockRateLimit({ allowed: true, count: 2, limit: 30, retry_after: 0 });
     vi.mocked(createClient).mockResolvedValue({} as never);
     vi.mocked(fetchSocialBadges).mockResolvedValue(BADGES as never);
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/community/badges"));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(BADGES);
     expect(res.headers.get("x-ratelimit-limit")).toBe("30");

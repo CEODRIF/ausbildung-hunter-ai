@@ -32,7 +32,13 @@ export async function GET(
   if (!user || !profile || profile.account_status !== "active") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const limited = await checkRateLimit("community_dm_history", user.id);
+  // `?poll=1` marks the 1s background poll of the ACTIVE conversation
+  // (community_poll bucket, 240/min) — auth + RLS identical to a normal load.
+  const isPoll = new URL(request.url).searchParams.get("poll") === "1";
+  const limited = await checkRateLimit(
+    isPoll ? "community_poll" : "community_dm_history",
+    user.id,
+  );
   if (!limited.allowed) return tooManyRequests(limited);
 
   const { conversationId } = await params;

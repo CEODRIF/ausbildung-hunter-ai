@@ -13,18 +13,22 @@ import { fetchSocialBadges } from "@/lib/community/social";
  * notifications), the SAME server computation the pages use for their first
  * render.
  *
- * The shell calls this on EVENT (realtime RECONNECTED, network "online")
- * after a connection recovery, when the in-memory increment may have missed
- * rows delivered while the socket was down. It is never called on a timer —
- * badges stay event-driven.
+ * The shell polls this every 1s while mounted (`?poll=1` → the higher
+ * community_poll bucket) and also on events (realtime RECONNECTED, network
+ * "online") after a connection recovery. Auth + RLS are identical to a
+ * normal load — a poll can never read more.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const limited = await checkRateLimit("community_profile", user.id);
+  const isPoll = new URL(request.url).searchParams.get("poll") === "1";
+  const limited = await checkRateLimit(
+    isPoll ? "community_poll" : "community_profile",
+    user.id,
+  );
   if (!limited.allowed) return tooManyRequests(limited);
 
   try {
