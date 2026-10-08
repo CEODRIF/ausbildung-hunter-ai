@@ -579,6 +579,29 @@ textarea:focus-visible,
   animation-delay: 300ms;
 }
 
+/* ---------------------------------------------------------------------------
+ * Community message rows — lightweight entrance for NEWLY MOUNTED rows.
+ * Rows are keyed by message id and memoized, so the animation runs exactly
+ * once per row: on first render, on optimistic send, on realtime insert.
+ * In-place updates (sending → sent, edit, reactions) never restart it.
+ * The global prefers-reduced-motion rule below freezes it to ~0ms.
+ * --------------------------------------------------------------------------- */
+
+@keyframes community-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.community-msg-in {
+  animation: community-msg-in 160ms ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

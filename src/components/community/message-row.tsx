@@ -198,7 +198,7 @@ function MessageRowInner({
       role="group"
       aria-label={`${name}: ${m.message ?? t("community.imageAlt")}`}
       onClick={() => onActivate(active ? null : m.id)}
-      className={`group relative ${
+      className={`community-msg-in group relative ${
         firstOfGroup ? "mt-2.5 first:mt-0" : "mt-[2px]"
       } rounded-xl px-3 py-0.5 transition-colors hover:bg-surface-2/40 ${
         highlight
