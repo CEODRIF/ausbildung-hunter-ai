@@ -84,7 +84,7 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
               {t("premium.hero.subtitle")}
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
-              <Link href="/company-discovery">
+              <Link href="/opportunities">
                 <Button size="lg" className="h-13 rounded-2xl px-7">
                   <Icon name="search" size={17} />
                   {t("premium.hero.ctaStart")}
@@ -100,18 +100,11 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
                   {t("dash.hero.ctaAnalyze")}
                 </Button>
               </Link>
-              <Link
-                href="/company-discovery"
-                className="inline-flex h-13 items-center gap-1.5 px-2 text-sm font-semibold text-muted transition-colors hover:text-accent"
-              >
-                {t("premium.hero.ctaPrevious")}
-                <Icon name="arrowRight" size={15} className="rtl:-scale-x-100" />
-              </Link>
             </div>
           </div>
         </GlassCard>
 
-        {/* Discovery launcher — the product's signature action. */}
+        {/* Job search launcher — the product's signature action. */}
         <GlassCard
           variant="surface-floating"
           className="relative flex flex-col items-center justify-center overflow-hidden p-8 text-center anim-fade-up"
@@ -125,7 +118,7 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
             <p className="mx-auto mt-2 max-w-60 text-xs leading-5 text-muted">
               {t("dash.hero.subtitle")}
             </p>
-            <Link href="/company-discovery" className="mt-6 inline-block">
+            <Link href="/opportunities" className="mt-6 inline-block">
               <Button size="md" className="rounded-2xl">
                 {t("premium.hero.ctaStart")}
                 <Icon name="arrowRight" size={15} className="rtl:-scale-x-100" />

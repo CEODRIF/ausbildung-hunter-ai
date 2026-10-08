@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 /**
  * fetchOpportunityWindowCached — the shared, user-independent window for
- * programmatic consumers (Company Discovery). Same cache as the UI search:
- * hit → no provider call; miss → provider call + cache write. The returned
- * window never carries per-user match data.
+ * programmatic consumers. Same cache as the UI search: hit → no provider
+ * call; miss → provider call + cache write. The returned window never
+ * carries per-user match data.
  */
 
 const windowMock = vi.fn();

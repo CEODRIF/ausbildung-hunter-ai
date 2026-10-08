@@ -78,7 +78,9 @@ describe("premium i18n: no raw keys reach the UI", () => {
     const premiumKeys = collectStaticKeys().filter((key) =>
       key.startsWith("premium."),
     );
-    expect(premiumKeys.length).toBeGreaterThan(5);
+    // Floor recalibrated after the Company Discovery removal: the premium
+    // block now carries the hero, launcher and nav keys (5 static t() refs).
+    expect(premiumKeys.length).toBeGreaterThanOrEqual(5);
     for (const lang of SUPPORTED_LANGUAGES) {
       for (const key of premiumKeys) {
         const value = lookup(dictionaries[lang], key);
@@ -91,7 +93,9 @@ describe("premium i18n: no raw keys reach the UI", () => {
 
   it("keeps all four dictionaries structurally complete for premium.*", () => {
     const paths = collectPremiumPaths(dictionaries.de.premium);
-    expect(paths.length).toBeGreaterThan(20);
+    // Floor recalibrated after the Company Discovery removal: the premium
+    // namespace keeps nav/filterAll/hero/orb/error (13 leaf paths).
+    expect(paths.length).toBeGreaterThanOrEqual(13);
     for (const lang of SUPPORTED_LANGUAGES) {
       for (const path of paths) {
         const value = lookup(dictionaries[lang], path);

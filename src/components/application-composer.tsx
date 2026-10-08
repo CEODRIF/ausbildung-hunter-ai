@@ -7,7 +7,6 @@ import {
   useState,
   useTransition,
 } from "react";
-import Link from "next/link";
 import { Plus } from "lucide-react";
 import { Card, Input } from "@/components/ui";
 import { RecipientManager } from "@/components/recipient-manager";
@@ -51,21 +50,13 @@ export function ApplicationComposer({
   accounts,
   prefillNotice,
   prefillError,
-  from,
 }: {
   draft: ApplicationDraft;
   accounts: SafeEmailAccount[];
   /** One-time notice for the most recent prefill action (in-memory only). */
-  prefillNotice?: string | null;
-  prefillError?: string | null;
-  /**
-   * Where the composer was opened from (`?from=…`). `company-discovery` means
-   * the draft was created from a discovery selection, so the way back must
-   * lead to /company-discovery — never to the dashboard, and never by
-   * re-running a search.
-   */
-  from?: string | null;
-}) {
+   prefillNotice?: string | null;
+   prefillError?: string | null;
+ }) {
   const { t } = useI18n();
   const [draft] = useState(initialDraft);
   const [goal, setGoal] = useState<ApplicationGoal>(initialDraft.goal);
@@ -184,20 +175,6 @@ export function ApplicationComposer({
       )}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="space-y-5">
-          {from === "company-discovery" && (
-             <Link
-               href="/company-discovery"
-               className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-surface-2 hover:text-ink"
-             >
-              <span
-                aria-hidden="true"
-                className="me-1.5 inline-block rtl:rotate-180"
-              >
-                ←
-              </span>
-              {t("companyDiscovery.campaigns.backToDiscovery")}
-            </Link>
-          )}
           {prefilledFrom && (
             <Card className="flex flex-wrap items-center justify-between gap-3 border-accent/25 bg-surface-2 p-4">
               <div className="min-w-0">

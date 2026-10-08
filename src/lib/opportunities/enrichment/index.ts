@@ -656,7 +656,7 @@ export interface AiSearchStats {
   sourcesSearched: number;
   /** Of those, sources that returned at least one candidate. */
   sourcesWithResults: number;
-  /** Grounding searches actually EXECUTED (discovery + company discovery) —
+  /** Grounding searches actually EXECUTED (website + contact discovery) —
    *  never counted per attempt, only per successful call. */
   webSearchesExecuted: number;
   /** Companies whose enrichment actually ran (checked or cache-hit). */

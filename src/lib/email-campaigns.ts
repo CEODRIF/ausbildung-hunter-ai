@@ -95,9 +95,7 @@ export async function createCampaign(input: {
   const admin = createAdminClient();
   const { data: draft, error: draftError } = await admin
     .from("application_drafts")
-    .select(
-      "id, subject, body_html, body_text, sender_email_account_id, discovery_run_id",
-    )
+    .select("id, subject, body_html, body_text, sender_email_account_id")
     .eq("id", input.draftId)
     .eq("user_id", current.user.id)
     .single<{
@@ -106,8 +104,6 @@ export async function createCampaign(input: {
       body_html: string;
       body_text: string;
       sender_email_account_id: string;
-      /** Set when the draft was built from a Company Discovery result. */
-      discovery_run_id: string | null;
     }>();
   if (draftError || !draft) throw new Error("Draft not found.");
   const { data: persistedRecipients } = await admin
@@ -156,9 +152,6 @@ export async function createCampaign(input: {
       total_recipients: validRecipients.length,
       queued_count: validRecipients.length,
       reserved_count: validRecipients.length,
-      // Provenance: the campaign knows which Company Discovery run its draft
-      // came from (null for an ordinary, manually addressed application).
-      discovery_run_id: draft.discovery_run_id ?? null,
     })
     .select("id")
     .single<{ id: string }>();
