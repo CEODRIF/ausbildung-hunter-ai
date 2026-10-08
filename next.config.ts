@@ -15,6 +15,12 @@ const securityHeaders = buildSecurityHeaders(
 );
 
 const nextConfig: NextConfig = {
+  // Container deployment (Azure Container Apps / any OCI runner): emit the
+  // self-contained `.next/standalone` server. The Dockerfile copies it plus
+  // `.next/static` and `public/` only — no dev tooling, no tests, no
+  // node_modules beyond what the server actually traces (incl. the PDF
+  // stack below, which is traced into standalone/node_modules).
+  output: "standalone",
   // PDF stack (pdf-parse v2 → pdf.js 5 + @napi-rs/canvas) must load from
   // node_modules at runtime, NOT be inlined by the bundler: the parser's
   // worker bootstraps the canvas-backed DOMMatrix/ImageData/Path2D globals

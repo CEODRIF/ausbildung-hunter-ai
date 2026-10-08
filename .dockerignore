@@ -1,0 +1,30 @@
+# VCS / CI — never needed in the build context
+.git
+.github
+
+# Dependencies & build output — rebuilt inside the image
+node_modules
+.next
+out
+dist
+build
+
+# Test tooling output (tests/ itself stays: `next build` typechecks it)
+coverage
+.nyc_output
+*.tsbuildinfo
+
+# Local environment files — secrets must never enter an image
+.env
+.env.*
+
+# Local ops/analysis artifacts (not part of the app)
+vercel-functions-storage-report.md
+capacity-analysis-report.md
+
+# Logs & OS noise
+npm-debug.log*
+yarn-error.log*
+*.log
+.DS_Store
+Thumbs.db
