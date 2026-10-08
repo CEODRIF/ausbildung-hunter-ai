@@ -30,7 +30,9 @@
  */
 
 /** Stable, user-safe error code for PDF extraction failures. */
-export const PDF_PARSE_FAILED = "PDF_PARSE_FAILED";
+import { PDF_PARSE_FAILED } from "@/lib/pdf-error";
+
+export { PDF_PARSE_FAILED };
 
 export async function extractPdfText(
   data: Uint8Array | Buffer,

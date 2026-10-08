@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { scanRequestBodySchema } from "@/lib/bewerbung-schema";
-import { createScan, runScan } from "@/lib/bewerbung-scanner";
+import { createScan } from "@/lib/bewerbung-scanner";
+import { runScan } from "@/lib/bewerbung-scan";
 
 export const runtime = "nodejs";
 

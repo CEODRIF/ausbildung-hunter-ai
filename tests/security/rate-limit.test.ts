@@ -23,6 +23,12 @@ vi.mock("@/lib/rate-limit", async () => {
 });
 vi.mock("@/lib/bewerbung-scanner", () => ({
   createScan: vi.fn(),
+  // bewerbung-scan.ts (the heavy scan half) imports these at module scope.
+  activeUser: vi.fn(),
+  SCAN_PROFILE_INCOMPLETE: "SCAN_PROFILE_INCOMPLETE",
+  SCAN_UNEXPECTED_FAILED: "SCAN_UNEXPECTED_FAILED",
+}));
+vi.mock("@/lib/bewerbung-scan", () => ({
   runScan: vi.fn(),
 }));
 vi.mock("@/lib/ai-service", () => ({
@@ -36,7 +42,8 @@ vi.mock("@/lib/ai-provider", () => ({ createAIProvider: vi.fn() }));
 
 const { checkRateLimit } = await import("@/lib/rate-limit");
 const { createClient } = await import("@/lib/supabase/server");
-const { createScan, runScan } = await import("@/lib/bewerbung-scanner");
+const { createScan } = await import("@/lib/bewerbung-scanner");
+const { runScan } = await import("@/lib/bewerbung-scan");
 const { uploadAIFile } = await import("@/lib/ai-service");
 const { getCurrentUserAndProfile } = await import("@/lib/auth");
 const { createAIProvider } = await import("@/lib/ai-provider");

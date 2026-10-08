@@ -75,7 +75,8 @@ vi.mock("@/lib/ai-provider", () => ({
 const { createAdminClient } = await import("@/lib/supabase/admin");
 const { createClient } = await import("@/lib/supabase/server");
 const { getCurrentUserAndProfile } = await import("@/lib/auth");
-const { getConversation, getAIContext } = await import("@/lib/ai-service");
+const { getAIContext } = await import("@/lib/ai-context");
+const { getConversation } = await import("@/lib/ai-service");
 const { POST } = await import("@/app/api/ai/chat/route");
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";

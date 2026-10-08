@@ -134,7 +134,9 @@ describe("identity is never taken from the request", () => {
   });
 
   it("the scanner re-reads uploads scoped to the session user (foreign id cannot be scanned)", () => {
-    const scanner = read(join(root, "src/lib/bewerbung-scanner.ts"));
+    // The scan run lives in bewerbung-scan.ts (split out of bewerbung-scanner.ts
+    // so the light module does not force the PDF stack into unrelated functions).
+    const scanner = read(join(root, "src/lib/bewerbung-scan.ts"));
     expect(scanner).toMatch(
       /from\("ai_file_uploads"\)[\s\S]{0,200}\.eq\("user_id", user\.id\)/,
     );

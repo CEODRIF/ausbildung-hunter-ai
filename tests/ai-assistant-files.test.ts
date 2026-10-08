@@ -52,11 +52,11 @@ vi.mock("@/lib/rate-limit", async () => {
 const { createAdminClient } = await import("@/lib/supabase/admin");
 const { createClient } = await import("@/lib/supabase/server");
 const { getCurrentUserAndProfile } = await import("@/lib/auth");
+const { getAIContext } = await import("@/lib/ai-context");
 const {
   detectFileType,
   prepareChat,
   uploadAIFile,
-  getAIContext,
   getConversation,
   validateAIFile,
 } = await import("@/lib/ai-service");

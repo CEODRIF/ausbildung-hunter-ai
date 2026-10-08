@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getAIContext } from "@/lib/ai-context";
 import {
-  getAIContext,
   prepareChat,
   provider,
   recentMessages,
