@@ -90,6 +90,7 @@ function matches(params: Parameters<typeof buildMatchers>[0], item: Opportunity)
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 // ---------------------------------------------------------------------------
@@ -138,6 +139,10 @@ describe("Goal consistency — Ausbildung search shows only Ausbildung", () => {
   });
 
   it("scan mode: the goal filter ANDs with the other filters (counts included)", async () => {
+    // fetchOpportunityWindow evaluates freshness against the REAL clock (no
+    // injectable `now`); freeze it to the deterministic NOW so the hardcoded
+    // fixture dates (2026-10-01) keep their "published 1 day ago" meaning.
+    vi.useFakeTimers().setSystemTime(NOW);
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
