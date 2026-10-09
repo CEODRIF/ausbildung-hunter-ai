@@ -151,7 +151,12 @@ export async function azureWebSearch(req: ResponsesRequest): Promise<WebDiscover
       cache: "no-store",
     });
   } catch (error) {
-    const isTimeout = error instanceof Error && error.name === "TimeoutError";
+    // AbortSignal.timeout() raises TimeoutError; network-level aborts may
+    // surface as AbortError. BOTH are timeouts — mapping AbortError to
+    // provider_error mislabels the failure (task §10: clear separation).
+    const isTimeout =
+      error instanceof Error &&
+      (error.name === "TimeoutError" || error.name === "AbortError");
     throw new WebSearchApiError(
       isTimeout ? "timeout" : "provider_error",
       isTimeout

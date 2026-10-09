@@ -51,14 +51,22 @@ interface QuotaInfo {
 }
 
 interface SearchFunnel {
-  candidatesRetrieved: number;
+  providerCalls: number;
+  webSearchCalls: number;
+  rawCandidates: number;
+  uniqueCandidates: number;
   invalidUrls: number;
-  duplicatesRemoved: number;
+  searchPagesRejected: number;
+  cityMismatches: number;
+  duplicateResults: number;
   offAllowlist: number;
-  notListingUrl: number;
   jsonItems: number;
+  jsonMatched: number;
   fabricatedRejected: number;
-  displayed: number;
+  detailsEnriched: number;
+  validListings: number;
+  displayedListings: number;
+  elapsedMs: number;
 }
 
 interface WebSearchOutcome {
@@ -148,6 +156,8 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
   const [httpError, setHttpError] = useState<Status | null>(null);
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
   const [openListing, setOpenListing] = useState<HousingListing | null>(null);
+  /** Seconds to wait before a retry after a 429 (server retry-after). */
+  const [rateLimitWait, setRateLimitWait] = useState<number | null>(null);
 
   // The allowlist and the per-user daily quota are served by the API (single
   // source of truth, server-side — the browser can never inflate its own
@@ -201,10 +211,13 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
         }),
       });
       if (res.status === 429) {
+        const ra = Number(res.headers.get("retry-after") ?? "0");
+        setRateLimitWait(Number.isFinite(ra) && ra > 0 ? ra : null);
         setPhase("done");
         setHttpError("rate_limited");
         return;
       }
+      setRateLimitWait(null);
       if (!res.ok) {
         setPhase("done");
         setHttpError("provider_error");
@@ -288,12 +301,30 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
   /** Count-only funnel diagnostics: something was dropped, so say so. */
   const funnel = outcome?.funnel;
   const funnelDropped =
-    (funnel?.duplicatesRemoved ?? 0) +
-      (funnel?.notListingUrl ?? 0) +
+    (funnel?.duplicateResults ?? 0) +
+      (funnel?.searchPagesRejected ?? 0) +
       (funnel?.offAllowlist ?? 0) +
       (funnel?.invalidUrls ?? 0) +
-      (funnel?.fabricatedRejected ?? 0) >
+      (funnel?.fabricatedRejected ?? 0) +
+      (funnel?.cityMismatches ?? 0) >
     0;
+
+  /** Concrete cause for an empty result set, when the funnel proves one
+   *  (task: never a generic empty message when the evidence says why). */
+  const emptyCause =
+    outcome?.status === "ok" && rawListings.length === 0
+      ? funnel && funnel.cityMismatches > 0
+        ? t("housing.webSearch.emptyCityMismatch", { n: funnel.cityMismatches })
+        : funnel && (funnel.uniqueCandidates ?? 0) > 0
+          ? t("housing.webSearch.emptyFiltered", {
+              n: funnel.uniqueCandidates,
+              pages: funnel.searchPagesRejected,
+              dups: funnel.duplicateResults,
+            })
+          : funnel && (funnel.webSearchCalls ?? 0) === 0
+            ? t("housing.webSearch.emptyNoSearchCall")
+            : null
+      : null;
 
   return (
     <section className="rounded-3xl border border-line bg-surface p-5 shadow-[var(--shadow-card)]">
@@ -404,6 +435,11 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
                     ? t("housing.webSearch.stateDailyQuota", { time: resetTime })
                     : t(`housing.webSearch.${stateKey}`)}
                 </p>
+                {status === "rate_limited" && rateLimitWait !== null && (
+                  <p className="mt-1 text-xs text-faint">
+                    {t("housing.webSearch.rateLimitHint", { seconds: rateLimitWait })}
+                  </p>
+                )}
                 {status === "rate_limited" || status === "provider_error" || status === "timeout" ? (
                   <Button variant="secondary" size="sm" className="mt-2" onClick={() => void run()}>
                     {t("common.retry")}
@@ -450,7 +486,12 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
               ) : listings.length === 0 ? (
                 <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-line-strong bg-surface/60 p-10 text-center">
                   <Icon name="search" size={28} strokeWidth={1.5} className="text-faint" />
-                  <p className="mt-3 max-w-md text-sm font-semibold text-ink">{t("housing.webSearch.empty")}</p>
+                  <p className="mt-3 max-w-md text-sm font-semibold text-ink">
+                    {t("housing.webSearch.empty")}
+                  </p>
+                  {emptyCause && (
+                    <p className="mt-2 max-w-md text-xs text-muted">{emptyCause}</p>
+                  )}
                 </div>
               ) : (
                 <>
@@ -469,8 +510,8 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
                   {funnelDropped && funnel && (
                     <p className="text-[11px] text-faint">
                       {t("housing.webSearch.funnel", {
-                        shown: funnel.displayed,
-                        retrieved: funnel.candidatesRetrieved,
+                        shown: funnel.displayedListings,
+                        retrieved: funnel.uniqueCandidates,
                       })}
                     </p>
                   )}

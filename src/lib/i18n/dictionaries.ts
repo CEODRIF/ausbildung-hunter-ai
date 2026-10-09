@@ -2268,6 +2268,24 @@ const de = {
         "{shown} von {total} Funden entsprechen deinen Filtern (Funde mit unbekannten Werten bleiben sichtbar, soweit prüfbar).",
       filtersEmpty:
         "Keine der {total} Funde erfüllt deine Filter vollständig – lockere die Kriterien oder nutze eine breitere Suche.",
+      locationUnverified: "unbestätigt",
+      locationUnknown: "Standort unklar",
+      derivedTitle: "Abgeleiteter Titel – kein Originaltitel vom Anbieter erhalten",
+      provenancePageTag: "Seite geprüft",
+      provenanceSearchTag: "Suchergebnis",
+      notePageFetched: "Quellseite abgerufen und strukturiert geprüft.",
+      notePageUnstructured: "Quellseite abgerufen – keine strukturierten Angaben gefunden.",
+      noteTosNoFetch:
+        "Das Portal erlaubt keine automatisierte Abfrage (Nutzungsbedingungen) – Angaben aus dem Suchergebnis.",
+      noteRobotsBlocked: "robots.txt blockiert den Abruf – Angaben aus dem Suchergebnis.",
+      noteFetchFailed: "Der Abruf der Quellseite ist fehlgeschlagen – Angaben aus dem Suchergebnis.",
+      rateLimitHint: "Bitte warte ca. {seconds} Sekunden und versuche es erneut.",
+      emptyCityMismatch:
+        "Ursache: {n} Funde wurden verworfen, weil sie nachweislich eine andere Stadt betreffen.",
+      emptyFiltered:
+        "Ursache: {n} Suchtreffer erhalten – {pages} Portalseiten und {dups} Duplikate wurden aussortiert.",
+      emptyNoSearchCall:
+        "Ursache: Der Suchdienst wurde für diese Anfrage nicht aufgerufen. Bitte versuche es erneut.",
     },
   },
 };
@@ -4477,6 +4495,23 @@ const en: Dict = {
         "{shown} of {total} findings match your filters (findings with unknown values stay visible where checkable).",
       filtersEmpty:
         "None of the {total} findings fully meet your filters — relax the criteria or run a broader search.",
+      locationUnverified: "unverified",
+      locationUnknown: "Location unknown",
+      derivedTitle: "Derived title — no original title available from the provider",
+      provenancePageTag: "Page checked",
+      provenanceSearchTag: "Search result",
+      notePageFetched: "Source page fetched and checked for structured data.",
+      notePageUnstructured: "Source page fetched — no structured details found.",
+      noteTosNoFetch:
+        "This portal does not allow automated retrieval (terms of service) — details from the search result.",
+      noteRobotsBlocked: "robots.txt blocks retrieval — details from the search result.",
+      noteFetchFailed: "Fetching the source page failed — details from the search result.",
+      rateLimitHint: "Please wait about {seconds} seconds and try again.",
+      emptyCityMismatch:
+        "Cause: {n} results were rejected because they demonstrably concern a different city.",
+      emptyFiltered:
+        "Cause: {n} search hits received — {pages} portal/search pages and {dups} duplicates were sorted out.",
+      emptyNoSearchCall: "Cause: the search service was not invoked for this request. Please try again.",
     },
   },
 };
@@ -6688,6 +6723,24 @@ const fr: Dict = {
         "{shown} résultats sur {total} correspondent à vos filtres (les valeurs inconnues restent visibles le cas échéant).",
       filtersEmpty:
         "Aucun des {total} résultats ne remplit entièrement vos filtres — assouplissez les critères ou élargissez la recherche.",
+      locationUnverified: "non confirmé",
+      locationUnknown: "Localisation inconnue",
+      derivedTitle: "Titre dérivé — aucun titre original fourni par le portail",
+      provenancePageTag: "Page vérifiée",
+      provenanceSearchTag: "Résultat de recherche",
+      notePageFetched: "Page source consultée et vérifiée (données structurées).",
+      notePageUnstructured: "Page source consultée — aucune donnée structurée trouvée.",
+      noteTosNoFetch:
+        "Ce portail n'autorise pas la récupération automatisée (conditions d'utilisation) — données issues du résultat de recherche.",
+      noteRobotsBlocked: "robots.txt bloque la récupération — données issues du résultat de recherche.",
+      noteFetchFailed:
+        "La consultation de la page source a échoué — données issues du résultat de recherche.",
+      rateLimitHint: "Veuillez patienter environ {seconds} secondes et réessayez.",
+      emptyCityMismatch: "Cause : {n} résultats rejetés car situés dans une autre ville.",
+      emptyFiltered:
+        "Cause : {n} hits reçus — {pages} pages portail/recherche et {dups} doublons écartés.",
+      emptyNoSearchCall:
+        "Cause : le service de recherche n'a pas été invoqué pour cette requête. Réessayez.",
     },
   },
 };
@@ -8845,6 +8898,22 @@ const ar: Dict = {
         "{shown} من أصل {total} نتائج تطابق عوامل التصفية (تبقى القيم المجهولة مرئية حيثما أمكن الفحص).",
       filtersEmpty:
         "لا تطابق أي من النتائج ({total}) عوامل التصفية بالكامل — تخفّف المعايير أو وسّع نطاق البحث.",
+      locationUnverified: "غير مؤكد",
+      locationUnknown: "الموقع غير معروف",
+      derivedTitle: "عنوان مشتق — لم يتوفر عنوان أصلي من المنصة",
+      provenancePageTag: "تمت مراجعة الصفحة",
+      provenanceSearchTag: "نتيجة بحث",
+      notePageFetched: "تم استرجاع الصفحة المصدر ومراجعتها (بيانات منظمة).",
+      notePageUnstructured: "تم استرجاع الصفحة المصدر — لم يتم العثور على بيانات منظمة.",
+      noteTosNoFetch:
+        "هذه المنصة لا تسمح بالاسترجاع الآلي (شروط الاستخدام) — البيانات من نتيجة البحث.",
+      noteRobotsBlocked: "robots.txt يمنع الاسترجاع — البيانات من نتيجة البحث.",
+      noteFetchFailed: "فشل استرجاع الصفحة المصدر — البيانات من نتيجة البحث.",
+      rateLimitHint: "يُرجى الانتظار نحو {seconds} ثانية ثم إعادة المحاولة.",
+      emptyCityMismatch: "السبب: تم رفض {n} نتيجة لأنها تخص مدينة أخرى بشكل مؤكد.",
+      emptyFiltered:
+        "السبب: تم استلام {n} نتيجة — استُبعدت {pages} صفحات بوابة/بحث و{dups} من التكرارات.",
+      emptyNoSearchCall: "السبب: لم يتم استدعاء خدمة البحث لهذا الطلب. أعد المحاولة.",
     },
   },
 };

@@ -81,6 +81,53 @@ export interface HousingListing {
    */
   source_label?: string | null;
   /**
+   * Web-discovery only: true when the location evidence does NOT confirm
+   * the requested city (unknown location). `city` then carries the
+   * evidence-based name (if any) — never the requested city. The UI shows
+   * "Standort unbestätigt" so the user is never misled about the location.
+   * 2026-10-10 fix: results used to be labelled with the searched city.
+   */
+  city_unverified?: boolean;
+  /**
+   * Web-discovery only: true when `title` is the neutral derived label
+   * ("Anzeige auf <hostname>") because no title was obtained from the
+   * search result — NOT a provider title.
+   */
+  title_is_fallback?: boolean;
+  /**
+   * Web-discovery only: which channel each key field came through —
+   * "page" (fetched + parsed) or "search" (cited search result / model
+   * JSON). Absent key = value unknown. Lets the UI show per-field
+   * provenance instead of one global impression.
+   */
+  field_provenance?: Partial<
+    Record<
+      | "rent_cold_eur"
+      | "rent_warm_eur"
+      | "additional_costs_eur"
+      | "rooms"
+      | "living_area_sqm"
+      | "available_from"
+      | "city"
+      | "floor"
+      | "furnished"
+      | "images",
+      "page" | "search"
+    >
+  >;
+  /**
+   * Web-discovery only: machine-readable reason for the verification level
+   * (localized by the UI): page fetched / fetched but unstructured /
+   * portal ToS forbid fetching / robots blocked / fetch failed.
+   */
+  verification_notes?:
+    | "page_fetched"
+    | "page_unstructured"
+    | "tos_no_fetch"
+    | "robots_blocked"
+    | "fetch_failed"
+    | null;
+  /**
    * How far WE verified this result — independent of the provider's own
    * `verified` badge:
    *  - `verified`           — fields parsed from the fetched page (JSON-LD or

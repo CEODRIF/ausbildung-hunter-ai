@@ -22,17 +22,25 @@ const { checkRateLimit } = await import("@/lib/rate-limit");
 vi.mock("@/lib/housing/web-search/discovery", () => ({
   runHousingWebSearch: vi.fn(),
   ZERO_FUNNEL: {
-    candidatesRetrieved: 0,
+    providerCalls: 0,
+    webSearchCalls: 0,
+    rawCandidates: 0,
+    uniqueCandidates: 0,
     invalidUrls: 0,
-    duplicatesRemoved: 0,
+    searchPagesRejected: 0,
+    cityMismatches: 0,
+    duplicateResults: 0,
     offAllowlist: 0,
-    notListingUrl: 0,
     jsonItems: 0,
+    jsonMatched: 0,
     fabricatedRejected: 0,
-    displayed: 0,
+    detailsEnriched: 0,
+    validListings: 0,
+    displayedListings: 0,
+    elapsedMs: 0,
   },
 }));
-const { runHousingWebSearch } = await import("@/lib/housing/web-search/discovery");
+const { runHousingWebSearch, ZERO_FUNNEL } = await import("@/lib/housing/web-search/discovery");
 
 vi.mock("@/lib/housing/web-search/quota", () => ({
   reserveHousingWebSearch: vi.fn(async () => ({ status: "reserved", used: 1, remaining: 19 })),
@@ -83,16 +91,7 @@ function makeOutcome(over: Record<string, unknown> = {}): HousingWebSearchOutcom
     citations: [],
     queries: [],
     stats: { searchCalls: 0, pagesFetched: 0, bingRequests: null },
-    funnel: {
-      candidatesRetrieved: 0,
-      invalidUrls: 0,
-      duplicatesRemoved: 0,
-      offAllowlist: 0,
-      notListingUrl: 0,
-      jsonItems: 0,
-      fabricatedRejected: 0,
-      displayed: 0,
-    },
+    funnel: { ...ZERO_FUNNEL },
     warnings: [] as string[],
     cached: false,
     fetchedAt: "2025-10-09T00:00:00.000Z",
@@ -186,21 +185,34 @@ describe("POST /api/housing/web-search", () => {
     vi.mocked(runHousingWebSearch).mockResolvedValue(
       makeOutcome({
         funnel: {
-          candidatesRetrieved: 12,
+          ...ZERO_FUNNEL,
+          providerCalls: 1,
+          webSearchCalls: 1,
+          rawCandidates: 15,
+          uniqueCandidates: 12,
           invalidUrls: 0,
-          duplicatesRemoved: 3,
-          offAllowlist: 0,
-          notListingUrl: 2,
+          searchPagesRejected: 2,
+          cityMismatches: 0,
+          duplicateResults: 3,
           jsonItems: 10,
+          jsonMatched: 8,
           fabricatedRejected: 0,
-          displayed: 7,
+          validListings: 9,
+          displayedListings: 7,
         },
       }),
     );
     const res = await POST(req({ mode: "web", params: { city: "Berlin" } }));
     expect(res.status).toBe(200);
     const data = (await res.json()) as { funnel: Record<string, number> };
-    expect(data.funnel).toMatchObject({ candidatesRetrieved: 12, duplicatesRemoved: 3, displayed: 7 });
+    expect(data.funnel).toMatchObject({
+      rawCandidates: 15,
+      uniqueCandidates: 12,
+      searchPagesRejected: 2,
+      duplicateResults: 3,
+      validListings: 9,
+      displayedListings: 7,
+    });
   });
 
   it("drops non-allowlisted domains server-side and reports them as a warning", async () => {

@@ -116,9 +116,12 @@ export const LIMITS = {
   /**
    * Whole-request budget. Covers up to TWO sequential search calls (each
    * capped by searchTimeoutMs) plus a small fetch reserve — and stays under
-   * the route's maxDuration (60 s).
+   * the route's maxDuration (60 s) with ~5 s of headroom. 2026-10-10
+   * timeout incident: gpt-5-mini + web_search regularly needs 15–25 s per
+   * call, so the 45 s budget squeezed the second call and the per-call 20 s
+   * cap turned otherwise-fine slow answers into "timeout" failures.
    */
-  requestTimeoutMs: 45_000,
+  requestTimeoutMs: 55_000,
   /** Manual redirect hops, each hop re-validated against the URL guard. */
   maxRedirects: 3,
   /**
@@ -143,8 +146,12 @@ export const LIMITS = {
   cacheTtlMs: 15 * 60 * 1000,
   cacheMaxEntries: 50,
   robotsCacheTtlMs: 10 * 60 * 1000,
-  /** Search-API (Azure) timeout. */
-  searchTimeoutMs: 20_000,
+  /**
+   * Per-call search-API (Azure) timeout. 2026-10-10 timeout incident:
+   * reasoning + web_search frequently needs 15–25 s; 20 s aborted good-but-
+   * slow calls. 30 s leaves room for both calls inside the 55 s budget.
+   */
+  searchTimeoutMs: 30_000,
   /**
    * Output-token budget for the Responses call. gpt-5-mini is a REASONING
    * model: reasoning tokens share this budget with the visible answer. The

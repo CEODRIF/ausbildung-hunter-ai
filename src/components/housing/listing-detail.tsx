@@ -58,6 +58,44 @@ function FactCell({ label, children }: { label: string; children: React.ReactNod
   );
 }
 
+/** Tiny "where did this section's values come from" tag (honesty rule:
+ *  fetched page ≠ search result — the user must see the difference). */
+function ProvenanceLabel({
+  p,
+  t,
+}: {
+  p: "page" | "search" | undefined;
+  t: (key: string) => string;
+}) {
+  if (p === undefined) return null;
+  return (
+    <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-bold text-accent normal-case">
+      {p === "page" ? t("housing.webSearch.provenancePageTag") : t("housing.webSearch.provenanceSearchTag")}
+    </span>
+  );
+}
+
+/** Localized text for the machine-readable verification note. */
+function verificationNoteText(
+  note: HousingListing["verification_notes"],
+  t: (key: string) => string,
+): string | null {
+  switch (note) {
+    case "page_fetched":
+      return t("housing.webSearch.notePageFetched");
+    case "page_unstructured":
+      return t("housing.webSearch.notePageUnstructured");
+    case "tos_no_fetch":
+      return t("housing.webSearch.noteTosNoFetch");
+    case "robots_blocked":
+      return t("housing.webSearch.noteRobotsBlocked");
+    case "fetch_failed":
+      return t("housing.webSearch.noteFetchFailed");
+    default:
+      return null;
+  }
+}
+
 export function ListingDetailModal({
   listing,
   domains,
@@ -123,10 +161,17 @@ export function ListingDetailModal({
               <VerificationBadge status={listing.verification_status} t={t} />
             </div>
             <h2 className="text-lg font-extrabold leading-snug text-ink">{listing.title}</h2>
+            {listing.title_is_fallback && (
+              <p className="mt-0.5 text-[11px] text-faint">{t("housing.webSearch.derivedTitle")}</p>
+            )}
             <p className="mt-1 flex items-center gap-1 text-sm text-muted">
               <Icon name="home" size={13} strokeWidth={2} className="shrink-0" />
-              {[listing.city, listing.postal_code].filter(Boolean).join(", ") ||
-                t("housing.webSearch.notAvailable")}
+              {listing.city_unverified
+                ? listing.city
+                  ? `${listing.city} (${t("housing.webSearch.locationUnverified")})`
+                  : t("housing.webSearch.locationUnknown")
+                : [listing.city, listing.postal_code].filter(Boolean).join(", ") ||
+                  t("housing.webSearch.locationUnknown")}
             </p>
           </div>
           <button
@@ -151,10 +196,11 @@ export function ListingDetailModal({
             </figure>
           )}
 
-          {/* prices */}
+          {/* prices (per-field provenance: page vs. search result) */}
           <section>
-            <h3 className="mb-2 text-xs font-bold tracking-wide text-faint uppercase">
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-bold tracking-wide text-faint uppercase">
               {t("housing.webSearch.prices")}
+              <ProvenanceLabel p={listing.field_provenance?.rent_warm_eur ?? listing.field_provenance?.rent_cold_eur} t={t} />
             </h3>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <FactCell label={t("housing.webSearch.coldRent")}>
@@ -183,8 +229,12 @@ export function ListingDetailModal({
 
           {/* property facts */}
           <section>
-            <h3 className="mb-2 text-xs font-bold tracking-wide text-faint uppercase">
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-bold tracking-wide text-faint uppercase">
               {t("housing.webSearch.property")}
+              <ProvenanceLabel
+                p={listing.field_provenance?.rooms ?? listing.field_provenance?.living_area_sqm}
+                t={t}
+              />
             </h3>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <FactCell label={t("housing.webSearch.rooms")}>
@@ -230,6 +280,14 @@ export function ListingDetailModal({
               {t("housing.webSearch.confirmNote")}
             </span>
           </p>
+
+          {/* machine-readable verification note (why this level) */}
+          {verificationNoteText(listing.verification_notes, t) && (
+            <p className="flex items-start gap-2 rounded-2xl bg-surface-2 p-3 text-xs leading-5 text-faint">
+              <Icon name="shield" size={13} strokeWidth={2} className="mt-0.5 shrink-0" />
+              <span>{verificationNoteText(listing.verification_notes, t)}</span>
+            </p>
+          )}
         </div>
 
         {/* source footer */}

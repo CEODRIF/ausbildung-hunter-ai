@@ -20,6 +20,7 @@ import {
 } from "./config";
 import { buildHousingQueries } from "./queries";
 import { parseModelListings, type ModelListingItem } from "./parse-model-listings";
+import { extractCityFromText, matchCity } from "./geo";
 import { guardedFetch, UnsafeUrlError } from "./url-guard";
 import { parseListingPage } from "./parse-listing";
 import { robotsVerdictForUrl } from "./robots";
@@ -31,30 +32,34 @@ import { robotsVerdictForUrl } from "./robots";
  *   general  — 1 primary German search call; a SECOND complementary German
  *              call only when the first yields fewer than
  *              LIMITS.webModeSecondCallThreshold usable candidates. Both
- *              result sets are merged and deduped, so a rich first call is
- *              not chased with a redundant paid call.
+ *              result sets are merged and deduped.
  *   targeted — exactly 1 domain-restricted search call
  *   fetches  — ≤ maxPagesToFetch pages, allowlisted FETCHABLE-policy
  *              domains only (both modes), robots-checked first (fail-
  *              closed), SSRF-guarded. Unreviewed domains are never fetched.
  *
- * Whole-web mode is NOT display-filtered to the reviewed allowlist
- * (2026-10-10 audit: that filter was the main cause of "Berlin returns
- * only seven" — Bing's own results outside the 7 reviewed portals were
- * silently dropped). The allowlist still decides FETCHABILITY: only
- * reviewed, explicitly fetchable open-data domains may be fetched;
- * everything else is link-only (search snippets / model-stated fields).
- * Targeted mode remains bound to the user's selected domains.
+ * Location correctness (2026-10-10 production fix):
+ *   A result is labelled with the requested city ONLY when its location
+ *   evidence (fetched page > cited model JSON > title/URL-slug scan)
+ *   supports it. Evidence naming a KNOWN different German city → the
+ *   result is rejected and counted (cityMismatches). Absent/unknown
+ *   evidence → shown with `city_unverified: true`, never with the
+ *   requested city. See ./geo.
  *
  * Honesty:
  *   - Every displayed listing URL must be a URL the search tool actually
  *     returned (citations ∪ action.sources). The model's JSON answer is
- *     cross-validated against that set — invented URLs are dropped and
- *     counted (fabricatedRejected).
+ *     cross-validated against that set. The model frequently RETRANSCRIBES
+ *     listing URLs (e.g. immowelt /expose/123 vs /123 — the same listing);
+ *     a JSON item therefore also matches when hostname + 6-digit listing
+ *     id are identical. Anything else is treated as fabricated and counted.
  *   - verification_status: "verified" ONLY for fields parsed from a fetched
  *     page (JSON-LD / explicit text). Model-stated fields with a genuine
  *     citation → "partially_verified". Discovery only → "unverified".
- *   - fields we cannot verify stay null — never invented.
+ *   - fields we cannot verify stay null — never invented. A listing whose
+ *     title we could not obtain gets a NEUTRAL, explicitly-derived label
+ *     ("Anzeige auf <hostname>") with title_is_fallback — not "Titel
+ *     unbekannt" presented as a fact.
  *   - expiry is discarded only when RELIABLY established (a fetched page
  *     states an availability date already in the past).
  *
@@ -98,27 +103,56 @@ export type WebSearchStatus =
   | "timeout";
 
 /**
- * Result funnel — safe, count-only diagnostics (never URLs or response
- * text) so "search ran but few/no results displayed" is explainable from
- * the API response alone.
+ * Machine-readable note about WHY a listing carries its verification level
+ * (localized by the UI). `null` = nothing specific to report.
+ */
+export type VerificationNote =
+  | "page_fetched"
+  | "page_unstructured"
+  | "tos_no_fetch"
+  | "robots_blocked"
+  | "fetch_failed"
+  | null;
+
+/**
+ * Result funnel — privacy-safe, count-only diagnostics (never URLs,
+ * response text, or personal data) so "search ran but few/no results
+ * displayed" is explainable from the API response and the server log alone.
  */
 export interface SearchFunnel {
-  /** Distinct real URLs the search tool returned (citations ∪ sources). */
-  candidatesRetrieved: number;
+  /** Azure Responses API calls made. */
+  providerCalls: number;
+  /** Bing `web_search` tool invocations reported by the provider. */
+  webSearchCalls: number;
+  /** Citations + source URLs before deduplication. */
+  rawCandidates: number;
+  /** Distinct normalized real URLs the search tool returned. */
+  uniqueCandidates: number;
   /** URLs that were not valid http(s). */
   invalidUrls: number;
+  /** Real URLs that are not individual listing pages (home/search/legal). */
+  searchPagesRejected: number;
+  /** Real URLs rejected because their location evidence names a KNOWN
+   *  different city than the one requested. */
+  cityMismatches: number;
   /** Real URLs already seen (dedup across queries/calls/portals). */
-  duplicatesRemoved: number;
+  duplicateResults: number;
   /** (targeted mode) real URLs outside the user's selected domains. */
   offAllowlist: number;
-  /** Real URLs that are not individual listing pages (home/search/legal). */
-  notListingUrl: number;
   /** Model JSON items parsed (valid URLs, sane field values). */
   jsonItems: number;
-  /** Model JSON items whose URL was NOT returned by the search tool. */
+  /** Model JSON items attached to a real candidate (by URL or listing id). */
+  jsonMatched: number;
+  /** Model JSON items whose URL/id was NOT returned by the search tool. */
   fabricatedRejected: number;
+  /** Candidates that received at least one fact from JSON or a fetched page. */
+  detailsEnriched: number;
+  /** Valid listings after all validation, before the display cap. */
+  validListings: number;
   /** Listings finally returned to the client. */
-  displayed: number;
+  displayedListings: number;
+  /** Wall-clock pipeline duration. */
+  elapsedMs: number;
 }
 
 export interface HousingWebSearchOutcome {
@@ -145,14 +179,22 @@ export interface HousingWebSearchOutcome {
 }
 
 export const ZERO_FUNNEL: SearchFunnel = {
-  candidatesRetrieved: 0,
+  providerCalls: 0,
+  webSearchCalls: 0,
+  rawCandidates: 0,
+  uniqueCandidates: 0,
   invalidUrls: 0,
-  duplicatesRemoved: 0,
+  searchPagesRejected: 0,
+  cityMismatches: 0,
+  duplicateResults: 0,
   offAllowlist: 0,
-  notListingUrl: 0,
   jsonItems: 0,
+  jsonMatched: 0,
   fabricatedRejected: 0,
-  displayed: 0,
+  detailsEnriched: 0,
+  validListings: 0,
+  displayedListings: 0,
+  elapsedMs: 0,
 };
 
 // --- result cache (in-memory, TTL — work-product scope only) ----------------
@@ -224,6 +266,29 @@ function normalizeUrl(raw: string): string | null {
   }
 }
 
+/**
+ * The dominant numeric listing id inside a URL (path or query). Same
+ * hostname + same id = the same listing, even when the portal (or the
+ * model) writes the path differently (immowelt: /expose/123 and /123).
+ */
+function listingId(rawUrl: string): string | null {
+  try {
+    const u = new URL(rawUrl);
+    const m = `${u.pathname} ${u.search}`.match(/\d{6,}/);
+    return m ? m[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+function hostnameOf(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
 function looksLikeListingUrl(url: URL, domain: AllowedDomain | null): boolean {
   const path = url.pathname;
   if (NON_LISTING_PATH_RE.test(path)) return false;
@@ -241,12 +306,13 @@ function looksLikeListingUrl(url: URL, domain: AllowedDomain | null): boolean {
 
 interface CollectResult {
   candidates: Candidate[];
+  rawCandidates: number;
   /** Distinct normalized real URLs (before the listing heuristic). */
-  candidatesRetrieved: number;
+  uniqueCandidates: number;
   invalidUrls: number;
-  duplicatesRemoved: number;
+  duplicateResults: number;
   offAllowlist: number;
-  notListingUrl: number;
+  searchPagesRejected: number;
 }
 
 /**
@@ -279,9 +345,9 @@ function collectCandidates(
   const out = new Map<string, Candidate>();
   const order: string[] = [];
   let invalidUrls = 0;
-  let duplicatesRemoved = 0;
+  let duplicateResults = 0;
   let offAllowlist = 0;
-  let notListingUrl = 0;
+  let searchPagesRejected = 0;
 
   const push = (rawUrl: string) => {
     const normalized = normalizeUrl(rawUrl);
@@ -290,7 +356,7 @@ function collectCandidates(
       return;
     }
     if (out.has(normalized)) {
-      duplicatesRemoved += 1;
+      duplicateResults += 1;
       return;
     }
     let u: URL;
@@ -309,7 +375,7 @@ function collectCandidates(
       }
     }
     if (!looksLikeListingUrl(u, entry)) {
-      notListingUrl += 1;
+      searchPagesRejected += 1;
       return;
     }
     out.set(normalized, {
@@ -327,11 +393,12 @@ function collectCandidates(
 
   return {
     candidates: order.map((k) => out.get(k)!),
-    candidatesRetrieved: countDistinctRealUrls(citations, sources),
+    rawCandidates: citations.length + sources.length,
+    uniqueCandidates: countDistinctRealUrls(citations, sources),
     invalidUrls,
-    duplicatesRemoved,
+    duplicateResults,
     offAllowlist,
-    notListingUrl,
+    searchPagesRejected,
   };
 }
 
@@ -354,7 +421,9 @@ function titleExtractsRent(title: string): { cold: number | null; warm: number |
   const parse = (raw: string | undefined): number | null => {
     if (!raw) return null;
     const cleaned = raw.replace(/\s/g, "");
-    const n = Number.parseFloat(cleaned.includes(",") ? cleaned.replace(".", "").replace(",", ".") : cleaned.replace(/\.(?=\d{3})/g, ""));
+    const n = Number.parseFloat(
+      cleaned.includes(",") ? cleaned.replace(/\./g, "").replace(",", ".") : cleaned.replace(/\.(?=\d{3})/g, ""),
+    );
     return Number.isFinite(n) ? n : null;
   };
   return { cold: parse(cold?.[1]), warm: parse(warm?.[1]) };
@@ -392,6 +461,10 @@ export async function runHousingWebSearch(
   const warnings: string[] = [];
   const funnel: SearchFunnel = { ...ZERO_FUNNEL };
 
+  // Declared before `fail` (which reports them on every failure path).
+  const searchCalls: string[] = [];
+  let bingRequests: number | null = null;
+
   const fail = (
     status: WebSearchStatus,
     message: string | null,
@@ -405,8 +478,8 @@ export async function runHousingWebSearch(
     listings: extra.listings ?? [],
     citations: extra.citations ?? [],
     queries: extra.queries ?? [],
-    stats: { searchCalls: 0, pagesFetched: 0, bingRequests: null },
-    funnel: { ...funnel },
+    stats: { searchCalls: searchCalls.length, pagesFetched: 0, bingRequests },
+    funnel: { ...funnel, elapsedMs: now() - started },
     warnings,
     cached: false,
     fetchedAt: new Date(started).toISOString(),
@@ -433,9 +506,7 @@ export async function runHousingWebSearch(
     : undefined;
 
   // 4) Run bounded search calls. Each call gets a timeout that respects the
-  //    whole-request budget, so two 20 s calls can never run past it.
-  const searchCalls: string[] = [];
-  let bingRequests: number | null = null;
+  //    whole-request budget, so two full-timeout calls can never run past it.
   let webSearchCalls = 0;
   let citations: SearchCitation[] = [];
   let sources: string[] = [];
@@ -532,16 +603,21 @@ export async function runHousingWebSearch(
 
   // 5) Collect + dedupe candidates.
   const collected = collectCandidates(citations, sources, input);
-  funnel.candidatesRetrieved = collected.candidatesRetrieved;
+  funnel.providerCalls = searchCalls.length;
+  funnel.webSearchCalls = webSearchCalls;
+  funnel.rawCandidates = collected.rawCandidates;
+  funnel.uniqueCandidates = collected.uniqueCandidates;
   funnel.invalidUrls = collected.invalidUrls;
-  funnel.duplicatesRemoved = collected.duplicatesRemoved;
+  funnel.duplicateResults = collected.duplicateResults;
   funnel.offAllowlist = collected.offAllowlist;
-  funnel.notListingUrl = collected.notListingUrl;
+  funnel.searchPagesRejected = collected.searchPagesRejected;
   funnel.jsonItems = jsonItems.length;
 
   // 6) Cross-validate the model's JSON items against the REAL result set
-  //    (citations ∪ sources): the fabrication guard. A JSON url that the
-  //    search tool never returned is dropped and counted.
+  //    (citations ∪ sources): the fabrication guard. A JSON url whose
+  //    hostname + listing id do not belong to any returned result is
+  //    dropped and counted. Lenient on PATH (portals write the same
+  //    listing several ways) but strict on host + id.
   const realUrls = new Set<string>();
   for (const c of citations) {
     const n = normalizeUrl(c.url);
@@ -553,16 +629,35 @@ export async function runHousingWebSearch(
   }
   const candidatesByNormalizedUrl = new Map<string, Candidate>();
   for (const c of collected.candidates) candidatesByNormalizedUrl.set(c.url, c);
+
+  const realByHostId = new Map<string, Candidate>();
+  for (const c of collected.candidates) {
+    const id = listingId(c.url);
+    if (id) realByHostId.set(`${hostnameOf(c.url)}|${id}`, c);
+  }
+
+  let jsonMatched = 0;
   for (const item of jsonItems) {
     const n = normalizeUrl(item.url);
-    if (!n || !realUrls.has(n)) {
+    let target: Candidate | undefined;
+    if (n && realUrls.has(n)) {
+      target = candidatesByNormalizedUrl.get(n);
+    } else if (n) {
+      // Lenient match: same portal + same numeric listing id (portals write
+      // the same listing several ways: immowelt /expose/123 and /123).
+      const id = listingId(item.url);
+      if (id) target = realByHostId.get(`${hostnameOf(item.url)}|${id}`);
+    }
+    if (!target) {
       funnel.fabricatedRejected += 1;
       continue;
     }
-    const target = candidatesByNormalizedUrl.get(n);
-    if (!target) continue; // not an individual listing page — field data unusable
-    if (target.json === null) target.json = item;
+    if (target.json === null) {
+      target.json = item;
+      jsonMatched += 1;
+    }
   }
+  funnel.jsonMatched = jsonMatched;
 
   if (collected.candidates.length === 0) {
     if (citations.length === 0 && sources.length === 0 && webSearchCalls === 0) {
@@ -575,18 +670,24 @@ export async function runHousingWebSearch(
   }
   if (funnel.invalidUrls > 0) warnings.push(`candidates_dropped_invalid_url=${funnel.invalidUrls}`);
   if (funnel.offAllowlist > 0) warnings.push(`candidates_dropped_off_allowlist=${funnel.offAllowlist}`);
-  if (funnel.notListingUrl > 0) warnings.push(`candidates_dropped_not_listing_url=${funnel.notListingUrl}`);
+  if (funnel.searchPagesRejected > 0) {
+    warnings.push(`candidates_dropped_search_pages=${funnel.searchPagesRejected}`);
+  }
   if (funnel.fabricatedRejected > 0) warnings.push(`fabricated_urls_rejected=${funnel.fabricatedRejected}`);
+  // City mismatches are decided later in the enrichment loop; the warning
+  // is appended there (count-only, privacy-safe).
   if (jsonItems.length > 0 && funnel.fabricatedRejected === jsonItems.length) {
-    // The model answered with JSON but NONE of the URLs are real — treat the
-    // whole answer as unusable, keep the citation-based candidates.
+    // The model answered with JSON but NONE of the URLs/ids are real — treat
+    // the whole answer as unusable, keep the citation-based candidates.
     for (const c of candidatesByNormalizedUrl.values()) c.json = null;
+    funnel.jsonMatched = 0;
   }
 
   const candidates = collected.candidates.slice(0, LIMITS.maxResults);
 
-  // 7) Enrichment: fetch + verify on allowlisted FETCHABLE-policy domains
-  //    only (both modes). Robots-checked (fail-closed), SSRF-guarded.
+  // 7) Enrichment + location gating. Fetch + verify on allowlisted
+  //    FETCHABLE-policy domains only (robots-checked, SSRF-guarded), then
+  //    validate the location evidence and build the normalized listing.
   const listings: HousingListing[] = [];
   let pagesFetched = 0;
 
@@ -596,6 +697,7 @@ export async function runHousingWebSearch(
       break;
     }
     let verification: HousingListing["verification_status"] = "unverified";
+    let note: VerificationNote = null;
     let parsed: ReturnType<typeof parseListingPage> | null = null;
     let titleRentCold: number | null = null;
     let titleRentWarm: number | null = null;
@@ -623,6 +725,7 @@ export async function runHousingWebSearch(
               parsed.rooms != null ||
               parsed.livingAreaSqm != null;
             verification = strong ? "verified" : "partially_verified";
+            note = strong ? "page_fetched" : "page_unstructured";
           } catch (error) {
             // Fetch problems NEVER block the rest of the results: the
             // candidate stays, simply unverified (or partially, from JSON).
@@ -630,9 +733,11 @@ export async function runHousingWebSearch(
               warnings.push(`unsafe_url_skipped:${candidate.domain.domain}`);
             } else {
               warnings.push(`fetch_failed:${candidate.domain.domain}`);
+              note = "fetch_failed";
             }
           }
         } else {
+          note = "robots_blocked";
           warnings.push(
             verdict === "disallowed"
               ? `robots_blocked:${candidate.domain.domain}`
@@ -640,6 +745,8 @@ export async function runHousingWebSearch(
           );
         }
       }
+    } else if (candidate.domain && candidate.domain.policy === "search_only") {
+      note = "tos_no_fetch";
     }
 
     // Model-stated fields (with a genuine citation) or title-level facts
@@ -668,22 +775,89 @@ export async function runHousingWebSearch(
       }
     }
 
-    // 8) Expiry — discard ONLY when reliably established (fetched page
+    // 8) Location correctness — the requested city may only be shown when
+    //    the evidence supports it. Known-different city → reject + count.
+    //    Evidence sources: fetched page (strongest) > cited model JSON >
+    //    title/URL-slug scan (weakest). The hostname is NOT used as
+    //    evidence ("frankfurt-immo.de" may host Berlin listings).
+    let slugPath = "";
+    try {
+      slugPath = new URL(candidate.url).pathname;
+    } catch {
+      slugPath = "";
+    }
+    const evidenceCity =
+      parsed?.city ?? json?.city ?? extractCityFromText(`${candidate.title} ${slugPath}`) ?? null;
+    const evidencePlz = parsed?.postalCode ?? null;
+    const geo = matchCity(
+      input.params.city,
+      input.params.postal_code,
+      evidenceCity,
+      evidencePlz,
+    );
+    if (geo.status === "mismatch") {
+      funnel.cityMismatches += 1;
+      continue;
+    }
+    const requestedCity = input.params.city.trim();
+    const city =
+      geo.status === "match"
+        ? requestedCity || geo.evidenceCity || ""
+        : geo.evidenceCity || "";
+    const cityUnverified = geo.status !== "match";
+
+    // 9) Expiry — discard ONLY when reliably established (fetched page
     //    states availability already ended).
     if (parsed && isPastIsoDate(parsed.availableUntil, started)) {
       warnings.push("expired_listing_discarded");
       continue;
     }
 
-    // 9) Normalize to HousingListing (unknown fields stay null — never
-    //    invented). Precedence: fetched page > model JSON (cited) > title.
+    // 10) Neutral, explicitly-derived title when no real title was obtained
+    //     (never presented as the provider's title).
+    const titleIsFallback = !candidate.title && json?.title == null;
+    const title =
+      candidate.title ||
+      json?.title ||
+      `Anzeige auf ${hostnameOf(candidate.url)}`;
+
+    // 11) Per-field provenance (which channel each value came through).
+    const field_provenance: NonNullable<HousingListing["field_provenance"]> = {};
+    if (parsed?.rentColdEur != null) field_provenance.rent_cold_eur = "page";
+    else if (json?.rent_cold_eur != null) field_provenance.rent_cold_eur = "search";
+    if (parsed?.rentWarmEur != null) field_provenance.rent_warm_eur = "page";
+    else if (json?.rent_warm_eur != null) field_provenance.rent_warm_eur = "search";
+    else if (titleRentWarm != null) field_provenance.rent_warm_eur = "search";
+    if (json?.additional_costs_eur != null) field_provenance.additional_costs_eur = "search";
+    if (parsed?.rooms != null) field_provenance.rooms = "page";
+    else if (json?.rooms != null) field_provenance.rooms = "search";
+    if (parsed?.livingAreaSqm != null) field_provenance.living_area_sqm = "page";
+    else if (json?.living_area_sqm != null) field_provenance.living_area_sqm = "search";
+    if (parsed?.availableFrom) field_provenance.available_from = "page";
+    else if (json?.available_from) field_provenance.available_from = "search";
+    if (json?.floor != null) field_provenance.floor = "search";
+    if (json?.furnished != null) field_provenance.furnished = "search";
+    if (parsed?.images?.length) field_provenance.images = "page";
+    if (parsed?.city) field_provenance.city = "page";
+    else if (json?.city != null) field_provenance.city = "search";
+
+    const detailsEnriched =
+      parsed !== null ||
+      json?.rent_cold_eur != null ||
+      json?.rent_warm_eur != null ||
+      json?.rooms != null ||
+      json?.living_area_sqm != null;
+    if (detailsEnriched) funnel.detailsEnriched += 1;
+
+    // 12) Normalize to HousingListing (unknown fields stay null — never
+    //     invented). Precedence: fetched page > model JSON (cited) > title.
     const listing: HousingListing = {
       provider: "web-search",
       source_id: stableSourceId(candidate.url),
-      title: candidate.title || json?.title || "Titel unbekannt",
+      title,
       listing_url: candidate.url,
-      city: input.params.city.trim() || parsed?.city || json?.city || "",
-      postal_code: input.params.postal_code.trim() || parsed?.postalCode || null,
+      city,
+      postal_code: parsed?.postalCode || null,
       address: null,
       latitude: null,
       longitude: null,
@@ -712,11 +886,20 @@ export async function runHousingWebSearch(
       verification_status: verification,
       floor: json?.floor ?? null,
       source_label: json?.source ?? null,
+      city_unverified: cityUnverified,
+      title_is_fallback: titleIsFallback,
+      field_provenance,
+      verification_notes: note,
     };
     listings.push(listing);
   }
 
-  funnel.displayed = listings.length;
+  funnel.validListings = listings.length;
+  funnel.displayedListings = listings.length;
+  funnel.elapsedMs = now() - started;
+  if (funnel.cityMismatches > 0) {
+    warnings.push(`city_mismatch_rejected=${funnel.cityMismatches}`);
+  }
 
   const outcome: HousingWebSearchOutcome = {
     status: "ok",

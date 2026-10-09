@@ -191,7 +191,16 @@ export function ListingCard({
 
       <div className="flex flex-1 flex-col gap-2.5 p-4">
         <div className="flex items-start justify-between gap-2">
-          <h3 className="line-clamp-2 text-sm font-bold text-ink group-hover:text-accent">
+          <h3
+            className={`line-clamp-2 text-sm font-bold ${
+              listing.title_is_fallback ? "text-ink-soft" : "text-ink"
+            } group-hover:text-accent`}
+            title={
+              listing.title_is_fallback
+                ? t("housing.webSearch.derivedTitle")
+                : undefined
+            }
+          >
             {listing.title}
           </h3>
         </div>
@@ -199,7 +208,12 @@ export function ListingCard({
         <p className="flex items-center gap-1 text-xs text-muted">
           <Icon name="home" size={12} strokeWidth={2} className="shrink-0" />
           <span className="truncate">
-            {[listing.city, listing.postal_code].filter(Boolean).join(", ") || t("housing.webSearch.notAvailable")}
+            {listing.city_unverified
+              ? listing.city
+                ? `${listing.city} (${t("housing.webSearch.locationUnverified")})`
+                : t("housing.webSearch.locationUnknown")
+              : [listing.city, listing.postal_code].filter(Boolean).join(", ") ||
+                t("housing.webSearch.locationUnknown")}
           </span>
         </p>
 
