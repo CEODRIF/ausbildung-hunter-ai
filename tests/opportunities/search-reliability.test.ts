@@ -15,7 +15,7 @@
  *     restriction.
  */
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMatchers,
   fetchOpportunityWindow,
@@ -88,7 +88,22 @@ function matches(params: Parameters<typeof buildMatchers>[0], item: Opportunity)
   return buildMatchers(params, { now: NOW }).every((m) => m(item));
 }
 
+// The file's contract is a deterministic "now" (see NOW above). The direct
+// buildMatchers tests inject it explicitly, but fetchOpportunityWindow runs
+// buildMatchers(params) internally and falls back to the WALL CLOCK
+// (arbeitsagentur.ts: `options.now ?? new Date()`). Without pinning the
+// system time, the freshness assertions below silently stop holding one week
+// after 2026-10-02 (fixture posted_at 2026-10-01 falls out of the "1w"
+// window). Pin the clock the same way tests/email-rate-limit.test.ts does, so
+// the test verifies the goal+freshness AND semantics at its declared "now" —
+// never at whenever CI happens to run.
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
