@@ -145,9 +145,6 @@ const NAV_SECTIONS: NavSection[] = [
     titleKey: "housing.nav.section",
     items: [
       { labelKey: "housing.nav.find", href: "/wohnen", icon: "home" },
-      { labelKey: "housing.nav.wg", href: "/wohnen/wg-zimmer", icon: "users" },
-      { labelKey: "housing.nav.moebliert", href: "/wohnen/moebliert", icon: "image" },
-      { labelKey: "housing.nav.mietCheck", href: "/wohnen/miet-check", icon: "shield" },
       { labelKey: "housing.nav.kosten", href: "/wohnen/kostenrechner", icon: "chart" },
       { labelKey: "housing.nav.suchen", href: "/wohnen/suchen", icon: "search" },
       {
@@ -155,7 +152,6 @@ const NAV_SECTIONS: NavSection[] = [
         href: "/wohnen/gespeichert",
         icon: "bookmark",
       },
-      { labelKey: "housing.nav.tipps", href: "/wohnen/tipps", icon: "book" },
     ],
   },
   {
