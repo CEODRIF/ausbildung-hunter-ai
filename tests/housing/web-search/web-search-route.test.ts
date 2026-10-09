@@ -35,6 +35,7 @@ vi.mock("@/lib/housing/web-search/discovery", () => ({
     jsonMatched: 0,
     fabricatedRejected: 0,
     detailsEnriched: 0,
+    imagesAttached: 0,
     validListings: 0,
     displayedListings: 0,
     elapsedMs: 0,

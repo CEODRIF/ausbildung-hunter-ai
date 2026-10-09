@@ -118,7 +118,9 @@ export function ListingDetailModal({
   }, [onClose]);
 
   const sourceLabel = listingSourceLabel(listing, domains);
-  const image = firstSafeImage(listing.images);
+  // Server-validated primary photo first; the images[] fallback covers
+  // legacy saved snapshots from before image_url existed.
+  const image = listing.image_url ?? firstSafeImage(listing.images);
 
   const warm = listing.rent_warm_eur;
   const cold = listing.rent_cold_eur;

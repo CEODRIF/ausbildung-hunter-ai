@@ -4,6 +4,7 @@ import {
   firstSafeImage,
   listingSourceLabel,
   safeHostname,
+  shouldShowImage,
   type WebSearchDomain,
 } from "@/components/housing/listing-card";
 import { applyClientFilters } from "@/components/housing/housing-web-search";
@@ -62,6 +63,40 @@ describe("firstSafeImage", () => {
     expect(firstSafeImage([])).toBeNull();
     expect(firstSafeImage(null)).toBeNull();
     expect(firstSafeImage(undefined)).toBeNull();
+  });
+
+  it("rejects credentials, localhost and private IP-literal hosts (legacy-snapshot defense)", () => {
+    expect(firstSafeImage(["https://user:pass@cdn.de/a.jpg"])).toBeNull();
+    expect(firstSafeImage(["https://user@cdn.de/a.jpg"])).toBeNull();
+    expect(firstSafeImage(["https://localhost/a.jpg"])).toBeNull();
+    expect(firstSafeImage(["https://192.168.1.5/a.jpg"])).toBeNull();
+    expect(firstSafeImage(["https://10.0.0.8/a.jpg"])).toBeNull();
+    expect(firstSafeImage(["https://169.254.169.254/a.jpg"])).toBeNull();
+    expect(firstSafeImage(["https://[::1]/a.jpg"])).toBeNull();
+    // and a safe URL behind bad ones still wins
+    expect(firstSafeImage(["https://10.0.0.8/a.jpg", "https://cdn.de/ok.jpg"])).toBe("https://cdn.de/ok.jpg");
+  });
+
+  it("accepts a public IP-literal host", () => {
+    expect(firstSafeImage(["https://93.184.216.34/a.jpg"])).toBe("https://93.184.216.34/a.jpg");
+  });
+});
+
+describe("shouldShowImage — broken-image fallback decision", () => {
+  it("no image → placeholder (false)", () => {
+    expect(shouldShowImage(null, null)).toBe(false);
+  });
+
+  it("image present, nothing failed → photo (true)", () => {
+    expect(shouldShowImage("https://cdn.de/a.jpg", null)).toBe(true);
+  });
+
+  it("the image itself failed to load → placeholder (true fallback)", () => {
+    expect(shouldShowImage("https://cdn.de/a.jpg", "https://cdn.de/a.jpg")).toBe(false);
+  });
+
+  it("an OLD failure (different src, e.g. after re-search) does not suppress the new photo", () => {
+    expect(shouldShowImage("https://cdn.de/new.jpg", "https://cdn.de/a.jpg")).toBe(true);
   });
 });
 

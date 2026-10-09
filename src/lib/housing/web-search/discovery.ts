@@ -22,6 +22,7 @@ import { buildHousingQueries } from "./queries";
 import { parseModelListings, type ModelListingItem } from "./parse-model-listings";
 import { extractCityFromText, matchCity } from "./geo";
 import { guardedFetch, UnsafeUrlError } from "./url-guard";
+import { sanitizeImageUrls, validateImageUrl } from "./image-safety";
 import { parseListingPage } from "./parse-listing";
 import { robotsVerdictForUrl } from "./robots";
 
@@ -62,6 +63,14 @@ import { robotsVerdictForUrl } from "./robots";
  *     unbekannt" presented as a fact.
  *   - expiry is discarded only when RELIABLY established (a fetched page
  *     states an availability date already in the past).
+ *   - photos: a listing gets a photo ONLY from (a) metadata of a page we
+ *     legitimately fetched (JSON-LD `image`, og:image/twitter:image) or
+ *     (b) image metadata the search provider delivered with the result.
+ *     Every URL is server-validated (https-only, no credentials, no
+ *     private/loopback/link-local IP hosts, no control chars; relative
+ *     references resolved against the fetched page). The model's JSON is
+ *     NEVER an image source. No photo → the UI renders the neutral
+ *     placeholder; we never substitute or generate an image.
  *
  * Enterprise TOU (Grounding with Bing): output is cached in-memory only
  * (15-min TTL, work-product scope), citations are preserved verbatim for
@@ -147,6 +156,8 @@ export interface SearchFunnel {
   fabricatedRejected: number;
   /** Candidates that received at least one fact from JSON or a fetched page. */
   detailsEnriched: number;
+  /** Listings that received at least one VALIDATED real photo URL. */
+  imagesAttached: number;
   /** Valid listings after all validation, before the display cap. */
   validListings: number;
   /** Listings finally returned to the client. */
@@ -192,6 +203,7 @@ export const ZERO_FUNNEL: SearchFunnel = {
   jsonMatched: 0,
   fabricatedRejected: 0,
   detailsEnriched: 0,
+  imagesAttached: 0,
   validListings: 0,
   displayedListings: 0,
   elapsedMs: 0,
@@ -222,6 +234,10 @@ function cacheKey(input: HousingWebSearchInput): string {
 interface Candidate {
   url: string;
   title: string;
+  /** Photo URL delivered by the search provider alongside this result
+   *  (public search-result metadata; raw — validated in the pipeline).
+   *  null = the provider returned no image for this result. */
+  imageUrl: string | null;
   /** Reviewed allowlist entry for the host, or null (unreviewed — never
    *  fetched; displayed with the bare hostname as source). */
   domain: AllowedDomain | null;
@@ -327,6 +343,7 @@ function collectCandidates(
   citations: SearchCitation[],
   sources: string[],
   input: HousingWebSearchInput,
+  sourceImages: Record<string, string> = {},
 ): CollectResult {
   const inTargeted = input.mode === "targeted";
   const selectedDomains =
@@ -337,9 +354,18 @@ function collectCandidates(
         : null; // web mode: not binding
 
   const titleByUrl = new Map<string, string>();
+  // Provider-delivered photo metadata per normalized result URL. RAW here —
+  // validated in the pipeline (./image-safety). First sighting wins.
+  const imageByUrl = new Map<string, string>();
   for (const c of citations) {
     const n = normalizeUrl(c.url);
-    if (n && c.title && !titleByUrl.has(n)) titleByUrl.set(n, c.title);
+    if (!n) continue;
+    if (c.title && !titleByUrl.has(n)) titleByUrl.set(n, c.title);
+    if (c.image && !imageByUrl.has(n)) imageByUrl.set(n, c.image);
+  }
+  for (const [rawUrl, img] of Object.entries(sourceImages)) {
+    const n = normalizeUrl(rawUrl);
+    if (n && img && !imageByUrl.has(n)) imageByUrl.set(n, img);
   }
 
   const out = new Map<string, Candidate>();
@@ -381,6 +407,7 @@ function collectCandidates(
     out.set(normalized, {
       url: normalized,
       title: titleByUrl.get(normalized) ?? "",
+      imageUrl: imageByUrl.get(normalized) ?? null,
       domain: entry,
       json: null,
     });
@@ -510,6 +537,7 @@ export async function runHousingWebSearch(
   let webSearchCalls = 0;
   let citations: SearchCitation[] = [];
   let sources: string[] = [];
+  let sourceImages: Record<string, string> = {};
   let jsonItems: ModelListingItem[] = [];
 
   const requestDeadline = started + LIMITS.requestTimeoutMs;
@@ -543,6 +571,8 @@ export async function runHousingWebSearch(
   const mergeCall = (res: WebDiscoveryResult): void => {
     citations = [...citations, ...res.citations];
     sources = [...sources, ...res.sources];
+    // First call's image metadata wins on URL conflicts (deterministic).
+    sourceImages = { ...res.sourceImages, ...sourceImages };
     // Structured model answer (JSON per the query contract). Parsed per call
     // — concatenating two call texts would break array extraction.
     const parsed = parseModelListings(res.text);
@@ -562,7 +592,7 @@ export async function runHousingWebSearch(
       // Cost-aware multi-query: primary call first; the complementary
       // second call only when the first under-delivered.
       mergeCall(await runOneCall(built.queries[0], undefined));
-      const probe = collectCandidates(citations, sources, input).candidates.length;
+      const probe = collectCandidates(citations, sources, input, sourceImages).candidates.length;
       if (probe < LIMITS.webModeSecondCallThreshold) {
         try {
           mergeCall(await runOneCall(built.queries[1], undefined));
@@ -602,7 +632,7 @@ export async function runHousingWebSearch(
   }
 
   // 5) Collect + dedupe candidates.
-  const collected = collectCandidates(citations, sources, input);
+  const collected = collectCandidates(citations, sources, input, sourceImages);
   funnel.providerCalls = searchCalls.length;
   funnel.webSearchCalls = webSearchCalls;
   funnel.rawCandidates = collected.rawCandidates;
@@ -699,6 +729,9 @@ export async function runHousingWebSearch(
     let verification: HousingListing["verification_status"] = "unverified";
     let note: VerificationNote = null;
     let parsed: ReturnType<typeof parseListingPage> | null = null;
+    /** Final URL of the fetched page (post-redirects) — the base for
+     *  resolving relative image references (og:image="/media/1.jpg"). */
+    let pageFinalUrl: string | null = null;
     let titleRentCold: number | null = null;
     let titleRentWarm: number | null = null;
 
@@ -715,6 +748,7 @@ export async function runHousingWebSearch(
               fetchImpl: deps.fetchImpl,
             });
             pagesFetched += 1;
+            pageFinalUrl = page.finalUrl;
             parsed = parseListingPage(page.text);
             // "verified" requires STRUCTURED or explicitly-labelled facts —
             // a bare <title> tag is not enough.
@@ -821,6 +855,20 @@ export async function runHousingWebSearch(
       json?.title ||
       `Anzeige auf ${hostnameOf(candidate.url)}`;
 
+    // 10b) Photos — only the two legitimate channels, page metadata beats
+    //      search metadata. Every URL is server-validated (https-only, no
+    //      credentials, no private/loopback/link-local IP hosts); invalid
+    //      references are dropped so the UI falls back to the placeholder.
+    //      The model's JSON is never an image source (see ./image-safety).
+    const pageImages = parsed
+      ? sanitizeImageUrls(
+          [...parsed.images, ...(parsed.ogImage ? [parsed.ogImage] : [])],
+          pageFinalUrl,
+        )
+      : [];
+    const searchImage = candidate.imageUrl ? validateImageUrl(candidate.imageUrl, null) : null;
+    const images = pageImages.length > 0 ? pageImages : searchImage ? [searchImage] : [];
+
     // 11) Per-field provenance (which channel each value came through).
     const field_provenance: NonNullable<HousingListing["field_provenance"]> = {};
     if (parsed?.rentColdEur != null) field_provenance.rent_cold_eur = "page";
@@ -837,7 +885,8 @@ export async function runHousingWebSearch(
     else if (json?.available_from) field_provenance.available_from = "search";
     if (json?.floor != null) field_provenance.floor = "search";
     if (json?.furnished != null) field_provenance.furnished = "search";
-    if (parsed?.images?.length) field_provenance.images = "page";
+    if (pageImages.length > 0) field_provenance.images = "page";
+    else if (images.length > 0) field_provenance.images = "search";
     if (parsed?.city) field_provenance.city = "page";
     else if (json?.city != null) field_provenance.city = "search";
 
@@ -848,6 +897,7 @@ export async function runHousingWebSearch(
       json?.rooms != null ||
       json?.living_area_sqm != null;
     if (detailsEnriched) funnel.detailsEnriched += 1;
+    if (images.length > 0) funnel.imagesAttached += 1;
 
     // 12) Normalize to HousingListing (unknown fields stay null — never
     //     invented). Precedence: fetched page > model JSON (cited) > title.
@@ -874,7 +924,10 @@ export async function runHousingWebSearch(
       wg_suitable: false, // unknown from search — never claimed
       verified: false, // we never claim portal-side verification
       accommodation_type: input.params.accommodation_type === "all" ? "apartment" : input.params.accommodation_type,
-      images: parsed?.images ?? [],
+      images,
+      // Only present when a REAL, validated photo URL exists — the UI must
+      // render the neutral placeholder otherwise (never a substitute image).
+      ...(images.length > 0 ? { image_url: images[0] } : {}),
       features: [],
       description: null,
       provider_updated_at: null,

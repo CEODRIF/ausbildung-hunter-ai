@@ -72,7 +72,7 @@ const OD_A = "https://www.opendata.de/dataset/miete";
 const OD_B = "https://www.opendata.de/dataset/miete2";
 
 function azurePayload(
-  citations: Array<{ url: string; title: string }>,
+  citations: Array<{ url: string; title: string; image?: string }>,
   text = "Angebote gefunden.",
   sources: string[] = [],
 ) {
@@ -959,5 +959,170 @@ describe("request budget constant sanity", () => {
     expect(worstCase).toBeLessThanOrEqual(LIMITS.requestTimeoutMs);
     expect(LIMITS.requestTimeoutMs + 5_000).toBeLessThanOrEqual(60_000);
     expect(LIMITS.webModeSecondCallThreshold).toBeLessThanOrEqual(8);
+  });
+});
+
+describe("listing photos — real, validated images only", () => {
+  it("attaches a real photo from fetched-page JSON-LD (provenance: page)", async () => {
+    const { impl } = makeFetch({
+      azure: [azurePayload([{ url: NW_A, title: "x" }])],
+      page: () =>
+        listingPage({
+          image: ["https://cdn.open.nrw/img/1.jpg", "https://cdn.open.nrw/img/2.jpg"],
+        }),
+    });
+    const outcome = await runHousingWebSearch(targeted(["open.nrw"]), {
+      now: () => NOW,
+      provider: AZURE,
+      fetchImpl: impl,
+    });
+    expect(outcome.listings).toHaveLength(1);
+    const l = outcome.listings[0];
+    expect(l.images).toEqual(["https://cdn.open.nrw/img/1.jpg", "https://cdn.open.nrw/img/2.jpg"]);
+    expect(l.image_url).toBe("https://cdn.open.nrw/img/1.jpg"); // first = card photo
+    expect(l.field_provenance?.images).toBe("page");
+    expect(outcome.funnel.imagesAttached).toBe(1);
+  });
+
+  it("falls back to og:image and resolves RELATIVE references against the fetched page", async () => {
+    const { impl } = makeFetch({
+      azure: [azurePayload([{ url: NW_A, title: "x" }])],
+      page: () =>
+        new Response(
+          '<html><head><meta property="og:image" content="/media/wohnung-1.jpg"></head>' +
+            "<body></body></html>",
+          { status: 200, headers: { "content-type": "text/html" } },
+        ),
+    });
+    const outcome = await runHousingWebSearch(targeted(["open.nrw"]), {
+      now: () => NOW,
+      provider: AZURE,
+      fetchImpl: impl,
+    });
+    const l = outcome.listings[0];
+    expect(l.image_url).toBe("https://open.nrw/media/wohnung-1.jpg");
+    expect(l.field_provenance?.images).toBe("page");
+  });
+
+  it("drops UNSAFE page images (http / data: / private IP / credentials) — never an internal reference", async () => {
+    const { impl } = makeFetch({
+      azure: [azurePayload([{ url: NW_A, title: "x" }])],
+      page: () =>
+        listingPage({
+          image: [
+            "http://cdn.example.de/1.jpg",
+            "data:image/png;base64,AAAA",
+            "https://169.254.169.254/latest/image.jpg",
+            "https://user:pass@cdn.example.de/2.jpg",
+            "https://10.0.0.8/inner.jpg",
+          ],
+        }),
+    });
+    const outcome = await runHousingWebSearch(targeted(["open.nrw"]), {
+      now: () => NOW,
+      provider: AZURE,
+      fetchImpl: impl,
+    });
+    const l = outcome.listings[0];
+    expect(l.images).toEqual([]);
+    expect("image_url" in l).toBe(false); // absent — UI renders the placeholder
+    expect(l.field_provenance?.images).toBeUndefined();
+    expect(outcome.funnel.imagesAttached).toBe(0);
+  });
+
+  it("resolves a page-relative image reference against the fetched page (same host)", async () => {
+    const { impl } = makeFetch({
+      azure: [azurePayload([{ url: NW_A, title: "x" }])],
+      page: () => listingPage({ image: "photos/wohnung-1.jpg" }),
+    });
+    const outcome = await runHousingWebSearch(targeted(["open.nrw"]), {
+      now: () => NOW,
+      provider: AZURE,
+      fetchImpl: impl,
+    });
+    expect(outcome.listings[0].image_url).toBe("https://open.nrw/dataset/photos/wohnung-1.jpg");
+  });
+
+  it("keeps a valid page image when other entries are invalid (partial salvage)", async () => {
+    const { impl } = makeFetch({
+      azure: [azurePayload([{ url: NW_A, title: "x" }])],
+      page: () =>
+        listingPage({
+          image: ["https://10.0.0.8/inner.jpg", "https://cdn.open.nrw/ok.jpg"],
+        }),
+    });
+    const outcome = await runHousingWebSearch(targeted(["open.nrw"]), {
+      now: () => NOW,
+      provider: AZURE,
+      fetchImpl: impl,
+    });
+    expect(outcome.listings[0].image_url).toBe("https://cdn.open.nrw/ok.jpg");
+  });
+
+  it("uses PROVIDER search-result metadata for search_only domains WITHOUT fetching them (restricted policy)", async () => {
+    const { impl, calls } = makeFetch({
+      azure: [
+        azurePayload([{ url: IS24_A, title: "x", image: "https://img.is24.de/123456789.jpg" }]),
+      ],
+    });
+    const outcome = await runHousingWebSearch(targeted(["immobilienscout24.de"]), {
+      now: () => NOW,
+      provider: AZURE,
+      fetchImpl: impl,
+    });
+    // IS24 is ToS-restricted: never fetched — the image may only come from
+    // the publicly delivered search metadata.
+    expect(outcome.stats.pagesFetched).toBe(0);
+    expect(calls.some((c) => c.url === IS24_A)).toBe(false);
+    const l = outcome.listings[0];
+    expect(l.verification_notes).toBe("tos_no_fetch");
+    expect(l.image_url).toBe("https://img.is24.de/123456789.jpg");
+    expect(l.images).toEqual(["https://img.is24.de/123456789.jpg"]);
+    expect(l.field_provenance?.images).toBe("search");
+    expect(outcome.funnel.imagesAttached).toBe(1);
+  });
+
+  it("drops INVALID search-metadata images too", async () => {
+    const { impl } = makeFetch({
+      azure: [
+        azurePayload([{ url: IS24_A, title: "x", image: "http://img.is24.de/123456789.jpg" }]),
+      ],
+    });
+    const outcome = await runHousingWebSearch(targeted(["immobilienscout24.de"]), {
+      now: () => NOW,
+      provider: AZURE,
+      fetchImpl: impl,
+    });
+    expect("image_url" in outcome.listings[0]).toBe(false);
+    expect(outcome.listings[0].images).toEqual([]);
+  });
+
+  it("prefers fetched-page images over search-metadata images (stronger evidence)", async () => {
+    const { impl } = makeFetch({
+      azure: [
+        azurePayload([{ url: NW_A, title: "x", image: "https://img.search-meta.example/t.jpg" }]),
+      ],
+      page: () => listingPage({ image: "https://cdn.open.nrw/page-1.jpg" }),
+    });
+    const outcome = await runHousingWebSearch(targeted(["open.nrw"]), {
+      now: () => NOW,
+      provider: AZURE,
+      fetchImpl: impl,
+    });
+    const l = outcome.listings[0];
+    expect(l.image_url).toBe("https://cdn.open.nrw/page-1.jpg");
+    expect(l.field_provenance?.images).toBe("page");
+  });
+
+  it("sets no image_url when no channel delivered a usable image", async () => {
+    const { impl } = makeFetch({ azure: [azurePayload([{ url: IS24_A, title: "x" }])] });
+    const outcome = await runHousingWebSearch(targeted(["immobilienscout24.de"]), {
+      now: () => NOW,
+      provider: AZURE,
+      fetchImpl: impl,
+    });
+    expect("image_url" in outcome.listings[0]).toBe(false);
+    expect(outcome.listings[0].images).toEqual([]);
+    expect(outcome.funnel.imagesAttached).toBe(0);
   });
 });

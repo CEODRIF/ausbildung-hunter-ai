@@ -22,7 +22,12 @@ export interface ParsedListingPage {
   availableFrom: string | null; // ISO date when the page states it
   /** ISO date: page states the offer is only available until then. */
   availableUntil: string | null;
+  /** Image URLs from JSON-LD `image` (structured, strongest channel).
+   *  RAW — server-side URL validation happens in the pipeline. */
   images: string[];
+  /** og:image / twitter:image content of the fetched page, when present.
+   *  RAW, may be relative (resolved + validated in the pipeline). */
+  ogImage: string | null;
 }
 
 const JSONLD_RE = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
@@ -152,6 +157,31 @@ function extractFromJsonLd(nodes: JsonLdNode[]): Partial<ParsedListingPage> {
   return result;
 }
 
+/**
+ * Content of a <meta property|name="…"> tag (attribute order agnostic).
+ * Open Graph / Twitter image metadata is PUBLIC page metadata — the page
+ * itself was fetched under the fetchable-domain policy, so referencing
+ * its declared image is legitimate. (Absolute or relative; validation +
+ * resolution against the page URL happens in the pipeline.)
+ */
+function metaContent(html: string, prop: string): string | null {
+  const tagRe = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]*>`, "i");
+  const tag = html.match(tagRe);
+  if (!tag) return null;
+  const content = tag[0].match(/content=["']([^"']*)["']/i);
+  const value = content ? content[1].trim() : "";
+  return value === "" ? null : value;
+}
+
+function extractSocialImage(html: string): string | null {
+  return (
+    metaContent(html, "og:image") ??
+    metaContent(html, "og:image:secure_url") ??
+    metaContent(html, "twitter:image") ??
+    metaContent(html, "twitter:image:src")
+  );
+}
+
 // --- conservative explicit-text fallback (no JSON-LD) -----------------------
 
 /** German number "1.234" (thousands dot) or "1234,50" — best effort. */
@@ -200,6 +230,7 @@ export function parseListingPage(html: string): ParsedListingPage {
     availableFrom: null,
     availableUntil: null,
     images: [],
+    ogImage: null,
   };
 
   const ldBlocks = [...html.matchAll(JSONLD_RE)];
@@ -230,5 +261,6 @@ export function parseListingPage(html: string): ParsedListingPage {
     availableFrom: fromLd.availableFrom ?? null,
     availableUntil: fromLd.availableUntil ?? null,
     images: fromLd.images ?? [],
+    ogImage: extractSocialImage(html),
   };
 }

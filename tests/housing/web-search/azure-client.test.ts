@@ -165,11 +165,68 @@ describe("parseResponsesPayload", () => {
     expect(p.numRequests).toBeNull();
   });
 
+  it("parses provider-delivered image metadata (citations + source entries), never invents it", () => {
+    const p = parseResponsesPayload({
+      output: [
+        {
+          type: "web_search_call",
+          status: "completed",
+          action: {
+            type: "search",
+            query: "Mietwohnung Köln",
+            sources: [
+              { type: "url", url: "https://www.immowelt.de/expose/987654321", image: "https://img.immowelt.de/thumb/987654321.jpg" },
+              "https://www.immobilienscout24.de/expose/123456789", // no image → no entry
+            ],
+          },
+        },
+        {
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "…",
+              annotations: [
+                {
+                  type: "url_citation",
+                  url: "https://www.immobilienscout24.de/expose/123456789",
+                  title: "2-Zimmer Köln",
+                  thumbnail_url: "https://img.is24.de/t/123456789.jpg",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(p.citations).toEqual([
+      {
+        url: "https://www.immobilienscout24.de/expose/123456789",
+        title: "2-Zimmer Köln",
+        image: "https://img.is24.de/t/123456789.jpg",
+      },
+    ]);
+    expect(p.sourceImages).toEqual({
+      "https://www.immowelt.de/expose/987654321": "https://img.immowelt.de/thumb/987654321.jpg",
+    });
+  });
+
+  it("keeps citations WITHOUT an image key when the provider sends none (documented Azure shape)", () => {
+    const p = parseResponsesPayload(fullPayload());
+    for (const c of p.citations) {
+      expect(c).not.toHaveProperty("image");
+    }
+    expect(p.sourceImages).toEqual({});
+  });
+
   it("survives malformed payloads (no throw, empty result)", () => {
     expect(parseResponsesPayload({})).toEqual({
       text: "",
       citations: [],
       sources: [],
+      sourceImages: {},
       queries: [],
       numRequests: null,
       webSearchCalls: 0,

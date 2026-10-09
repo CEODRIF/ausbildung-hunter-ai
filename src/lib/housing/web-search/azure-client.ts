@@ -41,6 +41,12 @@ import { LIMITS, validateAzureEndpoint } from "./config";
 export interface SearchCitation {
   url: string;
   title: string;
+  /**
+   * Optional photo URL the provider delivered WITH the citation (public
+   * search-result metadata, e.g. a Bing thumbnail). Only present when the
+   * provider actually returned one — never fabricated by us.
+   */
+  image?: string;
 }
 
 export interface WebDiscoveryResult {
@@ -50,6 +56,13 @@ export interface WebDiscoveryResult {
   citations: SearchCitation[];
   /** Source URLs from `web_search_call.action.sources` (may be empty). */
   sources: string[];
+  /**
+   * Optional image metadata the provider returned ALONGSIDE a source URL
+   * (same contract as `SearchCitation.image`), keyed by the raw URL the
+   * provider wrote. The documented Azure shape currently carries no images
+   * — this is parsed defensively and empty when absent.
+   */
+  sourceImages: Record<string, string>;
   /** The queries the search tool actually ran. */
   queries: string[];
   /** Billable Bing transactions reported by the API, when present. */
@@ -203,10 +216,29 @@ export function parseResponsesPayload(payload: {
 }): WebDiscoveryResult {
   const citations: SearchCitation[] = [];
   const sources: string[] = [];
+  const sourceImages: Record<string, string> = {};
   const queries: string[] = [];
   const seenCitation = new Set<string>();
   const seenSource = new Set<string>();
   let webSearchCalls = 0;
+
+  /**
+   * Read optional photo metadata a provider MAY deliver alongside a result
+   * URL (public search-result metadata — e.g. Bing-style thumbnails).
+   * Accepts the common spellings; returns null when absent. Defensive only:
+   * the documented Azure shape has no image field, so this is normally
+   * null — we never invent a photo.
+   */
+  const readImageMeta = (rec: Record<string, unknown>): string | null => {
+    for (const key of ["image", "image_url", "thumbnail_url"]) {
+      const v = rec[key];
+      if (typeof v === "string" && v.trim() !== "") return v.trim();
+      const nested = v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+      const nv = nested?.thumbnailUrl ?? nested?.url;
+      if (typeof nv === "string" && nv.trim() !== "") return nv.trim();
+    }
+    return null;
+  };
   // TEXT IS COLLECTED, THEN RESOLVED (below): the documented `output_text`
   // field ALREADY is the concatenation of all message output-text items —
   // using it AND appending the message blocks would double the text (harmless
@@ -255,9 +287,16 @@ export function parseResponsesPayload(payload: {
         if (Array.isArray(action.sources)) {
           for (const s of action.sources) {
             // Documented shape: each entry is { type, url }; a bare string is
-            // accepted defensively.
+            // accepted defensively. Optional photo metadata (when the
+            // provider delivers it) is captured alongside the URL.
             const url = typeof s === "string" ? s : (s as { url?: unknown })?.url;
-            if (typeof url === "string") addSource(url);
+            if (typeof url === "string") {
+              addSource(url);
+              if (typeof s === "object" && s !== null && !(url in sourceImages)) {
+                const img = readImageMeta(s as Record<string, unknown>);
+                if (img) sourceImages[url] = img;
+              }
+            }
           }
         }
       }
@@ -279,7 +318,9 @@ export function parseResponsesPayload(payload: {
             const u = typeof nested.url === "string" ? nested.url : null;
             if (u && !seenCitation.has(u)) {
               seenCitation.add(u);
-              citations.push({ url: u, title: typeof nested.title === "string" ? nested.title : "" });
+              const title = typeof nested.title === "string" ? nested.title : "";
+              const img = readImageMeta(nested);
+              citations.push(img ? { url: u, title, image: img } : { url: u, title });
             }
           }
         }
@@ -298,6 +339,7 @@ export function parseResponsesPayload(payload: {
     text,
     citations,
     sources,
+    sourceImages,
     queries,
     numRequests: Number.isFinite(numRequests as number) ? (numRequests as number) : null,
     webSearchCalls,

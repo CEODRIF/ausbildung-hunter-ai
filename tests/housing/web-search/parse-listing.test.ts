@@ -133,12 +133,56 @@ describe("parseListingPage — malformed content", () => {
       availableFrom: null,
       availableUntil: null,
       images: [],
+      ogImage: null,
     });
   });
 
   it("never throws on empty input", () => {
     expect(() => parseListingPage("")).not.toThrow();
     expect(parseListingPage("").title).toBeNull();
+  });
+});
+
+describe("parseListingPage — social image metadata (og/twitter)", () => {
+  it("extracts og:image (attribute order agnostic)", () => {
+    const html = `<html><head>
+      <meta property="og:image" content="https://cdn.example.de/og/1.jpg">
+    </head><body></body></html>`;
+    expect(parseListingPage(html).ogImage).toBe("https://cdn.example.de/og/1.jpg");
+  });
+
+  it("extracts og:image when content comes BEFORE the property attribute", () => {
+    const html = `<html><head>
+      <meta content="https://cdn.example.de/og/2.jpg" property="og:image">
+    </head><body></body></html>`;
+    expect(parseListingPage(html).ogImage).toBe("https://cdn.example.de/og/2.jpg");
+  });
+
+  it("falls back to twitter:image, then keeps og:image's precedence", () => {
+    const onlyTwitter = `<html><head><meta name="twitter:image" content="https://cdn.example.de/t.jpg"></head><body></body></html>`;
+    expect(parseListingPage(onlyTwitter).ogImage).toBe("https://cdn.example.de/t.jpg");
+    const both = `<html><head>
+      <meta property="og:image" content="https://cdn.example.de/og.jpg">
+      <meta name="twitter:image" content="https://cdn.example.de/t.jpg">
+    </head><body></body></html>`;
+    expect(parseListingPage(both).ogImage).toBe("https://cdn.example.de/og.jpg");
+  });
+
+  it("accepts relative og:image values (resolved later in the pipeline)", () => {
+    const html = `<html><head><meta property="og:image" content="/media/wohnung-1.jpg"></head><body></body></html>`;
+    expect(parseListingPage(html).ogImage).toBe("/media/wohnung-1.jpg");
+  });
+
+  it("returns null when no social image tag exists", () => {
+    expect(parseListingPage("<html><head><title>x</title></head><body></body></html>").ogImage).toBeNull();
+  });
+
+  it("does not confuse a JSON-LD string that mentions og:image for a real tag", () => {
+    const html = jsonLdPage(
+      { "@type": "Apartment", name: "x", description: "see og:image in the meta" },
+      "",
+    );
+    expect(parseListingPage(html).ogImage).toBeNull();
   });
 });
 

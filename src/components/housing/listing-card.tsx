@@ -32,21 +32,77 @@ export interface WebSearchDomain {
 }
 
 /**
- * The first image URL that is safe to render in an <img>: http(s) and
- * syntactically valid. http:// is deliberately excluded on an https app
- * (mixed content would block it in the browser and render a broken tile).
+ * Client-side check that an IP-LITERAL hostname is in a private / loopback
+ * / link-local / CGNAT / multicast / reserved range (same table as the
+ * server SSRF guard, re-implemented without node: for the browser bundle).
+ * Purely cosmetic for a user-facing app (a home browser cannot reach our
+ * internal ranges), but a response containing an internal address would be
+ * a data-leak smell — such URLs must not be rendered at all.
+ */
+function isUnsafeIpLiteral(host: string): boolean {
+  const lower = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(lower)) {
+    const parts = lower.split(".").map((p) => Number.parseInt(p, 10));
+    const [a, b] = parts;
+    return (
+      a === 0 || // 0.0.0.0/8
+      a === 10 || // 10.0.0.0/8
+      a === 127 || // loopback
+      (a === 169 && b === 254) || // link-local (incl. cloud metadata)
+      (a === 172 && b >= 16 && b <= 31) || // 172.16.0.0/12
+      (a === 192 && b === 168) || // 192.168.0.0/16
+      (a === 100 && b >= 64 && b <= 127) || // CGNAT
+      (a === 192 && b === 0) || // TEST-NET
+      (a === 198 && (b === 18 || b === 19)) || // benchmarking
+      a >= 224 // multicast + reserved + broadcast
+    );
+  }
+  if (lower.includes(":") && /^[0-9a-f:]+$/.test(lower)) {
+    if (lower === "::" || lower === "::1") return true;
+    const mapped = lower.match(/^::ffff:(\d{1,3}(\.\d{1,3}){3})$/);
+    if (mapped) return isUnsafeIpLiteral(mapped[1]);
+    if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // unique local
+    if (/^fe[89ab]/.test(lower)) return true; // link-local
+  }
+  return false;
+}
+
+/**
+ * The first image URL that is safe to render in an <img>. https and
+ * syntactically valid, no embedded credentials, no localhost, no private
+ * IP-literal host. http:// is deliberately excluded on an https app (mixed
+ * content would block it in the browser and render a broken tile).
+ *
+ * This is the CLIENT half of the safety contract: live API responses are
+ * already server-validated (image-safety.ts); this guards LEGACY saved
+ * snapshots written before that validation existed.
  */
 export function firstSafeImage(images: string[] | null | undefined): string | null {
   for (const img of images ?? []) {
     if (typeof img !== "string" || img === "") continue;
     try {
       const u = new URL(img);
-      if (u.protocol === "https:") return img;
+      if (u.protocol !== "https:") continue;
+      if (u.username !== "" || u.password !== "") continue;
+      const host = u.hostname.toLowerCase();
+      if (host === "" || host === "localhost") continue;
+      if (isUnsafeIpLiteral(host)) continue;
+      return img;
     } catch {
       /* ignore */
     }
   }
   return null;
+}
+
+/**
+ * Broken-image fallback decision (pure, testable): show the photo only
+ * when a URL exists AND that exact URL has not failed to load. A failure
+ * of a PREVIOUS url (e.g. after a re-search changed the photo) does not
+ * suppress the new one. Any other state → the neutral house placeholder.
+ */
+export function shouldShowImage(image: string | null, failedSrc: string | null): boolean {
+  return image !== null && failedSrc !== image;
 }
 
 export function safeHostname(url: string): string {
@@ -128,8 +184,12 @@ export function ListingCard({
   onOpen: (listing: HousingListing) => void;
 }) {
   const { t, lang } = useI18n();
-  const [imgFailed, setImgFailed] = useState(false);
-  const image = firstSafeImage(listing.images);
+  /** The exact URL that failed to load (tracked per-src so a re-search
+   *  with a different photo is not suppressed by an old failure). */
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  // Server-validated primary photo; the images[] fallback covers legacy
+  // saved snapshots from before image_url existed.
+  const image = listing.image_url ?? firstSafeImage(listing.images);
 
   const rentMain =
     listing.rent_warm_eur != null
@@ -161,19 +221,23 @@ export function ListingCard({
       }}
       className="group flex cursor-pointer flex-col overflow-hidden rounded-3xl border border-line bg-surface shadow-[var(--shadow-card)] transition-colors hover:border-line-strong focus:outline-none focus-visible:ring-4 focus-visible:ring-accent/20"
     >
-      {/* image or neutral placeholder */}
-      <div className="relative h-40 shrink-0 bg-gradient-to-br from-surface-2 to-surface">
-        {image && !imgFailed ? (
+      {/* photo or neutral placeholder — the card's top block. Responsive
+          aspect ratio (width-driven), object-fit: cover, top corners
+          rounded via the card's overflow-hidden. A broken/failed image
+          degrades to the placeholder — never a substitute photo. */}
+      <div className="relative aspect-[16/10] w-full shrink-0 bg-gradient-to-br from-surface-2 to-surface">
+        {shouldShowImage(image, failedSrc) && image ? (
           // eslint-disable-next-line @next/next/no-img-element -- external listing image, sized via CSS
           <img
             src={image}
             alt=""
             loading="lazy"
-            onError={() => setImgFailed(true)}
-            className="h-full w-full object-cover"
+            decoding="async"
+            onError={() => setFailedSrc(image)}
+            className="absolute inset-0 h-full w-full object-cover"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-faint">
+          <div className="absolute inset-0 flex h-full w-full items-center justify-center text-faint">
             <Icon name="home" size={36} strokeWidth={1.3} />
           </div>
         )}

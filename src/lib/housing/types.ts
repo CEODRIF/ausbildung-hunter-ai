@@ -89,6 +89,17 @@ export interface HousingListing {
    */
   city_unverified?: boolean;
   /**
+   * Web-discovery only: the primary property photo (first URL of the
+   * validated `images` array). Present ONLY when a real image URL was
+   * obtained from a legitimate channel (fetched-page metadata or
+   * provider-delivered search-result metadata) AND passed server-side
+   * validation (https-only, no credentials, no private/loopback/link-local
+   * IP hosts). Absent or null → the UI renders the neutral placeholder.
+   * Never a generated or substitute image — absence is honest.
+   * Optional for snapshot compatibility (saved rows predate the field).
+   */
+  image_url?: string | null;
+  /**
    * Web-discovery only: true when `title` is the neutral derived label
    * ("Anzeige auf <hostname>") because no title was obtained from the
    * search result — NOT a provider title.
