@@ -86,7 +86,14 @@ export type RateLimitScope =
   | "community_pin"
   | "community_moderation"
   | "community_role"
-  | "community_room_settings";
+  | "community_room_settings"
+  // Housing / Wohnen MVP (per session user). The AI-backed helpers
+  // (application draft + scam summary) are the expensive ones and get a 10-min
+  // budget; plain search/save are cheap reads/writes capped per minute.
+  | "housing_search"
+  | "housing_save"
+  | "housing_application_ai"
+  | "housing_scam_ai";
 
 /**
  * Per-scope budgets. Rationale:
@@ -209,6 +216,14 @@ export const RATE_LIMITS: Record<
   community_moderation: { max: 30, windowSeconds: 60 },
   community_role: { max: 10, windowSeconds: 60 },
   community_room_settings: { max: 10, windowSeconds: 60 },
+  // Housing / Wohnen MVP: search is a cheap, local (fixture) filter — 10/min
+  // keeps interactive use smooth and caps spam. Save is a small upsert —
+  // 10/min. The two AI-backed helpers each make one paid AI call, so they share
+  // the expensive-AI budget class (5 per 10 min) like scanner_scan.
+  housing_search: { max: 10, windowSeconds: 60 },
+  housing_save: { max: 10, windowSeconds: 60 },
+  housing_application_ai: { max: 5, windowSeconds: 600 },
+  housing_scam_ai: { max: 5, windowSeconds: 600 },
 };
 
 export function rateLimitKey(scope: RateLimitScope, userId: string): string {

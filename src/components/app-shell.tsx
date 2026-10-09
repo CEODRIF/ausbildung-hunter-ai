@@ -48,6 +48,7 @@ import {
   Folder,
   Globe,
   Hash,
+  Home,
   IdCard,
   Image as ImageIcon,
   LayoutGrid,
@@ -140,6 +141,24 @@ const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    // Housing / Wohnen (MVP). Labels come from the housing.* i18n block.
+    titleKey: "housing.nav.section",
+    items: [
+      { labelKey: "housing.nav.find", href: "/wohnen", icon: "home" },
+      { labelKey: "housing.nav.wg", href: "/wohnen/wg-zimmer", icon: "users" },
+      { labelKey: "housing.nav.moebliert", href: "/wohnen/moebliert", icon: "image" },
+      { labelKey: "housing.nav.mietCheck", href: "/wohnen/miet-check", icon: "shield" },
+      { labelKey: "housing.nav.kosten", href: "/wohnen/kostenrechner", icon: "chart" },
+      { labelKey: "housing.nav.suchen", href: "/wohnen/suchen", icon: "search" },
+      {
+        labelKey: "housing.nav.gespeichert",
+        href: "/wohnen/gespeichert",
+        icon: "bookmark",
+      },
+      { labelKey: "housing.nav.tipps", href: "/wohnen/tipps", icon: "book" },
+    ],
+  },
+  {
     titleKey: "nav.tools",
     items: [
       { labelKey: "nav.emailAssistant", href: "/settings/email", icon: "mail" },
@@ -208,6 +227,7 @@ const LUCIDE: Record<IconName, LucideIcon> = {
   clock: Clock,
   logout: LogOut,
   chart: BarChart3,
+  home: Home,
   hash: Hash,
   book: BookOpen,
   idCard: IdCard,
@@ -250,6 +270,50 @@ interface PageHeading {
 }
 
 const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: PageHeading }> = [
+  {
+    match: (p) => p === "/wohnen/wg-zimmer",
+    heading: { titleKey: "housing.page.wg.title", subtitleKey: "housing.page.wg.subtitle" },
+  },
+  {
+    match: (p) => p === "/wohnen/moebliert",
+    heading: {
+      titleKey: "housing.page.moebliert.title",
+      subtitleKey: "housing.page.moebliert.subtitle",
+    },
+  },
+  {
+    match: (p) => p === "/wohnen/miet-check",
+    heading: {
+      titleKey: "housing.page.mietCheck.title",
+      subtitleKey: "housing.page.mietCheck.subtitle",
+    },
+  },
+  {
+    match: (p) => p === "/wohnen/kostenrechner",
+    heading: {
+      titleKey: "housing.page.kosten.title",
+      subtitleKey: "housing.page.kosten.subtitle",
+    },
+  },
+  {
+    match: (p) => p === "/wohnen/suchen",
+    heading: { titleKey: "housing.page.suchen.title", subtitleKey: "housing.page.suchen.subtitle" },
+  },
+  {
+    match: (p) => p === "/wohnen/gespeichert",
+    heading: {
+      titleKey: "housing.page.gespeichert.title",
+      subtitleKey: "housing.page.gespeichert.subtitle",
+    },
+  },
+  {
+    match: (p) => p === "/wohnen/tipps",
+    heading: { titleKey: "housing.page.tipps.title", subtitleKey: "housing.page.tipps.subtitle" },
+  },
+  {
+    match: (p) => p === "/wohnen",
+    heading: { titleKey: "housing.page.find.title", subtitleKey: "housing.page.find.subtitle" },
+  },
   {
     match: (p) => p === "/dashboard/templates",
     heading: { titleKey: "pages.templates.title", subtitleKey: "pages.templates.subtitle" },

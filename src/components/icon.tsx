@@ -56,6 +56,8 @@ export type IconName =
   | "clock"
   | "logout"
   | "chart"
+  // Housing / Wohnen (MVP).
+  | "home"
   // Community v2 (rooms, reactions, voice, moderation).
   | "hash"
   | "book"
@@ -277,6 +279,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   chart: <path d="M4 18V6M4 18h16M7 15l3-4 3 2 4-6" />,
+  home: (
+    <>
+      <path d="M3 9.5 12 3l9 6.5" />
+      <path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5" />
+      <path d="M9.5 21v-6h5v6" />
+    </>
+  ),
   hash: <path d="M9.5 4.5 8 19.5M16 4.5l-1.5 15M4.5 9h16M3.5 15h16" />,
   book: (
     <>
