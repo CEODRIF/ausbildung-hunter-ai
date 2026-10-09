@@ -11,6 +11,7 @@ import { ApplicationAssistant } from "./application-assistant";
 import { formatEur } from "@/lib/housing/affordability";
 import {
   DEFAULT_HOUSING_SEARCH,
+  isVerifiedListing,
   type HousingListing,
   type HousingSearchParams,
   type HousingSearchResult,
@@ -246,12 +247,19 @@ export function HousingSearch({ preset, initialQuery, showFilters = true }: Prop
           {selected ? (
             <div className="space-y-4 rounded-3xl border border-line bg-surface p-5 shadow-[var(--shadow-card)] lg:sticky lg:top-20">
               <div>
-                {selected.verified && (
+                {isVerifiedListing(selected) ? (
+                  // Green "verified" only for genuine LIVE data backed by the
+                  // provider integration — never for demo fixtures.
                   <span className="mb-2 inline-flex items-center gap-1 rounded-full bg-success-soft px-2.5 py-1 text-[11px] font-bold text-success">
                     <Icon name="check" size={12} strokeWidth={2.5} />
                     {t("housing.verified")}
                   </span>
-                )}
+                ) : selected.data_status === "demo" ? (
+                  <span className="mb-2 inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[11px] font-bold text-muted">
+                    <Icon name="image" size={12} strokeWidth={2} />
+                    {t("housing.demoSource")}
+                  </span>
+                ) : null}
                 <h3 className="text-lg font-bold text-ink">{selected.title}</h3>
                 <p className="mt-1 flex items-center gap-1 text-sm text-muted">
                   <Icon name="home" size={13} strokeWidth={2} />
@@ -374,10 +382,12 @@ export function HousingSearch({ preset, initialQuery, showFilters = true }: Prop
                 </div>
               </div>
 
-              <p className="flex items-center gap-1.5 text-[11px] text-faint">
-                <Icon name="alert" size={12} strokeWidth={2} />
-                {t("housing.demoBanner")}
-              </p>
+              {selected.data_status === "demo" && (
+                <p className="flex items-center gap-1.5 text-[11px] text-faint">
+                  <Icon name="alert" size={12} strokeWidth={2} />
+                  {t("housing.demoBanner")}
+                </p>
+              )}
             </div>
           ) : (
             <div className="flex h-full min-h-48 flex-col items-center justify-center rounded-3xl border border-dashed border-line-strong bg-surface/60 p-6 text-center">
