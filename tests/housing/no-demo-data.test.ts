@@ -19,10 +19,11 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const DEMO_COMPONENT_FILES = [
-  "src/components/housing/demo-banner.tsx",
-  "src/components/housing/listing-card.tsx",
-];
+// NOTE: `src/components/housing/listing-card.tsx` was the OLD demo card
+// (deleted 2026-10-10) and is now the name of the LIVE professional
+// web-search card — it is guarded by the demo-marker checks below instead
+// of by file existence.
+const DEMO_COMPONENT_FILES = ["src/components/housing/demo-banner.tsx"];
 const DEMO_API_FILES = ["src/app/api/housing/search/route.ts"];
 const FIXTURE_DIRS = ["src/lib/housing/fixtures"];
 const FIXTURE_FILES = ["src/lib/housing/fixtures/demo-listings.json"];
@@ -80,7 +81,6 @@ describe("no demo references remain in the housing UI sources", () => {
     ["demo search API endpoint", /api\/housing\/search/],
     ["demo fixture path", /demo-listings/],
     ["demo-stamped listing field in UI", /is_demo/],
-    ["demo listing card", /ListingCard|listing-card/],
   ];
 
   it.each(patterns)("%s is not referenced", (_label, pattern) => {
@@ -100,6 +100,23 @@ describe("the web-search pipeline has no demo/sample fallback", () => {
     );
     expect(offenders.map((p) => p.slice(repoRoot.length + 1))).toEqual([]);
   });
+});
+
+describe("the live listing card components carry no demo data", () => {
+  // listing-card.tsx / listing-detail.tsx render ONLY server-provided
+  // web-search data. Guard them against demo markers specifically (the
+  // filenames are legitimate for the live components now).
+  const CARD_FILES = [
+    "src/components/housing/listing-card.tsx",
+    "src/components/housing/listing-detail.tsx",
+  ];
+  for (const rel of CARD_FILES) {
+    it(`${rel} contains no demo fixtures/markers`, () => {
+      const src = readFileSync(join(repoRoot, rel), "utf8");
+      expect(src).not.toMatch(/is_demo|demo-listings|demoListings|DEMO_LABEL|Beispiel|sampleData/i);
+      expect(src).not.toMatch(/fixtures/i);
+    });
+  }
 });
 
 describe("i18n dictionaries no longer contain demo keys", () => {

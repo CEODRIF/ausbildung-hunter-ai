@@ -69,6 +69,18 @@ export interface HousingListing {
    */
   source_type?: "web_search" | "page_fetch";
   /**
+   * Web-discovery only: floor as stated by the source (e.g. "1. OG"),
+   * null when unknown. Optional so saved snapshots written before this
+   * field exists keep validating (stored as JSONB, no schema change).
+   */
+  floor?: string | null;
+  /**
+   * Web-discovery only: portal name as reported by the search result
+   * (e.g. "ImmoScout24"); null → the UI derives the label from the URL
+   * hostname. Optional for the same snapshot-compatibility reason.
+   */
+  source_label?: string | null;
+  /**
    * How far WE verified this result — independent of the provider's own
    * `verified` badge:
    *  - `verified`           — fields parsed from the fetched page (JSON-LD or

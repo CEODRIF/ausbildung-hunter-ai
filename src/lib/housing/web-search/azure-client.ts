@@ -202,7 +202,11 @@ export function parseResponsesPayload(payload: {
   const seenCitation = new Set<string>();
   const seenSource = new Set<string>();
   let webSearchCalls = 0;
-  let text = typeof payload.output_text === "string" ? payload.output_text : "";
+  // TEXT IS COLLECTED, THEN RESOLVED (below): the documented `output_text`
+  // field ALREADY is the concatenation of all message output-text items —
+  // using it AND appending the message blocks would double the text (harmless
+  // for prose, but it corrupts the structured JSON answer: `[...][...]`).
+  const messageTexts: string[] = [];
 
   const numRequests =
     payload.tool_usage &&
@@ -256,7 +260,7 @@ export function parseResponsesPayload(payload: {
       for (const block of rec.content) {
         if (typeof block !== "object" || block === null) continue;
         const b = block as Record<string, unknown>;
-        if (typeof b.text === "string") text += b.text;
+        if (typeof b.text === "string") messageTexts.push(b.text);
         if (Array.isArray(b.annotations)) {
           for (const ann of b.annotations) {
             if (!ann || typeof ann !== "object" || ann.type !== "url_citation") continue;
@@ -277,6 +281,14 @@ export function parseResponsesPayload(payload: {
       }
     }
   }
+  // Resolve the answer text: prefer the documented `output_text` (it is the
+  // canonical concatenation of all message output-text items); fall back to
+  // the collected message blocks when the field is absent/empty.
+  const text =
+    typeof payload.output_text === "string" && payload.output_text !== ""
+      ? payload.output_text
+      : messageTexts.join("");
+
   return {
     text,
     citations,

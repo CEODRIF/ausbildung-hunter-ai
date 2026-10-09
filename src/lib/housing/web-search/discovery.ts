@@ -15,9 +15,11 @@ import {
   domainForHost,
   LIMITS,
   resolveSearchProvider,
+  type AllowedDomain,
   type ResolvedSearchProvider,
 } from "./config";
 import { buildHousingQueries } from "./queries";
+import { parseModelListings, type ModelListingItem } from "./parse-model-listings";
 import { guardedFetch, UnsafeUrlError } from "./url-guard";
 import { parseListingPage } from "./parse-listing";
 import { robotsVerdictForUrl } from "./robots";
@@ -25,16 +27,33 @@ import { robotsVerdictForUrl } from "./robots";
 /**
  * Housing web-discovery pipeline (general + targeted modes).
  *
- * Bounded by design (cost + abuse):
- *   general  — 1 search call (DE); 1 retry (EN) only when <3 candidates
+ * Retrieval (cost-aware multi-query):
+ *   general  — 1 primary German search call; a SECOND complementary German
+ *              call only when the first yields fewer than
+ *              LIMITS.webModeSecondCallThreshold usable candidates. Both
+ *              result sets are merged and deduped, so a rich first call is
+ *              not chased with a redundant paid call.
  *   targeted — exactly 1 domain-restricted search call
- *   fetches  — ≤ maxPagesToFetch pages, fetchable-policy domains only,
- *              robots-checked first (fail-closed), SSRF-guarded
+ *   fetches  — ≤ maxPagesToFetch pages, allowlisted FETCHABLE-policy
+ *              domains only (both modes), robots-checked first (fail-
+ *              closed), SSRF-guarded. Unreviewed domains are never fetched.
+ *
+ * Whole-web mode is NOT display-filtered to the reviewed allowlist
+ * (2026-10-10 audit: that filter was the main cause of "Berlin returns
+ * only seven" — Bing's own results outside the 7 reviewed portals were
+ * silently dropped). The allowlist still decides FETCHABILITY: only
+ * reviewed, explicitly fetchable open-data domains may be fetched;
+ * everything else is link-only (search snippets / model-stated fields).
+ * Targeted mode remains bound to the user's selected domains.
  *
  * Honesty:
+ *   - Every displayed listing URL must be a URL the search tool actually
+ *     returned (citations ∪ action.sources). The model's JSON answer is
+ *     cross-validated against that set — invented URLs are dropped and
+ *     counted (fabricatedRejected).
  *   - verification_status: "verified" ONLY for fields parsed from a fetched
- *     page (JSON-LD / explicit text). Search snippets / model output →
- *     "partially_verified" at best. Discovery only → "unverified".
+ *     page (JSON-LD / explicit text). Model-stated fields with a genuine
+ *     citation → "partially_verified". Discovery only → "unverified".
  *   - fields we cannot verify stay null — never invented.
  *   - expiry is discarded only when RELIABLY established (a fetched page
  *     states an availability date already in the past).
@@ -78,6 +97,30 @@ export type WebSearchStatus =
   | "provider_error"
   | "timeout";
 
+/**
+ * Result funnel — safe, count-only diagnostics (never URLs or response
+ * text) so "search ran but few/no results displayed" is explainable from
+ * the API response alone.
+ */
+export interface SearchFunnel {
+  /** Distinct real URLs the search tool returned (citations ∪ sources). */
+  candidatesRetrieved: number;
+  /** URLs that were not valid http(s). */
+  invalidUrls: number;
+  /** Real URLs already seen (dedup across queries/calls/portals). */
+  duplicatesRemoved: number;
+  /** (targeted mode) real URLs outside the user's selected domains. */
+  offAllowlist: number;
+  /** Real URLs that are not individual listing pages (home/search/legal). */
+  notListingUrl: number;
+  /** Model JSON items parsed (valid URLs, sane field values). */
+  jsonItems: number;
+  /** Model JSON items whose URL was NOT returned by the search tool. */
+  fabricatedRejected: number;
+  /** Listings finally returned to the client. */
+  displayed: number;
+}
+
 export interface HousingWebSearchOutcome {
   status: WebSearchStatus;
   message: string | null;
@@ -95,10 +138,22 @@ export interface HousingWebSearchOutcome {
     /** Billable Bing transactions (azure only, when reported). */
     bingRequests: number | null;
   };
+  funnel: SearchFunnel;
   warnings: string[];
   cached: boolean;
   fetchedAt: string;
 }
+
+export const ZERO_FUNNEL: SearchFunnel = {
+  candidatesRetrieved: 0,
+  invalidUrls: 0,
+  duplicatesRemoved: 0,
+  offAllowlist: 0,
+  notListingUrl: 0,
+  jsonItems: 0,
+  fabricatedRejected: 0,
+  displayed: 0,
+};
 
 // --- result cache (in-memory, TTL — work-product scope only) ----------------
 
@@ -125,13 +180,33 @@ function cacheKey(input: HousingWebSearchInput): string {
 interface Candidate {
   url: string;
   title: string;
-  snippet: string;
-  /** Domain entry the URL matched. */
-  domain: (typeof ALLOWED_DOMAINS)[number];
+  /** Reviewed allowlist entry for the host, or null (unreviewed — never
+   *  fetched; displayed with the bare hostname as source). */
+  domain: AllowedDomain | null;
+  /** Model-stated fields, cross-validated against the real result set. */
+  json: ModelListingItem | null;
 }
 
+/** Legal / auth / info pages that can never be an individual listing. */
 const NON_LISTING_PATH_RE =
   /^\/(impressum|datenschutz|agb|kontakt|login|registrieren|anmelden|hilfe|faq|jobs|karriere|about|en\/?|de\/?|sitemap\.xml|robots\.txt|api\/)(?!.*\d{6})/i;
+
+/**
+ * Portal SEARCH / overview / category pages — these must NOT be presented
+ * as individual rental listings (task rule: do not mislabel a search page).
+ */
+const SEARCH_RESULTS_PATH_RE =
+  /\/(suche|suchergebnisse|search|browse|kategorie|kategorien|category|categories|stadt|staedte|region|regionen|ort|orte|preiskarte|preise-check|markt|s-wohnung|s-hauser|s-zimmer|s-angebot)([/?#-]|$)/i;
+
+/**
+ * Domain-AGNOSTIC individual-listing indicators. German portals put a 6+
+ * digit id in the path (the dominant pattern: /expose/123456789,
+ * wg-gesucht slugs, kleinanzeigen "c20:123456789"); slugged portals use
+ * listing-like path segments or a numeric id query parameter.
+ */
+const LISTING_SEGMENT_RE =
+  /\/(expose|exposes|angebot|angebote|detail|details|immobilie|obj|objekt|objekte|listing|listings|property|properties|flat|flats|apartment|apartments|room|rooms|ad|ads|wohnung|zimmer|wg)([/?#]|$)/i;
+const LISTING_QUERY_RE = /[?&](id|expose|objekt|objnr|angebot|listing|property|flat|room|ad)=\d{4,}/i;
 
 function normalizeUrl(raw: string): string | null {
   try {
@@ -149,45 +224,73 @@ function normalizeUrl(raw: string): string | null {
   }
 }
 
-function looksLikeListingUrl(url: URL, domain: string): boolean {
+function looksLikeListingUrl(url: URL, domain: AllowedDomain | null): boolean {
   const path = url.pathname;
   if (NON_LISTING_PATH_RE.test(path)) return false;
+  if (SEARCH_RESULTS_PATH_RE.test(path)) return false;
   // Open-data dataset pages are "listings" for our purposes (machine-readable
   // housing data).
-  if (domain === "open.nrw" || domain === "opendata.de") {
-    return /\/(dataset|data|api)\//i.test(path);
+  if (domain === null || (domain.domain !== "open.nrw" && domain.domain !== "opendata.de")) {
+    // Generic individual-listing heuristics (any domain).
+    return (
+      /\d{6,}/.test(path) || LISTING_SEGMENT_RE.test(path) || LISTING_QUERY_RE.test(url.search)
+    );
   }
-  // Portal listing pages carry a numeric id in the path (6+ digits) or a
-  // listing-like path segment.
-  return (
-    /\d{6,}/.test(path) ||
-    /\/(expose|angebote|detail|immobilie|kauf|miet|apartments|rooms|ad)[/-]/i.test(path)
-  );
+  return /\/(dataset|data|api)\//i.test(path);
 }
 
-function collectCandidates(
-  result: WebDiscoveryResult,
-  input: HousingWebSearchInput,
-  warnings: string[],
-): Candidate[] {
-  const selectedDomains =
-    input.mode === "targeted" && input.domains && input.domains.length > 0
-      ? input.domains
-      : ALLOWED_DOMAINS.map((d) => d.domain);
-  const selected = new Set(selectedDomains);
+interface CollectResult {
+  candidates: Candidate[];
+  /** Distinct normalized real URLs (before the listing heuristic). */
+  candidatesRetrieved: number;
+  invalidUrls: number;
+  duplicatesRemoved: number;
+  offAllowlist: number;
+  notListingUrl: number;
+}
 
-  const out: Candidate[] = [];
-  const seen = new Set<string>();
-  // Funnel counters — turned into warnings when the funnel empties the
-  // results, so "search ran but nothing displayed" is diagnosable from the
-  // API response alone (counts only, never URLs).
-  let droppedOffAllowlist = 0;
-  let droppedNotListingUrl = 0;
+/**
+ * Turn raw citations + sources into validated candidates.
+ *
+ * - targeted mode: the user's selected domains are BINDING (off-allowlist
+ *   URLs are dropped and counted).
+ * - web mode: no display filter — any valid individual-listing URL is
+ *   accepted (the allowlist only governs fetchability, via `domain`).
+ */
+function collectCandidates(
+  citations: SearchCitation[],
+  sources: string[],
+  input: HousingWebSearchInput,
+): CollectResult {
+  const inTargeted = input.mode === "targeted";
+  const selectedDomains =
+    inTargeted && input.domains && input.domains.length > 0
+      ? new Set(input.domains)
+      : inTargeted
+        ? new Set(ALLOWED_DOMAINS.map((d) => d.domain))
+        : null; // web mode: not binding
+
+  const titleByUrl = new Map<string, string>();
+  for (const c of citations) {
+    const n = normalizeUrl(c.url);
+    if (n && c.title && !titleByUrl.has(n)) titleByUrl.set(n, c.title);
+  }
+
+  const out = new Map<string, Candidate>();
+  const order: string[] = [];
   let invalidUrls = 0;
-  const push = (rawUrl: string, title: string, snippet: string) => {
+  let duplicatesRemoved = 0;
+  let offAllowlist = 0;
+  let notListingUrl = 0;
+
+  const push = (rawUrl: string) => {
     const normalized = normalizeUrl(rawUrl);
-    if (!normalized || seen.has(normalized)) {
-      if (!normalized) invalidUrls += 1;
+    if (!normalized) {
+      invalidUrls += 1;
+      return;
+    }
+    if (out.has(normalized)) {
+      duplicatesRemoved += 1;
       return;
     }
     let u: URL;
@@ -198,38 +301,56 @@ function collectCandidates(
       return;
     }
     const entry = domainForHost(u.hostname);
-    if (!entry || !selected.has(entry.domain)) {
-      droppedOffAllowlist += 1; // allowlist is binding
+    if (selectedDomains !== null) {
+      // targeted mode: the user's selection is binding.
+      if (!entry || !selectedDomains.has(entry.domain)) {
+        offAllowlist += 1;
+        return;
+      }
+    }
+    if (!looksLikeListingUrl(u, entry)) {
+      notListingUrl += 1;
       return;
     }
-    if (!looksLikeListingUrl(u, entry.domain)) {
-      droppedNotListingUrl += 1;
-      return;
-    }
-    seen.add(normalized);
-    out.push({ url: normalized, title, snippet, domain: entry });
+    out.set(normalized, {
+      url: normalized,
+      title: titleByUrl.get(normalized) ?? "",
+      domain: entry,
+      json: null,
+    });
+    order.push(normalized);
   };
 
-  for (const c of result.citations) push(c.url, c.title, "");
-  for (const s of result.sources) push(s, "", "");
-  if (out.length === 0) {
-    if (result.citations.length === 0 && result.sources.length === 0 && result.webSearchCalls === 0) {
-      // The model answered WITHOUT invoking the web_search tool — the single
-      // most likely cause of a silent empty result (official docs: prompt
-      // more explicitly; we do, but the model can still decline).
-      warnings.push("azure_no_web_search_call");
-    }
-    warnings.push("no_candidates_on_allowed_domains");
-    if (invalidUrls > 0) warnings.push(`candidates_dropped_invalid_url=${invalidUrls}`);
-    if (droppedOffAllowlist > 0) warnings.push(`candidates_dropped_off_allowlist=${droppedOffAllowlist}`);
-    if (droppedNotListingUrl > 0) warnings.push(`candidates_dropped_not_listing_url=${droppedNotListingUrl}`);
-  }
-  return out;
+  // Citations first (they carry titles), then the tool's source list.
+  for (const c of citations) push(c.url);
+  for (const s of sources) push(s);
+
+  return {
+    candidates: order.map((k) => out.get(k)!),
+    candidatesRetrieved: countDistinctRealUrls(citations, sources),
+    invalidUrls,
+    duplicatesRemoved,
+    offAllowlist,
+    notListingUrl,
+  };
 }
 
-function snippetExtractsRent(snippet: string): { cold: number | null; warm: number | null } {
-  const cold = snippet.match(/Kaltmiete\s*(?:von)?\s*[:\-–]?\s*(\d{1,5}(?:[ .,]\d{1,3}){0,3})\s*(?:€|EUR|Euro)/i);
-  const warm = snippet.match(/Warmmiete\s*(?:von)?\s*[:\-–]?\s*(\d{1,5}(?:[ .,]\d{1,3}){0,3})\s*(?:€|EUR|Euro)/i);
+function countDistinctRealUrls(citations: SearchCitation[], sources: string[]): number {
+  const seen = new Set<string>();
+  for (const c of citations) {
+    const n = normalizeUrl(c.url);
+    if (n) seen.add(n);
+  }
+  for (const s of sources) {
+    const n = normalizeUrl(s);
+    if (n) seen.add(n);
+  }
+  return seen.size;
+}
+
+function titleExtractsRent(title: string): { cold: number | null; warm: number | null } {
+  const cold = title.match(/Kalt(?:miete)?\s*(?:von)?\s*[:\-–]?\s*(\d{1,5}(?:[ .,]\d{1,3}){0,3})\s*(?:€|EUR|Euro)/i);
+  const warm = title.match(/Warm(?:miete)?\s*(?:von)?\s*[:\-–]?\s*(\d{1,5}(?:[ .,]\d{1,3}){0,3})\s*(?:€|EUR|Euro)/i);
   const parse = (raw: string | undefined): number | null => {
     if (!raw) return null;
     const cleaned = raw.replace(/\s/g, "");
@@ -269,6 +390,7 @@ export async function runHousingWebSearch(
   const now = deps.now ?? Date.now;
   const started = now();
   const warnings: string[] = [];
+  const funnel: SearchFunnel = { ...ZERO_FUNNEL };
 
   const fail = (
     status: WebSearchStatus,
@@ -284,6 +406,7 @@ export async function runHousingWebSearch(
     citations: extra.citations ?? [],
     queries: extra.queries ?? [],
     stats: { searchCalls: 0, pagesFetched: 0, bingRequests: null },
+    funnel: { ...funnel },
     warnings,
     cached: false,
     fetchedAt: new Date(started).toISOString(),
@@ -295,32 +418,32 @@ export async function runHousingWebSearch(
     return fail("not_configured", "no_search_provider", null);
   }
 
-  // 2) Result cache (same user search within TTL → no paid call).
+  // 2) Result cache (same search within TTL → no paid call).
   const key = cacheKey(input);
   const cachedEntry = resultCache.get(key);
   if (cachedEntry && now() - cachedEntry.at <= LIMITS.cacheTtlMs) {
     return { ...cachedEntry.outcome, cached: true };
   }
 
-  // 3) Build queries.
+  // 3) Build queries (two complementary German queries for general mode).
   const built = buildHousingQueries(input.params);
   const location = input.params.city.trim() || input.params.postal_code.trim();
   const userLocation = location
     ? { country: "DE", city: input.params.city.trim() || undefined }
     : undefined;
 
-  // 5) Run bounded search calls.
-  const selectedDomains =
-    input.mode === "targeted" && input.domains && input.domains.length > 0
-      ? input.domains
-      : ALLOWED_DOMAINS.map((d) => d.domain);
-
+  // 4) Run bounded search calls. Each call gets a timeout that respects the
+  //    whole-request budget, so two 20 s calls can never run past it.
   const searchCalls: string[] = [];
   let bingRequests: number | null = null;
   let webSearchCalls = 0;
   let citations: SearchCitation[] = [];
   let sources: string[] = [];
-  let text = "";
+  let jsonItems: ModelListingItem[] = [];
+
+  const requestDeadline = started + LIMITS.requestTimeoutMs;
+  const timeoutForCall = (): number =>
+    Math.max(8_000, Math.min(LIMITS.searchTimeoutMs, requestDeadline - now()));
 
   // Azure-only search call: the resolver (./config) guarantees `provider`
   // is a fully validated `azure` provider or null (handled above). There is
@@ -338,6 +461,7 @@ export async function runHousingWebSearch(
       allowedDomains: allowed,
       userLocation,
       fetchImpl: deps.fetchImpl,
+      timeoutMs: timeoutForCall(),
     });
     bingRequests =
       bingRequests === null ? res.numRequests : bingRequests + (res.numRequests ?? 0);
@@ -345,27 +469,39 @@ export async function runHousingWebSearch(
     return res;
   };
 
+  const mergeCall = (res: WebDiscoveryResult): void => {
+    citations = [...citations, ...res.citations];
+    sources = [...sources, ...res.sources];
+    // Structured model answer (JSON per the query contract). Parsed per call
+    // — concatenating two call texts would break array extraction.
+    const parsed = parseModelListings(res.text);
+    if (parsed.truncated) warnings.push("json_truncated_salvaged");
+    jsonItems = [...jsonItems, ...parsed.items];
+  };
+
+  const selectedDomains =
+    input.mode === "targeted" && input.domains && input.domains.length > 0
+      ? input.domains
+      : ALLOWED_DOMAINS.map((d) => d.domain);
+
   try {
     if (input.mode === "targeted") {
-      const res = await runOneCall(built.targetedQuery, selectedDomains);
-      citations = res.citations;
-      sources = res.sources;
-      text = res.text;
+      mergeCall(await runOneCall(built.targetedQuery, selectedDomains));
     } else {
-      const first = await runOneCall(built.queries[0], undefined);
-      citations = first.citations;
-      sources = first.sources;
-      text = first.text;
-      // Count-only probe (empty warnings sink): funnel warnings are reported
-      // once, from the FINAL collectCandidates below, so a successful retry
-      // never leaves a stale "no web search call" warning behind.
-      const initial = collectCandidates({ ...first, citations, sources }, input, []);
-      if (initial.length < 3 && built.queries.length > 1) {
-        // Retry ONCE in English, only when the German query under-delivered.
-        const second = await runOneCall(built.queries[1], undefined);
-        citations = [...citations, ...second.citations];
-        sources = [...sources, ...second.sources];
-        text = text || second.text;
+      // Cost-aware multi-query: primary call first; the complementary
+      // second call only when the first under-delivered.
+      mergeCall(await runOneCall(built.queries[0], undefined));
+      const probe = collectCandidates(citations, sources, input).candidates.length;
+      if (probe < LIMITS.webModeSecondCallThreshold) {
+        try {
+          mergeCall(await runOneCall(built.queries[1], undefined));
+        } catch (secondError) {
+          // The FIRST call succeeded — keep its results and report the
+          // partial run honestly instead of failing the whole search.
+          const failed =
+            secondError instanceof WebSearchApiError ? secondError.failure : "provider_error";
+          warnings.push(`second_call_failed:${failed}`);
+        }
       }
     }
   } catch (error) {
@@ -394,17 +530,65 @@ export async function runHousingWebSearch(
     });
   }
 
-  // 6) Collect + dedupe candidates (allowlist binding).
-  const candidates = collectCandidates(
-    { text, citations, sources, queries: searchCalls, numRequests: null, webSearchCalls },
-    input,
-    warnings,
-  ).slice(0, LIMITS.maxResults);
+  // 5) Collect + dedupe candidates.
+  const collected = collectCandidates(citations, sources, input);
+  funnel.candidatesRetrieved = collected.candidatesRetrieved;
+  funnel.invalidUrls = collected.invalidUrls;
+  funnel.duplicatesRemoved = collected.duplicatesRemoved;
+  funnel.offAllowlist = collected.offAllowlist;
+  funnel.notListingUrl = collected.notListingUrl;
+  funnel.jsonItems = jsonItems.length;
 
-  // 7) Targeted mode: fetch + verify on fetchable-policy domains only.
+  // 6) Cross-validate the model's JSON items against the REAL result set
+  //    (citations ∪ sources): the fabrication guard. A JSON url that the
+  //    search tool never returned is dropped and counted.
+  const realUrls = new Set<string>();
+  for (const c of citations) {
+    const n = normalizeUrl(c.url);
+    if (n) realUrls.add(n);
+  }
+  for (const s of sources) {
+    const n = normalizeUrl(s);
+    if (n) realUrls.add(n);
+  }
+  const candidatesByNormalizedUrl = new Map<string, Candidate>();
+  for (const c of collected.candidates) candidatesByNormalizedUrl.set(c.url, c);
+  for (const item of jsonItems) {
+    const n = normalizeUrl(item.url);
+    if (!n || !realUrls.has(n)) {
+      funnel.fabricatedRejected += 1;
+      continue;
+    }
+    const target = candidatesByNormalizedUrl.get(n);
+    if (!target) continue; // not an individual listing page — field data unusable
+    if (target.json === null) target.json = item;
+  }
+
+  if (collected.candidates.length === 0) {
+    if (citations.length === 0 && sources.length === 0 && webSearchCalls === 0) {
+      // The model answered WITHOUT invoking the web_search tool — the single
+      // most likely cause of a silent empty result (official docs: prompt
+      // more explicitly; we do, but the model can still decline).
+      warnings.push("azure_no_web_search_call");
+    }
+    warnings.push(input.mode === "targeted" ? "no_candidates_on_allowed_domains" : "no_candidates_found");
+  }
+  if (funnel.invalidUrls > 0) warnings.push(`candidates_dropped_invalid_url=${funnel.invalidUrls}`);
+  if (funnel.offAllowlist > 0) warnings.push(`candidates_dropped_off_allowlist=${funnel.offAllowlist}`);
+  if (funnel.notListingUrl > 0) warnings.push(`candidates_dropped_not_listing_url=${funnel.notListingUrl}`);
+  if (funnel.fabricatedRejected > 0) warnings.push(`fabricated_urls_rejected=${funnel.fabricatedRejected}`);
+  if (jsonItems.length > 0 && funnel.fabricatedRejected === jsonItems.length) {
+    // The model answered with JSON but NONE of the URLs are real — treat the
+    // whole answer as unusable, keep the citation-based candidates.
+    for (const c of candidatesByNormalizedUrl.values()) c.json = null;
+  }
+
+  const candidates = collected.candidates.slice(0, LIMITS.maxResults);
+
+  // 7) Enrichment: fetch + verify on allowlisted FETCHABLE-policy domains
+  //    only (both modes). Robots-checked (fail-closed), SSRF-guarded.
   const listings: HousingListing[] = [];
   let pagesFetched = 0;
-  const requestDeadline = started + LIMITS.requestTimeoutMs;
 
   for (const candidate of candidates) {
     if (now() > requestDeadline) {
@@ -413,10 +597,11 @@ export async function runHousingWebSearch(
     }
     let verification: HousingListing["verification_status"] = "unverified";
     let parsed: ReturnType<typeof parseListingPage> | null = null;
-    let snippetRentCold: number | null = null;
-    let snippetRentWarm: number | null = null;
+    let titleRentCold: number | null = null;
+    let titleRentWarm: number | null = null;
 
-    if (input.mode === "targeted" && candidate.domain.policy === "fetchable") {
+    const fetchable = candidate.domain?.policy === "fetchable";
+    if (fetchable && candidate.domain) {
       if (pagesFetched >= LIMITS.maxPagesToFetch) {
         warnings.push("fetch_budget_exhausted");
       } else {
@@ -440,7 +625,7 @@ export async function runHousingWebSearch(
             verification = strong ? "verified" : "partially_verified";
           } catch (error) {
             // Fetch problems NEVER block the rest of the results: the
-            // candidate stays, simply unverified (or partially, from snippet).
+            // candidate stays, simply unverified (or partially, from JSON).
             if (error instanceof UnsafeUrlError) {
               warnings.push(`unsafe_url_skipped:${candidate.domain.domain}`);
             } else {
@@ -455,14 +640,32 @@ export async function runHousingWebSearch(
           );
         }
       }
-    } else if (input.mode === "targeted" && candidate.domain.policy === "search_only") {
-      // Restricted site: link only — never fetched (ToS). A snippet that
-      // explicitly states a rent upgrades confidence — nothing else does.
-      const snippet = candidate.snippet;
-      const rents = snippetExtractsRent(snippet);
-      if (rents.cold != null || rents.warm != null) verification = "partially_verified";
-      snippetRentCold = rents.cold;
-      snippetRentWarm = rents.warm;
+    }
+
+    // Model-stated fields (with a genuine citation) or title-level facts
+    // upgrade to "partially_verified" — never "verified".
+    const json = candidate.json;
+    const hasJsonFacts =
+      json !== null &&
+      (json.title !== null ||
+        json.city !== null ||
+        json.rent_cold_eur !== null ||
+        json.rent_warm_eur !== null ||
+        json.additional_costs_eur !== null ||
+        json.rooms !== null ||
+        json.living_area_sqm !== null ||
+        json.floor !== null ||
+        json.available_from !== null ||
+        json.furnished !== null);
+    if (verification === "unverified" && hasJsonFacts) verification = "partially_verified";
+
+    if (parsed == null && candidate.title) {
+      const t = titleExtractsRent(candidate.title);
+      titleRentCold = t.cold;
+      titleRentWarm = t.warm;
+      if (verification === "unverified" && (t.cold != null || t.warm != null)) {
+        verification = "partially_verified";
+      }
     }
 
     // 8) Expiry — discard ONLY when reliably established (fetched page
@@ -472,25 +675,26 @@ export async function runHousingWebSearch(
       continue;
     }
 
-    // 9) Normalize to HousingListing (unknown fields stay null).
+    // 9) Normalize to HousingListing (unknown fields stay null — never
+    //    invented). Precedence: fetched page > model JSON (cited) > title.
     const listing: HousingListing = {
       provider: "web-search",
       source_id: stableSourceId(candidate.url),
-      title: candidate.title || parsed?.title || "Titel unbekannt",
+      title: candidate.title || json?.title || "Titel unbekannt",
       listing_url: candidate.url,
-      city: input.params.city.trim() || parsed?.city || "",
+      city: input.params.city.trim() || parsed?.city || json?.city || "",
       postal_code: input.params.postal_code.trim() || parsed?.postalCode || null,
       address: null,
       latitude: null,
       longitude: null,
-      rent_cold_eur: parsed?.rentColdEur ?? snippetRentCold ?? null,
-      additional_costs_eur: null,
-      rent_warm_eur: parsed?.rentWarmEur ?? snippetRentWarm ?? null,
+      rent_cold_eur: parsed?.rentColdEur ?? json?.rent_cold_eur ?? titleRentCold ?? null,
+      additional_costs_eur: json?.additional_costs_eur ?? null,
+      rent_warm_eur: parsed?.rentWarmEur ?? json?.rent_warm_eur ?? titleRentWarm ?? null,
       deposit_eur: null,
-      rooms: parsed?.rooms ?? null,
-      living_area_sqm: parsed?.livingAreaSqm ?? null,
-      available_from: parsed?.availableFrom ?? null,
-      furnished: false,
+      rooms: parsed?.rooms ?? json?.rooms ?? null,
+      living_area_sqm: parsed?.livingAreaSqm ?? json?.living_area_sqm ?? null,
+      available_from: parsed?.availableFrom ?? json?.available_from ?? null,
+      furnished: json?.furnished ?? false,
       balcony: false,
       pets_allowed: null,
       wg_suitable: false, // unknown from search — never claimed
@@ -506,9 +710,13 @@ export async function runHousingWebSearch(
       listing_active: null,
       source_type: parsed ? "page_fetch" : "web_search",
       verification_status: verification,
+      floor: json?.floor ?? null,
+      source_label: json?.source ?? null,
     };
     listings.push(listing);
   }
+
+  funnel.displayed = listings.length;
 
   const outcome: HousingWebSearchOutcome = {
     status: "ok",
@@ -523,6 +731,7 @@ export async function runHousingWebSearch(
       pagesFetched,
       bingRequests,
     },
+    funnel: { ...funnel },
     warnings: [...new Set(warnings)],
     cached: false,
     fetchedAt: new Date(now()).toISOString(),

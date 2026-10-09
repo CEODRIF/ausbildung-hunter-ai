@@ -12,6 +12,7 @@ import {
 import { allowedDomainIds } from "@/lib/housing/web-search/config";
 import {
   runHousingWebSearch,
+  ZERO_FUNNEL,
   type HousingWebSearchOutcome,
 } from "@/lib/housing/web-search/discovery";
 import {
@@ -105,6 +106,7 @@ function emptyOutcome(
     citations: [],
     queries: [],
     stats: { searchCalls: 0, pagesFetched: 0, bingRequests: null },
+    funnel: { ...ZERO_FUNNEL },
     warnings: [],
     cached: false,
     fetchedAt: new Date().toISOString(),
@@ -223,9 +225,9 @@ export async function POST(request: Request) {
     }
     // Run-level diagnostics (counts + warning codes + run_id only — no URLs,
     // no response text, no keys). `status=ok listings=0` is the signature of
-    // a search that ran but displayed nothing; the warnings say why.
+    // a search that ran but displayed nothing; the warnings + funnel say why.
     console.info(
-      `[housing-web-search] run finished run_id=${runId} status=${outcome.status} provider=${outcome.provider ?? "n/a"} bing_requests=${outcome.stats.bingRequests ?? "n/a"} listings=${outcome.listings.length} warnings=[${outcome.warnings.slice(0, 6).join(",")}]`,
+      `[housing-web-search] run finished run_id=${runId} status=${outcome.status} provider=${outcome.provider ?? "n/a"} bing_requests=${outcome.stats.bingRequests ?? "n/a"} funnel=retrieved:${outcome.funnel.candidatesRetrieved} dup:${outcome.funnel.duplicatesRemoved} off_allowlist:${outcome.funnel.offAllowlist} not_listing:${outcome.funnel.notListingUrl} json:${outcome.funnel.jsonItems} fabricated:${outcome.funnel.fabricatedRejected} displayed:${outcome.funnel.displayed} listings=${outcome.listings.length} warnings=[${outcome.warnings.slice(0, 6).join(",")}]`,
     );
     // Settle the reserved slot: refund when NO paid search ran (cache hit or
     // non-ok status), otherwise mark the run succeeded (audit ledger).

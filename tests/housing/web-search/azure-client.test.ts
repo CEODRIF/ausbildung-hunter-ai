@@ -212,7 +212,9 @@ describe("azureWebSearch", () => {
     expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.tool_choice).toBe("auto");
     expect(body.include).toEqual(["web_search_call.action.sources"]);
-    expect(body.max_output_tokens).toBe(1500); // reasoning model: reasoning + cited answer share the budget
+    // Reasoning model: reasoning + JSON listing answer share the budget;
+    // 4000 fits ~25-30 compact listings (see config.LIMITS docs).
+    expect(body.max_output_tokens).toBe(4000);
     const tool = body.tools[0];
     expect(tool.type).toBe("web_search");
     expect(tool.filters).toEqual({ allowed_domains: ["immobilienscout24.de", "open.nrw"] });

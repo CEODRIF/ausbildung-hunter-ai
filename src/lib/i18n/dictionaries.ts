@@ -2191,6 +2191,7 @@ const de = {
     calcAssumptions:
       "Annahmen: Warmmiete = Kaltmiete + Nebenkosten (inkl. Heizung, ggf. Strom). Kaution = Monate × Warmmiete, einmalig zu Beginn. Faustregel: max. 30 % der Warmmiete am Nettoeinkommen.",
     rentCold: "kalt",
+    perMonth: "pro Monat",
     webSearch: {
       title: "Angebote im Web suchen",
       subtitle:
@@ -2236,6 +2237,37 @@ const de = {
       remainingToday: "Heute noch {remaining} von {limit} Websuchen übrig",
       quotaExhausted:
         "Tageslimit von {limit} Websuchen erreicht – neu ab {time} (Europe/Berlin).",
+      discovered: "Per Websuche gefunden",
+      notAvailable: "Nicht verfügbar",
+      prices: "Mietdaten",
+      coldRent: "Kaltmiete",
+      additionalCosts: "Nebenkosten",
+      warmRent: "Warmmiete",
+      deposit: "Kaution",
+      property: "Objekt",
+      rooms: "Zimmer",
+      area: "Wohnfläche",
+      propertyType: "Objekttyp",
+      floor: "Etage",
+      availability: "Verfügbarkeit",
+      furnished: "Möbliert",
+      furnishedYes: "Möbliert",
+      provenanceSearch:
+        "Angaben aus Websuche-Ergebnissen (Bing) – keine vollständige Originalbeschreibung des Portals.",
+      provenanceFetched:
+        "Angaben aus der abgerufenen Quellseite – keine vollständige Originalbeschreibung des Portals.",
+      confirmNote:
+        "Bitte prüfe die Verfügbarkeit direkt auf dem Portal – Angebote können inzwischen vergeben sein.",
+      openOriginal: "Zur Original-Anzeige",
+      viewDetails: "Details ansehen",
+      funnel:
+        "Alle {shown} gültigen Funde angezeigt – von {retrieved} Suchtreffern (Duplikate, Nicht-Angebote und ungültige Links aussortiert).",
+      coverageNote:
+        "Die Websuche zeigt alle gültigen Funde des Suchdienstes für diese Anfrage – sie garantiert nicht, dass jedes Mietangebot im Internet erfasst ist.",
+      matchesFilters:
+        "{shown} von {total} Funden entsprechen deinen Filtern (Funde mit unbekannten Werten bleiben sichtbar, soweit prüfbar).",
+      filtersEmpty:
+        "Keine der {total} Funde erfüllt deine Filter vollständig – lockere die Kriterien oder nutze eine breitere Suche.",
     },
   },
 };
@@ -4368,6 +4400,7 @@ const en: Dict = {
     calcAssumptions:
       "Assumptions: warm rent = cold rent + service charges (incl. heating, possibly electricity). Deposit = months × warm rent, paid once at the start. Rule of thumb: max. 30 % of net income for warm rent.",
     rentCold: "cold",
+    perMonth: "per month",
     webSearch: {
       title: "Search the web for listings",
       subtitle:
@@ -4413,6 +4446,37 @@ const en: Dict = {
       remainingToday: "{remaining} of {limit} web searches remaining today",
       quotaExhausted:
         "Daily limit of {limit} web searches reached — resets at {time} (Europe/Berlin).",
+      discovered: "Found via web search",
+      notAvailable: "Not available",
+      prices: "Rent details",
+      coldRent: "Cold rent",
+      additionalCosts: "Service charges",
+      warmRent: "Warm rent",
+      deposit: "Deposit",
+      property: "Property",
+      rooms: "Rooms",
+      area: "Living area",
+      propertyType: "Property type",
+      floor: "Floor",
+      availability: "Availability",
+      furnished: "Furnished",
+      furnishedYes: "Furnished",
+      provenanceSearch:
+        "Details from web-search results (Bing) — not the portal's full original description.",
+      provenanceFetched:
+        "Details from the fetched source page — not the portal's full original description.",
+      confirmNote:
+        "Please check availability directly on the portal — listings may already be taken.",
+      openOriginal: "Open original listing",
+      viewDetails: "View details",
+      funnel:
+        "Showing all {shown} valid findings — of {retrieved} search hits (duplicates, non-listings and invalid links removed).",
+      coverageNote:
+        "The web search shows every valid finding the search service retrieved for this query — it does not guarantee that every rental on the internet is captured.",
+      matchesFilters:
+        "{shown} of {total} findings match your filters (findings with unknown values stay visible where checkable).",
+      filtersEmpty:
+        "None of the {total} findings fully meet your filters — relax the criteria or run a broader search.",
     },
   },
 };
@@ -6547,6 +6611,7 @@ const fr: Dict = {
     calcAssumptions:
       "Hypothèses : loyer charges comprises = loyer hors charges + charges (chauffage, électricité éventuelle). Caution = mois × loyer charges comprises, payée une fois au début. Règle : max. 30 % du revenu net pour le loyer charges comprises.",
     rentCold: "charges",
+    perMonth: "par mois",
     webSearch: {
       title: "Rechercher des annonces sur le web",
       subtitle:
@@ -6592,6 +6657,37 @@ const fr: Dict = {
       remainingToday: "{remaining} recherches web restantes aujourd'hui (sur {limit})",
       quotaExhausted:
         "Limite quotidienne de {limit} recherches web atteinte — réinitialisation à {time} (Europe/Berlin).",
+      discovered: "Trouvé via recherche web",
+      notAvailable: "Non disponible",
+      prices: "Détails du loyer",
+      coldRent: "Loyer froid",
+      additionalCosts: "Charges",
+      warmRent: "Loyer chaud",
+      deposit: "Dépôt de garantie",
+      property: "Bien",
+      rooms: "Pièces",
+      area: "Surface habitable",
+      propertyType: "Type de bien",
+      floor: "Étage",
+      availability: "Disponibilité",
+      furnished: "Meublé",
+      furnishedYes: "Meublé",
+      provenanceSearch:
+        "Données issues des résultats de recherche web (Bing) — pas la description complète du portail.",
+      provenanceFetched:
+        "Données issues de la page source consultée — pas la description complète du portail.",
+      confirmNote:
+        "Veuillez vérifier la disponibilité directement sur le portail — l'annonce peut déjà être prise.",
+      openOriginal: "Ouvrir l'annonce d'origine",
+      viewDetails: "Voir les détails",
+      funnel:
+        "Tous les {shown} résultats valides sont affichés — sur {retrieved} hits (doublons, non-annonces et liens invalides écartés).",
+      coverageNote:
+        "La recherche web affiche tous les résultats valides obtenus pour cette requête — elle ne garantit pas de couvrir chaque annonce du marché.",
+      matchesFilters:
+        "{shown} résultats sur {total} correspondent à vos filtres (les valeurs inconnues restent visibles le cas échéant).",
+      filtersEmpty:
+        "Aucun des {total} résultats ne remplit entièrement vos filtres — assouplissez les critères ou élargissez la recherche.",
     },
   },
 };
@@ -8675,6 +8771,7 @@ const ar: Dict = {
     calcAssumptions:
       "الافتراضات: الإيجار الشامل = الإيجار الصافي + الرسوم الإضافية (بما في ذلك التدفئة، والكهرباء إن وجدت). التأمين = عدد الأشهر × الإيجار الشامل، يُدفع مرة واحدة عند البداية. قاعدة إرشادية: بحد أقصى 30% من صافي الدخل للإيجار الشامل.",
     rentCold: "صافي",
+    perMonth: "شهريًا",
     webSearch: {
       title: "ابحث عن الإعلانات على الويب",
       subtitle:
@@ -8717,6 +8814,37 @@ const ar: Dict = {
       remainingToday: "تبقّى اليوم {remaining} من {limit} عمليات بحث على الويب",
       quotaExhausted:
         "تم بلوغ الحد اليومي ({limit} عمليات بحث) — يُعاد التعيين عند {time} (Europe/Berlin).",
+      discovered: "عُثر عليه عبر بحث الويب",
+      notAvailable: "غير متاح",
+      prices: "تفاصيل الإيجار",
+      coldRent: "الإيجار البارد",
+      additionalCosts: "تكاليف إضافية",
+      warmRent: "الإيجار الدافئ",
+      deposit: "الوديعة",
+      property: "الوحدة",
+      rooms: "الغرف",
+      area: "المساحة",
+      propertyType: "نوع الوحدة",
+      floor: "الطابق",
+      availability: "التوفر",
+      furnished: "مفروش",
+      furnishedYes: "مفروش",
+      provenanceSearch:
+        "المعلومات من نتائج بحث الويب (Bing) — وليست الوصف الكامل الأصلي للإعلان.",
+      provenanceFetched:
+        "المعلومات من الصفحة المصدر المُسترجعة — وليست الوصف الكامل الأصلي للإعلان.",
+      confirmNote:
+        "يُرجى التحقق من التوفر مباشرة على المنصة — فقد يكون الإعلان محجوزًا بالفعل.",
+      openOriginal: "فتح الإعلان الأصلي",
+      viewDetails: "عرض التفاصيل",
+      funnel:
+        "تُعرض جميع النتائج الصالحة ({shown}) — من أصل {retrieved} نتيجة (تم استبعاد التكرارات وغير الإعلانات والروابط غير الصالحة).",
+      coverageNote:
+        "يعرض البحث على الويب كل النتائج الصالحة التي استرجعها محرك البحث لهذا الاستفسار — ولا يضمن تغطية كل الإعلانات المتاحة.",
+      matchesFilters:
+        "{shown} من أصل {total} نتائج تطابق عوامل التصفية (تبقى القيم المجهولة مرئية حيثما أمكن الفحص).",
+      filtersEmpty:
+        "لا تطابق أي من النتائج ({total}) عوامل التصفية بالكامل — تخفّف المعايير أو وسّع نطاق البحث.",
     },
   },
 };

@@ -29,7 +29,7 @@ import {
   runHousingWebSearch,
   type HousingWebSearchInput,
 } from "@/lib/housing/web-search/discovery";
-import { resolveSearchProvider } from "@/lib/housing/web-search/config";
+import { resolveSearchProvider, LIMITS } from "@/lib/housing/web-search/config";
 import { clearRobotsCache } from "@/lib/housing/web-search/robots";
 
 const NOW = 1_760_000_000_000; // 2025-10-09T09:46:40Z — deterministic clock
@@ -63,18 +63,25 @@ const targeted = (
 const IS24_A = "https://www.immobilienscout24.de/expose/123456789";
 const IS24_B = "https://www.immobilienscout24.de/expose/987654321";
 const IW_A = "https://www.immowelt.de/expose/555555555";
+// Non-allowlisted portals — valid in WHOLE-WEB mode (not in targeted mode).
+const EXT_A = "https://immobiliensuche24.de/wohnung/111222333";
+const EXT_B = "https://wohnbau-portal.de/apartments/444555666";
 const NW_A = "https://open.nrw/dataset/mieten-koeln";
 const NW_B = "https://open.nrw/dataset/wg-mieten-koeln"; // NOT a prefix of NW_A (startsWith trap)
 const OD_A = "https://www.opendata.de/dataset/miete";
 const OD_B = "https://www.opendata.de/dataset/miete2";
 
-function azurePayload(citations: Array<{ url: string; title: string }>) {
+function azurePayload(
+  citations: Array<{ url: string; title: string }>,
+  text = "Angebote gefunden.",
+  sources: string[] = [],
+) {
   return {
     output: [
       {
         type: "web_search_call",
         status: "completed",
-        action: { type: "search", query: "Mietwohnung Köln", sources: [] },
+        action: { type: "search", query: "Mietwohnung Köln", sources },
       },
       {
         type: "message",
@@ -83,7 +90,7 @@ function azurePayload(citations: Array<{ url: string; title: string }>) {
         content: [
           {
             type: "output_text",
-            text: "Angebote gefunden.",
+            text,
             annotations: citations.map((c, i) => ({
               type: "url_citation",
               start_index: i,
@@ -94,6 +101,7 @@ function azurePayload(citations: Array<{ url: string; title: string }>) {
         ],
       },
     ],
+    output_text: text,
     tool_usage: { web_search: { num_requests: 2 } },
   };
 }
@@ -192,48 +200,53 @@ describe("provider resolution (honest states)", () => {
   });
 });
 
-describe("general mode (web)", () => {
-  it("returns only allowlisted listing pages, deduped, unverified, with citations preserved", async () => {
+describe("general mode (web) — whole web, NOT allowlist-bound", () => {
+  it("accepts valid listing URLs from NON-allowlisted domains (the 2026-10-10 fix)", async () => {
     const citations = [
       { url: IS24_A, title: "Titel A" },
-      { url: IS24_B, title: "Titel B" },
-      { url: IW_A, title: "Titel C" },
-      { url: "https://example.com/expose/123456789", title: "not allowlisted" },
-      { url: "https://www.immobilienscout24.de/impressum", title: "legal page" },
-      { url: "https://www.immobilienscout24.de/", title: "homepage" },
+      { url: IW_A, title: "Titel B" },
+      { url: EXT_A, title: "Titel C (foreign portal)" },
+      { url: EXT_B, title: "Titel D (foreign portal)" },
     ];
-    const { impl, calls } = makeFetch({ azure: [azurePayload(citations)] });
+    const { impl } = makeFetch({ azure: [azurePayload(citations)] });
     const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
 
     expect(outcome.status).toBe("ok");
-    expect(outcome.provider).toBe("azure");
     expect(outcome.warnings).toEqual([]);
-    expect(outcome.stats).toEqual({ searchCalls: 1, pagesFetched: 0, bingRequests: 2 });
-    // Citations are preserved verbatim for display (enterprise TOU requirement).
-    expect(outcome.citations).toHaveLength(6);
-    expect(outcome.queries[0]).toContain("Mietwohnung");
-
-    expect(outcome.listings).toHaveLength(3);
+    // All 4 valid listings are shown — including the 2 off-allowlist portals.
+    expect(outcome.listings).toHaveLength(4);
+    expect(outcome.listings.map((l) => l.listing_url)).toEqual([
+      "https://immobilienscout24.de/expose/123456789",
+      "https://immowelt.de/expose/555555555",
+      "https://immobiliensuche24.de/wohnung/111222333",
+      "https://wohnbau-portal.de/apartments/444555666",
+    ]);
+    expect(outcome.funnel.offAllowlist).toBe(0); // web mode: allowlist not binding
     for (const l of outcome.listings) {
       expect(l.data_status).toBe("live");
       expect(l.provider).toBe("web-search");
-      expect(l.verification_status).toBe("unverified"); // discovery only, never fetched
+      expect(l.verification_status).toBe("unverified");
       expect(l.source_type).toBe("web_search");
       expect(l.verified).toBe(false);
       expect(l.rent_cold_eur).toBeNull(); // never invented
-      expect(l.rent_warm_eur).toBeNull();
-      expect(l.latitude).toBeNull();
-      expect(l.longitude).toBeNull();
       expect(l.last_checked_at).toBe(NOW_ISO);
-      expect(l.listing_url).toMatch(/^https:\/\//);
     }
-    expect(outcome.listings[0].title).toBe("Titel A");
-    // www stripped in the normalized source URL
-    expect(outcome.listings[0].listing_url).toBe("https://immobilienscout24.de/expose/123456789");
-    expect(outcome.fetchedAt).toBe(NOW_ISO);
+  });
 
-    // No page or robots fetch in general mode — search call only.
-    expect(calls.map((c) => c.url)).toEqual(["https://res.openai.azure.com/openai/v1/responses"]);
+  it("still rejects legal pages, homepages and portal SEARCH-result pages (not individual listings)", async () => {
+    const citations = [
+      { url: IS24_A, title: "listing" },
+      { url: "https://www.immobilienscout24.de/impressum", title: "legal page" },
+      { url: "https://www.immobilienscout24.de/", title: "homepage" },
+      { url: "https://www.immobilienscout24.de/immobilien/suche/wohnung-mieten/koeln", title: "search results" },
+      { url: "https://www.immowelt.de/suche?query=koeln", title: "search w/ query" },
+    ];
+    const { impl } = makeFetch({ azure: [azurePayload(citations)] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.listings).toHaveLength(1);
+    expect(outcome.listings[0].listing_url).toBe("https://immobilienscout24.de/expose/123456789");
+    expect(outcome.funnel.notListingUrl).toBe(4);
+    expect(outcome.warnings).toContain("candidates_dropped_not_listing_url=4");
   });
 
   it("dedupes the same listing (www / tracking params / http vs https)", async () => {
@@ -243,37 +256,56 @@ describe("general mode (web)", () => {
       { url: `http://www.immobilienscout24.de/expose/123456789#ref`, title: "dup2" },
       { url: IS24_B, title: "Titel B" },
       { url: IW_A, title: "Titel C" },
+      { url: EXT_A, title: "Titel D" },
     ];
     const { impl } = makeFetch({ azure: [azurePayload(citations)] });
     const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
     const forA = outcome.listings.filter((l) => l.listing_url === "https://immobilienscout24.de/expose/123456789");
     expect(forA).toHaveLength(1);
     expect(forA[0].title).toBe("Titel A"); // first-seen citation wins
-    expect(outcome.listings).toHaveLength(3);
+    expect(outcome.listings).toHaveLength(4);
+    expect(outcome.funnel.duplicatesRemoved).toBe(2);
   });
 
-  it("retries ONCE in English only when the German call under-delivered", async () => {
-    // Thin: 1 candidate → second (EN) call happens.
+  it("does NOT stop at an arbitrary seven: returns every valid candidate (12 shown)", async () => {
+    const citations = Array.from({ length: 12 }, (_, i) => ({
+      url: `https://portal${i % 3}.de/expose/${100000000 + i}`,
+      title: `Angebot ${i + 1}`,
+    }));
+    const { impl } = makeFetch({ azure: [azurePayload(citations)] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.listings).toHaveLength(12);
+    // A rich first call (12 ≥ threshold) must NOT spend a second paid call.
+    expect(outcome.stats.searchCalls).toBe(1);
+    expect(outcome.funnel.displayed).toBe(12);
+  });
+
+  it("runs a SECOND (complementary) paid call only when the first call under-delivered (<8 candidates)", async () => {
+    // Thin first call (3) + second call (2 new) → merged result set.
     const thin = makeFetch({
-      azure: [azurePayload([{ url: IS24_A, title: "A" }]), azurePayload([{ url: IS24_B, title: "B" }])],
+      azure: [
+        azurePayload([{ url: IS24_A, title: "A" }, { url: IS24_B, title: "B" }, { url: IW_A, title: "C" }]),
+        azurePayload([{ url: EXT_A, title: "D" }, { url: EXT_B, title: "E" }]),
+      ],
     });
     const thinOutcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: thin.impl });
     expect(thinOutcome.stats.searchCalls).toBe(2);
     expect(thinOutcome.queries).toHaveLength(2);
     expect(thin.calls.filter((c) => c.url.endsWith("/responses"))).toHaveLength(2);
-    expect(thinOutcome.listings).toHaveLength(2);
+    expect(thinOutcome.listings).toHaveLength(5); // 3 + 2 merged, deduped
+    // The two calls carry DIFFERENT complementary phrasings.
+    const inputs = thin.calls
+      .filter((c) => c.url.endsWith("/responses"))
+      .map((c) => String(c.body?.input));
+    expect(inputs[0]).toContain("Mietwohnung");
+    expect(inputs[1]).toContain("Wohnung mieten");
 
-    // Rich: 3 candidates → exactly one paid call. (Different input: the same
-    // input would be served from the result cache, not a second paid run.)
-    const rich = makeFetch({
-      azure: [
-        azurePayload([
-          { url: IS24_A, title: "A" },
-          { url: IS24_B, title: "B" },
-          { url: IW_A, title: "C" },
-        ]),
-      ],
-    });
+    // Rich first call (8) → exactly one paid call (cost-aware).
+    const richCitations = Array.from({ length: 8 }, (_, i) => ({
+      url: `https://portal.de/expose/${200000000 + i}`,
+      title: `R ${i}`,
+    }));
+    const rich = makeFetch({ azure: [azurePayload(richCitations)] });
     const richOutcome = await runHousingWebSearch(
       input({ params: { ...baseParams, city: "Leipzig" } }),
       { now: () => NOW, provider: AZURE, fetchImpl: rich.impl },
@@ -281,19 +313,41 @@ describe("general mode (web)", () => {
     expect(richOutcome.cached).toBe(false);
     expect(richOutcome.stats.searchCalls).toBe(1);
     expect(rich.calls.filter((c) => c.url.endsWith("/responses"))).toHaveLength(1);
+    expect(richOutcome.listings).toHaveLength(8);
   });
 
-  it("reports no_candidates_on_allowed_domains when nothing usable is found", async () => {
+  it("keeps the first call's results when the SECOND call fails (partial success, honest warning)", async () => {
+    const first = azurePayload([{ url: IS24_A, title: "A" }, { url: IW_A, title: "B" }]);
+    const secondFails = new Response(JSON.stringify({ error: "boom" }), { status: 500 });
+    // Only the second /responses call fails:
+    let responsesSeen = 0;
+    const impl2 = vi.fn(async (u: RequestInfo | URL) => {
+      const url = String(u);
+      if (url.endsWith("/responses")) {
+        responsesSeen += 1;
+        if (responsesSeen === 2) return secondFails;
+        return Response.json(first);
+      }
+      return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl2 });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toHaveLength(2);
+    expect(outcome.warnings.some((w) => w.startsWith("second_call_failed:"))).toBe(true);
+    expect(outcome.stats.searchCalls).toBe(2);
+  });
+
+  it("reports no_candidates_found when nothing usable is found", async () => {
     const { impl } = makeFetch({ azure: [azurePayload([{ url: "https://example.com/about", title: "x" }])] });
     const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
     expect(outcome.status).toBe("ok");
     expect(outcome.listings).toEqual([]);
-    expect(outcome.warnings).toContain("no_candidates_on_allowed_domains");
+    expect(outcome.warnings).toContain("no_candidates_found");
   });
 
-  it("honors the 25s request budget and stops fetching beyond it", async () => {
+  it("honors the request budget and stops processing beyond it", async () => {
     let tick = 0;
-    const now = () => (tick++ === 0 ? NOW : NOW + 30_000); // everything after start is "past deadline"
+    const now = () => (tick++ === 0 ? NOW : NOW + 50_000); // past the 45 s budget
     const { impl } = makeFetch({
       azure: [
         azurePayload([
@@ -310,155 +364,105 @@ describe("general mode (web)", () => {
   });
 });
 
-describe("real Azure response shape → real live listings (never demo)", () => {
-  // The exact "Response shape" from the official docs (flat url_citation
-  // annotations, action.query singular, action.sources as {type,url}
-  // objects) — the format the deployed gpt-5-mini deployment returns.
-  const docsShapePayload = {
-    output: [
-      {
-        id: "ws_1",
-        type: "web_search_call",
-        status: "completed",
-        action: {
-          type: "search",
-          query: "Mietwohnung Köln bis 800 Euro Warmmiete",
-          sources: [
-            { type: "url", url: "https://www.immobilienscout24.de/expose/123456789" },
-            { type: "url", url: "https://www.immowelt.de/expose/555555555" },
-            { type: "url", url: "https://www.wg-gesucht.de/2-zimmer-koeln-123456789.html" },
-            { type: "url", url: "https://www.immobilienscout24.de/immobilien/suche/wohnung-mieten/koeln" },
-          ],
-        },
-      },
-      {
-        id: "msg_1",
-        type: "message",
-        status: "completed",
-        role: "assistant",
-        content: [
-          {
-            type: "output_text",
-            text: "Aktuelle Angebote in Köln: …",
-            annotations: [
-              { type: "url_citation", start_index: 0, end_index: 40, url: "https://www.immobilienscout24.de/expose/123456789", title: "2-Zimmer-Wohnung in Köln-Ehrenfeld" },
-              { type: "url_citation", start_index: 40, end_index: 80, url: "https://www.immowelt.de/expose/555555555", title: "3-Zimmer-Wohnung in Köln-Sülz" },
-            ],
-          },
-        ],
-      },
-    ],
-    output_text: "Aktuelle Angebote in Köln: …",
-    tool_usage: { web_search: { num_requests: 1 } },
-  };
+describe("structured JSON answer → per-listing fields (with fabrication guard)", () => {
+  const jsonText = JSON.stringify([
+    {
+      url: IS24_A,
+      title: "2-Zi in Köln-Ehrenfeld",
+      city: "Köln",
+      rent_cold_eur: 850,
+      rent_warm_eur: 1050,
+      additional_costs_eur: 200,
+      rooms: 2,
+      living_area_sqm: 55,
+      floor: "2. OG",
+      available_from: "2026-12-01",
+      furnished: false,
+      source: "ImmoScout24",
+    },
+    { url: IW_A, title: null, city: null, rent_cold_eur: null, rent_warm_eur: null, rooms: null, living_area_sqm: null, floor: null, available_from: null, furnished: null, source: null },
+    { url: "https://invented-portal.de/expose/777777777", title: "invented", city: "Köln", rent_warm_eur: 1000, rooms: 3, living_area_sqm: 70, floor: null, available_from: null, additional_costs_eur: null, furnished: null, source: "Fake" },
+  ]);
 
-  it("extracts real listings (URL + title + live status) from citations AND sources, never demo", async () => {
-    const { impl } = makeFetch({ azure: [docsShapePayload] });
+  it("maps cited JSON items onto listings and drops invented URLs (fabrication guard)", async () => {
+    const { impl } = makeFetch({
+      azure: [azurePayload([{ url: IS24_A, title: "Citation title" }, { url: IW_A, title: "IW" }], jsonText)],
+    });
     const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
 
     expect(outcome.status).toBe("ok");
-    expect(outcome.warnings).toEqual([]);
-    expect(outcome.stats.bingRequests).toBe(1);
-    // Citations (2) + sources (3 listing pages + 1 search-overview page):
-    // the overview page is dropped by the listing-URL heuristic, dedupe
-    // keeps the three distinct listing URLs. ≥3 candidates also means the
-    // general-mode EN retry does NOT fire (one paid call, bingRequests=1).
-    expect(outcome.stats.searchCalls).toBe(1);
-    expect(outcome.listings).toHaveLength(3);
-    expect(outcome.listings.map((l) => l.listing_url).sort()).toEqual([
-      "https://immobilienscout24.de/expose/123456789",
-      "https://immowelt.de/expose/555555555",
-      "https://wg-gesucht.de/2-zimmer-koeln-123456789.html",
-    ]);
+    expect(outcome.listings).toHaveLength(2); // the invented URL is NOT displayed
+    expect(outcome.funnel.jsonItems).toBe(3);
+    expect(outcome.funnel.fabricatedRejected).toBe(1);
+    expect(outcome.warnings).toContain("fabricated_urls_rejected=1");
+
+    const is24 = outcome.listings.find((l) => l.listing_url.includes("123456789"))!;
+    expect(is24.rent_cold_eur).toBe(850);
+    expect(is24.rent_warm_eur).toBe(1050);
+    expect(is24.additional_costs_eur).toBe(200);
+    expect(is24.rooms).toBe(2);
+    expect(is24.living_area_sqm).toBe(55);
+    expect(is24.floor).toBe("2. OG");
+    expect(is24.available_from).toBe("2026-12-01");
+    expect(is24.furnished).toBe(false);
+    expect(is24.source_label).toBe("ImmoScout24");
+    // AI-extracted fields with a genuine citation = partially_verified, never "verified".
+    expect(is24.verification_status).toBe("partially_verified");
+    expect(is24.source_type).toBe("web_search");
+
+    // The JSON-less citation keeps its title and stays unverified.
+    const iw = outcome.listings.find((l) => l.listing_url.includes("555555555"))!;
+    expect(iw.title).toBe("IW");
+    expect(iw.verification_status).toBe("unverified");
+  });
+
+  it("salvages a TRUNCATED JSON array and flags it", async () => {
+    const truncatedText =
+      '[{"url":"' + IS24_A + '","title":"A","rent_warm_eur":950,"rooms":2,"city":"Köln","rent_cold_eur":750,"additional_costs_eur":null,"living_area_sqm":50,"floor":null,"available_from":null,"furnished":null,"source":"IS24"},' +
+      '{"url":"' + IW_A + '","title":"B","rent_warm_eur":880,"rooms":1,"city":"Köln","rent_cold_eur":null,"additional_costs_eur":null,"living_area_sqm":40,"floor":"EG","available_from":null,"furnished":true,"source":"IW"},' +
+      '{"url":"https://trunc.de/expose/123,'; // cut mid-string
+    const { impl } = makeFetch({
+      azure: [azurePayload([{ url: IS24_A, title: "A" }, { url: IW_A, title: "B" }], truncatedText)],
+    });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toHaveLength(2);
+    expect(outcome.warnings).toContain("json_truncated_salvaged");
+    const is24 = outcome.listings.find((l) => l.listing_url.includes("123456789"))!;
+    expect(is24.rent_warm_eur).toBe(950);
+    expect(is24.verification_status).toBe("partially_verified");
+  });
+
+  it("falls back to citation-only listings when the model ignored the JSON contract", async () => {
+    const prose =
+      "Ich habe Wohnungen gefunden: " + IS24_A + " und " + IW_A + ". Beide scheinen aktuell ausstehend.";
+    const { impl } = makeFetch({ azure: [azurePayload([{ url: IS24_A, title: "A" }, { url: IW_A, title: "B" }], prose)] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toHaveLength(2);
+    expect(outcome.funnel.jsonItems).toBe(0);
     for (const l of outcome.listings) {
-      expect(l.data_status).toBe("live"); // never "demo"
-      expect(l.provider).toBe("web-search");
-      expect(l.source_type).toBe("web_search");
-      expect(l.city).toBe("Köln");
-      expect(l.listing_active).toBeNull();
+      expect(l.verification_status).toBe("unverified");
+      expect(l.rent_warm_eur).toBeNull();
     }
-    // Citation titles are preserved on the matching listing.
-    const is24 = outcome.listings.find((l) => l.listing_url.includes("immobilienscout24.de"))!;
-    expect(is24.title).toBe("2-Zimmer-Wohnung in Köln-Ehrenfeld");
   });
 
-  it("sends an explicit web-search + direct-link instruction (not a bare query)", async () => {
-    const { impl, calls } = makeFetch({ azure: [docsShapePayload] });
-    await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
-    const body = calls.find((c) => c.url.endsWith("/responses"))!.body!;
-    const sentInput = String(body.input);
-    // The raw user query is preserved verbatim inside the instruction…
-    expect(sentInput).toContain("Mietwohnung");
-    expect(sentInput).toContain("Köln");
-    expect(sentInput).toContain("800");
-    // …and the instruction explicitly demands a web search with direct
-    // per-listing links (the documented fix for missing citations).
-    expect(sentInput).toMatch(/Websuche/i);
-    expect(sentInput).toMatch(/direkten Link/i);
-    expect(sentInput).toMatch(/Quellen|zitiere/i);
-  });
-
-  it("reports WHY an empty result is empty: all citations off the allowlist", async () => {
-    const offAllowlist = {
-      ...docsShapePayload,
-      output: [
-        {
-          type: "web_search_call",
-          status: "completed",
-          action: { type: "search", query: "q", sources: [] },
-        },
-        {
-          type: "message",
-          status: "completed",
-          role: "assistant",
-          content: [
-            {
-              type: "output_text",
-              text: "…",
-              annotations: [
-                { type: "url_citation", start_index: 0, end_index: 10, url: "https://blog.example.com/wohnungen", title: "a" },
-                { type: "url_citation", start_index: 10, end_index: 20, url: "https://wiki.example.org/mieten", title: "b" },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const { impl } = makeFetch({ azure: [offAllowlist] });
+  it("never charges the JSON answer when ALL its URLs are invented (fields cleared, links kept)", async () => {
+    const allInvented = JSON.stringify([
+      { url: "https://invented.de/expose/11111111", title: "X", rent_warm_eur: 500, rooms: 1, city: null, rent_cold_eur: null, additional_costs_eur: null, living_area_sqm: null, floor: null, available_from: null, furnished: null, source: null },
+      { url: "https://invented.de/expose/22222222", title: "Y", rent_warm_eur: 600, rooms: 2, city: null, rent_cold_eur: null, additional_costs_eur: null, living_area_sqm: null, floor: null, available_from: null, furnished: null, source: null },
+    ]);
+    const { impl } = makeFetch({
+      azure: [azurePayload([{ url: IS24_A, title: "A" }], allInvented)],
+    });
     const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
-
-    expect(outcome.status).toBe("ok"); // a real search ran — not an error
-    expect(outcome.listings).toEqual([]);
-    expect(outcome.warnings).toContain("no_candidates_on_allowed_domains");
-    expect(outcome.warnings).toContain("candidates_dropped_off_allowlist=2");
-    // Citations stay visible (Bing TOU: references displayed to the user).
-    expect(outcome.citations).toHaveLength(2);
-  });
-
-  it("flags azure_no_web_search_call when the model answered without invoking the tool", async () => {
-    const noTool = {
-      output: [
-        {
-          type: "message",
-          status: "completed",
-          role: "assistant",
-          content: [{ type: "output_text", text: "Aus meinem Wissen: …", annotations: [] }],
-        },
-      ],
-      output_text: "Aus meinem Wissen: …",
-    };
-    // Both the German call and the general-mode EN retry return no tool use.
-    const { impl } = makeFetch({ azure: [noTool, noTool] });
-    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
-
-    expect(outcome.status).toBe("ok");
-    expect(outcome.listings).toEqual([]);
-    expect(outcome.warnings).toContain("azure_no_web_search_call");
-    expect(outcome.warnings).toContain("no_candidates_on_allowed_domains");
+    expect(outcome.listings).toHaveLength(1); // only the real citation remains
+    expect(outcome.listings[0].rent_warm_eur).toBeNull(); // invented fields NOT applied
+    expect(outcome.funnel.fabricatedRejected).toBe(2);
   });
 });
 
-describe("targeted mode", () => {
+describe("targeted mode (selected websites remain binding)", () => {
   it("sends the domain restriction to the search API and never fetches search_only portals", async () => {
     const citations = [
       { url: IS24_A, title: "IS24 Titel" },
@@ -498,10 +502,11 @@ describe("targeted mode", () => {
     expect(calls.some((c) => c.url === "https://open.nrw/robots.txt")).toBe(true);
   });
 
-  it("bounds candidates to the selected domains (allowlist is binding)", async () => {
+  it("bounds candidates to the selected domains (allowlist is binding) — unlike web mode", async () => {
     const citations = [
       { url: NW_A, title: "in" },
       { url: IS24_A, title: "not selected" },
+      { url: EXT_A, title: "off allowlist" },
     ];
     const { impl } = makeFetch({ azure: [azurePayload(citations)] });
     const outcome = await runHousingWebSearch(targeted(["open.nrw"]), {
@@ -510,6 +515,8 @@ describe("targeted mode", () => {
       fetchImpl: impl,
     });
     expect(outcome.listings.map((l) => l.listing_url)).toEqual([NW_A]);
+    expect(outcome.funnel.offAllowlist).toBe(2);
+    expect(outcome.warnings).toContain("candidates_dropped_off_allowlist=2");
   });
 
   it("discards a listing ONLY when the fetched page states it is already unavailable", async () => {
@@ -549,8 +556,6 @@ describe("targeted mode", () => {
     expect(blocked.calls.some((c) => c.url === NW_A)).toBe(false);
 
     // Broken robots.txt (network failure) → unknown → also not fetched.
-    // (Clear BOTH the result cache — same input would otherwise be served
-    // from the first run — and the per-host robots cache so the run re-queries.)
     clearWebSearchCache();
     clearRobotsCache();
     const broken = makeFetch({
@@ -627,6 +632,35 @@ describe("targeted mode", () => {
   });
 });
 
+describe("funnel diagnostics", () => {
+  it("reports count-only funnel numbers and never URLs or response text", async () => {
+    const citations = [
+      { url: IS24_A, title: "A" },
+      { url: "https://immobilienscout24.de/impressum", title: "legal" },
+      { url: "not a url", title: "bad" },
+      { url: IW_A, title: "B" },
+    ];
+    // IW_A also arrives via action.sources → counted as a cross-source duplicate.
+    const { impl } = makeFetch({ azure: [azurePayload(citations, "Angebote.", [IW_A])] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.funnel).toEqual({
+      candidatesRetrieved: 3, // IS24_A, impressum, IW_A ("not a url" is unparseable)
+      invalidUrls: 1,
+      duplicatesRemoved: 1,
+      offAllowlist: 0,
+      notListingUrl: 1,
+      jsonItems: 0,
+      fabricatedRejected: 0,
+      displayed: 2,
+    });
+    // No warning may carry a URL or listing text (safe logs contract).
+    for (const w of outcome.warnings) {
+      expect(w).not.toMatch(/https?:\/\//);
+      expect(w).not.toContain("A");
+    }
+  });
+});
+
 describe("Azure-only provider enforcement (no Tavily fallback)", () => {
   it("resolves to azure via the real resolver even when TAVILY_API_KEY is present", async () => {
     vi.stubEnv("HOUSING_WEB_SEARCH", "");
@@ -634,14 +668,17 @@ describe("Azure-only provider enforcement (no Tavily fallback)", () => {
     vi.stubEnv("AZURE_WEB_SEARCH_KEY", "azure-test-key");
     vi.stubEnv("AZURE_WEB_SEARCH_MODEL", "gpt-5-mini");
     vi.stubEnv("TAVILY_API_KEY", "tvly-test-key");
-    const { impl, calls } = makeFetch({ azure: [azurePayload([{ url: IS24_A, title: "A" }])] });
+    const richCitations = Array.from({ length: 8 }, (_, i) => ({
+      url: `https://portal.de/expose/${300000000 + i}`,
+      title: `R ${i}`,
+    }));
+    const { impl, calls } = makeFetch({ azure: [azurePayload(richCitations)] });
 
     // No `provider` dep injected → resolveSearchProvider() runs for real.
     const outcome = await runHousingWebSearch(input(), { now: () => NOW, fetchImpl: impl });
 
     expect(outcome.status).toBe("ok");
     expect(outcome.provider).toBe("azure");
-    expect(calls.filter((c) => c.url.endsWith("/responses")).length).toBeGreaterThan(0);
     // The paid call went to the Foundry Responses endpoint with the
     // documented body (deployment name + hosted web_search tool; general
     // mode also carries user_location for the German/city bias).
@@ -734,5 +771,15 @@ describe("caching and budgets", () => {
     });
     expect(other.cached).toBe(false);
     expect(calls.filter((c) => c.url.endsWith("/responses")).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("request budget constant sanity", () => {
+  it("the two-call strategy fits the whole-request budget and maxDuration", () => {
+    // Two full search calls must fit into the request budget, and the budget
+    // must fit into the route's maxDuration (60 s) with fetch headroom.
+    expect(LIMITS.requestTimeoutMs).toBeLessThanOrEqual(60_000 - 10_000);
+    expect(2 * LIMITS.searchTimeoutMs).toBeLessThanOrEqual(LIMITS.requestTimeoutMs);
+    expect(LIMITS.webModeSecondCallThreshold).toBeLessThanOrEqual(8);
   });
 });

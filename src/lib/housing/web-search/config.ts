@@ -99,7 +99,11 @@ export const ALLOWED_DOMAINS: readonly AllowedDomain[] = [
 
 /** Hard, code-level limits. Env may lower (never raise) some of them. */
 export const LIMITS = {
-  /** Max search-API calls per user request, general mode (DE + optional EN retry). */
+  /**
+   * Max search-API calls per user request, general mode: a primary German
+   * query plus ONE cost-aware secondary German query (only when the first
+   * call under-delivered — see webModeSecondCallThreshold).
+   */
   maxSearchCallsPerRun: 2,
   /** Max search-API calls per user request, targeted mode (one domain-restricted call). */
   maxTargetedSearchCalls: 1,
@@ -109,12 +113,28 @@ export const LIMITS = {
   robotsTimeoutMs: 8_000,
   /** Page bodies larger than this are truncated (parse best-effort). */
   fetchMaxBytes: 512 * 1024,
-  /** Whole-request budget. */
-  requestTimeoutMs: 25_000,
+  /**
+   * Whole-request budget. Covers up to TWO sequential search calls (each
+   * capped by searchTimeoutMs) plus a small fetch reserve — and stays under
+   * the route's maxDuration (60 s).
+   */
+  requestTimeoutMs: 45_000,
   /** Manual redirect hops, each hop re-validated against the URL guard. */
   maxRedirects: 3,
-  /** Max listings returned per run. */
-  maxResults: 20,
+  /**
+   * Max listings returned per run. A single Bing call typically yields
+   * ~8–15 results; the multi-query merge can produce more, so this cap must
+   * not be the reason results get truncated (the 2026-10-10 "seven results"
+   * audit found it was not the cause, but it would have clipped the merge).
+   */
+  maxResults: 40,
+  /**
+   * General (whole-web) mode: run the SECOND paid search call only when the
+   * first call yielded fewer than this many usable candidates. Cost-aware
+   * multi-query retrieval — a rich first result set is not chased with a
+   * redundant second call.
+   */
+  webModeSecondCallThreshold: 8,
   /**
    * In-memory result cache. Enterprise TOU §3(c): Bing output may only be
    * stored as part of our work product — a short in-process TTL for the
@@ -128,11 +148,13 @@ export const LIMITS = {
   /**
    * Output-token budget for the Responses call. gpt-5-mini is a REASONING
    * model: reasoning tokens share this budget with the visible answer. The
-   * answer must fit a list of individually cited listings (each citation
-   * needs its URL inside the text), so 500 was too small and truncated
-   * cited answers; 1500 covers ~8–12 listings plus low-effort reasoning.
+   * answer must fit a JSON array of individually cited listings (each
+   * listing needs its URL inside the text), so 500 was too small and 1500
+   * truncated answers at ~8–10 items — one of the root causes of the
+   * "Berlin returns only seven" audit finding. 4000 fits ~25–30 compact
+   * JSON listings plus low-effort reasoning with headroom.
    */
-  maxOutputTokens: 1500,
+  maxOutputTokens: 4000,
 } as const;
 
 /** Identifies ourselves honestly to fetched sites (never a browser UA). */

@@ -21,6 +21,16 @@ const { checkRateLimit } = await import("@/lib/rate-limit");
 
 vi.mock("@/lib/housing/web-search/discovery", () => ({
   runHousingWebSearch: vi.fn(),
+  ZERO_FUNNEL: {
+    candidatesRetrieved: 0,
+    invalidUrls: 0,
+    duplicatesRemoved: 0,
+    offAllowlist: 0,
+    notListingUrl: 0,
+    jsonItems: 0,
+    fabricatedRejected: 0,
+    displayed: 0,
+  },
 }));
 const { runHousingWebSearch } = await import("@/lib/housing/web-search/discovery");
 
@@ -73,6 +83,16 @@ function makeOutcome(over: Record<string, unknown> = {}): HousingWebSearchOutcom
     citations: [],
     queries: [],
     stats: { searchCalls: 0, pagesFetched: 0, bingRequests: null },
+    funnel: {
+      candidatesRetrieved: 0,
+      invalidUrls: 0,
+      duplicatesRemoved: 0,
+      offAllowlist: 0,
+      notListingUrl: 0,
+      jsonItems: 0,
+      fabricatedRejected: 0,
+      displayed: 0,
+    },
     warnings: [] as string[],
     cached: false,
     fetchedAt: "2025-10-09T00:00:00.000Z",
@@ -160,6 +180,27 @@ describe("POST /api/housing/web-search", () => {
     const data = (await res.json()) as { listings: unknown[]; citations: unknown[] };
     expect(data.listings).toHaveLength(1);
     expect(data.citations).toHaveLength(1);
+  });
+
+  it("passes the count-only funnel diagnostics through to the client", async () => {
+    vi.mocked(runHousingWebSearch).mockResolvedValue(
+      makeOutcome({
+        funnel: {
+          candidatesRetrieved: 12,
+          invalidUrls: 0,
+          duplicatesRemoved: 3,
+          offAllowlist: 0,
+          notListingUrl: 2,
+          jsonItems: 10,
+          fabricatedRejected: 0,
+          displayed: 7,
+        },
+      }),
+    );
+    const res = await POST(req({ mode: "web", params: { city: "Berlin" } }));
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { funnel: Record<string, number> };
+    expect(data.funnel).toMatchObject({ candidatesRetrieved: 12, duplicatesRemoved: 3, displayed: 7 });
   });
 
   it("drops non-allowlisted domains server-side and reports them as a warning", async () => {

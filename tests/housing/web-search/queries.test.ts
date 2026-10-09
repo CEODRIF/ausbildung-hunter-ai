@@ -27,7 +27,7 @@ const base: Q = {
 };
 
 describe("buildHousingQueries", () => {
-  it("builds a German primary query naming every constraint the user set", () => {
+  it("builds TWO complementary German queries naming every constraint the user set", () => {
     const built = buildHousingQueries({
       ...base,
       city: "Köln",
@@ -37,40 +37,37 @@ describe("buildHousingQueries", () => {
       min_area_sqm: 50,
       available_before: "2026-11-01",
     });
-    const de = built.queries[0];
-    expect(de).toContain("Mietwohnung");
-    expect(de).toContain("Köln");
-    expect(de).toContain("800 Euro Warmmiete");
-    expect(de).toContain("2 Zimmer");
-    expect(de).toContain("mind. 50 m²");
-    expect(de).toContain("frei ab 2026-11-01");
-    expect(de).toContain("in der Umgebung von Köln");
-    // Targeted mode uses the German query; the EN query is a general-mode retry.
-    expect(built.targetedQuery).toBe(de);
-    expect(built.queries).toHaveLength(2);
-    // Every query carries the explicit web-search instruction (the documented
-    // fix for "model answers without performing the search / without
-    // citations") — the raw constraint string above is embedded verbatim.
-    expect(de).toMatch(/Websuche/i);
-    expect(de).toMatch(/direkten Link/i);
-    expect(built.queries[1]).toMatch(/live web search/i);
-    expect(built.queries[1]).toMatch(/DIRECT LINK/i);
+    for (const q of built.queries) {
+      expect(q).toContain("Köln");
+      expect(q).toContain("800 Euro Warmmiete");
+      expect(q).toContain("2 Zimmer");
+      expect(q).toContain("mind. 50 m²");
+      expect(q).toContain("frei ab 2026-11-01");
+      expect(q).toContain("in der Umgebung von Köln");
+    }
+    // Primary vs. complementary phrasing (different index ranking).
+    expect(built.queries[0]).toContain("Mietwohnung");
+    expect(built.queries[1]).toContain("Wohnung mieten");
+    // Targeted mode uses the primary German query.
+    expect(built.targetedQuery).toBe(built.queries[0]);
   });
 
-  it("builds a useful English secondary query", () => {
-    const built = buildHousingQueries({
-      ...base,
-      city: "Köln",
-      max_warm_rent: 800,
-      rooms: 2,
-      min_area_sqm: 50,
-    });
-    const en = built.queries[1];
-    expect(en).toContain("rental apartment");
-    expect(en).toContain("Köln");
-    expect(en).toContain("max 800 EUR warm rent");
-    expect(en).toContain("2 rooms");
-    expect(en).toContain("min 50 sqm");
+  it("every query carries the explicit web-search + JSON output instruction", () => {
+    const built = buildHousingQueries({ ...base, city: "Berlin", max_warm_rent: 1000 });
+    for (const q of [built.queries[0], built.queries[1], built.targetedQuery]) {
+      // The raw user query is preserved verbatim inside the instruction…
+      expect(q).toContain("Berlin");
+      expect(q).toContain("1.000 Euro Warmmiete");
+      // …and the instruction explicitly demands a live web search, per-
+      // listing DIRECT links, citations, and a strict JSON array answer.
+      expect(q).toMatch(/Websuche/i);
+      expect(q).toMatch(/direkten Link/i);
+      expect(q).toMatch(/zitiere/i);
+      expect(q).toMatch(/JSON-Array/i);
+      // Anti-fabrication rules are part of the request contract.
+      expect(q).toMatch(/null sein/i);
+      expect(q).toMatch(/Erfinde niemals/i);
+    }
   });
 
   it("uses the postal code when no city is given; radius is city-only", () => {
@@ -82,24 +79,24 @@ describe("buildHousingQueries", () => {
   it("omits unset constraints (rooms=all, no rent cap)", () => {
     const built = buildHousingQueries({ ...base, city: "Leipzig" });
     const de = built.queries[0];
-    // The raw query keeps exactly the set constraints — inside the
-    // fixed instruction wrapper.
     expect(de).toContain("Mietwohnung, Leipzig");
-    expect(de).not.toContain("Zimmer");
-    expect(de).not.toContain("Warmmiete");
+    // The JSON field schema always mentions the German field names ("Zimmer",
+    // "Warmmiete") — so assert the CONSTRAINT phrases are absent.
+    expect(de).not.toMatch(/\d\s+Zimmer/);
+    expect(de).not.toContain("Euro Warmmiete");
   });
 
-  it("maps every accommodation type to German and English terms", () => {
-    for (const [type, deTerm, enTerm] of [
-      ["all", "Mietwohnung", "rental apartment"],
-      ["apartment", "Mietwohnung", "rental apartment"],
-      ["wg_room", "WG-Zimmer", "shared flat room (WG)"],
-      ["furnished", "möblierte Wohnung", "furnished rental apartment"],
-      ["studio", "Studio-Wohnung", "studio apartment for rent"],
+  it("maps every accommodation type to primary + complementary German terms", () => {
+    for (const [type, primary, secondary] of [
+      ["all", "Mietwohnung", "Wohnung mieten"],
+      ["apartment", "Mietwohnung", "Wohnung mieten"],
+      ["wg_room", "WG-Zimmer", "Zimmer in WG mieten"],
+      ["furnished", "möblierte Wohnung", "möblierte Wohnung mieten"],
+      ["studio", "Studio-Wohnung", "Studio mieten"],
     ] as const) {
       const built = buildHousingQueries({ ...base, city: "Köln", accommodation_type: type });
-      expect(built.queries[0]).toContain(deTerm);
-      expect(built.queries[1]).toContain(enTerm);
+      expect(built.queries[0]).toContain(primary);
+      expect(built.queries[1]).toContain(secondary);
     }
   });
 
@@ -108,7 +105,7 @@ describe("buildHousingQueries", () => {
     expect(built.queries[0]).not.toContain("frei ab");
   });
 
-  it("keeps queries bounded (raw part ≤400 chars + fixed instruction ≤900 total)", () => {
+  it("keeps queries bounded (raw part ≤400 chars + fixed instruction ≤1400 total)", () => {
     const built = buildHousingQueries({
       ...base,
       city: "Köln",
@@ -120,9 +117,7 @@ describe("buildHousingQueries", () => {
       available_before: "2026-11-01",
     });
     for (const q of [built.queries[0], built.queries[1], built.targetedQuery]) {
-      // Raw constraint string is sliced at 400; the explicit search
-      // instruction adds a fixed, bounded amount.
-      expect(q.length).toBeLessThanOrEqual(900);
+      expect(q.length).toBeLessThanOrEqual(1400);
     }
   });
 });
