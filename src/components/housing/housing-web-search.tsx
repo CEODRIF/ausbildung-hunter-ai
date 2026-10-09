@@ -354,10 +354,9 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
 
               {listings.length === 0 ? (
                 <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-line-strong bg-surface/60 p-10 text-center">
-                  <Icon name="search" size={28} strokeWidth={1.5} className="text-faint" />
-                  <p className="mt-3 text-sm font-semibold text-ink">{t("housing.webSearch.empty")}</p>
-                  <p className="mt-1 text-xs text-muted">{t("housing.webSearch.emptyHint")}</p>
-                </div>
+                    <Icon name="search" size={28} strokeWidth={1.5} className="text-faint" />
+                    <p className="mt-3 max-w-md text-sm font-semibold text-ink">{t("housing.webSearch.empty")}</p>
+                  </div>
               ) : (
                 <ul className="space-y-3">
                   {listings.map((l) => {

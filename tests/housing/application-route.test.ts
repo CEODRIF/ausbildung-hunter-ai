@@ -26,19 +26,17 @@ vi.mock("@/lib/rate-limit", () => ({
 const { checkRateLimit } = await import("@/lib/rate-limit");
 
 const { POST, GET, PATCH } = await import("@/app/api/housing/application/route");
-const { findListingById } = await import("@/lib/housing/providers");
 
-const listing = findListingById("demo", "demo-koln-2zz-balkon")!;
 const appRow = {
   id: "app-1",
   user_id: "user-1",
   listing_ref: {
-    provider: "demo",
-    source_id: "demo-koln-2zz-balkon",
-    title: listing.title,
-    url: listing.listing_url,
+    provider: "example-licensed-provider",
+    source_id: "src-1",
+    title: "2-Zimmer-Wohnung in Köln-Ehrenfeld",
+    url: "https://immobilienscout24.de/expose/123456789",
   },
-  title: listing.title,
+  title: "2-Zimmer-Wohnung in Köln-Ehrenfeld",
   message_draft: "AI draft",
   status: "prepared",
   timeline: [{ status: "prepared", at: "2026-10-09T00:00:00.000Z" }],
@@ -74,8 +72,8 @@ afterEach(() => vi.clearAllMocks());
 
 describe("POST /api/housing/application", () => {
   const cleanBody = {
-    provider: "demo",
-    sourceId: "demo-koln-2zz-balkon",
+    provider: "example-licensed-provider",
+    sourceId: "src-1",
     context: { firstName: "Max", lastName: "Mustermann" },
   };
 
@@ -84,39 +82,16 @@ describe("POST /api/housing/application", () => {
     expect((await POST(req("POST", cleanBody))).status).toBe(401);
   });
 
-  it("maps an unknown listing to 404 (before any AI call)", async () => {
+  it("maps EVERY listing to 404 while no adapter is registered — the listing is never fabricated, and no AI call happens", async () => {
     vi.mocked(getCurrentUserAndProfile).mockResolvedValue(authed("user-1"));
-    const res = await POST(
-      req("POST", { ...cleanBody, sourceId: "nope" }),
-    );
-    expect(res.status).toBe(404);
+    for (const sourceId of ["src-1", "demo-koln-2zz-balkon", "nope"]) {
+      const res = await POST(req("POST", { ...cleanBody, sourceId }));
+      expect(res.status).toBe(404);
+    }
     expect(mockGenerate).not.toHaveBeenCalled();
-  });
-
-  it("creates a prepared application with the AI draft", async () => {
-    vi.mocked(getCurrentUserAndProfile).mockResolvedValue(authed("user-1"));
-    const res = await POST(req("POST", cleanBody));
-    expect(res.status).toBe(200);
-    const data = (await res.json()) as {
-      application: { id: string; status: string; message_draft: string };
-      ai_assisted: boolean;
-    };
-    expect(data.application.id).toBe("app-1");
-    expect(data.application.status).toBe("prepared");
-    expect(data.ai_assisted).toBe(true);
-    const insert = adminMock.calls.find(
-      (c) => c.table === "housing_applications" && c.op === "insert",
-    );
-    expect(insert?.args[0]).toMatchObject({ user_id: "user-1", status: "prepared" });
-  });
-
-  it("falls back to a deterministic draft (ai_assisted=false) when the AI fails", async () => {
-    mockGenerate.mockRejectedValue(new Error("AI down"));
-    vi.mocked(getCurrentUserAndProfile).mockResolvedValue(authed("user-1"));
-    const res = await POST(req("POST", cleanBody));
-    expect(res.status).toBe(200);
-    const data = (await res.json()) as { ai_assisted: boolean };
-    expect(data.ai_assisted).toBe(false);
+    expect(
+      adminMock.calls.some((c) => c.table === "housing_applications" && c.op === "insert"),
+    ).toBe(false);
   });
 
   it("returns 429 when rate-limited", async () => {

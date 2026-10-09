@@ -120,22 +120,10 @@ export const DEFAULT_HOUSING_SEARCH: HousingSearchParams = {
   sort: "newest",
 };
 
-export interface HousingSearchResult {
-  listings: HousingListing[];
-  /** Total number of matches BEFORE pagination (stable across pages). */
-  total: number;
-  /** True when further pages exist at `offset + limit`. */
-  has_more: boolean;
-  /**
-   * True when the city could be geocoded and a real radius filter was applied
-   * to listings carrying coordinates. False = the radius was not applied
-   * (no city, geocoding failed, or radius 0) — the UI says so honestly.
-   */
-  radius_applied: boolean;
-  /** True when the results come from demo fixtures (no live providers yet). */
-  is_demo: boolean;
-  data_status: DataStatus;
-}
+// NOTE: the demo listing pipeline (fixtures + demo search route) was
+// removed on 2026-10-10 — the only listing source is now the live web
+// search (`src/lib/housing/web-search/`). `tests/housing/no-demo-data.test.ts`
+// guarantees the demo data cannot reappear.
 
 // --- Provider adapters --------------------------------------------------------
 
@@ -303,12 +291,15 @@ export interface AffordabilityResult {
  * Trust-badge gate (UI-facing, pure, client-safe).
  *
  * The green "verified source" badge may ONLY appear on LIVE data — i.e.
- * listings produced by a registered provider adapter, which searchHousing
- * re-stamps with `data_status: "live"`. Demo fixtures are NEVER verified,
- * no matter what their `verified` field says: in sample data that flag is
- * display metadata, not evidence of any real source verification. There is
- * no live provider contract yet (PROVIDER_ADAPTERS = []), so this gate
- * currently returns false for every listing the app can serve.
+ * listings produced by a registered provider adapter, re-stamped
+ * `data_status: "live"` by the provider pipeline. Anything stamped "demo"
+ * is NEVER verified, no matter what its `verified` field says: in sample
+ * data that flag is display metadata, not evidence of any real source
+ * verification. (Demo data was removed from the housing surface on
+ * 2026-10-10; the gate remains as defense in depth — e.g. for saved
+ * snapshots written before the removal.) There is no live provider
+ * contract yet (PROVIDER_ADAPTERS = []), so this gate currently returns
+ * false for every listing the app can serve.
  */
 export function isVerifiedListing(
   listing: Pick<HousingListing, "data_status" | "verified">,

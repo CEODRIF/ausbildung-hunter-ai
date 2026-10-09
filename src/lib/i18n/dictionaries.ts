@@ -2057,12 +2057,8 @@ const de = {
     heroSubtitle:
       "Wohnungen, WG-Zimmer und mehr – mit hilfreichen Tools, Tipps und geprüften Informationen.",
     guideCta: "Neu in Deutschland? Schritt-für-Schritt-Guide",
-    demoBanner: "Demo-Daten — keine echten Mietangebote",
-    demoNote:
-      "Diese Ansicht zeigt Beispieldaten. Live-Angebote folgen nach lizenzierter Anbindung an die Portale.",
     externalLink: "Original ansehen",
     verified: "Verifizierte Quelle",
-    demoSource: "Beispiel-Anzeige",
     searchCity: "Stadt oder PLZ",
     searchCityPlaceholder: "z. B. Köln, 50667",
     searchRadius: "Umkreis",
@@ -2213,9 +2209,8 @@ const de = {
       checkedCount: "{n} Seiten abgerufen und geprüft",
       warningPartial:
         "Nicht alle Funde konnten geprüft werden – Einträge ohne grünes Kennzeichen stammen nur aus Suchtreffern.",
-      empty: "Keine passenden Anzeigen in den erlaubten Quellen gefunden.",
-      emptyHint:
-        "Versuche eine größere Stadt, mehr Spielraum bei Zimmer/Miete oder eine längere Frist.",
+      empty:
+        "Keine echten Mietangebote gefunden. Bitte ändere deine Suchkriterien oder versuche es später erneut.",
       verified: "Seite geprüft",
       partial: "Aus Suchtreffer",
       unverified: "Nur entdeckt",
@@ -4239,12 +4234,8 @@ const en: Dict = {
     heroSubtitle:
       "Flats, shared rooms and more – with helpful tools, tips and verified information.",
     guideCta: "New to Germany? Step-by-step guide",
-    demoBanner: "Demo data — not real rental listings",
-    demoNote:
-      "This view shows sample data. Live listings will follow once portals are connected under licence.",
     externalLink: "View original",
     verified: "Verified source",
-    demoSource: "Sample listing",
     searchCity: "City or postal code",
     searchCityPlaceholder: "e.g. Köln, 50667",
     searchRadius: "Radius",
@@ -4395,9 +4386,8 @@ const en: Dict = {
       checkedCount: "{n} pages fetched and checked",
       warningPartial:
         "Not all findings could be checked — entries without the green marker come from search hits only.",
-      empty: "No matching listings found in the allowed sources.",
-      emptyHint:
-        "Try a larger city, more flexibility on rooms/rent, or a longer deadline.",
+      empty:
+        "No real rental listings found. Please adjust your search criteria or try again later.",
       verified: "Page checked",
       partial: "From search hit",
       unverified: "Discovered only",
@@ -6423,12 +6413,8 @@ const fr: Dict = {
     heroSubtitle:
       "Appartements, chambres en colocation et plus – avec des outils, des conseils et des informations vérifiées.",
     guideCta: "Nouveau en Allemagne ? Guide étape par étape",
-    demoBanner: "Données de démonstration — pas de vraies annonces",
-    demoNote:
-      "Cette vue affiche des données d’exemple. Les annonces en direct suivront après un accord de licence avec les portails.",
     externalLink: "Voir l’original",
     verified: "Source vérifiée",
-    demoSource: "Annonce d’exemple",
     searchCity: "Ville ou code postal",
     searchCityPlaceholder: "ex. Köln, 50667",
     searchRadius: "Rayon",
@@ -6579,9 +6565,8 @@ const fr: Dict = {
       checkedCount: "{n} pages consultées et vérifiées",
       warningPartial:
         "Tous les résultats n'ont pas pu être vérifiés — les entrées sans marque verte proviennent uniquement des résultats de recherche.",
-      empty: "Aucune annonce correspondante trouvée dans les sources autorisées.",
-      emptyHint:
-        "Essayez une plus grande ville, plus de souplesse sur pièces/loyer, ou un délai plus long.",
+      empty:
+        "Aucune annonce de location réelle trouvée. Veuillez modifier vos critères de recherche ou réessayer plus tard.",
       verified: "Page vérifiée",
       partial: "Issue du résultat",
       unverified: "Découverte uniquement",
@@ -8563,11 +8548,8 @@ const ar: Dict = {
     heroTitle: "اعثر على بيتك في ألمانيا.",
     heroSubtitle: "شقق وغرف مشتركة والمزيد – مع أدوات ومعلومات موثوقة.",
     guideCta: "جديد في ألمانيا؟ دليل خطوة بخطوة",
-    demoBanner: "بيانات تجريبية – ليست إعلانات إيجار حقيقية",
-    demoNote: "تعرض هذه الصفحة بيانات مثالية. ستتوفر الإعلانات المباشرة بعد ربط المنصات ترخيصياً.",
     externalLink: "عرض الأصل",
     verified: "مصدر موثّق",
-    demoSource: "إعلان تجريبي",
     searchCity: "المدينة أو الرمز البريدي",
     searchCityPlaceholder: "مثال: كولن، 50667",
     searchRadius: "نطاق البحث",
@@ -8711,8 +8693,7 @@ const ar: Dict = {
       checkedCount: "تم استعراض {n} صفحات والتحقق منها",
       warningPartial:
         "تعذّر التحقق من جميع النتائج — البنود دون العلامة الخضراء تعتمد فقط على نتائج البحث.",
-      empty: "لم تَعثر على إعلانات مطابقة في المصادر المسموح بها.",
-      emptyHint: "جرّب مدينة أكبر، أو مرونة أكبر في الغرف/الإيجار، أو مهلة أطول.",
+      empty: "لم يتم العثور على عروض إيجار حقيقية. يرجى تعديل معايير البحث أو المحاولة مرة أخرى لاحقًا.",
       verified: "تم التحقق من الصفحة",
       partial: "من نتيجة البحث",
       unverified: "اكتشاف فقط",
