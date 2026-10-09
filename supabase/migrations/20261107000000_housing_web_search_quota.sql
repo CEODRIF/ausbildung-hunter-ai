@@ -31,13 +31,22 @@
 -- unit for a run that was reserved and then FAILED (provider error,
 -- timeout) or that turned out to be a result-cache hit (no paid call).
 -- Successes are never released. Idempotent by run_id (a double release
--- cannot refund twice).
+-- cannot refund twice). Refunds ALWAYS target the day the run was
+-- RESERVED (its created_at in Europe/Berlin) — never the day the release
+-- executes — so a run stranded across Berlin midnight cannot create
+-- headroom on the new day's counter (no limit overshoot).
 --
 -- Stale recovery: expire_stale_housing_web_search_runs() refunds runs that
 -- stayed 'reserved' beyond a window (platform kill of a long function,
--- browser navigated away, lost release call). Comfortably longer than any
--- search the function allows (maxDuration 60s), short enough that the
--- user's next attempt repairs the day.
+-- browser navigated away, lost release call), again against the run's own
+-- reservation day. Comfortably longer than any search the function allows
+-- (maxDuration 60s), short enough that the user's next attempt repairs
+-- the affected day.
+--
+-- Authorization: EVERY RPC (including the read-only status function)
+-- raises not_authorized when called with a JWT whose auth.uid() differs
+-- from target_user_id — the security-definer functions must not become a
+-- way to read or touch another user's counter.
 --
 -- The DAILY LIMIT IS NOT HARDCODED in SQL: the server passes it as
 -- p_daily_limit on every call (env HOUSING_WEB_SEARCH_DAILY_MAX, default
@@ -99,6 +108,10 @@ create policy "Users can read their own housing web search runs"
 
 -- ---------------------------------------------------------------------------
 -- Read today's status (p_daily_limit - used = remaining)
+--
+-- Guarded exactly like the write RPCs: an authenticated caller may only
+-- read their OWN status (the function is security definer, so without the
+-- guard it would bypass RLS and expose any user's counter).
 -- ---------------------------------------------------------------------------
 
 create or replace function public.get_housing_web_search_status(
@@ -113,24 +126,33 @@ returns table (
   remaining integer,
   usage_date date
 )
-language sql
+language plpgsql
 security definer
 set search_path = public
 as $$
-  select p_daily_limit,
-         coalesce(u.searches_used, 0),
-         greatest(p_daily_limit - coalesce(u.searches_used, 0), 0),
-         (now() at time zone 'Europe/Berlin')::date
-    from public.housing_web_search_usage u
-   where u.user_id = target_user_id
-     and u.usage_date = (now() at time zone 'Europe/Berlin')::date
-   union all
-   select p_daily_limit, 0, p_daily_limit, (now() at time zone 'Europe/Berlin')::date
-   where not exists (
-     select 1 from public.housing_web_search_usage u
-      where u.user_id = target_user_id
-        and u.usage_date = (now() at time zone 'Europe/Berlin')::date
-   );
+declare
+  today date := (now() at time zone 'Europe/Berlin')::date;
+  row public.housing_web_search_usage;
+begin
+  if auth.uid() is not null and auth.uid() <> target_user_id then
+    raise exception 'not_authorized';
+  end if;
+  if p_daily_limit is null or p_daily_limit < 1 then
+    raise exception 'invalid_daily_limit';
+  end if;
+
+  select * into row
+    from public.housing_web_search_usage
+   where user_id = target_user_id and usage_date = today;
+
+  if row is null then
+    return query select p_daily_limit, 0, p_daily_limit, today;
+  else
+    return query
+      select p_daily_limit, row.searches_used,
+             greatest(p_daily_limit - row.searches_used, 0), today;
+  end if;
+end;
 $$;
 
 revoke execute on function public.get_housing_web_search_status(uuid, integer) from public, anon;
@@ -262,9 +284,14 @@ begin
      set status = 'failed'
    where run_id = p_run_id;
 
+  -- Refund the day the run was RESERVED (its created_at, Berlin time), NOT
+  -- the day the release happens: a run reserved yesterday that is released
+  -- today must not create headroom on today's counter (a refund without a
+  -- matching increment could let the user exceed the limit).
   update public.housing_web_search_usage u
      set searches_used = greatest(u.searches_used - 1, 0)
-   where u.user_id = target_user_id and u.usage_date = today
+   where u.user_id = target_user_id
+     and u.usage_date = (run_row.created_at at time zone 'Europe/Berlin')::date
    returning searches_used into cur_used;
 
   return query
@@ -319,7 +346,6 @@ security definer
 set search_path = public
 as $$
 declare
-  today date := (now() at time zone 'Europe/Berlin')::date;
   stale record;
   refunded integer := 0;
 begin
@@ -331,7 +357,8 @@ begin
   end if;
 
   for stale in
-    select r.run_id
+    select r.run_id,
+           (r.created_at at time zone 'Europe/Berlin')::date as r_day
       from public.housing_web_search_runs r
      where r.user_id = target_user_id
        and r.status = 'reserved'
@@ -341,10 +368,13 @@ begin
        set status = 'failed'
      where run_id = stale.run_id;
 
+    -- Refund the run's OWN reservation day (never the recovery day), so a
+    -- run stranded across Berlin midnight can only return its slot to the
+    -- day it was charged on — the recovery day's limit stays intact.
     update public.housing_web_search_usage u
        set searches_used = greatest(u.searches_used - 1, 0)
      where u.user_id = target_user_id
-       and u.usage_date = today;
+       and u.usage_date = stale.r_day;
 
     refunded := refunded + 1;
   end loop;

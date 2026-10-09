@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Offline: the Supabase server client is fully mocked.
@@ -325,5 +327,191 @@ describe("concurrent requests", () => {
     expect(first?.status).toBe("reserved");
     expect(retry?.status).toBe("already_reserved");
     expect(retry?.used).toBe(1); // still exactly ONE consumed
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-midnight / DST refunds.
+//
+// The day key for a refund lives in the SQL (the run's created_at converted
+// to Europe/Berlin). The harness below emulates the corrected SQL contract
+// exactly (usage rows per Berlin day; release/stale sweeps refund the run's
+// OWN reservation day) so the module + day math can be exercised end-to-end
+// offline. The static contract test below pins this behavior to the actual
+// committed migration text.
+// ---------------------------------------------------------------------------
+
+function emulatedQuotaByDay(limit: number) {
+  const clock = { now: new Date("2026-11-08T22:59:00Z") };
+  const usage = new Map<string, number>(); // Berlin day -> used
+  const runs = new Map<string, { day: string; status: string; created: number }>();
+  const STALE_MS = 15 * 60 * 1000;
+  const day = () => berlinCalendarDate(clock.now);
+  let sweepRefunded = 0;
+
+  const sweep = () => {
+    sweepRefunded = 0;
+    for (const [, r] of runs) {
+      if (r.status === "reserved" && clock.now.getTime() - r.created > STALE_MS) {
+        r.status = "failed";
+        usage.set(r.day, Math.max((usage.get(r.day) ?? 0) - 1, 0)); // refund RUN'S OWN day
+        sweepRefunded += 1;
+      }
+    }
+  };
+
+  const rpc: (name: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }> =
+    (name, args) => {
+      if (name === "expire_stale_housing_web_search_runs") {
+        sweep();
+        return Promise.resolve({ data: sweepRefunded, error: null });
+      }
+      if (name === "reserve_housing_web_search") {
+        const runId = String(args.p_run_id);
+        if (runs.has(runId)) {
+          const d = day();
+          const u = usage.get(d) ?? 0;
+          return Promise.resolve({
+            data: [{ status: "already_reserved", used: u, remaining: Math.max(limit - u, 0) }],
+            error: null,
+          });
+        }
+        const d = day();
+        if ((usage.get(d) ?? 0) >= limit) {
+          return Promise.resolve({ data: [{ status: "quota_exhausted", used: limit, remaining: 0 }], error: null });
+        }
+        usage.set(d, (usage.get(d) ?? 0) + 1);
+        runs.set(runId, { day: d, status: "reserved", created: clock.now.getTime() });
+        return Promise.resolve({
+          data: [{ status: "reserved", used: usage.get(d), remaining: limit - (usage.get(d) ?? 0) }],
+          error: null,
+        });
+      }
+      if (name === "release_housing_web_search") {
+        const r = runs.get(String(args.p_run_id));
+        if (!r || r.status !== "reserved") {
+          const d = day();
+          const u = usage.get(d) ?? 0;
+          return Promise.resolve({ data: [{ status: "no_op", used: u, remaining: Math.max(limit - u, 0) }], error: null });
+        }
+        r.status = "failed";
+        usage.set(r.day, Math.max((usage.get(r.day) ?? 0) - 1, 0)); // refund RUN'S OWN day
+        return Promise.resolve({
+          data: [{ status: "released", used: usage.get(r.day) ?? 0, remaining: limit - (usage.get(r.day) ?? 0) }],
+          error: null,
+        });
+      }
+      if (name === "get_housing_web_search_status") {
+        const d = day();
+        const u = usage.get(d) ?? 0;
+        return Promise.resolve({
+          data: [{ daily_limit: limit, used: u, remaining: Math.max(limit - u, 0), usage_date: d }],
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    };
+
+  setFakeClient({ rpc });
+  return { clock, usage, runs };
+}
+
+describe("cross-midnight and DST refunds (regression: no limit overshoot)", () => {
+  it("a run stranded across Berlin midnight refunds YESTERDAY's row, never today's", async () => {
+    const h = emulatedQuotaByDay(20);
+
+    // Day 2026-11-08, Berlin 23:59 (CET): reservation happens, then the
+    // platform kills the function before settlement (run stays 'reserved').
+    h.clock.now = new Date("2026-11-08T22:59:00Z");
+    expect(await reserveHousingWebSearch("run-night")).toMatchObject({ status: "reserved", used: 1 });
+    expect(h.usage.get("2026-11-08")).toBe(1);
+
+    // 81 minutes later: Berlin 01:20 on 2026-11-09 (past the 15-min stale
+    // window). The first new reserve triggers the stale sweep.
+    h.clock.now = new Date("2026-11-09T00:20:00Z");
+    expect(await reserveHousingWebSearch("run-b1")).toMatchObject({ status: "reserved" });
+
+    // The refund landed on the run's OWN day (2026-11-08), not the recovery
+    // day — today's counter is untouched by yesterday's refund.
+    expect(h.usage.get("2026-11-08")).toBe(0);
+    expect(h.usage.get("2026-11-09")).toBe(1);
+
+    // 2026-11-09: exactly 20 searches allowed, the 21st rejected. (With the
+    // old recovery-day refund, the 21st would have been admitted.)
+    for (let i = 2; i <= 20; i += 1) {
+      expect((await reserveHousingWebSearch(`run-b${i}`))?.status).toBe("reserved");
+    }
+    expect((await reserveHousingWebSearch("run-b21"))?.status).toBe("quota_exhausted");
+    expect(h.usage.get("2026-11-09")).toBe(20);
+  });
+
+  it("keeps the correct day across the spring-forward DST boundary (2026-03-29)", async () => {
+    const h = emulatedQuotaByDay(20);
+
+    // Run created 2026-03-28T22:00Z = Berlin 2026-03-28 23:00 (still CET,
+    // transition happens 2026-03-29T01:00Z) → its day is 2026-03-28.
+    h.clock.now = new Date("2026-03-28T22:00:00Z");
+    expect(berlinCalendarDate(h.clock.now)).toBe("2026-03-28");
+    expect(await reserveHousingWebSearch("run-dst")).toMatchObject({ status: "reserved" });
+    expect(h.usage.get("2026-03-28")).toBe(1);
+
+    // Recovery 2026-03-29T02:00Z = Berlin 2026-03-29 05:00 (CEST, after the
+    // spring-forward) — 4h later, well past the stale window.
+    h.clock.now = new Date("2026-03-29T02:00:00Z");
+    expect(berlinCalendarDate(h.clock.now)).toBe("2026-03-29");
+    expect(await reserveHousingWebSearch("run-c1")).toMatchObject({ status: "reserved" });
+
+    // Refund hit the pre-DST day (2026-03-28); the post-DST recovery day
+    // only carries its own new reservation.
+    expect(h.usage.get("2026-03-28")).toBe(0);
+    expect(h.usage.get("2026-03-29")).toBe(1);
+
+    // Full 20 still available on 2026-03-29; the 21st is rejected.
+    for (let i = 2; i <= 20; i += 1) {
+      expect((await reserveHousingWebSearch(`run-c${i}`))?.status).toBe("reserved");
+    }
+    expect((await reserveHousingWebSearch("run-c21"))?.status).toBe("quota_exhausted");
+    expect(h.usage.get("2026-03-29")).toBe(20);
+  });
+
+  it("same-day provider-failure refund still behaves (release → no_op idempotent)", async () => {
+    const h = emulatedQuotaByDay(20);
+    h.clock.now = new Date("2026-11-09T10:00:00Z");
+
+    expect(await reserveHousingWebSearch("run-x")).toMatchObject({ status: "reserved", used: 1 });
+    // Provider failed → the route refunds within the same request/day.
+    expect(await releaseHousingWebSearch("run-x")).toBe(true);
+    expect(h.usage.get("2026-11-09")).toBe(0);
+    // Second release is a no-op — a double release cannot refund twice.
+    expect(await releaseHousingWebSearch("run-x")).toBe(false);
+    expect(h.usage.get("2026-11-09")).toBe(0);
+  });
+});
+
+describe("migration SQL contract (static pin)", () => {
+  const MIGRATION = "supabase/migrations/20261107000000_housing_web_search_quota.sql";
+  const fnBody = (sql: string, fn: string): string => {
+    const start = sql.indexOf(`function public.${fn}(`);
+    const end = sql.indexOf(`revoke execute on function public.${fn}`);
+    if (start === -1 || end === -1) throw new Error(`${fn} not found in migration`);
+    return sql.slice(start, end);
+  };
+
+  it("guards get_housing_web_search_status with auth.uid() (no cross-user reads)", () => {
+    const sql = readFileSync(MIGRATION, "utf8");
+    const body = fnBody(sql, "get_housing_web_search_status");
+    expect(body).toContain("raise exception 'not_authorized'");
+    expect(body).toContain("auth.uid() is not null and auth.uid() <> target_user_id");
+    // It must be plpgsql (a pure-SQL function cannot carry the guard).
+    expect(body).toContain("language plpgsql");
+  });
+
+  it("refunds the run's OWN Berlin reservation day in release and stale recovery", () => {
+    const sql = readFileSync(MIGRATION, "utf8");
+    const release = fnBody(sql, "release_housing_web_search");
+    expect(release).toMatch(/run_row\.created_at at time zone 'Europe\/Berlin'/);
+    const expire = fnBody(sql, "expire_stale_housing_web_search_runs");
+    expect(expire).toMatch(/created_at at time zone 'Europe\/Berlin'/);
+    expect(expire).toContain("stale.r_day");
   });
 });
