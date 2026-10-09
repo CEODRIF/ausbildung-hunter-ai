@@ -178,18 +178,34 @@ function collectCandidates(
 
   const out: Candidate[] = [];
   const seen = new Set<string>();
+  // Funnel counters — turned into warnings when the funnel empties the
+  // results, so "search ran but nothing displayed" is diagnosable from the
+  // API response alone (counts only, never URLs).
+  let droppedOffAllowlist = 0;
+  let droppedNotListingUrl = 0;
+  let invalidUrls = 0;
   const push = (rawUrl: string, title: string, snippet: string) => {
     const normalized = normalizeUrl(rawUrl);
-    if (!normalized || seen.has(normalized)) return;
+    if (!normalized || seen.has(normalized)) {
+      if (!normalized) invalidUrls += 1;
+      return;
+    }
     let u: URL;
     try {
       u = new URL(normalized);
     } catch {
+      invalidUrls += 1;
       return;
     }
     const entry = domainForHost(u.hostname);
-    if (!entry || !selected.has(entry.domain)) return; // allowlist is binding
-    if (!looksLikeListingUrl(u, entry.domain)) return;
+    if (!entry || !selected.has(entry.domain)) {
+      droppedOffAllowlist += 1; // allowlist is binding
+      return;
+    }
+    if (!looksLikeListingUrl(u, entry.domain)) {
+      droppedNotListingUrl += 1;
+      return;
+    }
     seen.add(normalized);
     out.push({ url: normalized, title, snippet, domain: entry });
   };
@@ -197,7 +213,16 @@ function collectCandidates(
   for (const c of result.citations) push(c.url, c.title, "");
   for (const s of result.sources) push(s, "", "");
   if (out.length === 0) {
+    if (result.citations.length === 0 && result.sources.length === 0 && result.webSearchCalls === 0) {
+      // The model answered WITHOUT invoking the web_search tool — the single
+      // most likely cause of a silent empty result (official docs: prompt
+      // more explicitly; we do, but the model can still decline).
+      warnings.push("azure_no_web_search_call");
+    }
     warnings.push("no_candidates_on_allowed_domains");
+    if (invalidUrls > 0) warnings.push(`candidates_dropped_invalid_url=${invalidUrls}`);
+    if (droppedOffAllowlist > 0) warnings.push(`candidates_dropped_off_allowlist=${droppedOffAllowlist}`);
+    if (droppedNotListingUrl > 0) warnings.push(`candidates_dropped_not_listing_url=${droppedNotListingUrl}`);
   }
   return out;
 }
@@ -292,6 +317,7 @@ export async function runHousingWebSearch(
 
   const searchCalls: string[] = [];
   let bingRequests: number | null = null;
+  let webSearchCalls = 0;
   let citations: SearchCitation[] = [];
   let sources: string[] = [];
   let text = "";
@@ -315,6 +341,7 @@ export async function runHousingWebSearch(
     });
     bingRequests =
       bingRequests === null ? res.numRequests : bingRequests + (res.numRequests ?? 0);
+    webSearchCalls += res.webSearchCalls;
     return res;
   };
 
@@ -329,7 +356,10 @@ export async function runHousingWebSearch(
       citations = first.citations;
       sources = first.sources;
       text = first.text;
-      const initial = collectCandidates({ ...first, citations, sources }, input, warnings);
+      // Count-only probe (empty warnings sink): funnel warnings are reported
+      // once, from the FINAL collectCandidates below, so a successful retry
+      // never leaves a stale "no web search call" warning behind.
+      const initial = collectCandidates({ ...first, citations, sources }, input, []);
       if (initial.length < 3 && built.queries.length > 1) {
         // Retry ONCE in English, only when the German query under-delivered.
         const second = await runOneCall(built.queries[1], undefined);
@@ -364,9 +394,9 @@ export async function runHousingWebSearch(
     });
   }
 
-  // 6) Collect + dedupe candidates (allowlist binding for BOTH providers).
+  // 6) Collect + dedupe candidates (allowlist binding).
   const candidates = collectCandidates(
-    { text, citations, sources, queries: searchCalls, numRequests: null },
+    { text, citations, sources, queries: searchCalls, numRequests: null, webSearchCalls },
     input,
     warnings,
   ).slice(0, LIMITS.maxResults);
@@ -493,7 +523,7 @@ export async function runHousingWebSearch(
       pagesFetched,
       bingRequests,
     },
-    warnings,
+    warnings: [...new Set(warnings)],
     cached: false,
     fetchedAt: new Date(now()).toISOString(),
   };

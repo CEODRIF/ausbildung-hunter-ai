@@ -310,6 +310,154 @@ describe("general mode (web)", () => {
   });
 });
 
+describe("real Azure response shape → real live listings (never demo)", () => {
+  // The exact "Response shape" from the official docs (flat url_citation
+  // annotations, action.query singular, action.sources as {type,url}
+  // objects) — the format the deployed gpt-5-mini deployment returns.
+  const docsShapePayload = {
+    output: [
+      {
+        id: "ws_1",
+        type: "web_search_call",
+        status: "completed",
+        action: {
+          type: "search",
+          query: "Mietwohnung Köln bis 800 Euro Warmmiete",
+          sources: [
+            { type: "url", url: "https://www.immobilienscout24.de/expose/123456789" },
+            { type: "url", url: "https://www.immowelt.de/expose/555555555" },
+            { type: "url", url: "https://www.wg-gesucht.de/2-zimmer-koeln-123456789.html" },
+            { type: "url", url: "https://www.immobilienscout24.de/immobilien/suche/wohnung-mieten/koeln" },
+          ],
+        },
+      },
+      {
+        id: "msg_1",
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text: "Aktuelle Angebote in Köln: …",
+            annotations: [
+              { type: "url_citation", start_index: 0, end_index: 40, url: "https://www.immobilienscout24.de/expose/123456789", title: "2-Zimmer-Wohnung in Köln-Ehrenfeld" },
+              { type: "url_citation", start_index: 40, end_index: 80, url: "https://www.immowelt.de/expose/555555555", title: "3-Zimmer-Wohnung in Köln-Sülz" },
+            ],
+          },
+        ],
+      },
+    ],
+    output_text: "Aktuelle Angebote in Köln: …",
+    tool_usage: { web_search: { num_requests: 1 } },
+  };
+
+  it("extracts real listings (URL + title + live status) from citations AND sources, never demo", async () => {
+    const { impl } = makeFetch({ azure: [docsShapePayload] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+
+    expect(outcome.status).toBe("ok");
+    expect(outcome.warnings).toEqual([]);
+    expect(outcome.stats.bingRequests).toBe(1);
+    // Citations (2) + sources (3 listing pages + 1 search-overview page):
+    // the overview page is dropped by the listing-URL heuristic, dedupe
+    // keeps the three distinct listing URLs. ≥3 candidates also means the
+    // general-mode EN retry does NOT fire (one paid call, bingRequests=1).
+    expect(outcome.stats.searchCalls).toBe(1);
+    expect(outcome.listings).toHaveLength(3);
+    expect(outcome.listings.map((l) => l.listing_url).sort()).toEqual([
+      "https://immobilienscout24.de/expose/123456789",
+      "https://immowelt.de/expose/555555555",
+      "https://wg-gesucht.de/2-zimmer-koeln-123456789.html",
+    ]);
+    for (const l of outcome.listings) {
+      expect(l.data_status).toBe("live"); // never "demo"
+      expect(l.provider).toBe("web-search");
+      expect(l.source_type).toBe("web_search");
+      expect(l.city).toBe("Köln");
+      expect(l.listing_active).toBeNull();
+    }
+    // Citation titles are preserved on the matching listing.
+    const is24 = outcome.listings.find((l) => l.listing_url.includes("immobilienscout24.de"))!;
+    expect(is24.title).toBe("2-Zimmer-Wohnung in Köln-Ehrenfeld");
+  });
+
+  it("sends an explicit web-search + direct-link instruction (not a bare query)", async () => {
+    const { impl, calls } = makeFetch({ azure: [docsShapePayload] });
+    await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    const body = calls.find((c) => c.url.endsWith("/responses"))!.body!;
+    const sentInput = String(body.input);
+    // The raw user query is preserved verbatim inside the instruction…
+    expect(sentInput).toContain("Mietwohnung");
+    expect(sentInput).toContain("Köln");
+    expect(sentInput).toContain("800");
+    // …and the instruction explicitly demands a web search with direct
+    // per-listing links (the documented fix for missing citations).
+    expect(sentInput).toMatch(/Websuche/i);
+    expect(sentInput).toMatch(/direkten Link/i);
+    expect(sentInput).toMatch(/Quellen|zitiere/i);
+  });
+
+  it("reports WHY an empty result is empty: all citations off the allowlist", async () => {
+    const offAllowlist = {
+      ...docsShapePayload,
+      output: [
+        {
+          type: "web_search_call",
+          status: "completed",
+          action: { type: "search", query: "q", sources: [] },
+        },
+        {
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "…",
+              annotations: [
+                { type: "url_citation", start_index: 0, end_index: 10, url: "https://blog.example.com/wohnungen", title: "a" },
+                { type: "url_citation", start_index: 10, end_index: 20, url: "https://wiki.example.org/mieten", title: "b" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const { impl } = makeFetch({ azure: [offAllowlist] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+
+    expect(outcome.status).toBe("ok"); // a real search ran — not an error
+    expect(outcome.listings).toEqual([]);
+    expect(outcome.warnings).toContain("no_candidates_on_allowed_domains");
+    expect(outcome.warnings).toContain("candidates_dropped_off_allowlist=2");
+    // Citations stay visible (Bing TOU: references displayed to the user).
+    expect(outcome.citations).toHaveLength(2);
+  });
+
+  it("flags azure_no_web_search_call when the model answered without invoking the tool", async () => {
+    const noTool = {
+      output: [
+        {
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Aus meinem Wissen: …", annotations: [] }],
+        },
+      ],
+      output_text: "Aus meinem Wissen: …",
+    };
+    // Both the German call and the general-mode EN retry return no tool use.
+    const { impl } = makeFetch({ azure: [noTool, noTool] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toEqual([]);
+    expect(outcome.warnings).toContain("azure_no_web_search_call");
+    expect(outcome.warnings).toContain("no_candidates_on_allowed_domains");
+  });
+});
+
 describe("targeted mode", () => {
   it("sends the domain restriction to the search API and never fetches search_only portals", async () => {
     const citations = [

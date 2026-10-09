@@ -221,6 +221,12 @@ export async function POST(request: Request) {
         `domains_rejected:${rejectedDomains.slice(0, 3).join(",")}`,
       );
     }
+    // Run-level diagnostics (counts + warning codes + run_id only — no URLs,
+    // no response text, no keys). `status=ok listings=0` is the signature of
+    // a search that ran but displayed nothing; the warnings say why.
+    console.info(
+      `[housing-web-search] run finished run_id=${runId} status=${outcome.status} provider=${outcome.provider ?? "n/a"} bing_requests=${outcome.stats.bingRequests ?? "n/a"} listings=${outcome.listings.length} warnings=[${outcome.warnings.slice(0, 6).join(",")}]`,
+    );
     // Settle the reserved slot: refund when NO paid search ran (cache hit or
     // non-ok status), otherwise mark the run succeeded (audit ledger).
     if (outcome.cached || outcome.status !== "ok") {

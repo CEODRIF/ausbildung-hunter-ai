@@ -20,9 +20,14 @@ import { LIMITS, validateAzureEndpoint } from "./config";
  *             include:["web_search_call.action.sources"],
  *             input:"<query>" }
  *
- * Response: `output[]` with `web_search_call` items (action.query, action.sources)
- * and a `message` item whose content[0].annotations[] carries
- * `url_citation { url, title }`. Billable count = `tool_usage.web_search.num_requests`.
+ * Response (official "Response shape", verified 2026-10-10): `output[]` with
+ * `web_search_call` items (`action: { type: "search", query, sources? }`;
+ * reasoning models may also emit `open_page` / `find_in_page` actions that
+ * carry a `url`) and a `message` item whose content[].annotations[] carries
+ * `url_citation` objects — flat `{ type, url, title, start_index, end_index }`
+ * in the documented Azure shape (the nested `{ url_citation: { … } }` OpenAI
+ * spelling is accepted defensively too). Billable count =
+ * `tool_usage.web_search.num_requests`.
  *
  * Compliance: Grounding with Bing (enterprise) TOU — citations must be
  * displayed to the end user; output may only be cached as part of our work
@@ -49,6 +54,12 @@ export interface WebDiscoveryResult {
   queries: string[];
   /** Billable Bing transactions reported by the API, when present. */
   numRequests: number | null;
+  /**
+   * Number of `web_search_call` output items. 0 = the model answered without
+   * invoking the search tool (possible with tool_choice "auto") — the caller
+   * surfaces this as an explicit warning instead of a silent empty result.
+   */
+  webSearchCalls: number;
 }
 
 export type WebSearchFailure =
@@ -123,7 +134,7 @@ export async function azureWebSearch(req: ResponsesRequest): Promise<WebDiscover
     ],
     tool_choice: "auto",
     include: ["web_search_call.action.sources"],
-    max_output_tokens: 500,
+    max_output_tokens: LIMITS.maxOutputTokens,
   };
 
   const fetchImpl = req.fetchImpl ?? fetch;
@@ -168,7 +179,15 @@ export async function azureWebSearch(req: ResponsesRequest): Promise<WebDiscover
     output_text?: unknown;
     tool_usage?: unknown;
   };
-  return parseResponsesPayload(payload);
+  const parsed = parseResponsesPayload(payload);
+  // Safe diagnostics: COUNTS ONLY — never URLs, response text, keys, or
+  // request details. This line is what makes "search ran but no results
+  // shown" debuggable: it shows whether the tool was invoked, how many
+  // citations/sources came back, and the billable Bing count.
+  console.info(
+    `[housing-web-search] azure response web_search_calls=${parsed.webSearchCalls} citations=${parsed.citations.length} sources=${parsed.sources.length} queries=${parsed.queries.length} bing_requests=${parsed.numRequests ?? "n/a"} output_text_chars=${parsed.text.length}`,
+  );
+  return parsed;
 }
 
 /** Pure response parsing — exported for tests. */
@@ -182,6 +201,7 @@ export function parseResponsesPayload(payload: {
   const queries: string[] = [];
   const seenCitation = new Set<string>();
   const seenSource = new Set<string>();
+  let webSearchCalls = 0;
   let text = typeof payload.output_text === "string" ? payload.output_text : "";
 
   const numRequests =
@@ -194,22 +214,41 @@ export function parseResponsesPayload(payload: {
         )
       : null;
 
+  const addSource = (url: string): void => {
+    if (!seenSource.has(url)) {
+      seenSource.add(url);
+      sources.push(url);
+    }
+  };
+
+  // Parse by `type`, never by position — with reasoning models the `output`
+  // array also contains `reasoning` items (official docs, "Response shape").
   const output = Array.isArray(payload.output) ? payload.output : [];
   for (const item of output) {
     if (typeof item !== "object" || item === null) continue;
     const rec = item as Record<string, unknown>;
     if (rec.type === "web_search_call") {
+      webSearchCalls += 1;
       const actionRaw = rec.action;
       if (actionRaw && typeof actionRaw === "object") {
         const action = actionRaw as Record<string, unknown>;
+        // Documented Azure shape: action.query (string). The OpenAI API also
+        // uses action.queries (array) — accept both.
         if (typeof action.query === "string") queries.push(action.query);
+        if (Array.isArray(action.queries)) {
+          for (const q of action.queries) {
+            if (typeof q === "string") queries.push(q);
+          }
+        }
+        // Reasoning models: open_page / find_in_page actions carry the page
+        // URL the model consulted — a valid listing source.
+        if (typeof action.url === "string") addSource(action.url);
         if (Array.isArray(action.sources)) {
           for (const s of action.sources) {
+            // Documented shape: each entry is { type, url }; a bare string is
+            // accepted defensively.
             const url = typeof s === "string" ? s : (s as { url?: unknown })?.url;
-            if (typeof url === "string" && !seenSource.has(url)) {
-              seenSource.add(url);
-              sources.push(url);
-            }
+            if (typeof url === "string") addSource(url);
           }
         }
       }
@@ -220,12 +259,18 @@ export function parseResponsesPayload(payload: {
         if (typeof b.text === "string") text += b.text;
         if (Array.isArray(b.annotations)) {
           for (const ann of b.annotations) {
-            if (ann && typeof ann === "object" && ann.type === "url_citation") {
-              const u = typeof ann.url === "string" ? ann.url : null;
-              if (u && !seenCitation.has(u)) {
-                seenCitation.add(u);
-                citations.push({ url: u, title: typeof ann.title === "string" ? ann.title : "" });
-              }
+            if (!ann || typeof ann !== "object" || ann.type !== "url_citation") continue;
+            // Documented Azure shape is FLAT (url/title on the annotation);
+            // the OpenAI nested spelling { url_citation: { url, title } } is
+            // accepted defensively.
+            const nested =
+              ann.url_citation && typeof ann.url_citation === "object"
+                ? (ann.url_citation as Record<string, unknown>)
+                : ann;
+            const u = typeof nested.url === "string" ? nested.url : null;
+            if (u && !seenCitation.has(u)) {
+              seenCitation.add(u);
+              citations.push({ url: u, title: typeof nested.title === "string" ? nested.title : "" });
             }
           }
         }
@@ -238,5 +283,6 @@ export function parseResponsesPayload(payload: {
     sources,
     queries,
     numRequests: Number.isFinite(numRequests as number) ? (numRequests as number) : null,
+    webSearchCalls,
   };
 }

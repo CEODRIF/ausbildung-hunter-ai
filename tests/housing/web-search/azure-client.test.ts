@@ -88,6 +88,74 @@ describe("parseResponsesPayload", () => {
     ]);
     expect(p.queries).toEqual(["Mietwohnung Köln bis 800 Euro Warmmiete"]);
     expect(p.numRequests).toBe(2);
+    expect(p.webSearchCalls).toBe(1);
+  });
+
+  it("counts web_search_call items (0 when the model answered without the tool)", () => {
+    // The official troubleshooting section documents exactly this case:
+    // "If the model doesn't call the tool, prompt more explicitly…"
+    const noTool = parseResponsesPayload({
+      output: [
+        {
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Ich rate aus dem Training: …", annotations: [] }],
+        },
+      ],
+      output_text: "Ich rate aus dem Training: …",
+    });
+    expect(noTool.webSearchCalls).toBe(0);
+    expect(noTool.citations).toEqual([]);
+    expect(noTool.sources).toEqual([]);
+  });
+
+  it("accepts the OpenAI nested annotation spelling, queries[] arrays and open_page actions", () => {
+    const p = parseResponsesPayload({
+      output: [
+        {
+          type: "web_search_call",
+          status: "completed",
+          action: { type: "search", queries: ["Mietwohnung Köln", "rental Cologne"] },
+        },
+        {
+          type: "web_search_call",
+          status: "completed",
+          action: { type: "open_page", url: "https://www.wg-gesucht.de/2-zimmer-koeln-123456789.html" },
+        },
+        {
+          type: "reasoning",
+          status: "completed",
+          content: [{ type: "reasoning_summary_text", text: "thinking…" }],
+        },
+        {
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "…",
+              annotations: [
+                {
+                  type: "url_citation",
+                  url_citation: {
+                    url: "https://www.immobilienscout24.de/expose/555555555",
+                    title: "Nested spelling",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(p.webSearchCalls).toBe(2);
+    expect(p.queries).toEqual(["Mietwohnung Köln", "rental Cologne"]);
+    expect(p.sources).toEqual(["https://www.wg-gesucht.de/2-zimmer-koeln-123456789.html"]);
+    expect(p.citations).toEqual([
+      { url: "https://www.immobilienscout24.de/expose/555555555", title: "Nested spelling" },
+    ]);
   });
 
   it("uses top-level output_text when no message items exist", () => {
@@ -104,6 +172,7 @@ describe("parseResponsesPayload", () => {
       sources: [],
       queries: [],
       numRequests: null,
+      webSearchCalls: 0,
     });
     expect(parseResponsesPayload({ output: 42, tool_usage: "x" }).text).toBe("");
     const badNum = parseResponsesPayload({ tool_usage: { web_search: { num_requests: "abc" } } });
@@ -143,7 +212,7 @@ describe("azureWebSearch", () => {
     expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.tool_choice).toBe("auto");
     expect(body.include).toEqual(["web_search_call.action.sources"]);
-    expect(body.max_output_tokens).toBe(500);
+    expect(body.max_output_tokens).toBe(1500); // reasoning model: reasoning + cited answer share the budget
     const tool = body.tools[0];
     expect(tool.type).toBe("web_search");
     expect(tool.filters).toEqual({ allowed_domains: ["immobilienscout24.de", "open.nrw"] });

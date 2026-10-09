@@ -48,6 +48,13 @@ describe("buildHousingQueries", () => {
     // Targeted mode uses the German query; the EN query is a general-mode retry.
     expect(built.targetedQuery).toBe(de);
     expect(built.queries).toHaveLength(2);
+    // Every query carries the explicit web-search instruction (the documented
+    // fix for "model answers without performing the search / without
+    // citations") — the raw constraint string above is embedded verbatim.
+    expect(de).toMatch(/Websuche/i);
+    expect(de).toMatch(/direkten Link/i);
+    expect(built.queries[1]).toMatch(/live web search/i);
+    expect(built.queries[1]).toMatch(/DIRECT LINK/i);
   });
 
   it("builds a useful English secondary query", () => {
@@ -75,7 +82,11 @@ describe("buildHousingQueries", () => {
   it("omits unset constraints (rooms=all, no rent cap)", () => {
     const built = buildHousingQueries({ ...base, city: "Leipzig" });
     const de = built.queries[0];
-    expect(de).toBe("Mietwohnung, Leipzig");
+    // The raw query keeps exactly the set constraints — inside the
+    // fixed instruction wrapper.
+    expect(de).toContain("Mietwohnung, Leipzig");
+    expect(de).not.toContain("Zimmer");
+    expect(de).not.toContain("Warmmiete");
   });
 
   it("maps every accommodation type to German and English terms", () => {
@@ -97,7 +108,7 @@ describe("buildHousingQueries", () => {
     expect(built.queries[0]).not.toContain("frei ab");
   });
 
-  it("keeps queries bounded (≤400 chars)", () => {
+  it("keeps queries bounded (raw part ≤400 chars + fixed instruction ≤900 total)", () => {
     const built = buildHousingQueries({
       ...base,
       city: "Köln",
@@ -109,7 +120,9 @@ describe("buildHousingQueries", () => {
       available_before: "2026-11-01",
     });
     for (const q of [built.queries[0], built.queries[1], built.targetedQuery]) {
-      expect(q.length).toBeLessThanOrEqual(400);
+      // Raw constraint string is sliced at 400; the explicit search
+      // instruction adds a fixed, bounded amount.
+      expect(q.length).toBeLessThanOrEqual(900);
     }
   });
 });

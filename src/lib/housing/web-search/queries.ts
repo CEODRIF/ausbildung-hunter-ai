@@ -39,6 +39,34 @@ export interface BuiltQueries {
 }
 
 /**
+ * Explicit web-search instruction wrapped around the raw query.
+ *
+ * The official docs' troubleshooting section is unambiguous: with
+ * tool_choice "auto" the model may answer WITHOUT performing a search or
+ * WITHOUT citing sources — "prompt more explicitly to browse the web or ask
+ * for citations". A bare query string as `input` is exactly the case that
+ * produced "search consumed quota but zero listings displayed", so the
+ * instruction is part of the request contract now, not a nicety.
+ * The raw query is preserved verbatim inside (tests assert this).
+ */
+function wrapInstruction(query: string, lang: "de" | "en"): string {
+  if (lang === "de") {
+    return (
+      `Führe eine Websuche im aktuellen Internet durch nach konkreten, aktuell ausstehenden Einzelangeboten für: ${query}. ` +
+      `Liste im Ergebnis einzelne konkrete Angebote auf und gib für JEDES Angebot den direkten Link (URL) zur jeweiligen Angebotsseite an ` +
+      `(also die URL des einzelnen Objekts, keine Übersichts- oder Suchergebnisseite), mit kurzer Angabe zu Ort und Mietpreis, soweit der Suchtreffer sie nennt. ` +
+      `Nutze ausschließlich die Websuche und zitiere die Quellen (Links) direkt in der Antwort.`
+    );
+  }
+  return (
+    `Perform a live web search for currently available individual rental listings matching: ${query}. ` +
+    `List each concrete listing and give the DIRECT LINK (URL) to the individual listing page for EVERY listing ` +
+    `(the URL of the single property, not a search or overview page), with short location and rent details where the search result states them. ` +
+    `Use the web search only and cite the sources (links) directly in your answer.`
+  );
+}
+
+/**
  * Build the search queries for one housing search.
  * Location = the user's city (wins) or postal code.
  */
@@ -95,5 +123,8 @@ export function buildHousingQueries(
   if (params.min_area_sqm != null) partsEn.push(`min ${params.min_area_sqm} sqm`);
   const en = partsEn.filter(Boolean).join(", ").slice(0, 400);
 
-  return { queries: [de, en], targetedQuery: de };
+  return {
+    queries: [wrapInstruction(de, "de"), wrapInstruction(en, "en")],
+    targetedQuery: wrapInstruction(de, "de"),
+  };
 }

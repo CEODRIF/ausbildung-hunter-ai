@@ -125,6 +125,14 @@ export const LIMITS = {
   robotsCacheTtlMs: 10 * 60 * 1000,
   /** Search-API (Azure) timeout. */
   searchTimeoutMs: 20_000,
+  /**
+   * Output-token budget for the Responses call. gpt-5-mini is a REASONING
+   * model: reasoning tokens share this budget with the visible answer. The
+   * answer must fit a list of individually cited listings (each citation
+   * needs its URL inside the text), so 500 was too small and truncated
+   * cited answers; 1500 covers ~8–12 listings plus low-effort reasoning.
+   */
+  maxOutputTokens: 1500,
 } as const;
 
 /** Identifies ourselves honestly to fetched sites (never a browser UA). */
