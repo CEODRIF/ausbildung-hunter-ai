@@ -21,20 +21,7 @@ vi.mock("@/lib/rate-limit", () => ({
 const { checkRateLimit } = await import("@/lib/rate-limit");
 
 const { GET, POST, DELETE } = await import("@/app/api/housing/save/route");
-const { findListingById } = await import("@/lib/housing/providers");
 
-const listing = findListingById("demo", "demo-koln-2zz-balkon")!;
-const savedRow = {
-  id: "sl-1",
-  user_id: "user-1",
-  provider: "demo",
-  source_listing_id: "demo-koln-2zz-balkon",
-  url: listing.listing_url,
-  snapshot: listing,
-  notes: null,
-  status: "saved",
-  saved_at: "2026-10-09T00:00:00.000Z",
-};
 const searchRow = {
   id: "ss-1",
   user_id: "user-1",
@@ -62,7 +49,6 @@ function req(url: string, body: unknown) {
 let adminMock: Awaited<ReturnType<typeof createAdminMock>>;
 beforeEach(() => {
   adminMock = createAdminMock({
-    maybeSingleData: (table) => (table === "housing_saved_listings" ? savedRow : null),
     singleData: (table) => (table === "housing_saved_searches" ? searchRow : null),
   });
   vi.mocked(createAdminClient).mockReturnValue(adminMock.admin as never);
@@ -98,21 +84,19 @@ describe("POST /api/housing/save", () => {
     ).toBe(false);
   });
 
-  it("saves a known listing (server-derived snapshot)", async () => {
+  it("maps EVERY listing save to 404 while no adapter is registered — nothing can be re-derived, so nothing is fabricated", async () => {
     vi.mocked(getCurrentUserAndProfile).mockResolvedValue(authed("user-1"));
-    const res = await POST(
-      req("", { kind: "listing", provider: "demo", sourceId: "demo-koln-2zz-balkon" }),
-    );
-    expect(res.status).toBe(200);
-    const data = (await res.json()) as { saved: { id: string; snapshot: { title: string } } };
-    expect(data.saved.id).toBe("sl-1");
-    expect(data.saved.snapshot.title).toBe(listing.title);
-  });
-
-  it("maps an unknown listing to 404", async () => {
-    vi.mocked(getCurrentUserAndProfile).mockResolvedValue(authed("user-1"));
-    const res = await POST(req("", { kind: "listing", provider: "demo", sourceId: "nope" }));
-    expect(res.status).toBe(404);
+    for (const [provider, sourceId] of [
+      ["demo", "demo-koln-2zz-balkon"], // the old demo id — gone for good
+      ["web-search", "is24-123456789"],
+      ["nope", "nope"],
+    ] as const) {
+      const res = await POST(req("", { kind: "listing", provider, sourceId }));
+      expect(res.status).toBe(404);
+    }
+    expect(
+      adminMock.calls.some((c) => c.table === "housing_saved_listings" && c.op === "upsert"),
+    ).toBe(false);
   });
 
   it("saves a search (kind=search)", async () => {
@@ -147,7 +131,7 @@ describe("DELETE /api/housing/save", () => {
       new Request("http://localhost/api/housing/save", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: "listing", provider: "demo", sourceId: "demo-koln-2zz-balkon" }),
+        body: JSON.stringify({ kind: "listing", provider: "web-search", sourceId: "is24-123456789" }),
       }),
     );
     expect(res.status).toBe(200);

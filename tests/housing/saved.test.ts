@@ -12,17 +12,26 @@ const {
   saveHousingSearch,
   isSavedListingStatus,
 } = await import("@/lib/housing/saved");
-const { findListingById } = await import("@/lib/housing/providers");
 
-const listing = findListingById("demo", "demo-koln-2zz-balkon")!;
-
+/**
+ * A previously saved row (its snapshot lives in the DB — that is why the
+ * saved page keeps working after the demo fixtures were removed).
+ */
 const savedRow = {
   id: "sl-1",
   user_id: "user-1",
-  provider: "demo",
-  source_listing_id: "demo-koln-2zz-balkon",
-  url: listing.listing_url,
-  snapshot: listing,
+  provider: "web-search",
+  source_listing_id: "is24-123456789",
+  url: "https://immobilienscout24.de/expose/123456789",
+  snapshot: {
+    provider: "web-search",
+    source_id: "is24-123456789",
+    title: "2-Zimmer-Wohnung in Köln-Ehrenfeld",
+    listing_url: "https://immobilienscout24.de/expose/123456789",
+    city: "Köln",
+    rent_warm_eur: 850,
+    data_status: "live",
+  },
   notes: null,
   status: "saved",
   saved_at: "2026-10-09T00:00:00.000Z",
@@ -50,56 +59,20 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("saveHousingListing (server-derived snapshot, never client data)", () => {
-  it("re-derives the snapshot from the source and keys it by the session user", async () => {
-    const row = await saveHousingListing("user-1", "demo", "demo-koln-2zz-balkon", "note");
-    expect(row.id).toBe("sl-1");
-    const upsert = adminMock.calls.find(
-      (c) => c.table === "housing_saved_listings" && c.op === "upsert",
-    );
-    expect(upsert).toBeDefined();
-    const payload = upsert?.args[0] as Record<string, unknown>;
-    expect(payload.user_id).toBe("user-1");
-    expect(payload.provider).toBe("demo");
-    expect(payload.source_listing_id).toBe("demo-koln-2zz-balkon");
-    // Snapshot is the server-derived fixture, not anything a client could send.
-    const snapshot = payload.snapshot as { title: string; rent_warm_eur: number };
-    expect(snapshot.title).toBe(listing.title);
-    expect(snapshot.rent_warm_eur).toBe(listing.rent_warm_eur);
-    expect(payload.notes).toBe("note");
-    expect(upsert?.args[1]).toEqual({
-      onConflict: "user_id,provider,source_listing_id",
-      ignoreDuplicates: true,
-    });
-  });
-
-  it("only writes the migrated columns", async () => {
-    const MIGRATED = new Set([
-      "user_id",
-      "provider",
-      "source_listing_id",
-      "url",
-      "snapshot",
-      "notes",
-      "status",
-    ]);
-    await saveHousingListing("user-1", "demo", "demo-koln-2zz-balkon");
-    const upsert = adminMock.calls.find(
-      (c) => c.table === "housing_saved_listings" && c.op === "upsert",
-    );
-    const payload = upsert?.args[0] as Record<string, unknown>;
-    for (const key of Object.keys(payload)) {
-      expect(MIGRATED.has(key)).toBe(true);
+  it("rejects EVERY listing id while no adapter is registered — no fabrication, no write", async () => {
+    // The demo fixtures are gone: there is no listing that can be re-derived
+    // server-side, so saving must fail closed instead of inventing data.
+    for (const [provider, sourceId] of [
+      ["demo", "demo-koln-2zz-balkon"],
+      ["web-search", "is24-123456789"],
+      ["anything", "else"],
+    ] as const) {
+      await expect(saveHousingListing("user-1", provider, sourceId)).rejects.toThrow(
+        "Listing not found.",
+      );
     }
-  });
-
-  it("rejects an unknown listing id (no fabrication, no write)", async () => {
-    await expect(
-      saveHousingListing("user-1", "demo", "does-not-exist"),
-    ).rejects.toThrow();
     expect(
-      adminMock.calls.some(
-        (c) => c.table === "housing_saved_listings" && c.op === "upsert",
-      ),
+      adminMock.calls.some((c) => c.table === "housing_saved_listings" && c.op === "upsert"),
     ).toBe(false);
   });
 });
@@ -134,7 +107,7 @@ describe("user isolation + migrated schema", () => {
   });
 
   it("removeSavedListing scopes the delete to the session user", async () => {
-    await removeSavedListing("user-A", "demo", "demo-koln-2zz-balkon");
+    await removeSavedListing("user-A", "web-search", "is24-123456789");
     const eqs = adminMock.calls.filter(
       (c) => c.table === "housing_saved_listings" && c.op === "eq",
     );

@@ -82,13 +82,27 @@ export interface WebSearchStructuredResult<T> {
   results: WebSearchResult[];
 }
 
+/** Optional request options for {@link WebSearchClient.search}. */
+export interface WebSearchOptions {
+  /**
+   * Restrict results to these domains (Tavily `include_domains`). Callers
+   * MUST still post-filter results themselves — the remote parameter is an
+   * optimization, the client-side allowlist is the binding guarantee.
+   */
+  includeDomains?: string[];
+}
+
 export interface WebSearchClient {
   name: WebSearchProviderName;
   /**
    * One Tavily search request (multiple results per request), or [] once
    * the per-run budget is spent (no network call).
    */
-  search(query: string, maxResults: number): Promise<WebSearchResult[]>;
+  search(
+    query: string,
+    maxResults: number,
+    options?: WebSearchOptions,
+  ): Promise<WebSearchResult[]>;
   /** Not implemented by the Tavily provider (discovery-only phase). */
   searchStructured?(
     query: string,
@@ -376,6 +390,7 @@ async function tavilySearch(
   key: string,
   requestNo: number,
   budget: number,
+  options: WebSearchOptions = {},
 ): Promise<WebSearchResult[]> {
   const startedAt = Date.now();
   const body = {
@@ -386,6 +401,9 @@ async function tavilySearch(
     include_raw_content: false,
     include_images: false,
     include_usage: true,
+    ...(options.includeDomains && options.includeDomains.length > 0
+      ? { include_domains: options.includeDomains.slice(0, 100) }
+      : {}),
   };
   let response: Response;
   try {
@@ -515,38 +533,47 @@ export function getWebSearchClient(
       ? Math.min(requested, MAX_TAVILY_REQUESTS_HARD_CAP)
       : defaultTavilyBudget();
   let requestsUsed = 0;
-  return {
-    name: "tavily",
-    async search(query: string, maxResults: number): Promise<WebSearchResult[]> {
-      const cacheKey = `${query.trim()}|${maxResults}`;
-      const cached = cacheGet(cacheKey);
-      if (cached) return cached;
-      if (requestsUsed >= maxRequests) {
-        // Hard cap: no network call, no retry loop.
-        logTavily("warn", {
-          requestNo: requestsUsed,
-          budget: maxRequests,
-          httpStatus: null,
-          code: null,
-          providerStatus: null,
-          providerMessage: null,
-          durationMs: null,
-          results: 0,
-          note: `request budget exhausted (${maxRequests} max) — skipped`,
-        });
-        return [];
-      }
-      requestsUsed += 1;
-      const results = await tavilySearch(
-        query,
-        maxResults,
-        key,
-        requestsUsed,
-        maxRequests,
-      );
-      cacheSet(cacheKey, results);
-      return results;
-    },
+    return {
+      name: "tavily",
+      async search(
+        query: string,
+        maxResults: number,
+        options: WebSearchOptions = {},
+      ): Promise<WebSearchResult[]> {
+        const domainsKey =
+          options.includeDomains && options.includeDomains.length > 0
+            ? `|d=${options.includeDomains.slice().sort().join(",")}`
+            : "";
+        const cacheKey = `${query.trim()}|${maxResults}${domainsKey}`;
+        const cached = cacheGet(cacheKey);
+        if (cached) return cached;
+        if (requestsUsed >= maxRequests) {
+          // Hard cap: no network call, no retry loop.
+          logTavily("warn", {
+            requestNo: requestsUsed,
+            budget: maxRequests,
+            httpStatus: null,
+            code: null,
+            providerStatus: null,
+            providerMessage: null,
+            durationMs: null,
+            results: 0,
+            note: `request budget exhausted (${maxRequests} max) — skipped`,
+          });
+          return [];
+        }
+        requestsUsed += 1;
+        const results = await tavilySearch(
+          query,
+          maxResults,
+          key,
+          requestsUsed,
+          maxRequests,
+          options,
+        );
+        cacheSet(cacheKey, results);
+        return results;
+      },
     // NOTE: searchStructured is deliberately NOT implemented — Tavily has no
     // structured-output mode and this phase is discovery-only, so company
     // website discovery must not spend a request per company.

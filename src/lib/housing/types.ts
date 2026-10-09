@@ -42,7 +42,9 @@ export interface HousingListing {
   furnished: boolean;
   balcony: boolean;
   pets_allowed: boolean | null;
-  wg_suitable: boolean;
+  /** `null` = the source did not state WG suitability (web discovery);
+   *  the UI treats unknown as "not shown as WG-suitable". */
+  wg_suitable: boolean | null;
   /** True when the source marks the listing as verified/professional. */
   verified: boolean;
   accommodation_type: AccommodationType;
@@ -55,6 +57,104 @@ export interface HousingListing {
   source_terms_version: string | null;
   /** "demo" for fixture data, "live" for licensed adapters. */
   data_status: DataStatus;
+  /**
+   * Whether the provider still lists this offering as available.
+   * `false` = the source marks it expired/removed (excluded from results);
+   * `null` = unknown (kept — absence of evidence is not evidence of expiry).
+   */
+  listing_active: boolean | null;
+  /**
+   * Web-discovery provenance (set by the web-search provider only):
+   * `web_search` = discovered via search-engine index (link + title +
+   * snippet-level facts), `page_fetch` = we fetched and parsed the page
+   * (fetchable-policy domains only). Undefined for portal/demo data.
+   */
+  source_type?: "web_search" | "page_fetch";
+  /**
+   * Web-discovery only: floor as stated by the source (e.g. "1. OG"),
+   * null when unknown. Optional so saved snapshots written before this
+   * field exists keep validating (stored as JSONB, no schema change).
+   */
+  floor?: string | null;
+  /**
+   * Web-discovery only: portal name as reported by the search result
+   * (e.g. "ImmoScout24"); null → the UI derives the label from the URL
+   * hostname. Optional for the same snapshot-compatibility reason.
+   */
+  source_label?: string | null;
+  /**
+   * Web-discovery only: true when the location evidence does NOT confirm
+   * the requested city (unknown location). `city` then carries the
+   * evidence-based name (if any) — never the requested city. The UI shows
+   * "Standort unbestätigt" so the user is never misled about the location.
+   * 2026-10-10 fix: results used to be labelled with the searched city.
+   */
+  city_unverified?: boolean;
+  /**
+   * Web-discovery only: the primary property photo (first URL of the
+   * validated `images` array). Present ONLY when a real image URL was
+   * obtained from a legitimate channel (fetched-page metadata or
+   * provider-delivered search-result metadata) AND passed server-side
+   * validation (https-only, no credentials, no private/loopback/link-local
+   * IP hosts). Absent or null → the UI renders the neutral placeholder.
+   * Never a generated or substitute image — absence is honest.
+   * Optional for snapshot compatibility (saved rows predate the field).
+   */
+  image_url?: string | null;
+  /**
+   * Web-discovery only: true when `title` is the neutral derived label
+   * ("Anzeige auf <hostname>") because no title was obtained from the
+   * search result — NOT a provider title.
+   */
+  title_is_fallback?: boolean;
+  /**
+   * Web-discovery only: which channel each key field came through —
+   * "page" (fetched + parsed) or "search" (cited search result / model
+   * JSON). Absent key = value unknown. Lets the UI show per-field
+   * provenance instead of one global impression.
+   */
+  field_provenance?: Partial<
+    Record<
+      | "rent_cold_eur"
+      | "rent_warm_eur"
+      | "additional_costs_eur"
+      | "rooms"
+      | "living_area_sqm"
+      | "available_from"
+      | "city"
+       | "floor"
+       | "furnished"
+       | "deposit_eur"
+       | "address"
+       | "pets_allowed"
+       | "wg_suitable"
+       | "images",
+      "page" | "search"
+    >
+  >;
+  /**
+   * Web-discovery only: machine-readable reason for the verification level
+   * (localized by the UI): page fetched / fetched but unstructured /
+   * portal ToS forbid fetching / robots blocked / fetch failed.
+   */
+  verification_notes?:
+    | "page_fetched"
+    | "page_unstructured"
+    | "tos_no_fetch"
+    | "robots_blocked"
+    | "fetch_failed"
+    | null;
+  /**
+   * How far WE verified this result — independent of the provider's own
+   * `verified` badge:
+   *  - `verified`           — fields parsed from the fetched page (JSON-LD or
+   *                           unambiguous explicit text);
+   *  - `partially_verified` — stated in a search result/snippet with a
+   *                           citation, not confirmed by a page fetch;
+   *  - `unverified`         — discovered, details unknown.
+   * AI extraction alone NEVER yields `verified`.
+   */
+  verification_status?: "unverified" | "partially_verified" | "verified";
 }
 
 export interface HousingSearchParams {
@@ -96,12 +196,76 @@ export const DEFAULT_HOUSING_SEARCH: HousingSearchParams = {
   sort: "newest",
 };
 
-export interface HousingSearchResult {
-  listings: HousingListing[];
-  total: number;
-  /** True when the results come from demo fixtures (no live providers yet). */
-  is_demo: boolean;
-  data_status: DataStatus;
+// NOTE: the demo listing pipeline (fixtures + demo search route) was
+// removed on 2026-10-10 — the only listing source is now the live web
+// search (`src/lib/housing/web-search/`). `tests/housing/no-demo-data.test.ts`
+// guarantees the demo data cannot reappear.
+
+// --- Provider adapters --------------------------------------------------------
+
+/**
+ * A licensed source of rental listings.
+ *
+ * Contract (honesty-by-design): an adapter may only be registered when
+ * `isLicensed()` is backed by a verifiable agreement — and that agreement
+ * must be citable via `termsRef` (URL or document reference). `supportedFilters`
+ * declares which search filters the source genuinely applies; filters outside
+ * that list are not silently faked, they are simply not supported by the source.
+ */
+export interface HousingProviderAdapter {
+  /** Stable provider id (dedupe key, together with source_id). */
+  id: string;
+  /** Display name for the source badge. */
+  displayName: string;
+  /**
+   * True only when we hold a valid license/contract for this source. This is a
+   * HARD gate: an unlicensed adapter never contributes results, regardless of
+   * the kill switch.
+   */
+  isLicensed(): boolean;
+  /**
+   * Search-filter keys (`HousingSearchParams` field names) this source
+   * genuinely supports. Documented, not assumed.
+   */
+  supportedFilters: readonly string[];
+  /**
+   * Human-readable reference (URL or document name) to the license/terms that
+   * justify `isLicensed()` — the audit trail for where the data comes from.
+   */
+  termsRef: string;
+  search(params: HousingSearchParams): Promise<HousingListing[]>;
+}
+
+/**
+ * Geocode callback used to turn a city name into coordinates for radius
+ * search. `null` result = "could not resolve" (fail-open: the search falls
+ * back to city-name matching and reports `radius_applied: false`).
+ */
+export type GeocodeFn = (
+  query: string,
+) => Promise<{ lat: number; lon: number; label: string } | null>;
+
+export interface HousingSearchPagination {
+  /** Page size (1..100, default 30). */
+  limit: number;
+  /** Zero-based offset of the first result (0..10000, default 0). */
+  offset: number;
+}
+
+export interface HousingSearchOptions {
+  pagination?: HousingSearchPagination;
+  /**
+   * Test/preview hook: override the registered adapters. Production code
+   * never passes this — only PROVIDER_ADAPTERS applies.
+   */
+  adapters?: readonly HousingProviderAdapter[];
+  /**
+   * Injected geocoder. `undefined` = default (Nominatim), `null` = disabled
+   * (radius is never applied). Used by tests to stay deterministic/offline.
+   */
+  geocode?: GeocodeFn | null;
+  /** Per-adapter timeout in ms (default 8000). Injectable for tests. */
+  adapterTimeoutMs?: number;
 }
 
 // --- Persisted, per-user rows ------------------------------------------------
@@ -203,12 +367,15 @@ export interface AffordabilityResult {
  * Trust-badge gate (UI-facing, pure, client-safe).
  *
  * The green "verified source" badge may ONLY appear on LIVE data — i.e.
- * listings produced by a registered provider adapter, which searchHousing
- * re-stamps with `data_status: "live"`. Demo fixtures are NEVER verified,
- * no matter what their `verified` field says: in sample data that flag is
- * display metadata, not evidence of any real source verification. There is
- * no live provider contract yet (PROVIDER_ADAPTERS = []), so this gate
- * currently returns false for every listing the app can serve.
+ * listings produced by a registered provider adapter, re-stamped
+ * `data_status: "live"` by the provider pipeline. Anything stamped "demo"
+ * is NEVER verified, no matter what its `verified` field says: in sample
+ * data that flag is display metadata, not evidence of any real source
+ * verification. (Demo data was removed from the housing surface on
+ * 2026-10-10; the gate remains as defense in depth — e.g. for saved
+ * snapshots written before the removal.) There is no live provider
+ * contract yet (PROVIDER_ADAPTERS = []), so this gate currently returns
+ * false for every listing the app can serve.
  */
 export function isVerifiedListing(
   listing: Pick<HousingListing, "data_status" | "verified">,

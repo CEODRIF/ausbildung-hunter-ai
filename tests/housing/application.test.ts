@@ -17,16 +17,29 @@ const {
   listApplications,
   updateApplicationStatus,
 } = await import("@/lib/housing/application");
-const { findListingById } = await import("@/lib/housing/providers");
+const { normalizeListing } = await import("@/lib/housing/providers");
 
-const listing = findListingById("demo", "demo-koln-2zz-balkon")!;
+/**
+ * A live-style listing (the demo fixtures were removed 2026-10-10). The
+ * application lib functions accept a listing object — their contract is
+ * source-agnostic, so an inline normalized listing is the test data.
+ */
+const listing = normalizeListing({
+  provider: "example-licensed-provider",
+  source_id: "src-1",
+  title: "2-Zimmer-Wohnung in Köln-Ehrenfeld",
+  listing_url: "https://immobilienscout24.de/expose/123456789",
+  city: "Köln",
+  rent_warm_eur: 850,
+  data_status: "live",
+});
 
 const appRow = {
   id: "app-1",
   user_id: "user-1",
   listing_ref: {
-    provider: "demo",
-    source_id: "demo-koln-2zz-balkon",
+    provider: listing.provider,
+    source_id: listing.source_id,
     title: listing.title,
     url: listing.listing_url,
   },
@@ -107,8 +120,8 @@ describe("application persistence (server-derived, user-scoped)", () => {
     expect(payload.status).toBe("prepared");
     expect((payload.timeline as unknown[]).length).toBe(1);
     expect(payload.listing_ref).toMatchObject({
-      provider: "demo",
-      source_id: "demo-koln-2zz-balkon",
+      provider: listing.provider,
+      source_id: listing.source_id,
     });
   });
 

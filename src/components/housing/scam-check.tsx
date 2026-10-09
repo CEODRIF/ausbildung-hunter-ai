@@ -161,6 +161,12 @@ export function ScamCheck({ initialText = "" }: { initialText?: string }) {
             <p className="rounded-2xl bg-surface-2 p-4 text-xs leading-5 text-muted">
               {t("housing.scamHint")}
             </p>
+
+            {/* Explicit honesty boundary: no legitimacy guarantee, no legal advice. */}
+            <p className="flex items-start gap-1.5 text-[11px] leading-4 text-faint">
+              <Icon name="alert" size={12} strokeWidth={2} className="mt-0.5 shrink-0" />
+              {t("housing.scamDisclaimer")}
+            </p>
           </>
         )}
       </div>

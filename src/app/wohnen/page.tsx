@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { getServerT } from "@/lib/i18n/server";
 import { Icon } from "@/components/icon";
-import { DemoBanner } from "@/components/housing/demo-banner";
 import { HousingSearch } from "@/components/housing/housing-search";
 
 export const dynamic = "force-dynamic";
@@ -80,10 +79,6 @@ export default async function WohnenPage({
               </div>
             </Link>
           ))}
-        </div>
-
-        <div className="mb-5">
-          <DemoBanner />
         </div>
 
         <HousingSearch initialQuery={initialQuery} />

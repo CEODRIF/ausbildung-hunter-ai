@@ -2057,12 +2057,8 @@ const de = {
     heroSubtitle:
       "Wohnungen, WG-Zimmer und mehr – mit hilfreichen Tools, Tipps und geprüften Informationen.",
     guideCta: "Neu in Deutschland? Schritt-für-Schritt-Guide",
-    demoBanner: "Demo-Daten — keine echten Mietangebote",
-    demoNote:
-      "Diese Ansicht zeigt Beispieldaten. Live-Angebote folgen nach lizenzierter Anbindung an die Portale.",
     externalLink: "Original ansehen",
     verified: "Verifizierte Quelle",
-    demoSource: "Beispiel-Anzeige",
     searchCity: "Stadt oder PLZ",
     searchCityPlaceholder: "z. B. Köln, 50667",
     searchRadius: "Umkreis",
@@ -2186,6 +2182,116 @@ const de = {
     error: "Angebote konnten nicht geladen werden.",
     noResults: "Keine Angebote für diese Filter gefunden.",
     noResultsHint: "Setze deinen Suchradius oder dein Budget auf.",
+    loadMore: "Mehr laden",
+    radiusApplied: "Umkreissuche: {city} ({n} km)",
+    radiusSkipped: "Umkreisfilter nicht angewendet – Ort konnte nicht zugeordnet werden.",
+    updatedAt: "Aktualisiert: {date}",
+    scamDisclaimer:
+      "Erste-Einschätzung-Tool: keine Rechtsberatung und keine Garantie für die Seriosität einer Anzeige. Prüfe Vertrag, Anbieter und Zahlungen immer selbst.",
+    calcAssumptions:
+      "Annahmen: Warmmiete = Kaltmiete + Nebenkosten (inkl. Heizung, ggf. Strom). Kaution = Monate × Warmmiete, einmalig zu Beginn. Faustregel: max. 30 % der Warmmiete am Nettoeinkommen.",
+    rentCold: "kalt",
+    perMonth: "pro Monat",
+    webSearch: {
+      title: "Angebote im Web suchen",
+      subtitle:
+        "Findet aktuelle Mietanzeigen über eine Websuche mit Quellenangabe – nur auf Wunsch, nicht automatisch.",
+      modeWeb: "Gesamtes Web",
+      modeTargeted: "Ausgewählte Websites",
+      domainsTitle: "Websites wählen",
+      hintFetchable: "Seite wird geprüft",
+      hintSearchOnly: "nur Verweis",
+      run: "Web-Suche starten",
+      running: "Suche läuft …",
+      costNote:
+        "Jeder Start nutzt eine bezahlte Websuche (max. 2 Suchaufrufe) – starte sie nur, wenn du suchst.",
+      results: "{n} Funde über Websuche",
+      cached: "aus dem Kurzzeit-Cache",
+      checkedCount: "{n} Seiten abgerufen und geprüft",
+      warningPartial:
+        "Nicht alle Funde konnten geprüft werden – Einträge ohne grünes Kennzeichen stammen nur aus Suchtreffern.",
+      empty:
+        "Keine echten Mietangebote gefunden. Bitte ändere deine Suchkriterien oder versuche es später erneut.",
+      verified: "Seite geprüft",
+      partial: "Aus Suchtreffer",
+      unverified: "Nur entdeckt",
+      observed: "beobachtet",
+      lastChecked: "Geprüft: {date}",
+      external: "Zur Anzeige",
+      from: "frei ab",
+      attribution:
+        "Ergebnisse einer Internet-Websuche (Bing). Alle Angaben ohne Gewähr – bitte vor einer Kontaktaufnahme direkt auf der Quellenseite prüfen.",
+      stateNotConfigured:
+        "Die Websuche ist derzeit nicht konfiguriert – es wurden keine Suchaufrufe ausgelöst.",
+      stateToolBlocked:
+        "Der Websuche-Dienst ist auf dem Konto deaktiviert. Bitte beim Anbieter melden.",
+      stateEndpoint: "Der Suchdienst ist nicht erreichbar (Endpunkt nicht verfügbar).",
+      stateRateLimited:
+        "Zu viele Websuchen in kurzer Zeit – bitte kurz warten und erneut versuchen.",
+      stateDailyQuota:
+        "Dein heutiges Websuche-Limit ist erreicht. Neu ab {time} (Europe/Berlin).",
+      stateQuotaUnavailable:
+        "Die Kontingent-Prüfung war gerade nicht möglich – es wurde keine Websuche gestartet (keine Kosten).",
+      stateProviderError: "Die Websuche ist fehlgeschlagen – bitte erneut versuchen.",
+      stateTimeout: "Die Websuche hat zu lange gedauert – bitte erneut versuchen.",
+      remainingToday: "Heute noch {remaining} von {limit} Websuchen übrig",
+      quotaExhausted:
+        "Tageslimit von {limit} Websuchen erreicht – neu ab {time} (Europe/Berlin).",
+      discovered: "Per Websuche gefunden",
+      notAvailable: "Nicht verfügbar",
+      prices: "Mietdaten",
+      coldRent: "Kaltmiete",
+      additionalCosts: "Nebenkosten",
+      warmRent: "Warmmiete",
+      deposit: "Kaution",
+      property: "Objekt",
+      rooms: "Zimmer",
+      area: "Wohnfläche",
+      propertyType: "Objekttyp",
+      floor: "Etage",
+      address: "Adresse",
+      availability: "Verfügbarkeit",
+      furnished: "Möbliert",
+      furnishedYes: "Möbliert",
+      pets: "Haustiere",
+      wgSuitable: "WG-tauglich",
+      valueYes: "Ja",
+      valueNo: "Nein",
+      provenanceSearch:
+        "Angaben aus Websuche-Ergebnissen (Bing) – keine vollständige Originalbeschreibung des Portals.",
+      provenanceFetched:
+        "Angaben aus der abgerufenen Quellseite – keine vollständige Originalbeschreibung des Portals.",
+      confirmNote:
+        "Bitte prüfe die Verfügbarkeit direkt auf dem Portal – Angebote können inzwischen vergeben sein.",
+      openOriginal: "Zur Original-Anzeige",
+      viewDetails: "Details ansehen",
+      funnel:
+        "Alle {shown} gültigen Funde angezeigt – von {retrieved} Suchtreffern (Duplikate, Nicht-Angebote und ungültige Links aussortiert).",
+      coverageNote:
+        "Die Websuche zeigt alle gültigen Funde des Suchdienstes für diese Anfrage – sie garantiert nicht, dass jedes Mietangebot im Internet erfasst ist.",
+      matchesFilters:
+        "{shown} von {total} Funden entsprechen deinen Filtern (Funde mit unbekannten Werten bleiben sichtbar, soweit prüfbar).",
+      filtersEmpty:
+        "Keine der {total} Funde erfüllt deine Filter vollständig – lockere die Kriterien oder nutze eine breitere Suche.",
+      locationUnverified: "unbestätigt",
+      locationUnknown: "Standort unklar",
+      derivedTitle: "Abgeleiteter Titel – kein Originaltitel vom Anbieter erhalten",
+      provenancePageTag: "Seite geprüft",
+      provenanceSearchTag: "Suchergebnis",
+      notePageFetched: "Quellseite abgerufen und strukturiert geprüft.",
+      notePageUnstructured: "Quellseite abgerufen – keine strukturierten Angaben gefunden.",
+      noteTosNoFetch:
+        "Das Portal erlaubt keine automatisierte Abfrage (Nutzungsbedingungen) – Angaben aus dem Suchergebnis.",
+      noteRobotsBlocked: "robots.txt blockiert den Abruf – Angaben aus dem Suchergebnis.",
+      noteFetchFailed: "Der Abruf der Quellseite ist fehlgeschlagen – Angaben aus dem Suchergebnis.",
+      rateLimitHint: "Bitte warte ca. {seconds} Sekunden und versuche es erneut.",
+      emptyCityMismatch:
+        "Ursache: {n} Funde wurden verworfen, weil sie nachweislich eine andere Stadt betreffen.",
+      emptyFiltered:
+        "Ursache: {n} eindeutige Suchtreffer erhalten – {pages} Such-/Portalseiten (keine Einzelangebote), {untitled} titellose Treffer, {nonRental} Verkaufsanzeigen und {dups} Duplikate wurden aussortiert.",
+      emptyNoSearchCall:
+        "Ursache: Der Suchdienst wurde für diese Anfrage nicht aufgerufen. Bitte versuche es erneut.",
+    },
   },
 };
 
@@ -4183,12 +4289,8 @@ const en: Dict = {
     heroSubtitle:
       "Flats, shared rooms and more – with helpful tools, tips and verified information.",
     guideCta: "New to Germany? Step-by-step guide",
-    demoBanner: "Demo data — not real rental listings",
-    demoNote:
-      "This view shows sample data. Live listings will follow once portals are connected under licence.",
     externalLink: "View original",
     verified: "Verified source",
-    demoSource: "Sample listing",
     searchCity: "City or postal code",
     searchCityPlaceholder: "e.g. Köln, 50667",
     searchRadius: "Radius",
@@ -4312,6 +4414,115 @@ const en: Dict = {
     error: "Listings could not be loaded.",
     noResults: "No listings found for these filters.",
     noResultsHint: "Widen your search radius or increase your budget.",
+    loadMore: "Load more",
+    radiusApplied: "Radius search: {city} ({n} km)",
+    radiusSkipped: "Radius filter not applied – the location could not be resolved.",
+    updatedAt: "Updated: {date}",
+    scamDisclaimer:
+      "First-pass tool: not legal advice and no guarantee that a listing is legitimate. Always verify the contract, the landlord and any payment yourself.",
+    calcAssumptions:
+      "Assumptions: warm rent = cold rent + service charges (incl. heating, possibly electricity). Deposit = months × warm rent, paid once at the start. Rule of thumb: max. 30 % of net income for warm rent.",
+    rentCold: "cold",
+    perMonth: "per month",
+    webSearch: {
+      title: "Search the web for listings",
+      subtitle:
+        "Finds current rental ads via web search with sources shown — only on request, never automatically.",
+      modeWeb: "Whole web",
+      modeTargeted: "Selected websites",
+      domainsTitle: "Choose websites",
+      hintFetchable: "page is checked",
+      hintSearchOnly: "link only",
+      run: "Start web search",
+      running: "Searching …",
+      costNote:
+        "Each run uses a paid web search (max. 2 search calls) — start it only when you actually search.",
+      results: "{n} findings via web search",
+      cached: "from short-term cache",
+      checkedCount: "{n} pages fetched and checked",
+      warningPartial:
+        "Not all findings could be checked — entries without the green marker come from search hits only.",
+      empty:
+        "No real rental listings found. Please adjust your search criteria or try again later.",
+      verified: "Page checked",
+      partial: "From search hit",
+      unverified: "Discovered only",
+      observed: "observed",
+      lastChecked: "Checked: {date}",
+      external: "To listing",
+      from: "available from",
+      attribution:
+        "Results of an internet web search (Bing). All details without guarantee — please verify on the source page before contacting anyone.",
+      stateNotConfigured:
+        "Web search is not configured right now — no search calls were issued.",
+      stateToolBlocked:
+        "The web search service is disabled on the account. Please contact the provider.",
+      stateEndpoint: "The search service is unreachable (endpoint unavailable).",
+      stateRateLimited:
+        "Too many web searches in a short time — please wait a moment and retry.",
+      stateDailyQuota:
+        "Your daily web-search limit is reached. Resets at {time} (Europe/Berlin).",
+      stateQuotaUnavailable:
+        "The quota check was not possible just now — no web search was started (no charges).",
+      stateProviderError: "The web search failed — please retry.",
+      stateTimeout: "The web search took too long — please retry.",
+      remainingToday: "{remaining} of {limit} web searches remaining today",
+      quotaExhausted:
+        "Daily limit of {limit} web searches reached — resets at {time} (Europe/Berlin).",
+      discovered: "Found via web search",
+      notAvailable: "Not available",
+      prices: "Rent details",
+      coldRent: "Cold rent",
+      additionalCosts: "Service charges",
+      warmRent: "Warm rent",
+      deposit: "Deposit",
+      property: "Property",
+      rooms: "Rooms",
+      area: "Living area",
+      propertyType: "Property type",
+      floor: "Floor",
+      address: "Address",
+      availability: "Availability",
+      furnished: "Furnished",
+      furnishedYes: "Furnished",
+      pets: "Pets",
+      wgSuitable: "WG-suitable",
+      valueYes: "Yes",
+      valueNo: "No",
+      provenanceSearch:
+        "Details from web-search results (Bing) — not the portal's full original description.",
+      provenanceFetched:
+        "Details from the fetched source page — not the portal's full original description.",
+      confirmNote:
+        "Please check availability directly on the portal — listings may already be taken.",
+      openOriginal: "Open original listing",
+      viewDetails: "View details",
+      funnel:
+        "Showing all {shown} valid findings — of {retrieved} search hits (duplicates, non-listings and invalid links removed).",
+      coverageNote:
+        "The web search shows every valid finding the search service retrieved for this query — it does not guarantee that every rental on the internet is captured.",
+      matchesFilters:
+        "{shown} of {total} findings match your filters (findings with unknown values stay visible where checkable).",
+      filtersEmpty:
+        "None of the {total} findings fully meet your filters — relax the criteria or run a broader search.",
+      locationUnverified: "unverified",
+      locationUnknown: "Location unknown",
+      derivedTitle: "Derived title — no original title available from the provider",
+      provenancePageTag: "Page checked",
+      provenanceSearchTag: "Search result",
+      notePageFetched: "Source page fetched and checked for structured data.",
+      notePageUnstructured: "Source page fetched — no structured details found.",
+      noteTosNoFetch:
+        "This portal does not allow automated retrieval (terms of service) — details from the search result.",
+      noteRobotsBlocked: "robots.txt blocks retrieval — details from the search result.",
+      noteFetchFailed: "Fetching the source page failed — details from the search result.",
+      rateLimitHint: "Please wait about {seconds} seconds and try again.",
+      emptyCityMismatch:
+        "Cause: {n} results were rejected because they demonstrably concern a different city.",
+      emptyFiltered:
+        "Cause: {n} distinct search hits received — {pages} search/portal pages (no individual offers), {untitled} untitled results, {nonRental} sale ads and {dups} duplicates were sorted out.",
+      emptyNoSearchCall: "Cause: the search service was not invoked for this request. Please try again.",
+    },
   },
 };
 
@@ -6311,12 +6522,8 @@ const fr: Dict = {
     heroSubtitle:
       "Appartements, chambres en colocation et plus – avec des outils, des conseils et des informations vérifiées.",
     guideCta: "Nouveau en Allemagne ? Guide étape par étape",
-    demoBanner: "Données de démonstration — pas de vraies annonces",
-    demoNote:
-      "Cette vue affiche des données d’exemple. Les annonces en direct suivront après un accord de licence avec les portails.",
     externalLink: "Voir l’original",
     verified: "Source vérifiée",
-    demoSource: "Annonce d’exemple",
     searchCity: "Ville ou code postal",
     searchCityPlaceholder: "ex. Köln, 50667",
     searchRadius: "Rayon",
@@ -6440,6 +6647,116 @@ const fr: Dict = {
     error: "Les annonces n’ont pas pu être chargées.",
     noResults: "Aucune annonce pour ces filtres.",
     noResultsHint: "Élargissez votre rayon ou augmentez votre budget.",
+    loadMore: "Charger plus",
+    radiusApplied: "Recherche par rayon : {city} ({n} km)",
+    radiusSkipped: "Filtre par rayon non appliqué – la localisation n’a pas pu être résolue.",
+    updatedAt: "Mis à jour : {date}",
+    scamDisclaimer:
+      "Outil de premier passage : pas de conseil juridique et aucune garantie de légitimité d’une annonce. Vérifiez toujours le contrat, le propriétaire et tout paiement vous-même.",
+    calcAssumptions:
+      "Hypothèses : loyer charges comprises = loyer hors charges + charges (chauffage, électricité éventuelle). Caution = mois × loyer charges comprises, payée une fois au début. Règle : max. 30 % du revenu net pour le loyer charges comprises.",
+    rentCold: "charges",
+    perMonth: "par mois",
+    webSearch: {
+      title: "Rechercher des annonces sur le web",
+      subtitle:
+        "Trouve des annonces de location actuelles via une recherche web avec sources — uniquement sur demande, jamais automatiquement.",
+      modeWeb: "Web entier",
+      modeTargeted: "Sites sélectionnés",
+      domainsTitle: "Choisir les sites",
+      hintFetchable: "page vérifiée",
+      hintSearchOnly: "lien seulement",
+      run: "Lancer la recherche web",
+      running: "Recherche en cours …",
+      costNote:
+        "Chaque lancement utilise une recherche web payante (2 requêtes max.) — ne la lancez que si vous cherchez vraiment.",
+      results: "{n} résultats via recherche web",
+      cached: "de la mémoire cache temporaire",
+      checkedCount: "{n} pages consultées et vérifiées",
+      warningPartial:
+        "Tous les résultats n'ont pas pu être vérifiés — les entrées sans marque verte proviennent uniquement des résultats de recherche.",
+      empty:
+        "Aucune annonce de location réelle trouvée. Veuillez modifier vos critères de recherche ou réessayer plus tard.",
+      verified: "Page vérifiée",
+      partial: "Issue du résultat",
+      unverified: "Découverte uniquement",
+      observed: "observé",
+      lastChecked: "Vérifié le : {date}",
+      external: "Voir l'annonce",
+      from: "disponible à partir du",
+      attribution:
+        "Résultats d'une recherche internet (Bing). Tous les détails sans garantie — veuillez vérifier sur la page source avant tout contact.",
+      stateNotConfigured:
+        "La recherche web n'est pas configurée pour l'instant — aucune requête n'a été lancée.",
+      stateToolBlocked:
+        "Le service de recherche web est désactivé sur le compte. Merci de contacter le fournisseur.",
+      stateEndpoint: "Le service de recherche est injoignable (point d'accès indisponible).",
+      stateRateLimited:
+        "Trop de recherches web en peu de temps — veuillez patienter un instant et réessayer.",
+      stateDailyQuota:
+        "Votre limite quotidienne de recherche web est atteinte. Réinitialisation à {time} (Europe/Berlin).",
+      stateQuotaUnavailable:
+        "La vérification du quota n'a pas été possible — aucune recherche n'a été lancée (aucune charge).",
+      stateProviderError: "La recherche web a échoué — veuillez réessayer.",
+      stateTimeout: "La recherche web a pris trop de temps — veuillez réessayer.",
+      remainingToday: "{remaining} recherches web restantes aujourd'hui (sur {limit})",
+      quotaExhausted:
+        "Limite quotidienne de {limit} recherches web atteinte — réinitialisation à {time} (Europe/Berlin).",
+      discovered: "Trouvé via recherche web",
+      notAvailable: "Non disponible",
+      prices: "Détails du loyer",
+      coldRent: "Loyer froid",
+      additionalCosts: "Charges",
+      warmRent: "Loyer chaud",
+      deposit: "Dépôt de garantie",
+      property: "Bien",
+      rooms: "Pièces",
+      area: "Surface habitable",
+      propertyType: "Type de bien",
+      floor: "Étage",
+      address: "Adresse",
+      availability: "Disponibilité",
+      furnished: "Meublé",
+      furnishedYes: "Meublé",
+      pets: "Animaux",
+      wgSuitable: "Convient en colocation",
+      valueYes: "Oui",
+      valueNo: "Non",
+      provenanceSearch:
+        "Données issues des résultats de recherche web (Bing) — pas la description complète du portail.",
+      provenanceFetched:
+        "Données issues de la page source consultée — pas la description complète du portail.",
+      confirmNote:
+        "Veuillez vérifier la disponibilité directement sur le portail — l'annonce peut déjà être prise.",
+      openOriginal: "Ouvrir l'annonce d'origine",
+      viewDetails: "Voir les détails",
+      funnel:
+        "Tous les {shown} résultats valides sont affichés — sur {retrieved} hits (doublons, non-annonces et liens invalides écartés).",
+      coverageNote:
+        "La recherche web affiche tous les résultats valides obtenus pour cette requête — elle ne garantit pas de couvrir chaque annonce du marché.",
+      matchesFilters:
+        "{shown} résultats sur {total} correspondent à vos filtres (les valeurs inconnues restent visibles le cas échéant).",
+      filtersEmpty:
+        "Aucun des {total} résultats ne remplit entièrement vos filtres — assouplissez les critères ou élargissez la recherche.",
+      locationUnverified: "non confirmé",
+      locationUnknown: "Localisation inconnue",
+      derivedTitle: "Titre dérivé — aucun titre original fourni par le portail",
+      provenancePageTag: "Page vérifiée",
+      provenanceSearchTag: "Résultat de recherche",
+      notePageFetched: "Page source consultée et vérifiée (données structurées).",
+      notePageUnstructured: "Page source consultée — aucune donnée structurée trouvée.",
+      noteTosNoFetch:
+        "Ce portail n'autorise pas la récupération automatisée (conditions d'utilisation) — données issues du résultat de recherche.",
+      noteRobotsBlocked: "robots.txt bloque la récupération — données issues du résultat de recherche.",
+      noteFetchFailed:
+        "La consultation de la page source a échoué — données issues du résultat de recherche.",
+      rateLimitHint: "Veuillez patienter environ {seconds} secondes et réessayez.",
+      emptyCityMismatch: "Cause : {n} résultats rejetés car situés dans une autre ville.",
+      emptyFiltered:
+        "Cause : {n} résultats de recherche distincts reçus — {pages} pages portail/recherche (pas d'annonces individuelles), {untitled} résultats sans titre, {nonRental} annonces de vente et {dups} doublons écartés.",
+      emptyNoSearchCall:
+        "Cause : le service de recherche n'a pas été invoqué pour cette requête. Réessayez.",
+    },
   },
 };
 
@@ -8395,11 +8712,8 @@ const ar: Dict = {
     heroTitle: "اعثر على بيتك في ألمانيا.",
     heroSubtitle: "شقق وغرف مشتركة والمزيد – مع أدوات ومعلومات موثوقة.",
     guideCta: "جديد في ألمانيا؟ دليل خطوة بخطوة",
-    demoBanner: "بيانات تجريبية – ليست إعلانات إيجار حقيقية",
-    demoNote: "تعرض هذه الصفحة بيانات مثالية. ستتوفر الإعلانات المباشرة بعد ربط المنصات ترخيصياً.",
     externalLink: "عرض الأصل",
     verified: "مصدر موثّق",
-    demoSource: "إعلان تجريبي",
     searchCity: "المدينة أو الرمز البريدي",
     searchCityPlaceholder: "مثال: كولن، 50667",
     searchRadius: "نطاق البحث",
@@ -8516,6 +8830,111 @@ const ar: Dict = {
     error: "تعذر تحميل الإعلانات.",
     noResults: "لا توجد إعلانات لهذه الفلاتر.",
     noResultsHint: "وسّع نطاق البحث أو زد ميزانيتك.",
+    loadMore: "حمّل المزيد",
+    radiusApplied: "بحث بالنطاق: {city} ({n} كم)",
+    radiusSkipped: "لم يُطبَّق فلتر النطاق – تعذَّر تحديد الموقع.",
+    updatedAt: "تم التحديث: {date}",
+    scamDisclaimer:
+      "أداة للتحقق الأولي: ليست استشارة قانونية ولا تضمن مصداقية الإعلان. افحص دائماً العقد والمالك وأي دفع بنفسك.",
+    calcAssumptions:
+      "الافتراضات: الإيجار الشامل = الإيجار الصافي + الرسوم الإضافية (بما في ذلك التدفئة، والكهرباء إن وجدت). التأمين = عدد الأشهر × الإيجار الشامل، يُدفع مرة واحدة عند البداية. قاعدة إرشادية: بحد أقصى 30% من صافي الدخل للإيجار الشامل.",
+    rentCold: "صافي",
+    perMonth: "شهريًا",
+    webSearch: {
+      title: "ابحث عن الإعلانات على الويب",
+      subtitle:
+        "يجد إعلانات الإيجار الحالية عبر بحث على الويب مع ذكر المصادر — فقط عند الطلب، وليس تلقائيًا.",
+      modeWeb: "الويب بالكامل",
+      modeTargeted: "مواقع محددة",
+      domainsTitle: "اختر المواقع",
+      hintFetchable: "يُتحقق من الصفحة",
+      hintSearchOnly: "رابط فقط",
+      run: "بدء البحث على الويب",
+      running: "جارٍ البحث …",
+      costNote:
+        "كل تشغيل يستخدم بحث ويب مدفوعًا (بحد أقصى استدعاءا بحث) — شغّله فقط عندما تبحث فعلًا.",
+      results: "{n} نتائج عبر بحث الويب",
+      cached: "من ذاكرة مؤقتة قصيرة",
+      checkedCount: "تم استعراض {n} صفحات والتحقق منها",
+      warningPartial:
+        "تعذّر التحقق من جميع النتائج — البنود دون العلامة الخضراء تعتمد فقط على نتائج البحث.",
+      empty: "لم يتم العثور على عروض إيجار حقيقية. يرجى تعديل معايير البحث أو المحاولة مرة أخرى لاحقًا.",
+      verified: "تم التحقق من الصفحة",
+      partial: "من نتيجة البحث",
+      unverified: "اكتشاف فقط",
+      observed: "مُراقَب",
+      lastChecked: "تاريخ الفحص: {date}",
+      external: "إلى الإعلان",
+      from: "متاح من",
+      attribution:
+        "نتائج بحث إنترنت (بينغ). جميع التفاصيل دون ضمان — يُرجى التحقق منها على الصفحة المصدرية قبل أي تواصل.",
+      stateNotConfigured: "بحث الويب غير مُهيّأ حاليًا — لم تُطلق أي طلبات بحث.",
+      stateToolBlocked: "خدمة بحث الويب معطّلة على الحساب. يُرجى إبلاغ المزوّد.",
+      stateEndpoint: "خدمة البحث غير متاحة (نقطة الوصول غير متوفرة).",
+      stateRateLimited:
+        "عدد كبير جدًّا من عمليات بحث الويب في وقت قصير — انتظر لحظة ثم أعد المحاولة.",
+      stateDailyQuota:
+        "تم بلوغ حدك اليومي لبحث الويب. يُعاد التعيين عند {time} (Europe/Berlin).",
+      stateQuotaUnavailable:
+        "تعذّر فحص الحصة الآن — لم يُطلق أي بحث (دون أي تكلفة).",
+      stateProviderError: "فشل بحث الويب — يُرجى إعادة المحاولة.",
+      stateTimeout: "استغرق بحث الويب وقتًا طويلاً — يُرجى إعادة المحاولة.",
+      remainingToday: "تبقّى اليوم {remaining} من {limit} عمليات بحث على الويب",
+      quotaExhausted:
+        "تم بلوغ الحد اليومي ({limit} عمليات بحث) — يُعاد التعيين عند {time} (Europe/Berlin).",
+      discovered: "عُثر عليه عبر بحث الويب",
+      notAvailable: "غير متاح",
+      prices: "تفاصيل الإيجار",
+      coldRent: "الإيجار البارد",
+      additionalCosts: "تكاليف إضافية",
+      warmRent: "الإيجار الدافئ",
+      deposit: "الوديعة",
+      property: "الوحدة",
+      rooms: "الغرف",
+      area: "المساحة",
+      propertyType: "نوع الوحدة",
+      floor: "الطابق",
+      address: "العنوان",
+      availability: "التوفر",
+      furnished: "مفروش",
+      furnishedYes: "مفروش",
+      pets: "الحيوانات الأليفة",
+      wgSuitable: "مناسب للعيش المشترك",
+      valueYes: "نعم",
+      valueNo: "لا",
+      provenanceSearch:
+        "المعلومات من نتائج بحث الويب (Bing) — وليست الوصف الكامل الأصلي للإعلان.",
+      provenanceFetched:
+        "المعلومات من الصفحة المصدر المُسترجعة — وليست الوصف الكامل الأصلي للإعلان.",
+      confirmNote:
+        "يُرجى التحقق من التوفر مباشرة على المنصة — فقد يكون الإعلان محجوزًا بالفعل.",
+      openOriginal: "فتح الإعلان الأصلي",
+      viewDetails: "عرض التفاصيل",
+      funnel:
+        "تُعرض جميع النتائج الصالحة ({shown}) — من أصل {retrieved} نتيجة (تم استبعاد التكرارات وغير الإعلانات والروابط غير الصالحة).",
+      coverageNote:
+        "يعرض البحث على الويب كل النتائج الصالحة التي استرجعها محرك البحث لهذا الاستفسار — ولا يضمن تغطية كل الإعلانات المتاحة.",
+      matchesFilters:
+        "{shown} من أصل {total} نتائج تطابق عوامل التصفية (تبقى القيم المجهولة مرئية حيثما أمكن الفحص).",
+      filtersEmpty:
+        "لا تطابق أي من النتائج ({total}) عوامل التصفية بالكامل — تخفّف المعايير أو وسّع نطاق البحث.",
+      locationUnverified: "غير مؤكد",
+      locationUnknown: "الموقع غير معروف",
+      derivedTitle: "عنوان مشتق — لم يتوفر عنوان أصلي من المنصة",
+      provenancePageTag: "تمت مراجعة الصفحة",
+      provenanceSearchTag: "نتيجة بحث",
+      notePageFetched: "تم استرجاع الصفحة المصدر ومراجعتها (بيانات منظمة).",
+      notePageUnstructured: "تم استرجاع الصفحة المصدر — لم يتم العثور على بيانات منظمة.",
+      noteTosNoFetch:
+        "هذه المنصة لا تسمح بالاسترجاع الآلي (شروط الاستخدام) — البيانات من نتيجة البحث.",
+      noteRobotsBlocked: "robots.txt يمنع الاسترجاع — البيانات من نتيجة البحث.",
+      noteFetchFailed: "فشل استرجاع الصفحة المصدر — البيانات من نتيجة البحث.",
+      rateLimitHint: "يُرجى الانتظار نحو {seconds} ثانية ثم إعادة المحاولة.",
+      emptyCityMismatch: "السبب: تم رفض {n} نتيجة لأنها تخص مدينة أخرى بشكل مؤكد.",
+        emptyFiltered:
+        "السبب: تم استلام {n} نتيجة بحث مميزة — استُبعدت {pages} صفحة بوابة/بحث (ليست إعلانات فردية)، و{untitled} نتيجة بلا عنوان، و{nonRental} إعلان بيع، و{dups} من التكرارات.",
+      emptyNoSearchCall: "السبب: لم يتم استدعاء خدمة البحث لهذا الطلب. أعد المحاولة.",
+    },
   },
 };
 

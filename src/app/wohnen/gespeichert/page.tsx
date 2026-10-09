@@ -230,7 +230,7 @@ function NotesEditor({
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="w-full rounded-2xl border border-dashed border-line-strong bg-surface-2/50 px-3 py-2 text-left text-xs text-muted transition-colors hover:border-accent"
+          className="w-full rounded-2xl border border-dashed border-line-strong bg-surface-2/50 px-3 py-2 text-start text-xs text-muted transition-colors hover:border-accent"
         >
           {value ? <span className="text-ink-soft">{value}</span> : placeholder}
         </button>

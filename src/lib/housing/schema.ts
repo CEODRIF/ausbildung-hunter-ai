@@ -41,6 +41,9 @@ export const housingSearchSchema = z
     pets_allowed_only: z.boolean().optional().default(false),
     verified_only: z.boolean().optional().default(false),
     sort: z.enum(["newest", "price_asc", "price_desc"]).optional().default("newest"),
+    // Pagination (server-side page fetch; the UI pages via Load-more).
+    limit: z.number().int().min(1).max(100).optional().default(30),
+    offset: z.number().int().min(0).max(10000).optional().default(0),
   })
   .strict();
 export type HousingSearchInput = z.infer<typeof housingSearchSchema>;

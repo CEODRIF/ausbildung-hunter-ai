@@ -1,6 +1,5 @@
 import { getServerT } from "@/lib/i18n/server";
 import { Icon } from "@/components/icon";
-import { DemoBanner } from "@/components/housing/demo-banner";
 import { HousingSearch } from "@/components/housing/housing-search";
 
 export const dynamic = "force-dynamic";
@@ -20,9 +19,6 @@ export default async function WgZimmerPage() {
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-muted">{t("housing.page.wg.subtitle")}</p>
           </div>
-        </div>
-        <div className="mb-5">
-          <DemoBanner />
         </div>
         <HousingSearch preset={{ accommodation_type: "wg_room" }} />
       </div>
