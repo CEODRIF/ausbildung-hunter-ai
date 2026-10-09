@@ -59,3 +59,12 @@ language sql stable as $$
 $$;
 
 grant usage on schema auth to anon, authenticated, service_role;
+
+-- Faithful to the Supabase platform: every table a `postgres`-role user
+-- creates in schema `public` is granted to all three API roles, and the
+-- security contract then lives ENTIRELY in RLS (policies + per-table
+-- revokes, e.g. on server-owned caches). Without these default privileges
+-- the stub would fail queries that Supabase answers with "0 rows via RLS",
+-- which masks a missing-policy regression.
+alter default privileges for role postgres in schema public
+  grant all on tables to postgres, anon, authenticated, service_role;

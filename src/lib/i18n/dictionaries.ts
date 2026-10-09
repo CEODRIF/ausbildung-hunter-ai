@@ -2186,6 +2186,14 @@ const de = {
     error: "Angebote konnten nicht geladen werden.",
     noResults: "Keine Angebote für diese Filter gefunden.",
     noResultsHint: "Setze deinen Suchradius oder dein Budget auf.",
+    loadMore: "Mehr laden",
+    radiusApplied: "Umkreissuche: {city} ({n} km)",
+    radiusSkipped: "Umkreisfilter nicht angewendet – Ort konnte nicht zugeordnet werden.",
+    updatedAt: "Aktualisiert: {date}",
+    scamDisclaimer:
+      "Erste-Einschätzung-Tool: keine Rechtsberatung und keine Garantie für die Seriosität einer Anzeige. Prüfe Vertrag, Anbieter und Zahlungen immer selbst.",
+    calcAssumptions:
+      "Annahmen: Warmmiete = Kaltmiete + Nebenkosten (inkl. Heizung, ggf. Strom). Kaution = Monate × Warmmiete, einmalig zu Beginn. Faustregel: max. 30 % der Warmmiete am Nettoeinkommen.",
   },
 };
 
@@ -4312,6 +4320,14 @@ const en: Dict = {
     error: "Listings could not be loaded.",
     noResults: "No listings found for these filters.",
     noResultsHint: "Widen your search radius or increase your budget.",
+    loadMore: "Load more",
+    radiusApplied: "Radius search: {city} ({n} km)",
+    radiusSkipped: "Radius filter not applied – the location could not be resolved.",
+    updatedAt: "Updated: {date}",
+    scamDisclaimer:
+      "First-pass tool: not legal advice and no guarantee that a listing is legitimate. Always verify the contract, the landlord and any payment yourself.",
+    calcAssumptions:
+      "Assumptions: warm rent = cold rent + service charges (incl. heating, possibly electricity). Deposit = months × warm rent, paid once at the start. Rule of thumb: max. 30 % of net income for warm rent.",
   },
 };
 
@@ -6440,6 +6456,14 @@ const fr: Dict = {
     error: "Les annonces n’ont pas pu être chargées.",
     noResults: "Aucune annonce pour ces filtres.",
     noResultsHint: "Élargissez votre rayon ou augmentez votre budget.",
+    loadMore: "Charger plus",
+    radiusApplied: "Recherche par rayon : {city} ({n} km)",
+    radiusSkipped: "Filtre par rayon non appliqué – la localisation n’a pas pu être résolue.",
+    updatedAt: "Mis à jour : {date}",
+    scamDisclaimer:
+      "Outil de premier passage : pas de conseil juridique et aucune garantie de légitimité d’une annonce. Vérifiez toujours le contrat, le propriétaire et tout paiement vous-même.",
+    calcAssumptions:
+      "Hypothèses : loyer charges comprises = loyer hors charges + charges (chauffage, électricité éventuelle). Caution = mois × loyer charges comprises, payée une fois au début. Règle : max. 30 % du revenu net pour le loyer charges comprises.",
   },
 };
 
@@ -8516,6 +8540,14 @@ const ar: Dict = {
     error: "تعذر تحميل الإعلانات.",
     noResults: "لا توجد إعلانات لهذه الفلاتر.",
     noResultsHint: "وسّع نطاق البحث أو زد ميزانيتك.",
+    loadMore: "حمّل المزيد",
+    radiusApplied: "بحث بالنطاق: {city} ({n} كم)",
+    radiusSkipped: "لم يُطبَّق فلتر النطاق – تعذَّر تحديد الموقع.",
+    updatedAt: "تم التحديث: {date}",
+    scamDisclaimer:
+      "أداة للتحقق الأولي: ليست استشارة قانونية ولا تضمن مصداقية الإعلان. افحص دائماً العقد والمالك وأي دفع بنفسك.",
+    calcAssumptions:
+      "الافتراضات: الإيجار الشامل = الإيجار الصافي + الرسوم الإضافية (بما في ذلك التدفئة، والكهرباء إن وجدت). التأمين = عدد الأشهر × الإيجار الشامل، يُدفع مرة واحدة عند البداية. قاعدة إرشادية: بحد أقصى 30% من صافي الدخل للإيجار الشامل.",
   },
 };
 

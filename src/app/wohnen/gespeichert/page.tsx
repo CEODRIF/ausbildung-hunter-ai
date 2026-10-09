@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { Icon } from "@/components/icon";
 import { Button } from "@/components/ui";
+import { DemoBanner } from "@/components/housing/demo-banner";
 import { formatEur } from "@/lib/housing/affordability";
 import type {
   SavedHousingListing,
@@ -65,6 +66,11 @@ export default function SavedListingsPage() {
   return (
     <div className="px-4 py-6 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-3xl space-y-4">
+        {/* Snapshots today are demo data (no live providers registered) —
+            keep the saved list from looking like live offers. */}
+        {phase === "done" &&
+          rows.length > 0 &&
+          rows.every((r) => r.snapshot.data_status === "demo") && <DemoBanner />}
         {phase === "loading" && (
           <div className="flex items-center gap-3 rounded-3xl border border-line bg-surface p-6 text-sm text-muted">
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-line-strong border-t-accent" />
@@ -230,7 +236,7 @@ function NotesEditor({
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="w-full rounded-2xl border border-dashed border-line-strong bg-surface-2/50 px-3 py-2 text-left text-xs text-muted transition-colors hover:border-accent"
+          className="w-full rounded-2xl border border-dashed border-line-strong bg-surface-2/50 px-3 py-2 text-start text-xs text-muted transition-colors hover:border-accent"
         >
           {value ? <span className="text-ink-soft">{value}</span> : placeholder}
         </button>

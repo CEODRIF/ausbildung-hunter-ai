@@ -124,6 +124,11 @@ export function AffordabilityCalculator() {
             <p className="rounded-2xl bg-surface-2 p-4 text-xs leading-5 text-muted">
               {t("housing.calcGuideline")}
             </p>
+            {/* Transparent assumptions/formula — the user can see HOW the number
+                is derived, not just the verdict. */}
+            <p className="text-[11px] leading-4 text-faint">
+              {t("housing.calcAssumptions")}
+            </p>
           </>
         ) : (
           <div className="flex h-full min-h-48 flex-col items-center justify-center rounded-3xl border border-dashed border-line-strong bg-surface p-6 text-center">
