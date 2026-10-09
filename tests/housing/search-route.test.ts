@@ -3,6 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/auth", () => ({ getCurrentUserAndProfile: vi.fn() }));
 const { getCurrentUserAndProfile } = await import("@/lib/auth");
 
+// Offline: the default Nominatim geocoder must never run in route tests.
+vi.mock("@/lib/housing/geocode", () => ({
+  geocodePlace: vi.fn(async () => null),
+  clearGeocodeCache: vi.fn(),
+  geocodeUserAgent: () => "test-agent",
+}));
+
 vi.mock("@/lib/rate-limit", () => ({
   checkRateLimit: vi.fn(async () => ({
     allowed: true,
@@ -77,5 +84,51 @@ describe("POST /api/housing/search", () => {
     });
     const res = await POST(req({}));
     expect(res.status).toBe(429);
+  });
+
+  it("rejects out-of-range pagination (limit 1..100, offset 0..10000) with 400", async () => {
+    vi.mocked(getCurrentUserAndProfile).mockResolvedValue(authed("user-1"));
+    for (const body of [
+      { limit: 0 },
+      { limit: 101 },
+      { offset: -1 },
+      { offset: 10001 },
+      { limit: 2.5 },
+    ]) {
+      const res = await POST(req(body));
+      expect(res.status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  it("pages server-side: limit/offset, stable total, has_more, radius_applied", async () => {
+    vi.mocked(getCurrentUserAndProfile).mockResolvedValue(authed("user-1"));
+    const page1 = (await (await POST(req({ limit: 3, offset: 0 }))).json()) as {
+      listings: unknown[];
+      total: number;
+      has_more: boolean;
+      radius_applied: boolean;
+    };
+    expect(page1.listings).toHaveLength(3);
+    expect(page1.total).toBeGreaterThan(3); // 10 demo fixtures
+    expect(page1.has_more).toBe(true);
+    expect(page1.radius_applied).toBe(false); // no city → no radius
+
+    const tail = (await (await POST(req({ limit: 3, offset: page1.total - 1 }))).json()) as {
+      listings: unknown[];
+      total: number;
+      has_more: boolean;
+    };
+    expect(tail.listings).toHaveLength(1);
+    expect(tail.total).toBe(page1.total); // stable pre-pagination total
+    expect(tail.has_more).toBe(false);
+
+    // Pages do not overlap.
+    const seen = new Set(
+      page1.listings.map((l) => (l as { source_id: string }).source_id),
+    );
+    const page3 = (await (await POST(req({ limit: 3, offset: 3 }))).json()) as {
+      listings: Array<{ source_id: string }>;
+    };
+    for (const listing of page3.listings) expect(seen.has(listing.source_id)).toBe(false);
   });
 });

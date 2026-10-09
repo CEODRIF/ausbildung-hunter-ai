@@ -27,7 +27,9 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await searchHousing(body);
+    const result = await searchHousing(body, {
+      pagination: { limit: body.limit, offset: body.offset },
+    });
     return NextResponse.json(result, { headers: rateLimitHeaders(limited) });
   } catch (error) {
     return NextResponse.json(

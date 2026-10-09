@@ -32,6 +32,9 @@ interface Props {
 
 type Phase = "loading" | "done" | "error";
 
+/** Page size for server-side pagination (matches the schema default/max of 30). */
+const PAGE_SIZE = 30;
+
 function listingKey(l: HousingListing): string {
   return `${l.provider}:${l.source_id}`;
 }
@@ -106,34 +109,86 @@ export function HousingSearch({ preset, initialQuery, showFilters = true }: Prop
   const [savedIds, setSavedIds] = useState<Set<string>>(() => new Set());
   const [appOpen, setAppOpen] = useState(false);
   const [descExpanded, setDescExpanded] = useState(false);
+  // Server-side pagination: `offsetRef` tracks the next page to fetch (no
+  // state → no re-render loops). Load-more fetches directly; any filter
+  // change resets it to 0 (done in patch/reset), so pages never mix filters.
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Whether the server applied a REAL (geocoded) radius filter — surfaced
+  // honestly instead of implying a fake radius when it could not.
+  const [radiusApplied, setRadiusApplied] = useState(false);
   const runIdRef = useRef(0);
-
-  // Debounced search: runs on mount and whenever params change.
+  const offsetRef = useRef(0);
+  const paramsRef = useRef(params);
   useEffect(() => {
+    paramsRef.current = params;
+  }, [params]);
+
+  const fetchPage = useCallback(async (targetOffset: number, append: boolean) => {
     const id = ++runIdRef.current;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch("/api/housing/search", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(params),
-        });
-        if (id !== runIdRef.current) return;
-        if (!res.ok) {
-          setPhase("error");
-          return;
-        }
-        const data = (await res.json()) as HousingSearchResult;
-        if (id !== runIdRef.current) return;
+    if (append) setLoadingMore(true);
+    try {
+      const res = await fetch("/api/housing/search", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...paramsRef.current,
+          limit: PAGE_SIZE,
+          offset: targetOffset,
+        }),
+      });
+      if (id !== runIdRef.current) return;
+      if (!res.ok) {
+        setHasMore(false);
+        if (!append) setPhase("error");
+        return;
+      }
+      const data = (await res.json()) as HousingSearchResult;
+      if (id !== runIdRef.current) return;
+      offsetRef.current = targetOffset + data.listings.length;
+      setHasMore(data.has_more);
+      setRadiusApplied(data.radius_applied);
+      if (append) {
+        // Merge the page into the existing list; `total`/demo flags come from
+        // the first page (identical filter set on both sides).
+        setResults((prev) =>
+          prev
+            ? {
+                ...data,
+                listings: [...prev.listings, ...data.listings],
+                total: prev.total,
+                is_demo: prev.is_demo && data.is_demo,
+                data_status: prev.is_demo && data.is_demo ? "demo" : "live",
+              }
+            : data,
+        );
+      } else {
         setResults(data);
         setPhase("done");
-      } catch {
-        if (id !== runIdRef.current) return;
-        setPhase("error");
       }
+    } catch {
+      if (id !== runIdRef.current) return;
+      if (append) return; // keep hasMore so the user can retry the page
+      setPhase("error");
+    } finally {
+      if (id === runIdRef.current && append) setLoadingMore(false);
+    }
+  }, []);
+
+  // Debounced search: runs on mount and whenever the filter set changes.
+  // (Page resets are folded into patch/reset below, so filters and paging
+  // never double-fetch.)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void fetchPage(offsetRef.current, false);
     }, 300);
     return () => clearTimeout(timer);
-  }, [params]);
+  }, [params, fetchPage]);
+
+  async function loadMore() {
+    if (loadingMore || !hasMore || !results) return;
+    await fetchPage(offsetRef.current, true);
+  }
 
   // Load the user's existing saves so the hearts render correctly.
   useEffect(() => {
@@ -155,9 +210,11 @@ export function HousingSearch({ preset, initialQuery, showFilters = true }: Prop
   }, []);
 
   const patch = useCallback((p: Partial<HousingSearchParams>) => {
+    offsetRef.current = 0; // any filter change restarts pagination
     setParams((prev) => ({ ...prev, ...p }));
   }, []);
   const reset = useCallback(() => {
+    offsetRef.current = 0;
     setParams({ ...DEFAULT_HOUSING_SEARCH, ...(preset ?? {}) });
   }, [preset]);
 
@@ -178,9 +235,20 @@ export function HousingSearch({ preset, initialQuery, showFilters = true }: Prop
 
       {/* results header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-bold text-ink">
-          {phase === "done" && results ? t("housing.results", { n: results.total }) : t("housing.loading")}
-        </h2>
+        <div>
+          <h2 className="text-base font-bold text-ink">
+            {phase === "done" && results ? t("housing.results", { n: results.total }) : t("housing.loading")}
+          </h2>
+          {/* Honest radius status: only shown when the user actually typed a
+              city, and it states whether the radius was really applied. */}
+          {phase === "done" && params.city.trim() && (
+            <p className="mt-0.5 text-xs text-faint">
+              {radiusApplied
+                ? t("housing.radiusApplied", { city: params.city.trim(), n: params.radius_km })
+                : t("housing.radiusSkipped")}
+            </p>
+          )}
+        </div>
         <label className="flex items-center gap-2 text-sm text-muted">
           <Icon name="chart" size={14} strokeWidth={1.8} />
           <select
@@ -236,6 +304,25 @@ export function HousingSearch({ preset, initialQuery, showFilters = true }: Prop
                       onSavedChange={(saved) => onSavedChange(listingKey(listing), saved)}
                     />
                   ))}
+                </div>
+              )}
+
+              {/* Load-more (server-side pagination) */}
+              {phase === "done" && listings.length > 0 && hasMore && (
+                <div className="flex justify-center pt-1">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={loadingMore}
+                    onClick={() => void loadMore()}
+                  >
+                    {loadingMore ? (
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-line-strong border-t-accent" />
+                    ) : (
+                      <Icon name="chevron" size={14} strokeWidth={2} />
+                    )}
+                    {t("housing.loadMore")}
+                  </Button>
                 </div>
               )}
             </>
@@ -301,6 +388,14 @@ export function HousingSearch({ preset, initialQuery, showFilters = true }: Prop
                     />
                   )}
                 </dl>
+                {selected.provider_updated_at &&
+                  !Number.isNaN(Date.parse(selected.provider_updated_at)) && (
+                    <p className="mt-3 text-[11px] text-faint">
+                      {t("housing.updatedAt", {
+                        date: new Date(selected.provider_updated_at).toLocaleDateString(),
+                      })}
+                    </p>
+                  )}
               </div>
 
               {selected.features.length > 0 && (

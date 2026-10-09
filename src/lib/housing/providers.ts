@@ -1,55 +1,57 @@
 import "server-only";
 
 import demoFixture from "./fixtures/demo-listings.json";
+import { geocodePlace } from "./geocode";
 import type {
+  GeocodeFn,
   HousingListing,
+  HousingProviderAdapter,
   HousingSearchParams,
+  HousingSearchOptions,
   HousingSearchResult,
 } from "./types";
 
 /**
  * Housing / "Wohnen" — provider layer.
  *
- * The MVP ships ZERO live rental providers: there is no licensed, free German
- * rental data API, and scraping is explicitly out of scope. Instead:
+ * The product ships ZERO live rental providers: there is no licensed, free
+ * German rental data API, and scraping is explicitly out of scope. Instead:
  *
  *   1. The listing surface is a provider-ADAPTER abstraction. A future licensed
  *      adapter implements {@link HousingProviderAdapter} and is registered in
- *      {@link PROVIDER_ADAPTERS}; it must be `isLicensed()` and not kill-switched
+ *      {@link PROVIDER_ADAPTERS}; it must be `isLicensed()` (with a citable
+ *      `termsRef`), declare its `supportedFilters`, and not be kill-switched
  *      before its results are ever served.
  *   2. Until such an adapter exists, `searchHousing()` serves clearly-labeled
  *      DEMO fixtures (data_status = "demo") that link out to real portal
  *      homepages (never fabricated deep links) and never claim to be live data.
  *
+ * Runtime guarantees (all testable offline via `HousingSearchOptions`):
+ *   * failure isolation — one adapter error/timeout never breaks the search;
+ *   * per-adapter timeout — a hanging source is dropped, not awaited;
+ *   * dedupe — one card per `provider:source_id` (live beats demo);
+ *   * expiry — listings the provider marks inactive (`listing_active: false`)
+ *     are dropped; `null` (unknown) is kept;
+ *   * honest radius — the radius is applied ONLY when the city geocodes
+ *     (Nominatim, fail-open); otherwise `radius_applied: false` is reported;
+ *   * pagination — `limit`/`offset` with a stable pre-pagination `total` and
+ *     `has_more` so the UI can page without re-querying.
+ *
  * Every result is normalized to {@link HousingListing} so the UI, the saved
  * list, and the DB snapshot all share one shape.
  */
 
-/** A licensed source of rental listings. The MVP has none registered. */
-export interface HousingProviderAdapter {
-  /** Stable provider id (dedupe key, together with source_id). */
-  id: string;
-  /** Display name for the source badge. */
-  displayName: string;
-  /**
-   * True only when we hold a valid license/contract for this source. This is a
-   * HARD gate: an unlicensed adapter never contributes results, regardless of
-   * the kill switch.
-   */
-  isLicensed(): boolean;
-  /**
-   * A per-provider kill switch. Flipping this off stops a single source's
-   * results without touching the rest. Defaults to enabled.
-   */
-  search(params: HousingSearchParams): Promise<HousingListing[]>;
-}
+/** Re-export so existing imports (`from "./providers"`) keep working. */
+export type { HousingProviderAdapter } from "./types";
 
-/**
- * Registered live adapters. Intentionally EMPTY in the MVP — there is no
- * licensed free German rental API. Adding a licensed source here (with
- * isLicensed() true) is the only way live data can enter the product.
- */
-export const PROVIDER_ADAPTERS: HousingProviderAdapter[] = [];
+/** A single adapter may not hold the whole search hostage. */
+export const ADAPTER_TIMEOUT_MS = 8000;
+const EARTH_RADIUS_KM = 6371;
+
+/** Registered live adapters. Intentionally EMPTY — there is no licensed free
+ *  German rental API. Adding a licensed source here (isLicensed() true, with a
+ *  real `termsRef`) is the ONLY way live data can enter the product. */
+export const PROVIDER_ADAPTERS: readonly HousingProviderAdapter[] = [];
 
 /**
  * Per-provider kill switches. A provider id present here with `false` is
@@ -61,7 +63,7 @@ function providerEnabled(providerId: string): boolean {
   return PROVIDER_KILL_SWITCHES[providerId] !== false;
 }
 
-/** The demo fixture set — the only data source in the MVP. */
+/** The demo fixture set — the only built-in data source. */
 function demoListings(): HousingListing[] {
   const raw = demoFixture as unknown as {
     is_demo?: boolean;
@@ -71,7 +73,7 @@ function demoListings(): HousingListing[] {
   return (raw.listings ?? []).map((item) => normalizeListing(item));
 }
 
-/** Normalize a partial fixture row into a complete, null-safe listing. */
+/** Normalize a partial fixture/provider row into a complete, null-safe listing. */
 export function normalizeListing(partial: Partial<HousingListing>): HousingListing {
   return {
     provider: partial.provider ?? "demo",
@@ -103,13 +105,63 @@ export function normalizeListing(partial: Partial<HousingListing>): HousingListi
     last_checked_at: partial.last_checked_at ?? null,
     source_terms_version: partial.source_terms_version ?? null,
     data_status: partial.data_status ?? "demo",
+    listing_active: partial.listing_active ?? null,
   };
 }
 
-/** Label shown in the demo banner. Always non-empty in the MVP. */
+/** Label shown in the demo banner. Always non-empty. */
 export const DEMO_LABEL: string =
   (demoFixture as { label?: string }).label ??
   "Demo-Daten — keine echten Mietangebote";
+
+/** Pure great-circle distance in km (exported for tests + the UI). */
+export function haversineKm(
+  a: { lat: number; lon: number },
+  b: { lat: number; lon: number },
+): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+/** Race a promise against a timeout; rejection → the adapter is skipped. */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Adapter timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * One card per `provider:source_id`. Live data wins over demo data for the
+ * same identity (demo rows are placeholders until the real source is wired).
+ */
+function dedupeByProviderSource(listings: HousingListing[]): HousingListing[] {
+  const out: HousingListing[] = [];
+  const indexByKey = new Map<string, number>();
+  for (const listing of listings) {
+    const key = `${listing.provider}:${listing.source_id}`;
+    const existing = indexByKey.get(key);
+    if (existing === undefined) {
+      indexByKey.set(key, out.length);
+      out.push(listing);
+    } else if (out[existing].data_status === "demo" && listing.data_status === "live") {
+      out[existing] = listing;
+    }
+  }
+  return out;
+}
 
 function matchesParams(
   listing: HousingListing,
@@ -152,6 +204,21 @@ function matchesParams(
   return true;
 }
 
+/**
+ * The real radius filter. Only runs when the city geocoded (fail-open design):
+ *   * listings WITH coordinates must lie within `radius_km` (haversine);
+ *   * listings WITHOUT coordinates fall back to the city-name match already
+ *     done in {@link matchesParams} (absence of coordinates is not exclusion).
+ */
+function withinRadius(
+  listing: HousingListing,
+  center: { lat: number; lon: number },
+  radiusKm: number,
+): boolean {
+  if (listing.latitude == null || listing.longitude == null) return true;
+  return haversineKm(center, { lat: listing.latitude, lon: listing.longitude }) <= radiusKm;
+}
+
 function sortValue(listing: HousingListing, key: "newest" | "price"): number {
   if (key === "newest") {
     const ts = Date.parse(listing.provider_updated_at ?? "");
@@ -174,38 +241,85 @@ function sortListings(
   return copy;
 }
 
+function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
 /**
- * Run a housing search across all ENABLED + LICENSED providers, falling back
- * to (in the MVP, serving) the labeled demo fixtures.
+ * Run a housing search across all ENABLED + LICENSED providers, plus the
+ * labeled demo fixtures, with failure isolation, dedupe, an honest radius
+ * filter, and pagination.
  */
 export async function searchHousing(
   params: HousingSearchParams,
+  options: HousingSearchOptions = {},
 ): Promise<HousingSearchResult> {
+  const limit = clampInt(options.pagination?.limit, 30, 1, 100);
+  const offset = clampInt(options.pagination?.offset, 0, 0, 10000);
+  const adapters = options.adapters ?? PROVIDER_ADAPTERS;
+  // `undefined` → default geocoder; `null` → disabled (tests / kill switch).
+  const geocode: GeocodeFn | null =
+    options.geocode === undefined ? geocodePlace : options.geocode;
+  const adapterTimeoutMs =
+    options.adapterTimeoutMs === undefined
+      ? ADAPTER_TIMEOUT_MS
+      : Math.max(1, Math.round(options.adapterTimeoutMs));
+
+  // 1) Live adapters — isolated, bounded, re-stamped "live" defensively.
   const live: HousingListing[] = [];
-  for (const adapter of PROVIDER_ADAPTERS) {
-    if (!providerEnabled(adapter.id)) continue;
-    if (!adapter.isLicensed()) continue; // hard gate — unlicensed sources never run
-    try {
-      const results = await adapter.search(params);
-      for (const item of results) {
-        // Adapters must return live, licensed data; re-stamp defensively.
-        live.push(normalizeListing({ ...item, data_status: "live" }));
+  await Promise.all(
+    adapters.map(async (adapter) => {
+      if (!providerEnabled(adapter.id)) return;
+      if (!adapter.isLicensed()) return; // hard gate — unlicensed sources never run
+      try {
+        const results = await withTimeout(adapter.search(params), adapterTimeoutMs);
+        for (const item of results) {
+          live.push(normalizeListing({ ...item, data_status: "live" }));
+        }
+      } catch {
+        // A single failing/timing-out provider must not break the search.
       }
+    }),
+  );
+
+  // 2) Candidate pool: live first (dedupe gives live priority over demo).
+  const candidates = dedupeByProviderSource([...live, ...demoListings()]);
+
+  // 3) Expired listings are dropped; unknown state (null) is kept.
+  const active = candidates.filter((listing) => listing.listing_active !== false);
+
+  // 4) Filters (city/PLZ/type/rent/rooms/area/flags).
+  let filtered = active.filter((listing) => matchesParams(listing, params));
+
+  // 5) Honest radius: applied only when the city actually geocoded.
+  let radiusApplied = false;
+  const city = params.city.trim();
+  if (city && params.radius_km > 0 && geocode !== null) {
+    let center: { lat: number; lon: number } | null = null;
+    try {
+      const place = await geocode(city);
+      center = place ?? null;
     } catch {
-      // A single failing provider must not break the whole search.
-      continue;
+      center = null; // fail open — geocoders must not take the search down
+    }
+    if (center) {
+      radiusApplied = true;
+      filtered = filtered.filter((listing) => withinRadius(listing, center, params.radius_km));
     }
   }
 
-  const demo = demoListings();
-  const candidates = [...live, ...demo];
-  const filtered = candidates.filter((listing) => matchesParams(listing, params));
+  // 6) Sort + paginate on a STABLE pre-pagination total.
   const sorted = sortListings(filtered, params.sort);
+  const total = sorted.length;
+  const page = sorted.slice(offset, offset + limit);
 
-  const isDemo = sorted.every((listing) => listing.data_status === "demo");
+  const isDemo = page.every((listing) => listing.data_status === "demo");
   return {
-    listings: sorted,
-    total: sorted.length,
+    listings: page,
+    total,
+    has_more: offset + limit < total,
+    radius_applied: radiusApplied,
     is_demo: isDemo,
     data_status: isDemo ? "demo" : "live",
   };
@@ -227,7 +341,7 @@ export function findListingById(
 
 /**
  * The set of provider ids that can currently contribute data (enabled AND
- * licensed). Exposed for the UI/source badges and for tests. Empty in the MVP.
+ * licensed). Exposed for the UI/source badges and for tests. Empty today.
  */
 export function activeProviderIds(): string[] {
   return PROVIDER_ADAPTERS.filter(

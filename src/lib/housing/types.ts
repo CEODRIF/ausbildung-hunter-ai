@@ -55,6 +55,12 @@ export interface HousingListing {
   source_terms_version: string | null;
   /** "demo" for fixture data, "live" for licensed adapters. */
   data_status: DataStatus;
+  /**
+   * Whether the provider still lists this offering as available.
+   * `false` = the source marks it expired/removed (excluded from results);
+   * `null` = unknown (kept — absence of evidence is not evidence of expiry).
+   */
+  listing_active: boolean | null;
 }
 
 export interface HousingSearchParams {
@@ -98,10 +104,86 @@ export const DEFAULT_HOUSING_SEARCH: HousingSearchParams = {
 
 export interface HousingSearchResult {
   listings: HousingListing[];
+  /** Total number of matches BEFORE pagination (stable across pages). */
   total: number;
+  /** True when further pages exist at `offset + limit`. */
+  has_more: boolean;
+  /**
+   * True when the city could be geocoded and a real radius filter was applied
+   * to listings carrying coordinates. False = the radius was not applied
+   * (no city, geocoding failed, or radius 0) — the UI says so honestly.
+   */
+  radius_applied: boolean;
   /** True when the results come from demo fixtures (no live providers yet). */
   is_demo: boolean;
   data_status: DataStatus;
+}
+
+// --- Provider adapters --------------------------------------------------------
+
+/**
+ * A licensed source of rental listings.
+ *
+ * Contract (honesty-by-design): an adapter may only be registered when
+ * `isLicensed()` is backed by a verifiable agreement — and that agreement
+ * must be citable via `termsRef` (URL or document reference). `supportedFilters`
+ * declares which search filters the source genuinely applies; filters outside
+ * that list are not silently faked, they are simply not supported by the source.
+ */
+export interface HousingProviderAdapter {
+  /** Stable provider id (dedupe key, together with source_id). */
+  id: string;
+  /** Display name for the source badge. */
+  displayName: string;
+  /**
+   * True only when we hold a valid license/contract for this source. This is a
+   * HARD gate: an unlicensed adapter never contributes results, regardless of
+   * the kill switch.
+   */
+  isLicensed(): boolean;
+  /**
+   * Search-filter keys (`HousingSearchParams` field names) this source
+   * genuinely supports. Documented, not assumed.
+   */
+  supportedFilters: readonly string[];
+  /**
+   * Human-readable reference (URL or document name) to the license/terms that
+   * justify `isLicensed()` — the audit trail for where the data comes from.
+   */
+  termsRef: string;
+  search(params: HousingSearchParams): Promise<HousingListing[]>;
+}
+
+/**
+ * Geocode callback used to turn a city name into coordinates for radius
+ * search. `null` result = "could not resolve" (fail-open: the search falls
+ * back to city-name matching and reports `radius_applied: false`).
+ */
+export type GeocodeFn = (
+  query: string,
+) => Promise<{ lat: number; lon: number; label: string } | null>;
+
+export interface HousingSearchPagination {
+  /** Page size (1..100, default 30). */
+  limit: number;
+  /** Zero-based offset of the first result (0..10000, default 0). */
+  offset: number;
+}
+
+export interface HousingSearchOptions {
+  pagination?: HousingSearchPagination;
+  /**
+   * Test/preview hook: override the registered adapters. Production code
+   * never passes this — only PROVIDER_ADAPTERS applies.
+   */
+  adapters?: readonly HousingProviderAdapter[];
+  /**
+   * Injected geocoder. `undefined` = default (Nominatim), `null` = disabled
+   * (radius is never applied). Used by tests to stay deterministic/offline.
+   */
+  geocode?: GeocodeFn | null;
+  /** Per-adapter timeout in ms (default 8000). Injectable for tests. */
+  adapterTimeoutMs?: number;
 }
 
 // --- Persisted, per-user rows ------------------------------------------------
