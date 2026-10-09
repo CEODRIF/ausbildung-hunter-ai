@@ -61,6 +61,24 @@ export interface HousingListing {
    * `null` = unknown (kept — absence of evidence is not evidence of expiry).
    */
   listing_active: boolean | null;
+  /**
+   * Web-discovery provenance (set by the web-search provider only):
+   * `web_search` = discovered via search-engine index (link + title +
+   * snippet-level facts), `page_fetch` = we fetched and parsed the page
+   * (fetchable-policy domains only). Undefined for portal/demo data.
+   */
+  source_type?: "web_search" | "page_fetch";
+  /**
+   * How far WE verified this result — independent of the provider's own
+   * `verified` badge:
+   *  - `verified`           — fields parsed from the fetched page (JSON-LD or
+   *                           unambiguous explicit text);
+   *  - `partially_verified` — stated in a search result/snippet with a
+   *                           citation, not confirmed by a page fetch;
+   *  - `unverified`         — discovered, details unknown.
+   * AI extraction alone NEVER yields `verified`.
+   */
+  verification_status?: "unverified" | "partially_verified" | "verified";
 }
 
 export interface HousingSearchParams {

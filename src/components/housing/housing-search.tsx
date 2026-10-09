@@ -5,6 +5,7 @@ import { useI18n } from "@/lib/i18n";
 import { Icon } from "@/components/icon";
 import { Button, Modal } from "@/components/ui";
 import { HousingFilters } from "./housing-filters";
+import { HousingWebSearch } from "./housing-web-search";
 import { ListingCard } from "./listing-card";
 import { SaveListingButton } from "./save-listing-button";
 import { ApplicationAssistant } from "./application-assistant";
@@ -232,6 +233,11 @@ export function HousingSearch({ preset, initialQuery, showFilters = true }: Prop
   return (
     <div className="space-y-5">
       {showFilters && <HousingFilters params={params} onChange={patch} onReset={reset} />}
+
+      {/* On-demand LIVE web search — separate from the demo fixture search
+          below: explicit trigger, own result area, verification badges, and
+          the required Bing attribution line. Reuses the current filters. */}
+      <HousingWebSearch params={params} />
 
       {/* results header */}
       <div className="flex flex-wrap items-center justify-between gap-3">

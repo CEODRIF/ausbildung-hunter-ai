@@ -45,6 +45,9 @@ export type RateLimitScope =
   | "scanner_scan"
   // Paid third-party web lookups issued by the Germany copilot chat.
   | "web_search"
+  // Housing live web search (Azure Foundry web_search tool / Tavily): each
+  // request = 1–2 paid search calls + up to 3 bounded page fetches.
+  | "housing_web_search"
   // Unauthenticated auth flows — keyed by a hashed client IP, never a user id
   // (there is no session yet). See clientIpKey().
   | "register"
@@ -149,6 +152,10 @@ export const RATE_LIMITS: Record<
   // web_search: one live lookup per question that needs current information.
   // Generous for a real conversation, but a cap on third-party spend.
   web_search: { max: 20, windowSeconds: 600 },
+  // housing_web_search: each run spends 1–2 Bing transactions
+  // (~$0.014–0.056 each at $14/1,000) plus up to 3 page fetches. 10/hour
+  // per user is far above deliberate interactive use and bounds spend.
+  housing_web_search: { max: 10, windowSeconds: 3600 },
   // Unauthenticated auth flows (per client IP, 10-minute window). These are a
   // thin app-level layer on top of Supabase Auth's own built-in limits — they
   // stop invitation-code brute force and signup/login/resend spam from a
