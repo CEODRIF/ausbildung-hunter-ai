@@ -1,0 +1,67 @@
+name: email-worker-schedule
+
+# Stage 0 (Architecture A): durable, low-cost poller for the email worker.
+# The worker itself runs in the Azure Container App (ausbildungsweg-core).
+#
+# Safety model (defense in depth):
+#   - Single concurrency group -> ticks never overlap (no duplicate processing).
+#   - DB-side atomic claims (FOR UPDATE SKIP LOCKED) -> two runs can never
+#     claim the same campaign/message.
+#   - Sender-slot reservation inside the app -> provider rate limits hold
+#     even under any future concurrency.
+#   - Bounded: one tick processes at most ONE batch (<= 5 messages).
+#     If the queue is empty, claim returns null and the tick is a no-op.
+#   - Logs contain only campaign/user UUIDs and counters — no recipient
+#     addresses, subjects, or other personal data.
+#
+# Secrets (repository level):
+#   EMAIL_WORKER_URL     - base URL of the worker host (Azure FQDN)
+#   EMAIL_WORKER_SECRET  - must match EMAIL_WORKER_SECRET on the worker host
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: email-worker-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4 # < 5-minute cadence: a stuck tick can never overlap the next
+    steps:
+      - name: Claim next due campaign
+        id: claim
+        env:
+          WORKER_URL: ${{ secrets.EMAIL_WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.EMAIL_WORKER_SECRET }}
+        run: |
+          set -euo pipefail
+          RESP="$(curl -fsS --max-time 90 -X POST "$WORKER_URL/api/internal/email-worker/claim" \
+            -H "Content-Type: application/json" \
+            -H "x-email-worker-secret: $WORKER_SECRET" \
+            -d '{}')"
+          # claim response is {"campaign": null} or {"campaign": {userId, campaignId}}
+          echo "claim response: $RESP"
+          HAS="$(echo "$RESP" | python3 -c 'import json,sys; print("yes" if json.load(sys.stdin).get("campaign") else "no")')"
+          echo "has-campaign=$HAS" >> "$GITHUB_OUTPUT"
+          echo "$RESP" > /tmp/claim.json
+
+      - name: Process claimed batch (max 5 messages)
+        if: steps.claim.outputs.has-campaign == 'yes'
+        env:
+          WORKER_URL: ${{ secrets.EMAIL_WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.EMAIL_WORKER_SECRET }}
+        run: |
+          set -euo pipefail
+          USER_ID="$(python3 -c 'import json; print(json.load(open("/tmp/claim.json"))["campaign"]["userId"])')"
+          CAMPAIGN_ID="$(python3 -c 'import json; print(json.load(open("/tmp/claim.json"))["campaign"]["campaignId"])')"
+          RESP="$(curl -fsS --max-time 180 -X POST "$WORKER_URL/api/internal/email-worker" \
+            -H "Content-Type: application/json" \
+            -H "x-email-worker-secret: $WORKER_SECRET" \
+            -d "{\"userId\":\"$USER_ID\",\"campaignId\":\"$CAMPAIGN_ID\",\"batchSize\":5}")"
+          # process response is {"processed": n, "status": "..."} — counters only
+          echo "process response: $RESP"
+          # A 200 carrying an "error" field must fail the tick (visible in run history).
+          echo "$RESP" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(1 if "error" in d else 0)'
