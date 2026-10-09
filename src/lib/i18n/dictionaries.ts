@@ -2194,6 +2194,49 @@ const de = {
       "Erste-Einschätzung-Tool: keine Rechtsberatung und keine Garantie für die Seriosität einer Anzeige. Prüfe Vertrag, Anbieter und Zahlungen immer selbst.",
     calcAssumptions:
       "Annahmen: Warmmiete = Kaltmiete + Nebenkosten (inkl. Heizung, ggf. Strom). Kaution = Monate × Warmmiete, einmalig zu Beginn. Faustregel: max. 30 % der Warmmiete am Nettoeinkommen.",
+    rentCold: "kalt",
+    webSearch: {
+      title: "Angebote im Web suchen",
+      subtitle:
+        "Findet aktuelle Mietanzeigen über eine Websuche mit Quellenangabe – nur auf Wunsch, nicht automatisch.",
+      modeWeb: "Gesamtes Web",
+      modeTargeted: "Ausgewählte Websites",
+      domainsTitle: "Websites wählen",
+      hintFetchable: "Seite wird geprüft",
+      hintSearchOnly: "nur Verweis",
+      run: "Web-Suche starten",
+      running: "Suche läuft …",
+      costNote:
+        "Jeder Start nutzt eine bezahlte Websuche (max. 2 Suchaufrufe) – starte sie nur, wenn du suchst.",
+      results: "{n} Funde über Websuche",
+      cached: "aus dem Kurzzeit-Cache",
+      checkedCount: "{n} Seiten abgerufen und geprüft",
+      warningPartial:
+        "Nicht alle Funde konnten geprüft werden – Einträge ohne grünes Kennzeichen stammen nur aus Suchtreffern.",
+      empty: "Keine passenden Anzeigen in den erlaubten Quellen gefunden.",
+      emptyHint:
+        "Versuche eine größere Stadt, mehr Spielraum bei Zimmer/Miete oder eine längere Frist.",
+      verified: "Seite geprüft",
+      partial: "Aus Suchtreffer",
+      unverified: "Nur entdeckt",
+      observed: "beobachtet",
+      lastChecked: "Geprüft: {date}",
+      external: "Zur Anzeige",
+      from: "frei ab",
+      attribution:
+        "Ergebnisse einer Internet-Websuche (Bing). Alle Angaben ohne Gewähr – bitte vor einer Kontaktaufnahme direkt auf der Quellenseite prüfen.",
+      stateNotConfigured:
+        "Die Websuche ist derzeit nicht konfiguriert – es wurden keine Suchaufrufe ausgelöst.",
+      stateToolBlocked:
+        "Der Websuche-Dienst ist auf dem Konto deaktiviert. Bitte beim Anbieter melden.",
+      stateEndpoint: "Der Suchdienst ist nicht erreichbar (Endpunkt nicht verfügbar).",
+      stateRateLimited:
+        "Zu viele Websuchen in kurzer Zeit – bitte kurz warten und erneut versuchen.",
+      stateDailyBudget:
+        "Das tägliche Websuche-Limit ist erreicht – bitte am nächsten Tag erneut versuchen.",
+      stateProviderError: "Die Websuche ist fehlgeschlagen – bitte erneut versuchen.",
+      stateTimeout: "Die Websuche hat zu lange gedauert – bitte erneut versuchen.",
+    },
   },
 };
 
@@ -4328,6 +4371,49 @@ const en: Dict = {
       "First-pass tool: not legal advice and no guarantee that a listing is legitimate. Always verify the contract, the landlord and any payment yourself.",
     calcAssumptions:
       "Assumptions: warm rent = cold rent + service charges (incl. heating, possibly electricity). Deposit = months × warm rent, paid once at the start. Rule of thumb: max. 30 % of net income for warm rent.",
+    rentCold: "cold",
+    webSearch: {
+      title: "Search the web for listings",
+      subtitle:
+        "Finds current rental ads via web search with sources shown — only on request, never automatically.",
+      modeWeb: "Whole web",
+      modeTargeted: "Selected websites",
+      domainsTitle: "Choose websites",
+      hintFetchable: "page is checked",
+      hintSearchOnly: "link only",
+      run: "Start web search",
+      running: "Searching …",
+      costNote:
+        "Each run uses a paid web search (max. 2 search calls) — start it only when you actually search.",
+      results: "{n} findings via web search",
+      cached: "from short-term cache",
+      checkedCount: "{n} pages fetched and checked",
+      warningPartial:
+        "Not all findings could be checked — entries without the green marker come from search hits only.",
+      empty: "No matching listings found in the allowed sources.",
+      emptyHint:
+        "Try a larger city, more flexibility on rooms/rent, or a longer deadline.",
+      verified: "Page checked",
+      partial: "From search hit",
+      unverified: "Discovered only",
+      observed: "observed",
+      lastChecked: "Checked: {date}",
+      external: "To listing",
+      from: "available from",
+      attribution:
+        "Results of an internet web search (Bing). All details without guarantee — please verify on the source page before contacting anyone.",
+      stateNotConfigured:
+        "Web search is not configured right now — no search calls were issued.",
+      stateToolBlocked:
+        "The web search service is disabled on the account. Please contact the provider.",
+      stateEndpoint: "The search service is unreachable (endpoint unavailable).",
+      stateRateLimited:
+        "Too many web searches in a short time — please wait a moment and retry.",
+      stateDailyBudget:
+        "The daily web search limit has been reached — please try again tomorrow.",
+      stateProviderError: "The web search failed — please retry.",
+      stateTimeout: "The web search took too long — please retry.",
+    },
   },
 };
 
@@ -6464,6 +6550,49 @@ const fr: Dict = {
       "Outil de premier passage : pas de conseil juridique et aucune garantie de légitimité d’une annonce. Vérifiez toujours le contrat, le propriétaire et tout paiement vous-même.",
     calcAssumptions:
       "Hypothèses : loyer charges comprises = loyer hors charges + charges (chauffage, électricité éventuelle). Caution = mois × loyer charges comprises, payée une fois au début. Règle : max. 30 % du revenu net pour le loyer charges comprises.",
+    rentCold: "charges",
+    webSearch: {
+      title: "Rechercher des annonces sur le web",
+      subtitle:
+        "Trouve des annonces de location actuelles via une recherche web avec sources — uniquement sur demande, jamais automatiquement.",
+      modeWeb: "Web entier",
+      modeTargeted: "Sites sélectionnés",
+      domainsTitle: "Choisir les sites",
+      hintFetchable: "page vérifiée",
+      hintSearchOnly: "lien seulement",
+      run: "Lancer la recherche web",
+      running: "Recherche en cours …",
+      costNote:
+        "Chaque lancement utilise une recherche web payante (2 requêtes max.) — ne la lancez que si vous cherchez vraiment.",
+      results: "{n} résultats via recherche web",
+      cached: "de la mémoire cache temporaire",
+      checkedCount: "{n} pages consultées et vérifiées",
+      warningPartial:
+        "Tous les résultats n'ont pas pu être vérifiés — les entrées sans marque verte proviennent uniquement des résultats de recherche.",
+      empty: "Aucune annonce correspondante trouvée dans les sources autorisées.",
+      emptyHint:
+        "Essayez une plus grande ville, plus de souplesse sur pièces/loyer, ou un délai plus long.",
+      verified: "Page vérifiée",
+      partial: "Issue du résultat",
+      unverified: "Découverte uniquement",
+      observed: "observé",
+      lastChecked: "Vérifié le : {date}",
+      external: "Voir l'annonce",
+      from: "disponible à partir du",
+      attribution:
+        "Résultats d'une recherche internet (Bing). Tous les détails sans garantie — veuillez vérifier sur la page source avant tout contact.",
+      stateNotConfigured:
+        "La recherche web n'est pas configurée pour l'instant — aucune requête n'a été lancée.",
+      stateToolBlocked:
+        "Le service de recherche web est désactivé sur le compte. Merci de contacter le fournisseur.",
+      stateEndpoint: "Le service de recherche est injoignable (point d'accès indisponible).",
+      stateRateLimited:
+        "Trop de recherches web en peu de temps — veuillez patienter un instant et réessayer.",
+      stateDailyBudget:
+        "La limite quotidienne de recherche web est atteinte — réessayez demain.",
+      stateProviderError: "La recherche web a échoué — veuillez réessayer.",
+      stateTimeout: "La recherche web a pris trop de temps — veuillez réessayer.",
+    },
   },
 };
 
@@ -8548,6 +8677,45 @@ const ar: Dict = {
       "أداة للتحقق الأولي: ليست استشارة قانونية ولا تضمن مصداقية الإعلان. افحص دائماً العقد والمالك وأي دفع بنفسك.",
     calcAssumptions:
       "الافتراضات: الإيجار الشامل = الإيجار الصافي + الرسوم الإضافية (بما في ذلك التدفئة، والكهرباء إن وجدت). التأمين = عدد الأشهر × الإيجار الشامل، يُدفع مرة واحدة عند البداية. قاعدة إرشادية: بحد أقصى 30% من صافي الدخل للإيجار الشامل.",
+    rentCold: "صافي",
+    webSearch: {
+      title: "ابحث عن الإعلانات على الويب",
+      subtitle:
+        "يجد إعلانات الإيجار الحالية عبر بحث على الويب مع ذكر المصادر — فقط عند الطلب، وليس تلقائيًا.",
+      modeWeb: "الويب بالكامل",
+      modeTargeted: "مواقع محددة",
+      domainsTitle: "اختر المواقع",
+      hintFetchable: "يُتحقق من الصفحة",
+      hintSearchOnly: "رابط فقط",
+      run: "بدء البحث على الويب",
+      running: "جارٍ البحث …",
+      costNote:
+        "كل تشغيل يستخدم بحث ويب مدفوعًا (بحد أقصى استدعاءا بحث) — شغّله فقط عندما تبحث فعلًا.",
+      results: "{n} نتائج عبر بحث الويب",
+      cached: "من ذاكرة مؤقتة قصيرة",
+      checkedCount: "تم استعراض {n} صفحات والتحقق منها",
+      warningPartial:
+        "تعذّر التحقق من جميع النتائج — البنود دون العلامة الخضراء تعتمد فقط على نتائج البحث.",
+      empty: "لم تَعثر على إعلانات مطابقة في المصادر المسموح بها.",
+      emptyHint: "جرّب مدينة أكبر، أو مرونة أكبر في الغرف/الإيجار، أو مهلة أطول.",
+      verified: "تم التحقق من الصفحة",
+      partial: "من نتيجة البحث",
+      unverified: "اكتشاف فقط",
+      observed: "مُراقَب",
+      lastChecked: "تاريخ الفحص: {date}",
+      external: "إلى الإعلان",
+      from: "متاح من",
+      attribution:
+        "نتائج بحث إنترنت (بينغ). جميع التفاصيل دون ضمان — يُرجى التحقق منها على الصفحة المصدرية قبل أي تواصل.",
+      stateNotConfigured: "بحث الويب غير مُهيّأ حاليًا — لم تُطلق أي طلبات بحث.",
+      stateToolBlocked: "خدمة بحث الويب معطّلة على الحساب. يُرجى إبلاغ المزوّد.",
+      stateEndpoint: "خدمة البحث غير متاحة (نقطة الوصول غير متوفرة).",
+      stateRateLimited:
+        "عدد كبير جدًّا من عمليات بحث الويب في وقت قصير — انتظر لحظة ثم أعد المحاولة.",
+      stateDailyBudget: "تم بلوغ الحد اليومي لبحث الويب — أعد المحاولة في اليوم التالي.",
+      stateProviderError: "فشل بحث الويب — يُرجى إعادة المحاولة.",
+      stateTimeout: "استغرق بحث الويب وقتًا طويلاً — يُرجى إعادة المحاولة.",
+    },
   },
 };
 
