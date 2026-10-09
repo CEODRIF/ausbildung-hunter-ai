@@ -3,12 +3,23 @@ import type { HousingSearchParams } from "@/lib/housing/types";
 /**
  * Query construction for housing web discovery.
  *
- * BOTH general-mode queries are German (the market language) and name the
- * concrete constraints the user set. They use COMPLEMENTARY phrasings
- * ("Mietwohnung …" vs. "Wohnung mieten …") so the two paid calls retrieve
- * different index rankings and the merged result set is materially larger
- * than a single call. The secondary call only runs when the first under-
- * delivered (see LIMITS.webModeSecondCallThreshold) — cost-aware.
+ * General mode issues MULTIPLE complementary German queries (the market
+ * language), each naming the concrete constraints the user set:
+ *   - accommodation_type "all": FOUR query families — apartments
+ *     (Mietwohnung), shared rooms (WG-Zimmer), student housing
+ *     (Studentenwohnung) and private rentals (direkt vom Eigentümer).
+ *     Different families surface different index rankings and portals
+ *     (WG-Gesucht for rooms, university housing for student offers,
+ *     private-landlord pages for direct rentals) — a single "Mietwohnung"
+ *     query systematically misses them, which is why a 28-result search
+ *     could still display zero listings.
+ *   - specific types: TWO complementary phrasings of that type
+ *     ("Mietwohnung …" vs. "Wohnung mieten …").
+ * Calls are bounded and cost-aware (see ./discovery + ./config): the
+ * primary call always runs; complementary calls run in a bounded-
+ * parallelism pool and stop early once enough candidates exist, the
+ * transaction budget is exhausted, the deadline is near, or a call added
+ * no new candidates.
  *
  * The instruction wrapper demands a STRICT JSON answer (one object per
  * listing, unknowns as null). That is the reliable way to get per-listing
@@ -42,9 +53,22 @@ const TYPE_DE_ALT: Record<TypeKey, string> = {
   studio: "Studio mieten",
 };
 
+/**
+ * Query families for accommodation_type "all" — one per market segment.
+ * Order = call order (primary first; the rest are complementary and
+ * subject to the cost-aware early-stop).
+ */
+const ALL_TYPE_FAMILIES: readonly string[] = [
+  "Mietwohnung", // apartments (incl. normal private rentals)
+  "WG-Zimmer mieten", // shared rooms / WG
+  "Studentenwohnung mieten", // student housing (also surfaces WGH offers)
+  "Wohnung privat direkt vom Eigentümer mieten", // private rentals / direct
+];
+
 export interface BuiltQueries {
-  /** Exactly 2 complementary German queries for general mode. */
-  queries: [string, string];
+  /** Complementary German queries for general mode: 4 for "all"
+   *  (apartment / WG / student / private rental), 2 for specific types. */
+  queries: string[];
   /** The single query used in targeted mode (the primary German one). */
   targetedQuery: string;
 }
@@ -127,11 +151,21 @@ export function buildHousingQueries(
     return partsDe.filter(Boolean).join(", ").slice(0, 400);
   };
 
-  const primary = wrapInstruction(buildDe(TYPE_DE[params.accommodation_type]));
-  const secondary = wrapInstruction(buildDe(TYPE_DE_ALT[params.accommodation_type]));
+  const type = params.accommodation_type;
+  // "all" → one query per market segment (apartments, WG, student, private
+  // rental); specific types → primary + complementary phrasing.
+  const terms: string[] =
+    type === "all"
+      ? [...ALL_TYPE_FAMILIES]
+      : [TYPE_DE[type], TYPE_DE_ALT[type]];
+  // De-duplicate terms (defensive; the families are distinct by design).
+  const seen = new Set<string>();
+  const queries = terms
+    .filter((term) => (seen.has(term) ? false : (seen.add(term), true)))
+    .map((term) => wrapInstruction(buildDe(term)));
 
   return {
-    queries: [primary, secondary],
-    targetedQuery: primary,
+    queries,
+    targetedQuery: queries[0],
   };
 }

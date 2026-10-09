@@ -57,6 +57,14 @@ interface SearchFunnel {
   uniqueCandidates: number;
   invalidUrls: number;
   searchPagesRejected: number;
+  /** Distinct urls rejected as portal/search/legal pages (the honest
+   *  "how many real results were lost" number — searchPagesRejected
+   *  counts occurrences, which overstate when urls repeat across calls). */
+  uniqueSearchPages: number;
+  /** Unreviewed content pages the model did not name as offers. */
+  contentRejected: number;
+  /** Candidates kept only via the model's exact-URL JSON reference. */
+  jsonOnlyKept: number;
   cityMismatches: number;
   duplicateResults: number;
   offAllowlist: number;
@@ -64,6 +72,7 @@ interface SearchFunnel {
   jsonMatched: number;
   fabricatedRejected: number;
   detailsEnriched: number;
+  imagesAttached: number;
   validListings: number;
   displayedListings: number;
   elapsedMs: number;
@@ -303,6 +312,7 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
   const funnelDropped =
     (funnel?.duplicateResults ?? 0) +
       (funnel?.searchPagesRejected ?? 0) +
+      (funnel?.contentRejected ?? 0) +
       (funnel?.offAllowlist ?? 0) +
       (funnel?.invalidUrls ?? 0) +
       (funnel?.fabricatedRejected ?? 0) +
@@ -315,12 +325,15 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
     outcome?.status === "ok" && rawListings.length === 0
       ? funnel && funnel.cityMismatches > 0
         ? t("housing.webSearch.emptyCityMismatch", { n: funnel.cityMismatches })
-        : funnel && (funnel.uniqueCandidates ?? 0) > 0
-          ? t("housing.webSearch.emptyFiltered", {
-              n: funnel.uniqueCandidates,
-              pages: funnel.searchPagesRejected,
-              dups: funnel.duplicateResults,
-            })
+          : funnel && (funnel.uniqueCandidates ?? 0) > 0
+            ? t("housing.webSearch.emptyFiltered", {
+                n: funnel.uniqueCandidates,
+                // DISTINCT rejected portal/search pages — the occurrence
+                // counter (searchPagesRejected) overstates when the same
+                // page arrives in several calls ("28 in, 34 excluded").
+                pages: funnel.uniqueSearchPages,
+                dups: funnel.duplicateResults,
+              })
           : funnel && (funnel.webSearchCalls ?? 0) === 0
             ? t("housing.webSearch.emptyNoSearchCall")
             : null

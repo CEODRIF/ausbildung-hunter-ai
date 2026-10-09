@@ -2283,7 +2283,7 @@ const de = {
       emptyCityMismatch:
         "Ursache: {n} Funde wurden verworfen, weil sie nachweislich eine andere Stadt betreffen.",
       emptyFiltered:
-        "Ursache: {n} Suchtreffer erhalten – {pages} Portalseiten und {dups} Duplikate wurden aussortiert.",
+        "Ursache: {n} eindeutige Suchtreffer erhalten – {pages} Such-/Portalseiten (keine Einzelangebote) und {dups} Duplikate wurden aussortiert.",
       emptyNoSearchCall:
         "Ursache: Der Suchdienst wurde für diese Anfrage nicht aufgerufen. Bitte versuche es erneut.",
     },
@@ -4510,7 +4510,7 @@ const en: Dict = {
       emptyCityMismatch:
         "Cause: {n} results were rejected because they demonstrably concern a different city.",
       emptyFiltered:
-        "Cause: {n} search hits received — {pages} portal/search pages and {dups} duplicates were sorted out.",
+        "Cause: {n} distinct search hits received — {pages} search/portal pages (no individual offers) and {dups} duplicates were sorted out.",
       emptyNoSearchCall: "Cause: the search service was not invoked for this request. Please try again.",
     },
   },
@@ -6738,7 +6738,7 @@ const fr: Dict = {
       rateLimitHint: "Veuillez patienter environ {seconds} secondes et réessayez.",
       emptyCityMismatch: "Cause : {n} résultats rejetés car situés dans une autre ville.",
       emptyFiltered:
-        "Cause : {n} hits reçus — {pages} pages portail/recherche et {dups} doublons écartés.",
+        "Cause : {n} résultats de recherche distincts reçus — {pages} pages portail/recherche (pas d'annonces individuelles) et {dups} doublons écartés.",
       emptyNoSearchCall:
         "Cause : le service de recherche n'a pas été invoqué pour cette requête. Réessayez.",
     },
@@ -8911,8 +8911,8 @@ const ar: Dict = {
       noteFetchFailed: "فشل استرجاع الصفحة المصدر — البيانات من نتيجة البحث.",
       rateLimitHint: "يُرجى الانتظار نحو {seconds} ثانية ثم إعادة المحاولة.",
       emptyCityMismatch: "السبب: تم رفض {n} نتيجة لأنها تخص مدينة أخرى بشكل مؤكد.",
-      emptyFiltered:
-        "السبب: تم استلام {n} نتيجة — استُبعدت {pages} صفحات بوابة/بحث و{dups} من التكرارات.",
+        emptyFiltered:
+        "السبب: تم استلام {n} نتيجة بحث مميزة — استُبعدت {pages} صفحة بوابة/بحث (ليست إعلانات فردية) و{dups} من التكرارات.",
       emptyNoSearchCall: "السبب: لم يتم استدعاء خدمة البحث لهذا الطلب. أعد المحاولة.",
     },
   },

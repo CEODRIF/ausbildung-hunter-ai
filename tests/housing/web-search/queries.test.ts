@@ -27,7 +27,7 @@ const base: Q = {
 };
 
 describe("buildHousingQueries", () => {
-  it("builds TWO complementary German queries naming every constraint the user set", () => {
+  it("builds FOUR German query families for 'all' (apartment / WG / student / private rental), each naming every constraint the user set", () => {
     const built = buildHousingQueries({
       ...base,
       city: "Köln",
@@ -37,6 +37,7 @@ describe("buildHousingQueries", () => {
       min_area_sqm: 50,
       available_before: "2026-11-01",
     });
+    expect(built.queries).toHaveLength(4);
     for (const q of built.queries) {
       expect(q).toContain("Köln");
       expect(q).toContain("800 Euro Warmmiete");
@@ -45,16 +46,20 @@ describe("buildHousingQueries", () => {
       expect(q).toContain("frei ab 2026-11-01");
       expect(q).toContain("in der Umgebung von Köln");
     }
-    // Primary vs. complementary phrasing (different index ranking).
+    // One family per market segment — different segments surface different
+    // portals/index rankings (WG-Gesucht, university housing, private
+    // landlords), which a single "Mietwohnung" query systematically misses.
     expect(built.queries[0]).toContain("Mietwohnung");
-    expect(built.queries[1]).toContain("Wohnung mieten");
+    expect(built.queries[1]).toContain("WG-Zimmer");
+    expect(built.queries[2]).toContain("Studentenwohnung");
+    expect(built.queries[3]).toContain("Eigentümer");
     // Targeted mode uses the primary German query.
     expect(built.targetedQuery).toBe(built.queries[0]);
   });
 
   it("every query carries the explicit web-search + JSON output instruction", () => {
     const built = buildHousingQueries({ ...base, city: "Berlin", max_warm_rent: 1000 });
-    for (const q of [built.queries[0], built.queries[1], built.targetedQuery]) {
+    for (const q of built.queries) {
       // The raw user query is preserved verbatim inside the instruction…
       expect(q).toContain("Berlin");
       expect(q).toContain("1.000 Euro Warmmiete");
@@ -86,15 +91,15 @@ describe("buildHousingQueries", () => {
     expect(de).not.toContain("Euro Warmmiete");
   });
 
-  it("maps every accommodation type to primary + complementary German terms", () => {
+  it("maps every SPECIFIC accommodation type to exactly TWO queries (primary + complementary terms)", () => {
     for (const [type, primary, secondary] of [
-      ["all", "Mietwohnung", "Wohnung mieten"],
       ["apartment", "Mietwohnung", "Wohnung mieten"],
       ["wg_room", "WG-Zimmer", "Zimmer in WG mieten"],
       ["furnished", "möblierte Wohnung", "möblierte Wohnung mieten"],
       ["studio", "Studio-Wohnung", "Studio mieten"],
     ] as const) {
       const built = buildHousingQueries({ ...base, city: "Köln", accommodation_type: type });
+      expect(built.queries).toHaveLength(2);
       expect(built.queries[0]).toContain(primary);
       expect(built.queries[1]).toContain(secondary);
     }
@@ -105,7 +110,7 @@ describe("buildHousingQueries", () => {
     expect(built.queries[0]).not.toContain("frei ab");
   });
 
-  it("keeps queries bounded (raw part ≤400 chars + fixed instruction ≤1400 total)", () => {
+  it("keeps ALL queries bounded (raw part ≤400 chars + fixed instruction ≤1400 total)", () => {
     const built = buildHousingQueries({
       ...base,
       city: "Köln",
@@ -116,7 +121,7 @@ describe("buildHousingQueries", () => {
       min_area_sqm: 2000,
       available_before: "2026-11-01",
     });
-    for (const q of [built.queries[0], built.queries[1], built.targetedQuery]) {
+    for (const q of built.queries) {
       expect(q.length).toBeLessThanOrEqual(1400);
     }
   });

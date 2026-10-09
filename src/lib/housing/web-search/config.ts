@@ -100,13 +100,36 @@ export const ALLOWED_DOMAINS: readonly AllowedDomain[] = [
 /** Hard, code-level limits. Env may lower (never raise) some of them. */
 export const LIMITS = {
   /**
-   * Max search-API calls per user request, general mode: a primary German
-   * query plus ONE cost-aware secondary German query (only when the first
-   * call under-delivered — see webModeSecondCallThreshold).
+   * Max Azure Responses calls per user request, general mode: one primary
+   * call plus complementary query-family calls (apartment / WG / student /
+   * private rental for "all"), each cost-aware (early stop — see
+   * webModeSecondCallThreshold, maxBingTransactionsPerRun, deadline).
+   * Bounded PAID BUDGET (2026-10-10 search-quality task): worst case
+   * 4 Responses calls / 4 reported Bing transactions per run (before:
+   * 2 calls, typically 1–2 transactions); typical run is 2–3 calls.
    */
-  maxSearchCallsPerRun: 2,
+  maxSearchCallsPerRun: 4,
   /** Max search-API calls per user request, targeted mode (one domain-restricted call). */
   maxTargetedSearchCalls: 1,
+  /**
+   * Bounded parallelism for the COMPLEMENTARY calls (the primary call
+   * always runs first). 2 concurrent calls: the pool finishes in one wave
+   * for ≤3 complements while each call still gets a full per-call timeout
+   * within the shared request deadline.
+   */
+  webModeParallelism: 2,
+  /**
+   * Cost cap: cumulative BILLABLE Bing transactions reported by the API
+   * (numRequests) per run. When reached, no further calls are issued.
+   * 4 = the documented worst-case paid budget (see maxSearchCallsPerRun).
+   */
+  maxBingTransactionsPerRun: 4,
+  /**
+   * A call is only issued when at least this much of the request deadline
+   * remains (a call aborted after 79 % of its timeout has already paid
+   * for nothing but a timeout warning).
+   */
+  minRemainingForCallMs: 8_000,
   /** Max pages fetched per user request (targeted mode, fetchable domains only). */
   maxPagesToFetch: 3,
   fetchTimeoutMs: 10_000,
@@ -114,12 +137,14 @@ export const LIMITS = {
   /** Page bodies larger than this are truncated (parse best-effort). */
   fetchMaxBytes: 512 * 1024,
   /**
-   * Whole-request budget. Covers up to TWO sequential search calls (each
-   * capped by searchTimeoutMs) plus a small fetch reserve — and stays under
-   * the route's maxDuration (60 s) with ~5 s of headroom. 2026-10-10
-   * timeout incident: gpt-5-mini + web_search regularly needs 15–25 s per
-   * call, so the 45 s budget squeezed the second call and the per-call 20 s
-   * cap turned otherwise-fine slow answers into "timeout" failures.
+   * Whole-request budget. Covers the primary call plus the complementary
+   * pool (webModeParallelism concurrent, each capped by searchTimeoutMs,
+   * each re-checked against the shared deadline) plus a small fetch
+   * reserve — and stays under the route's maxDuration (60 s) with ~5 s of
+   * headroom. 2026-10-10 timeout incident: gpt-5-mini + web_search
+   * regularly needs 15–25 s per call, so the 45 s budget squeezed the
+   * second call and the per-call 20 s cap turned otherwise-fine slow
+   * answers into "timeout" failures.
    */
   requestTimeoutMs: 55_000,
   /** Manual redirect hops, each hop re-validated against the URL guard. */
@@ -132,10 +157,10 @@ export const LIMITS = {
    */
   maxResults: 40,
   /**
-   * General (whole-web) mode: run the SECOND paid search call only when the
-   * first call yielded fewer than this many usable candidates. Cost-aware
-   * multi-query retrieval — a rich first result set is not chased with a
-   * redundant second call.
+   * General (whole-web) mode: complementary paid search calls only run
+   * (and keep running) while the merged result set has fewer than this
+   * many usable candidates. Cost-aware multi-query retrieval — a rich
+   * first result set is not chased with redundant calls.
    */
   webModeSecondCallThreshold: 8,
   /**

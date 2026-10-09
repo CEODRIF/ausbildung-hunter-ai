@@ -252,8 +252,10 @@ describe("general mode (web) — whole web, NOT allowlist-bound", () => {
     const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
     expect(outcome.listings).toHaveLength(1);
     expect(outcome.listings[0].listing_url).toBe("https://immobilienscout24.de/expose/123456789");
+    // 4 DISTINCT pages rejected (legal / homepage / 2× search-result pages).
     expect(outcome.funnel.searchPagesRejected).toBe(4);
-    expect(outcome.warnings).toContain("candidates_dropped_search_pages=4");
+    expect(outcome.funnel.uniqueSearchPages).toBe(4);
+    expect(outcome.warnings).toContain("candidates_dropped_search_pages=4 unique=4");
   });
 
   it("dedupes the same listing (www / tracking params / http vs https)", async () => {
@@ -288,6 +290,8 @@ describe("general mode (web) — whole web, NOT allowlist-bound", () => {
   });
 
   it("runs a SECOND (complementary) paid call only when the first call under-delivered (<8 candidates)", async () => {
+    // Specific type → exactly ONE complementary query (primary + alt
+    // phrasing) — deterministic call count.
     // Thin first call (3) + second call (2 new) → merged result set.
     const thin = makeFetch({
       azure: [
@@ -295,7 +299,10 @@ describe("general mode (web) — whole web, NOT allowlist-bound", () => {
         azurePayload([{ url: EXT_A, title: "D" }, { url: EXT_B, title: "E" }]),
       ],
     });
-    const thinOutcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: thin.impl });
+    const thinOutcome = await runHousingWebSearch(
+      input({ params: { ...baseParams, accommodation_type: "apartment" } }),
+      { now: () => NOW, provider: AZURE, fetchImpl: thin.impl },
+    );
     expect(thinOutcome.stats.searchCalls).toBe(2);
     expect(thinOutcome.queries).toHaveLength(2);
     expect(thin.calls.filter((c) => c.url.endsWith("/responses"))).toHaveLength(2);
@@ -323,10 +330,32 @@ describe("general mode (web) — whole web, NOT allowlist-bound", () => {
     expect(richOutcome.listings).toHaveLength(8);
   });
 
-  it("keeps the first call's results when the SECOND call fails (partial success, honest warning)", async () => {
+  it("'all' type runs the MULTI-QUERY families (apartment / WG / student / private rental) with bounded calls", async () => {
+    // Primary call returns 2 candidates (< threshold) → the bounded-
+    // parallelism pool issues the complementary family calls. With an
+    // exhausted queue the complements return nothing new → the pool stops
+    // after the first wave: exactly 1 primary + 2 parallel calls.
+    const { impl, calls } = makeFetch({
+      azure: [azurePayload([{ url: IS24_A, title: "A" }, { url: IW_A, title: "B" }])],
+    });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toHaveLength(2);
+    expect(outcome.stats.searchCalls).toBe(3); // 1 primary + 2 parallel complements (stall-stop)
+    expect(outcome.stats.searchCalls).toBeLessThanOrEqual(LIMITS.maxSearchCallsPerRun);
+    const inputs = calls
+      .filter((c) => c.url.endsWith("/responses"))
+      .map((c) => String(c.body?.input));
+    expect(inputs[0]).toContain("Mietwohnung"); // family 1: apartments
+    expect(inputs[1]).toContain("WG-Zimmer"); // family 2: shared rooms
+    expect(inputs[2]).toContain("Studentenwohnung"); // family 3: student housing
+  });
+
+  it("keeps the first call's results when a COMPLEMENTARY call fails (partial success, honest warning)", async () => {
     const first = azurePayload([{ url: IS24_A, title: "A" }, { url: IW_A, title: "B" }]);
     const secondFails = new Response(JSON.stringify({ error: "boom" }), { status: 500 });
-    // Only the second /responses call fails:
+    // Specific type → exactly one complementary call (deterministic).
+    // Only that /responses call fails:
     let responsesSeen = 0;
     const impl2 = vi.fn(async (u: RequestInfo | URL) => {
       const url = String(u);
@@ -337,10 +366,13 @@ describe("general mode (web) — whole web, NOT allowlist-bound", () => {
       }
       return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
     }) as unknown as typeof fetch;
-    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl2 });
+    const outcome = await runHousingWebSearch(
+      input({ params: { ...baseParams, accommodation_type: "apartment" } }),
+      { now: () => NOW, provider: AZURE, fetchImpl: impl2 },
+    );
     expect(outcome.status).toBe("ok");
     expect(outcome.listings).toHaveLength(2);
-    expect(outcome.warnings.some((w) => w.startsWith("second_call_failed:"))).toBe(true);
+    expect(outcome.warnings.some((w) => w.startsWith("complementary_call_failed:"))).toBe(true);
     expect(outcome.stats.searchCalls).toBe(2);
   });
 
@@ -355,22 +387,241 @@ describe("general mode (web) — whole web, NOT allowlist-bound", () => {
     expect(outcome.funnel.searchPagesRejected).toBe(1);
   });
 
-  it("honors the request budget and stops processing beyond it", async () => {
-    let tick = 0;
-    const now = () => (tick++ === 0 ? NOW : NOW + 60_000); // past the 55 s budget
-    const { impl } = makeFetch({
-      azure: [
-        azurePayload([
-          { url: IS24_A, title: "A" },
-          { url: IS24_B, title: "B" },
-          { url: IW_A, title: "C" },
-        ]),
-      ],
-    });
+  it("honors the request budget: no COMPLEMENTARY call is issued once the deadline is exhausted", async () => {
+    // The primary call "consumes" the whole budget (clock jumps past the
+    // deadline inside the mock) — the pool must then issue no further
+    // paid calls and the enrichment loop must stop.
+    let t = NOW;
+    const now = () => t;
+    const impl = vi.fn(async (u: RequestInfo | URL) => {
+      const url = String(u);
+      if (url.endsWith("/responses")) {
+        t = NOW + 60_000; // past the 55 s request budget
+        return Response.json(azurePayload([{ url: IS24_A, title: "A" }]));
+      }
+      return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
     const outcome = await runHousingWebSearch(input(), { now, provider: AZURE, fetchImpl: impl });
     expect(outcome.status).toBe("ok");
     expect(outcome.listings).toEqual([]);
     expect(outcome.warnings).toContain("request_timeout_budget");
+    // EXACTLY one paid call — the budget-exhausted deadline blocked the pool.
+    expect(outcome.stats.searchCalls).toBe(1);
+  });
+
+  it("answers an honest 'timeout' (no paid call) when the deadline has no room for the PRIMARY call", async () => {
+    // The clock jumps past the budget between pipeline start and the issue
+    // check (e.g. slow provider resolution): a call issued now could not
+    // finish inside the route's maxDuration — do not spend the money on a
+    // guaranteed-aborted request.
+    let n = 0;
+    // 1st now() = pipeline start; every later read (incl. the issue check)
+    // is already past the 55 s budget.
+    const now = () => (n++ === 0 ? NOW : NOW + 60_000);
+    const impl = vi.fn(async () => {
+      // Any call reaching the provider would prove the guard failed.
+      throw new Error("no paid call may be issued after the deadline guard");
+    }) as unknown as typeof fetch;
+    const outcome = await runHousingWebSearch(input(), { now, provider: AZURE, fetchImpl: impl });
+    expect(outcome.status).toBe("timeout");
+    expect(outcome.stats.searchCalls).toBe(0);
+    expect(outcome.listings).toEqual([]);
+    expect(impl).not.toHaveBeenCalled();
+  });
+});
+
+describe("regression: representative German result set (28 results in, no silent losses)", () => {
+  // The 2026-10-10 search-quality incident: a 28-result Bing run displayed
+  // 0 listings and "34 excluded portal pages" (an occurrence count that
+  // exceeded the number of results). This fixture reproduces the shape of
+  // such a run — a mix of valid direct listings, portal homepages/search
+  // pages, legal pages, media articles, duplicates and a missing-optional-
+  // field listing — and proves every url lands in exactly one honest bucket.
+  const listings: Array<{ url: string; title: string }> = [
+    { url: "https://www.immobilienscout24.de/expose/111100001", title: "3-Zi in Ehrenfeld" },
+    { url: "https://www.immobilienscout24.de/expose/111100002", title: "2-Zi in Sülz" },
+    { url: "https://www.immowelt.de/expose/222200001", title: "2-Zi in Mülheim" },
+    { url: "https://www.wg-gesucht.de/rooms/12345678/koeln/", title: "Zimmer in WG, Longerich" },
+    { url: "https://www.kleinanzeigen.de/s-2-zimmer-wohnung-mieten/c20-123456789/", title: "2-Zi WG-Zimmer" },
+    { url: "https://open.nrw/dataset/wohnungen-koeln", title: "Wohnungen Köln (Open Data)" },
+    { url: "https://immobilien-suche.de/wohnung/999000111", title: "3-Zi in Nippes" },
+    { url: "https://wg-haus.de/apartments/888000222", title: "4-Zi in Rodenkirchen" },
+    { url: "https://privat-mieten-koeln.de/2-zimmer-sued-kasten", title: "2-Zi vom Eigentümer" },
+    { url: "https://mietangebote-koeln.de/123456789", title: "1-Zi in Lindenthal" },
+    { url: "https://www.immowelt.de/expose/222200002", title: "1-Zi in Kalk" },
+    { url: "https://www.immobilienscout24.de/expose/111100003", title: "4-Zi in Buchforst" },
+  ];
+  const nonListings: Array<{ url: string; title: string }> = [
+    { url: "https://www.immobilienscout24.de/", title: "IS24 Start" },
+    { url: "https://www.immobilienscout24.de/immobilien/suche/wohnung-mieten/koeln", title: "IS24 Suche" },
+    { url: "https://www.immowelt.de/", title: "IW Start" },
+    { url: "https://www.immowelt.de/suche?query=koeln", title: "IW Suche" },
+    { url: "https://www.wg-gesucht.de/wohnungsangebote/koeln/", title: "WG-Gesucht Übersicht" },
+    { url: "https://www.immobilienscout24.de/impressum", title: "Impressum" },
+    { url: "https://www.immobilienscout24.de/datenschutz", title: "Datenschutz" },
+    { url: "https://www.faz.net/aktuell/wirtschaft/immobilien/mieten-in-koeln-1790123456.html", title: "FAZ: Mieten in Köln (Analyse)" },
+    { url: "https://www.welt.de/immobilien/wohnen-in-koeln-geworden.html", title: "WELT: Wohnen in Köln" },
+    { url: "https://wohnungsbau-berichte.de/bericht/koeln-2026", title: "Wohnungsbericht Köln" },
+    { url: "https://www.immonet.de/", title: "Immonet Start" },
+    { url: "https://www.kleinanzeigen.de/s-wohnung-mieten/koeln", title: "Kleinanzeigen Suche" },
+  ];
+
+  /** Minimal mirror of the pipeline's URL normalization for expected values. */
+  function normalizeForExpect(raw: string): string {
+    const u = new URL(raw);
+    u.hash = "";
+    u.hostname = u.hostname.replace(/^www\./, "");
+    return u.toString().replace(/^http:/, "https:");
+  }
+  const jsonText = JSON.stringify([
+    { url: "https://www.immobilienscout24.de/expose/111100001", title: "3-Zi in Ehrenfeld", city: "Köln", rent_cold_eur: 700, rent_warm_eur: 750, additional_costs_eur: null, rooms: 3, living_area_sqm: 72, floor: null, available_from: null, furnished: null, source: "ImmoScout24" },
+    { url: "https://www.immobilienscout24.de/expose/111100002", title: "2-Zi in Sülz", city: "Köln", rent_cold_eur: 640, rent_warm_eur: 690, additional_costs_eur: null, rooms: 2, living_area_sqm: null, floor: null, available_from: null, furnished: null, source: "ImmoScout24" },
+    { url: "https://www.immowelt.de/expose/222200001", title: "2-Zi in Mülheim", city: "Köln", rent_cold_eur: null, rent_warm_eur: 720, additional_costs_eur: null, rooms: 2, living_area_sqm: 55, floor: null, available_from: null, furnished: null, source: "ImmoWelt" },
+    { url: "https://www.kleinanzeigen.de/s-2-zimmer-wohnung-mieten/c20-123456789/", title: "2-Zi WG-Zimmer", city: "Köln", rent_cold_eur: null, rent_warm_eur: 650, additional_costs_eur: null, rooms: 1, living_area_sqm: null, floor: null, available_from: null, furnished: true, source: "Kleinanzeigen" },
+    { url: "https://immobilien-suche.de/wohnung/999000111", title: "3-Zi in Nippes", city: "Köln", rent_cold_eur: 660, rent_warm_eur: 700, additional_costs_eur: null, rooms: 3, living_area_sqm: 68, floor: null, available_from: null, furnished: null, source: "Immobilien-Suche" },
+    { url: "https://privat-mieten-koeln.de/2-zimmer-sued-kasten", title: "2-Zi vom Eigentümer", city: "Köln", rent_cold_eur: 730, rent_warm_eur: 780, additional_costs_eur: null, rooms: 2, living_area_sqm: 58, floor: null, available_from: null, furnished: null, source: "Privat" },
+    { url: "https://mietangebote-koeln.de/123456789", title: "1-Zi in Lindenthal", city: "Köln", rent_cold_eur: null, rent_warm_eur: 600, additional_costs_eur: null, rooms: 1, living_area_sqm: 32, floor: null, available_from: null, furnished: null, source: "Mietangebote" },
+    { url: "https://www.immowelt.de/expose/222200002", title: "1-Zi in Kalk", city: "Köln", rent_cold_eur: 560, rent_warm_eur: 620, additional_costs_eur: null, rooms: 1, living_area_sqm: 40, floor: null, available_from: null, furnished: null, source: "ImmoWelt" },
+    { url: "https://www.immobilienscout24.de/expose/111100003", title: "4-Zi in Buchforst", city: "Köln", rent_cold_eur: 700, rent_warm_eur: 780, additional_costs_eur: null, rooms: 4, living_area_sqm: 95, floor: null, available_from: null, furnished: null, source: "ImmoScout24" },
+  ]);
+
+  function allCitations(): Array<{ url: string; title: string }> {
+    // 28 results: 12 listings + 12 non-listings + 3 duplicates + 1 garbage.
+    return [
+      ...listings,
+      ...nonListings,
+      { url: "https://www.immobilienscout24.de/expose/111100001?utm_source=x&gclid=y", title: "dup 1" },
+      { url: "http://www.immowelt.de/expose/222200001#ref", title: "dup 2" },
+      { url: "https://open.nrw/dataset/wohnungen-koeln?utm_source=mail", title: "dup 3" },
+      { url: "keine url", title: "garbage" },
+    ];
+  }
+  // The provider also echoes two of the same URLs in `action.sources` — the
+  // real mechanism behind the production "28 results → 34 excluded"
+  // arithmetic: the parser dedupes WITHIN one call's citations, but the same
+  // url arriving in citations AND sources (or in two calls) counts twice as
+  // an occurrence while remaining ONE distinct result.
+  const echoSources = [
+    "https://www.faz.net/aktuell/wirtschaft/immobilien/mieten-in-koeln-1790123456.html",
+    "https://www.immobilienscout24.de/expose/111100001",
+  ];
+
+  it("keeps every valid direct listing and puts every other URL into exactly one honest bucket", async () => {
+    expect(allCitations()).toHaveLength(28);
+    const { impl } = makeFetch({ azure: [azurePayload(allCitations(), jsonText, echoSources)] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+
+    expect(outcome.status).toBe("ok");
+    // 12 valid listings — including the slugged no-id listing and the
+    // bare-id listing that ONLY the model's JSON reference keeps.
+    expect(outcome.listings).toHaveLength(12);
+    const shown = new Set(outcome.listings.map((l) => l.listing_url));
+    for (const { url } of listings) expect(shown.has(normalizeForExpect(url))).toBe(true);
+    // Media articles / reports / homepages / search pages: never shown.
+    for (const { url } of nonListings) expect(shown.has(normalizeForExpect(url))).toBe(false);
+    expect(shown.has("https://www.faz.net/aktuell/wirtschaft/immobilien/mieten-in-koeln-1790123456.html")).toBe(false);
+
+    // The funnel accounts for EVERY push (28 citations + 2 source echoes =
+    // 30), each in exactly one bucket — no silent loss, no double counting:
+    //   12 kept + 9 portal/search/legal pages + 4 content-page occurrences
+    //   (3 distinct — the FAZ article arrives via citation AND source)
+    //   + 4 duplicate occurrences (3 citation variants + 1 source echo)
+    //   + 1 invalid = 30.
+    expect(outcome.funnel).toMatchObject({
+      rawCandidates: 30,
+      uniqueCandidates: 24, // 12 listings + 12 non-listings (distinct)
+      invalidUrls: 1,
+      duplicateResults: 4,
+      searchPagesRejected: 9,
+      uniqueSearchPages: 9,
+      contentRejected: 4,
+      jsonOnlyKept: 2, // slugged no-id + bare-id kept via the model's JSON
+      cityMismatches: 0,
+      validListings: 12,
+      displayedListings: 12,
+    });
+    // Rich primary result (12 ≥ 8) → the bounded pool never spends a 2nd call.
+    expect(outcome.stats.searchCalls).toBe(1);
+    // The JSON named exactly 9 offers, all matched real results (no fabrication).
+    expect(outcome.funnel.jsonItems).toBe(9);
+    expect(outcome.funnel.jsonMatched).toBe(9);
+    expect(outcome.funnel.fabricatedRejected).toBe(0);
+  });
+
+  it("does NOT discard a genuine listing for missing optional fields (no area/price/image)", async () => {
+    const { impl } = makeFetch({ azure: [azurePayload(allCitations(), jsonText, echoSources)] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    const sulz = outcome.listings.find(
+      (l) => l.listing_url === "https://immobilienscout24.de/expose/111100002",
+    );
+    expect(sulz).toBeDefined(); // missing optional fields never reject
+    expect(sulz!.rent_warm_eur).toBe(690);
+    expect(sulz!.living_area_sqm).toBeNull(); // honestly unknown
+    expect(sulz!.images).toEqual([]);
+    expect("image_url" in (sulz! as object)).toBe(false); // never a fake photo
+    expect(sulz!.verification_status).toBe("partially_verified");
+    // And the WG room with NO model JSON at all stays in as a real citation.
+    const wg = outcome.listings.find(
+      (l) => l.listing_url === "https://wg-gesucht.de/rooms/12345678/koeln/",
+    );
+    expect(wg).toBeDefined();
+    expect(wg!.rent_warm_eur).toBeNull();
+    expect(wg!.verification_status).toBe("unverified");
+    expect(wg!.verification_notes).toBe("tos_no_fetch");
+  });
+
+  it("reports WHY each bucket dropped results (count-only warnings, no URLs)", async () => {
+    const { impl } = makeFetch({ azure: [azurePayload(allCitations(), jsonText, echoSources)] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.warnings).toContain("candidates_dropped_search_pages=9 unique=9");
+    expect(outcome.warnings).toContain("candidates_dropped_non_listing_content=4");
+    expect(outcome.warnings).toContain("candidates_kept_via_json_reference=2");
+    expect(outcome.warnings).toContain("candidates_dropped_invalid_url=1");
+    for (const w of outcome.warnings) {
+      expect(w).not.toMatch(/https?:\/\//);
+      expect(w).not.toContain("Ehrenfeld");
+    }
+  });
+
+  it("zero-result scenario: everything is a search/portal page or article → honest empty with the funnel proof", async () => {
+    // 12 distinct non-listings as citations + the first 5 echoed in sources
+    // (occurrence inflation: 14 portal-page occurrences, 9 distinct).
+    const pageSources = nonListings.slice(0, 5).map((x) => x.url);
+    const { impl } = makeFetch({
+      azure: [azurePayload(nonListings, "Keine konkreten Angebote gefunden.", pageSources)],
+    });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toEqual([]);
+    expect(outcome.warnings).toContain("no_candidates_found");
+    // The funnel PROVES the cause: 12 distinct results — 9 search/portal
+    // pages (14 occurrences via the source echoes) + 3 content pages.
+    // NOT one silent loss.
+    expect(outcome.funnel.rawCandidates).toBe(17);
+    expect(outcome.funnel.uniqueCandidates).toBe(12);
+    expect(outcome.funnel.uniqueSearchPages).toBe(9);
+    expect(outcome.funnel.searchPagesRejected).toBe(14); // 9 distinct + 5 echoes
+    expect(outcome.funnel.contentRejected).toBe(3);
+    expect(outcome.funnel.displayedListings).toBe(0);
+  });
+
+  it("zero-result scenario: the model declines to search (no web_search call in the primary) → named warning", async () => {
+    // No web_search_call action at all in the primary output:
+    const noCall = {
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Ich habe nicht gesucht." }],
+        },
+      ],
+    };
+    const { impl } = makeFetch({ azure: [noCall as unknown as Record<string, unknown>] });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toEqual([]);
+    expect(outcome.warnings).toContain("azure_no_web_search_call");
+    expect(outcome.warnings).toContain("no_candidates_found");
   });
 });
 
@@ -812,18 +1063,23 @@ describe("funnel diagnostics (privacy-safe counters)", () => {
       { url: IW_A, title: "B" },
     ];
     // IW_A also arrives via action.sources → counted as a cross-source duplicate.
-    // Two IDENTICAL payloads: the second call repeats everything, so the
-    // funnel must count every occurrence (raw) while deduping for display.
+    // Two IDENTICAL payloads + the bounded-parallelism pool ("all" type):
+    // call 1 (primary) and call 2 (complement) repeat everything, call 3
+    // (second parallel worker) gets the empty queue payload. The funnel
+    // must count every occurrence (raw) while deduping for display.
     const payload = azurePayload(citations, "Angebote.", [IW_A]);
     const { impl } = makeFetch({ azure: [payload, payload] });
     const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
     expect(outcome.funnel).toMatchObject({
-      providerCalls: 2, // 2 valid candidates < 8 → second call runs
-      webSearchCalls: 2,
+      providerCalls: 3, // 2 valid candidates < 8 → bounded complementary pool
+      webSearchCalls: 3,
       rawCandidates: 10, // (4 citations + 1 source) × 2 identical calls
       uniqueCandidates: 3, // IS24_A, impressum, IW_A ("not a url" unparseable)
-      invalidUrls: 2, // the invalid URL is reported by every call
-      searchPagesRejected: 2, // the legal page is reported by every call
+      invalidUrls: 2, // the invalid URL is reported by every REAL call
+      searchPagesRejected: 2, // occurrences…
+      uniqueSearchPages: 1, // …but only ONE distinct page was lost
+      contentRejected: 0,
+      jsonOnlyKept: 0,
       duplicateResults: 4, // IS24_A ×1 + IW_A ×3 (repeat citation + 2× sources)
       cityMismatches: 0,
       displayedListings: 2,

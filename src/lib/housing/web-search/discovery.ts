@@ -30,52 +30,66 @@ import { robotsVerdictForUrl } from "./robots";
  * Housing web-discovery pipeline (general + targeted modes).
  *
  * Retrieval (cost-aware multi-query):
- *   general  — 1 primary German search call; a SECOND complementary German
- *              call only when the first yields fewer than
- *              LIMITS.webModeSecondCallThreshold usable candidates. Both
- *              result sets are merged and deduped.
+ *   general  — 1 primary German search call (apartment family for "all"),
+ *              then the complementary query families (WG / student /
+ *              private rental for "all"; alt phrasing for specific types)
+ *              in a bounded-parallelism pool (LIMITS.webModeParallelism),
+ *              with early stop: enough candidates
+ *              (LIMITS.webModeSecondCallThreshold), a stall (a call added
+ *              no new candidates), the call cap
+ *              (LIMITS.maxSearchCallsPerRun), the billable Bing
+ *              transaction cap (LIMITS.maxBingTransactionsPerRun) or the
+ *              shared request deadline. All result sets are merged and
+ *              deduped. BOUNDED PAID BUDGET: worst case 4 calls / 4
+ *              reported Bing transactions per run.
  *   targeted — exactly 1 domain-restricted search call
  *   fetches  — ≤ maxPagesToFetch pages, allowlisted FETCHABLE-policy
  *              domains only (both modes), robots-checked first (fail-
  *              closed), SSRF-guarded. Unreviewed domains are never fetched.
  *
- * Location correctness (2026-10-10 production fix):
- *   A result is labelled with the requested city ONLY when its location
- *   evidence (fetched page > cited model JSON > title/URL-slug scan)
- *   supports it. Evidence naming a KNOWN different German city → the
- *   result is rejected and counted (cityMismatches). Absent/unknown
- *   evidence → shown with `city_unverified: true`, never with the
- *   requested city. See ./geo.
- *
- * Honesty:
- *   - Every displayed listing URL must be a URL the search tool actually
- *     returned (citations ∪ action.sources). The model's JSON answer is
- *     cross-validated against that set. The model frequently RETRANSCRIBES
- *     listing URLs (e.g. immowelt /expose/123 vs /123 — the same listing);
- *     a JSON item therefore also matches when hostname + 6-digit listing
- *     id are identical. Anything else is treated as fabricated and counted.
- *   - verification_status: "verified" ONLY for fields parsed from a fetched
- *     page (JSON-LD / explicit text). Model-stated fields with a genuine
- *     citation → "partially_verified". Discovery only → "unverified".
- *   - fields we cannot verify stay null — never invented. A listing whose
- *     title we could not obtain gets a NEUTRAL, explicitly-derived label
- *     ("Anzeige auf <hostname>") with title_is_fallback — not "Titel
- *     unbekannt" presented as a fact.
- *   - expiry is discarded only when RELIABLY established (a fetched page
- *     states an availability date already in the past).
- *   - photos: a listing gets a photo ONLY from (a) metadata of a page we
- *     legitimately fetched (JSON-LD `image`, og:image/twitter:image) or
- *     (b) image metadata the search provider delivered with the result.
- *     Every URL is server-validated (https-only, no credentials, no
- *     private/loopback/link-local IP hosts, no control chars; relative
- *     references resolved against the fetched page). The model's JSON is
- *     NEVER an image source. No photo → the UI renders the neutral
- *     placeholder; we never substitute or generate an image.
- *
- * Enterprise TOU (Grounding with Bing): output is cached in-memory only
- * (15-min TTL, work-product scope), citations are preserved verbatim for
- * display, and no persistent database of search output is built.
+ * Result-URL classification (./classifyResultUrl):
+ *   direct_listing — kept (individual-offer signal: portal listing
+ *     pattern / 6+ digit listing id / listing segment / id query param).
+ *   portal_page    — homepage / search / browse / legal pages: rejected
+ *     and counted DISTINCTLY (uniqueSearchPages) so the funnel shows how
+ *     many real results were lost — occurrences (searchPagesRejected)
+ *     overstate when a url arrives in several calls.
+ *   direct_listing_id — a BARE 6+ digit path id without listing vocabulary.
+ *     On REVIEWED (audited) domains: a direct listing. On UNREVIEWED web-mode
+ *     domains: kept only with the model's JSON reference (news article ids
+ *     look identical; the model's offer-identification breaks the tie).
+ *   maybe_listing  — unpatterned individual content page: on REVIEWED
+ *     domains rejected as portal page; on UNREVIEWED web-mode domains
+ *     kept ONLY when the model's JSON names exactly that URL (it saw the
+ *     real results and the query contract forbids non-offers). This both
+ *     rescues genuine slugged listings (no numeric id) and keeps news
+ *     articles / directories out of the results.
  */
+export type ResultUrlKind =
+  | "direct_listing"
+  | "direct_listing_id"
+  | "portal_page"
+  | "maybe_listing";
+
+export function classifyResultUrl(url: URL, domain: AllowedDomain | null): ResultUrlKind {
+  const path = url.pathname;
+  if (NON_LISTING_PATH_RE.test(path)) return "portal_page";
+  if (SEARCH_RESULTS_PATH_RE.test(path)) return "portal_page";
+  // Open-data dataset pages are "listings" for our purposes (machine-readable
+  // housing data); other open.nrw pages are portal pages.
+  if (domain && (domain.domain === "open.nrw" || domain.domain === "opendata.de")) {
+    return /\/(dataset|data|api)\//i.test(path) ? "direct_listing" : "portal_page";
+  }
+  // Strong listing vocabulary (any domain): explicit individual-offer paths.
+  if (LISTING_SEGMENT_RE.test(path) || LISTING_QUERY_RE.test(url.search)) {
+    return "direct_listing";
+  }
+  // Editorial / media sections are never offers (even with long path ids).
+  if (MEDIA_PATH_RE.test(path)) return "maybe_listing";
+  // Bare numeric id: unambiguous on audited domains, ambiguous elsewhere.
+  if (/\d{6,}/.test(path)) return domain !== null ? "direct_listing" : "direct_listing_id";
+  return "maybe_listing";
+}
 
 export type WebSearchMode = "web" | "targeted";
 
@@ -139,8 +153,22 @@ export interface SearchFunnel {
   uniqueCandidates: number;
   /** URLs that were not valid http(s). */
   invalidUrls: number;
-  /** Real URLs that are not individual listing pages (home/search/legal). */
+  /** Occurrences (across calls/sources) of URLs that are not individual
+   *  listing pages (home/search/legal/overview). NOTE: an occurrence —
+   *  the SAME url can appear in multiple calls, so this can exceed
+   *  uniqueCandidates. Use `uniqueSearchPages` for "how many distinct
+   *  results were lost to this rule". */
   searchPagesRejected: number;
+  /** DISTINCT urls rejected as portal/search/overview/legal pages. */
+  uniqueSearchPages: number;
+  /** Occurrences of unreviewed-domain content pages that the model did
+   *  NOT identify as an individual offer (articles, directories, slugged
+   *  non-listings). */
+  contentRejected: number;
+  /** Candidates kept ONLY because the model's JSON referenced the exact
+   *  URL (web mode, unreviewed domains — slugged listings without a
+   *  numeric id that the generic listing pattern does not catch). */
+  jsonOnlyKept: number;
   /** Real URLs rejected because their location evidence names a KNOWN
    *  different city than the one requested. */
   cityMismatches: number;
@@ -196,6 +224,9 @@ export const ZERO_FUNNEL: SearchFunnel = {
   uniqueCandidates: 0,
   invalidUrls: 0,
   searchPagesRejected: 0,
+  uniqueSearchPages: 0,
+  contentRejected: 0,
+  jsonOnlyKept: 0,
   cityMismatches: 0,
   duplicateResults: 0,
   offAllowlist: 0,
@@ -261,10 +292,27 @@ const SEARCH_RESULTS_PATH_RE =
  * digit id in the path (the dominant pattern: /expose/123456789,
  * wg-gesucht slugs, kleinanzeigen "c20:123456789"); slugged portals use
  * listing-like path segments or a numeric id query parameter.
+ *
+ * STRONG listing vocabulary (segment/query): on any domain this is a
+ * direct listing signal. A BARE 6+ digit id alone is AMBIGUOUS on
+ * unreviewed domains — portals and news sites both use long numeric ids
+ * in their paths (FAZ article /.../1790123456.html). On reviewed
+ * allowlisted domains a bare id still counts (their URL schemes are
+ * audited); on unreviewed web-mode domains it additionally needs the
+ * model's JSON to name exactly that URL (the model saw the results and
+ * the query contract forbids non-offers).
  */
 const LISTING_SEGMENT_RE =
   /\/(expose|exposes|angebot|angebote|detail|details|immobilie|obj|objekt|objekte|listing|listings|property|properties|flat|flats|apartment|apartments|room|rooms|ad|ads|wohnung|zimmer|wg)([/?#]|$)/i;
 const LISTING_QUERY_RE = /[?&](id|expose|objekt|objnr|angebot|listing|property|flat|room|ad)=\d{4,}/i;
+
+/**
+ * Media / editorial section markers. Pages under these are articles,
+ * reports and explainers about housing — never individual offers,
+ * regardless of any numeric id in the path.
+ */
+const MEDIA_PATH_RE =
+  /\/(aktuell|news|article|articles|artikel|bericht|berichte|reportage|reportagen|studie|studien|analyse|analysen|magazin|magazine|wissen|newsroom|themen|thema|topic|topics)([/?#-]|$)/i;
 
 function normalizeUrl(raw: string): string | null {
   try {
@@ -305,21 +353,6 @@ function hostnameOf(rawUrl: string): string {
   }
 }
 
-function looksLikeListingUrl(url: URL, domain: AllowedDomain | null): boolean {
-  const path = url.pathname;
-  if (NON_LISTING_PATH_RE.test(path)) return false;
-  if (SEARCH_RESULTS_PATH_RE.test(path)) return false;
-  // Open-data dataset pages are "listings" for our purposes (machine-readable
-  // housing data).
-  if (domain === null || (domain.domain !== "open.nrw" && domain.domain !== "opendata.de")) {
-    // Generic individual-listing heuristics (any domain).
-    return (
-      /\d{6,}/.test(path) || LISTING_SEGMENT_RE.test(path) || LISTING_QUERY_RE.test(url.search)
-    );
-  }
-  return /\/(dataset|data|api)\//i.test(path);
-}
-
 interface CollectResult {
   candidates: Candidate[];
   rawCandidates: number;
@@ -328,7 +361,14 @@ interface CollectResult {
   invalidUrls: number;
   duplicateResults: number;
   offAllowlist: number;
+  /** Occurrences of portal/search/overview/legal pages. */
   searchPagesRejected: number;
+  /** Distinct URLs rejected as portal/search/overview/legal pages. */
+  uniqueSearchPages: number;
+  /** Occurrences of unreviewed content pages the model did not name. */
+  contentRejected: number;
+  /** Candidates kept only via the model's exact-URL JSON reference. */
+  jsonOnlyKept: number;
 }
 
 /**
@@ -338,12 +378,15 @@ interface CollectResult {
  *   URLs are dropped and counted).
  * - web mode: no display filter — any valid individual-listing URL is
  *   accepted (the allowlist only governs fetchability, via `domain`).
+ * - `jsonUrls`: the model's JSON item URLs (normalized). Used ONLY for
+ *   the maybe_listing keep-rule on unreviewed web-mode domains.
  */
 function collectCandidates(
   citations: SearchCitation[],
   sources: string[],
   input: HousingWebSearchInput,
   sourceImages: Record<string, string> = {},
+  jsonUrls: Set<string> = new Set(),
 ): CollectResult {
   const inTargeted = input.mode === "targeted";
   const selectedDomains =
@@ -374,6 +417,24 @@ function collectCandidates(
   let duplicateResults = 0;
   let offAllowlist = 0;
   let searchPagesRejected = 0;
+  let contentRejected = 0;
+  let jsonOnlyKept = 0;
+  // DISTINCT urls per rejection bucket — the occurrence counters above
+  // overstate losses when the same url arrives in several calls/sources
+  // (the "28 results in, 34 excluded" arithmetic the UI confused).
+  const searchPageUrls = new Set<string>();
+
+  const keep = (normalized: string, entry: AllowedDomain | null, viaJsonOnly: boolean) => {
+    out.set(normalized, {
+      url: normalized,
+      title: titleByUrl.get(normalized) ?? "",
+      imageUrl: imageByUrl.get(normalized) ?? null,
+      domain: entry,
+      json: null,
+    });
+    order.push(normalized);
+    if (viaJsonOnly) jsonOnlyKept += 1;
+  };
 
   const push = (rawUrl: string) => {
     const normalized = normalizeUrl(rawUrl);
@@ -400,18 +461,31 @@ function collectCandidates(
         return;
       }
     }
-    if (!looksLikeListingUrl(u, entry)) {
-      searchPagesRejected += 1;
+    const kind = classifyResultUrl(u, entry);
+    if (kind === "direct_listing") {
+      keep(normalized, entry, false);
       return;
     }
-    out.set(normalized, {
-      url: normalized,
-      title: titleByUrl.get(normalized) ?? "",
-      imageUrl: imageByUrl.get(normalized) ?? null,
-      domain: entry,
-      json: null,
-    });
-    order.push(normalized);
+    if (kind === "portal_page" || entry !== null) {
+      // General portal/search/legal page — or any non-strong-signal page
+      // of a REVIEWED domain (their overviews must not masquerade as
+      // listings; their URL schemes are audited, so a bare id there above
+      // already classified as direct_listing).
+      searchPagesRejected += 1;
+      searchPageUrls.add(normalized);
+      return;
+    }
+    // direct_listing_id / maybe_listing on an UNREVIEWED domain (web mode
+    // only — targeted mode already returned above): keep it when — and
+    // only when — the model's JSON names exactly this URL as an individual
+    // offer (the model saw the actual results; the query contract forbids
+    // non-offers). Rescues genuine slugged / bare-id listings, keeps news
+    // articles, reports and directories out of the results.
+    if (jsonUrls.has(normalized)) {
+      keep(normalized, entry, true);
+      return;
+    }
+    contentRejected += 1;
   };
 
   // Citations first (they carry titles), then the tool's source list.
@@ -426,6 +500,9 @@ function collectCandidates(
     duplicateResults,
     offAllowlist,
     searchPagesRejected,
+    uniqueSearchPages: searchPageUrls.size,
+    contentRejected,
+    jsonOnlyKept,
   };
 }
 
@@ -535,14 +612,32 @@ export async function runHousingWebSearch(
   // 4) Run bounded search calls. Each call gets a timeout that respects the
   //    whole-request budget, so two full-timeout calls can never run past it.
   let webSearchCalls = 0;
+  /** web_search calls reported by the PRIMARY call only (the pool's empty
+   *  complement payloads must not mask a model search decline). */
+  let primaryWebSearchCalls = 0;
   let citations: SearchCitation[] = [];
   let sources: string[] = [];
   let sourceImages: Record<string, string> = {};
   let jsonItems: ModelListingItem[] = [];
 
+  /** Internal sentinel: the shared request deadline has no room for a call.
+   *  NOT a provider failure — the pool simply stops issuing more calls. */
+  class CallBudgetExhausted extends Error {
+    constructor() {
+      super("call_budget_exhausted");
+      this.name = "CallBudgetExhausted";
+    }
+  }
+
   const requestDeadline = started + LIMITS.requestTimeoutMs;
-  const timeoutForCall = (): number =>
-    Math.max(8_000, Math.min(LIMITS.searchTimeoutMs, requestDeadline - now()));
+  /** Per-call timeout clamped to the shared deadline; null = not enough
+   *  time left for a call that could still pay off (see
+   *  LIMITS.minRemainingForCallMs). */
+  const timeoutForCall = (): number | null => {
+    const remaining = requestDeadline - now();
+    if (remaining < LIMITS.minRemainingForCallMs) return null;
+    return Math.min(LIMITS.searchTimeoutMs, remaining);
+  };
 
   // Azure-only search call: the resolver (./config) guarantees `provider`
   // is a fully validated `azure` provider or null (handled above). There is
@@ -551,6 +646,10 @@ export async function runHousingWebSearch(
     query: string,
     allowed: string[] | undefined,
   ): Promise<WebDiscoveryResult> => {
+    // Re-check the deadline at issue time (the pool guard ran a moment
+    // earlier; a parallel call may have consumed the remaining budget).
+    const t = timeoutForCall();
+    if (t === null) throw new CallBudgetExhausted();
     searchCalls.push(query);
     const res = await azureWebSearch({
       base: provider.base,
@@ -560,12 +659,23 @@ export async function runHousingWebSearch(
       allowedDomains: allowed,
       userLocation,
       fetchImpl: deps.fetchImpl,
-      timeoutMs: timeoutForCall(),
+      timeoutMs: t,
     });
     bingRequests =
       bingRequests === null ? res.numRequests : bingRequests + (res.numRequests ?? 0);
     webSearchCalls += res.webSearchCalls;
     return res;
+  };
+
+  /** Normalized URLs the model's JSON names (the keep-evidence for
+   *  maybe_listing candidates on unreviewed web-mode domains). */
+  const normalizedJsonUrls = (): Set<string> => {
+    const s = new Set<string>();
+    for (const item of jsonItems) {
+      const n = normalizeUrl(item.url);
+      if (n) s.add(n);
+    }
+    return s;
   };
 
   const mergeCall = (res: WebDiscoveryResult): void => {
@@ -588,24 +698,71 @@ export async function runHousingWebSearch(
   try {
     if (input.mode === "targeted") {
       mergeCall(await runOneCall(built.targetedQuery, selectedDomains));
+      primaryWebSearchCalls = webSearchCalls;
     } else {
-      // Cost-aware multi-query: primary call first; the complementary
-      // second call only when the first under-delivered.
+      // Cost-aware MULTI-QUERY retrieval: the primary query family always
+      // runs; the complementary families (WG / student / private rental
+      // for "all", the alt phrasing for specific types) run in a bounded-
+      // parallelism pool with early stop:
+      //   - probe ≥ webModeSecondCallThreshold candidates → done,
+      //   - a call added no NEW candidates (stall) → done,
+      //   - maxSearchCallsPerRun / maxBingTransactionsPerRun → done,
+      //   - not enough deadline left for a call that could pay off → done.
       mergeCall(await runOneCall(built.queries[0], undefined));
-      const probe = collectCandidates(citations, sources, input, sourceImages).candidates.length;
-      if (probe < LIMITS.webModeSecondCallThreshold) {
-        try {
-          mergeCall(await runOneCall(built.queries[1], undefined));
-        } catch (secondError) {
-          // The FIRST call succeeded — keep its results and report the
-          // partial run honestly instead of failing the whole search.
-          const failed =
-            secondError instanceof WebSearchApiError ? secondError.failure : "provider_error";
-          warnings.push(`second_call_failed:${failed}`);
-        }
+      primaryWebSearchCalls = webSearchCalls;
+      const complements = built.queries.slice(1);
+      if (complements.length > 0) {
+        const probeCandidates = (): number =>
+          collectCandidates(citations, sources, input, sourceImages, normalizedJsonUrls())
+            .candidates.length;
+        let stalled = false; // one call added nothing new → stop the pool
+        const poolGuard = (): boolean => {
+          if (stalled) return false;
+          if (searchCalls.length >= LIMITS.maxSearchCallsPerRun) return false;
+          if (bingRequests !== null && bingRequests >= LIMITS.maxBingTransactionsPerRun)
+            return false;
+          return timeoutForCall() !== null;
+        };
+        let next = 0;
+        const worker = async (): Promise<void> => {
+          while (next < complements.length && poolGuard()) {
+            const query = complements[next++];
+            const before = probeCandidates();
+            if (before >= LIMITS.webModeSecondCallThreshold) break;
+            try {
+              mergeCall(await runOneCall(query, undefined));
+            } catch (error) {
+              // A successful call already happened — keep its results and
+              // report the partial run honestly instead of failing the whole
+              // search. Budget exhaustion simply ends the pool.
+              if (error instanceof CallBudgetExhausted) break;
+              const failed =
+                error instanceof WebSearchApiError ? error.failure : "provider_error";
+              warnings.push(`complementary_call_failed:${failed}`);
+              continue;
+            }
+            if (probeCandidates() === before) {
+              // Cost-aware stop: the index surfaced no NEW individual
+              // listings for this city/budget. Deliberately NOT a warning
+              // (it is the normal outcome on thin markets — warnings drive
+              // the UI's partial-results banner); the funnel counters
+              // (providerCalls vs. uniqueCandidates) document it.
+              stalled = true;
+            }
+          }
+        };
+        const workers = Math.min(LIMITS.webModeParallelism, complements.length);
+        await Promise.all(Array.from({ length: workers }, () => worker()));
       }
     }
   } catch (error) {
+    if (error instanceof CallBudgetExhausted) {
+      // The PRIMARY call itself had no deadline room (not a provider fault).
+      return fail("timeout", "request_budget_exhausted", provider.kind, {
+        citations,
+        queries: searchCalls,
+      });
+    }
     if (error instanceof WebSearchApiError) {
       const status: WebSearchStatus =
         error.failure === "tool_blocked"
@@ -632,7 +789,7 @@ export async function runHousingWebSearch(
   }
 
   // 5) Collect + dedupe candidates.
-  const collected = collectCandidates(citations, sources, input, sourceImages);
+  const collected = collectCandidates(citations, sources, input, sourceImages, normalizedJsonUrls());
   funnel.providerCalls = searchCalls.length;
   funnel.webSearchCalls = webSearchCalls;
   funnel.rawCandidates = collected.rawCandidates;
@@ -641,6 +798,9 @@ export async function runHousingWebSearch(
   funnel.duplicateResults = collected.duplicateResults;
   funnel.offAllowlist = collected.offAllowlist;
   funnel.searchPagesRejected = collected.searchPagesRejected;
+  funnel.uniqueSearchPages = collected.uniqueSearchPages;
+  funnel.contentRejected = collected.contentRejected;
+  funnel.jsonOnlyKept = collected.jsonOnlyKept;
   funnel.jsonItems = jsonItems.length;
 
   // 6) Cross-validate the model's JSON items against the REAL result set
@@ -690,10 +850,12 @@ export async function runHousingWebSearch(
   funnel.jsonMatched = jsonMatched;
 
   if (collected.candidates.length === 0) {
-    if (citations.length === 0 && sources.length === 0 && webSearchCalls === 0) {
-      // The model answered WITHOUT invoking the web_search tool — the single
-      // most likely cause of a silent empty result (official docs: prompt
-      // more explicitly; we do, but the model can still decline).
+    if (citations.length === 0 && sources.length === 0 && primaryWebSearchCalls === 0) {
+      // The model answered WITHOUT invoking the web_search tool in the
+      // PRIMARY call — the single most likely cause of a silent empty
+      // result (official docs: prompt more explicitly; we do, but the model
+      // can still decline). Judged on the primary call because the
+      // complementary pool's empty payloads would otherwise mask the decline.
       warnings.push("azure_no_web_search_call");
     }
     warnings.push(input.mode === "targeted" ? "no_candidates_on_allowed_domains" : "no_candidates_found");
@@ -701,8 +863,14 @@ export async function runHousingWebSearch(
   if (funnel.invalidUrls > 0) warnings.push(`candidates_dropped_invalid_url=${funnel.invalidUrls}`);
   if (funnel.offAllowlist > 0) warnings.push(`candidates_dropped_off_allowlist=${funnel.offAllowlist}`);
   if (funnel.searchPagesRejected > 0) {
-    warnings.push(`candidates_dropped_search_pages=${funnel.searchPagesRejected}`);
+    warnings.push(
+      `candidates_dropped_search_pages=${funnel.searchPagesRejected} unique=${funnel.uniqueSearchPages}`,
+    );
   }
+  if (funnel.contentRejected > 0) {
+    warnings.push(`candidates_dropped_non_listing_content=${funnel.contentRejected}`);
+  }
+  if (funnel.jsonOnlyKept > 0) warnings.push(`candidates_kept_via_json_reference=${funnel.jsonOnlyKept}`);
   if (funnel.fabricatedRejected > 0) warnings.push(`fabricated_urls_rejected=${funnel.fabricatedRejected}`);
   // City mismatches are decided later in the enrichment loop; the warning
   // is appended there (count-only, privacy-safe).
