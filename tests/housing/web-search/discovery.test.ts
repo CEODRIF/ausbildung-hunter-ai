@@ -26,7 +26,6 @@ const { getWebSearchClient } = await import("@/lib/web-search");
 
 import {
   clearWebSearchCache,
-  resetDailyBudget,
   runHousingWebSearch,
   type HousingWebSearchInput,
 } from "@/lib/housing/web-search/discovery";
@@ -166,7 +165,6 @@ beforeEach(() => {
   dnsLookup.mockReset();
   dnsLookup.mockResolvedValue([{ address: PUBLIC, family: 4 }]);
   clearWebSearchCache();
-  resetDailyBudget();
   clearRobotsCache();
 });
 
@@ -546,20 +544,5 @@ describe("caching and budgets", () => {
     });
     expect(other.cached).toBe(false);
     expect(calls.filter((c) => c.url.endsWith("/responses")).length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("enforces the (env-lowerable) daily soft budget across runs", async () => {
-    vi.stubEnv("HOUSING_WEB_SEARCH_DAILY_MAX", "1");
-    const f1 = makeFetch({ azure: [azurePayload([{ url: IS24_A, title: "A" }])] });
-    const ok = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: f1.impl });
-    expect(ok.status).toBe("ok");
-    const f2 = makeFetch({ azure: [azurePayload([{ url: IS24_B, title: "B" }])] });
-    const blocked = await runHousingWebSearch(input({ params: { ...baseParams, city: "Berlin" } }), {
-      now: () => NOW,
-      provider: AZURE,
-      fetchImpl: f2.impl,
-    });
-    expect(blocked.status).toBe("daily_budget_exhausted");
-    expect(f2.calls).toEqual([]); // nothing paid
   });
 });

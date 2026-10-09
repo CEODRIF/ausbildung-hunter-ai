@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -12,25 +14,43 @@ import {
   runHousingWebSearch,
   type HousingWebSearchOutcome,
 } from "@/lib/housing/web-search/discovery";
+import {
+  completeHousingWebSearch,
+  getHousingWebSearchDailyLimit,
+  getHousingWebSearchStatus,
+  nextBerlinMidnight,
+  releaseHousingWebSearch,
+  reserveHousingWebSearch,
+  type HousingWebSearchQuotaStatus,
+} from "@/lib/housing/web-search/quota";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 /**
- * POST /api/housing/web-search — live housing discovery over the web.
+ * /api/housing/web-search — live housing discovery over the web.
  *
- * Two bounded modes (see docs/housing-web-search-plan.md):
+ * POST (run a search):
  *   mode "web"      — general web search (German query, English retry if thin)
  *   mode "targeted" — domain-restricted search; fetchable-policy domains are
  *                     robots-checked + fetched for verification, restricted
  *                     portals are link-only (never fetched).
  *
- * Cost/abuse gates:
- *   - authenticated + per-user rate limit (housing_web_search: 10/hour)
- *   - provider resolution is honest: nothing configured → 200 with
- *     status "not_configured" (NOT an error, and no paid call)
- *   - daily soft budget per process instance
+ * GET — today's per-user quota (never consumes anything).
+ *
+ * Gates (all server-side, validated BEFORE any paid provider call):
+ *   - authentication
+ *   - per-user rate limit (housing_web_search: 10/hour, in-memory)
+ *   - strict per-user DAILY quota (default 20 per Europe/Berlin day) via
+ *     atomic Postgres RPCs (migration 20261107000000_housing_web_search_quota)
+ *   - honest provider resolution: nothing configured → 200 with status
+ *     "not_configured" (NOT an error, and no paid call)
  *   - ≤2 search calls + ≤3 page fetches per request, 25s request budget
+ *
+ * Quota settlement: one slot is reserved BEFORE the provider call. It is
+ * refunded (released) when no paid call ran — result-cache hit, provider
+ * failure, or any non-"ok" status — and marked succeeded otherwise. A retry
+ * resending the same `request_id` is idempotent (never charged twice).
  *
  * The Azure key (when the Foundry endpoint is configured) is server-side
  * only — it never reaches the browser, logs, or the response.
@@ -60,20 +80,72 @@ const bodySchema = z
     mode: z.enum(["web", "targeted"]).default("web"),
     params: paramsSchema,
     domains: z.array(z.string().min(1).max(200)).max(100).optional(),
+    /** Optional client idempotency key: a retry resending the SAME id is
+     *  never charged twice (already_reserved). */
+    request_id: z.string().uuid().optional(),
   })
   .strict();
 
 const ALLOWED = new Set(allowedDomainIds());
 
-function outcomeResponse(
+/** The per-user daily quota as reported to the client (no PII). */
+type QuotaInfo = HousingWebSearchQuotaStatus;
+
+function emptyOutcome(
+  status: string,
+  message: string,
+  mode: "web" | "targeted",
+): Record<string, unknown> {
+  return {
+    status,
+    message,
+    provider: null,
+    mode,
+    listings: [],
+    citations: [],
+    queries: [],
+    stats: { searchCalls: 0, pagesFetched: 0, bingRequests: null },
+    warnings: [],
+    cached: false,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+/** Quota block for a POST response, derived deterministically from the
+ *  reservation/settlement (no extra RPC round-trip per request). */
+function postQuota(
   outcome: HousingWebSearchOutcome,
-  headers: Record<string, string>,
-): NextResponse {
-  // All pipeline outcomes (including provider rate limits and "not
-  // configured") come back as 200 with a machine-readable `status` field —
-  // the UI renders honest states from it. 4xx/5xx are reserved for request
-  // failures (auth, validation, unexpected errors).
-  return NextResponse.json(outcome, { status: 200, headers });
+  reservation: { used: number; remaining: number },
+): QuotaInfo {
+  // A cached hit or a non-ok outcome was refunded (released) — the slot is
+  // back in the pool, so report the pre-reservation numbers.
+  const refunded = outcome.cached || outcome.status !== "ok";
+  return {
+    limit: getHousingWebSearchDailyLimit(),
+    used: Math.max(reservation.used - (refunded ? 1 : 0), 0),
+    remaining: reservation.remaining + (refunded ? 1 : 0),
+    usageDate: new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Berlin",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date()),
+    resetsAt: nextBerlinMidnight().toISOString(),
+  };
+}
+
+export async function GET() {
+  const { user } = await getCurrentUserAndProfile();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const status = await getHousingWebSearchStatus();
+  if (!status) {
+    // Honest, non-blocking: the UI can still run searches (the POST path
+    // re-checks the quota itself).
+    return NextResponse.json({ status: "quota_unavailable", quota: null });
+  }
+  return NextResponse.json({ status: "ok", quota: status });
 }
 
 export async function POST(request: Request) {
@@ -102,6 +174,42 @@ export async function POST(request: Request) {
   const validDomains = requested.filter((d) => ALLOWED.has(d));
   const rejectedDomains = requested.filter((d) => !ALLOWED.has(d));
 
+  // ------------------------------------------------------------------
+  // Quota: reserve ONE per-user daily slot BEFORE any provider call.
+  // Atomic in Postgres (single conditional upsert) — concurrent requests
+  // can never exceed the limit; idempotent per run_id (no double charge).
+  // ------------------------------------------------------------------
+  const runId = body.request_id ?? randomUUID();
+  const reservation = await reserveHousingWebSearch(runId);
+  if (reservation === null) {
+    // The quota RPC itself failed (e.g. migration not applied). Fail closed:
+    // no paid call without a quota slot — and the UI shows an honest state.
+    return NextResponse.json(
+      { ...emptyOutcome("quota_unavailable", "quota_rpc_failed", body.mode), quota: null },
+      { status: 200, headers: rateLimitHeaders(limited) },
+    );
+  }
+  if (reservation.status === "quota_exhausted") {
+    return NextResponse.json(
+      {
+        ...emptyOutcome("daily_quota_exhausted", "daily_quota_exhausted", body.mode),
+        quota: {
+          limit: getHousingWebSearchDailyLimit(),
+          used: reservation.used,
+          remaining: 0,
+          usageDate: new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Europe/Berlin",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          }).format(new Date()),
+          resetsAt: nextBerlinMidnight().toISOString(),
+        },
+      },
+      { status: 200, headers: rateLimitHeaders(limited) },
+    );
+  }
+
   try {
     const outcome = await runHousingWebSearch({
       mode: body.mode,
@@ -113,20 +221,24 @@ export async function POST(request: Request) {
         `domains_rejected:${rejectedDomains.slice(0, 3).join(",")}`,
       );
     }
-    return outcomeResponse(outcome, rateLimitHeaders(limited));
+    // Settle the reserved slot: refund when NO paid search ran (cache hit or
+    // non-ok status), otherwise mark the run succeeded (audit ledger).
+    if (outcome.cached || outcome.status !== "ok") {
+      await releaseHousingWebSearch(runId);
+    } else {
+      await completeHousingWebSearch(runId);
+    }
+    return NextResponse.json(
+      { ...outcome, quota: postQuota(outcome, reservation) },
+      { status: 200, headers: rateLimitHeaders(limited) },
+    );
   } catch {
+    // Refund the never-settled slot (crash-safety net; stale recovery in the
+    // RPC covers the case where even this call is lost).
+    await releaseHousingWebSearch(runId).catch(() => undefined);
     // Controlled, key-free message only.
     return NextResponse.json(
-      {
-        status: "provider_error",
-        message: "The web search request failed.",
-        listings: [],
-        citations: [],
-        queries: [],
-        stats: { searchCalls: 0, pagesFetched: 0, bingRequests: null },
-        warnings: [],
-        cached: false,
-      },
+      { ...emptyOutcome("provider_error", "The web search request failed.", body.mode), quota: null },
       { status: 502, headers: rateLimitHeaders(limited) },
     );
   }

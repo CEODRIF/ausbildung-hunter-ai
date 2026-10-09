@@ -13,7 +13,6 @@ import {
 } from "./azure-client";
 import {
   ALLOWED_DOMAINS,
-  dailySearchBudget,
   domainForHost,
   LIMITS,
   resolveSearchProvider,
@@ -65,13 +64,18 @@ export interface HousingWebSearchInput {
   domains?: string[];
 }
 
+/**
+ * Pipeline-level statuses. NOTE: the per-user DAILY quota is enforced by the
+ * route (server-side, per user, Europe/Berlin day — see ./quota.ts); the
+ * route answers quota exhaustion with status "daily_quota_exhausted" before
+ * this pipeline is ever entered.
+ */
 export type WebSearchStatus =
   | "ok"
   | "not_configured"
   | "tool_blocked"
   | "endpoint_unavailable"
   | "rate_limited"
-  | "daily_budget_exhausted"
   | "provider_error"
   | "timeout";
 
@@ -94,32 +98,6 @@ export interface HousingWebSearchOutcome {
   warnings: string[];
   cached: boolean;
   fetchedAt: string;
-}
-
-// --- daily budget (per process instance, in-memory) -------------------------
-
-interface DailyBudgetState {
-  day: string;
-  used: number;
-}
-const dailyBudget: DailyBudgetState = { day: "", used: 0 };
-function budgetDay(now: number): string {
-  return new Date(now).toISOString().slice(0, 10);
-}
-function consumeDailyBudget(now: number): boolean {
-  const day = budgetDay(now);
-  if (dailyBudget.day !== day) {
-    dailyBudget.day = day;
-    dailyBudget.used = 0;
-  }
-  if (dailyBudget.used >= dailySearchBudget()) return false;
-  dailyBudget.used += 1;
-  return true;
-}
-/** Tests only. */
-export function resetDailyBudget(): void {
-  dailyBudget.day = "";
-  dailyBudget.used = 0;
 }
 
 // --- result cache (in-memory, TTL — work-product scope only) ----------------
@@ -299,12 +277,7 @@ export async function runHousingWebSearch(
     return { ...cachedEntry.outcome, cached: true };
   }
 
-  // 3) Daily soft budget.
-  if (!consumeDailyBudget(started)) {
-    return fail("daily_budget_exhausted", "daily_budget_exhausted", provider.kind);
-  }
-
-  // 4) Build queries.
+  // 3) Build queries.
   const built = buildHousingQueries(input.params);
   const location = input.params.city.trim() || input.params.postal_code.trim();
   const userLocation = location

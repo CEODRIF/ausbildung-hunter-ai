@@ -2232,10 +2232,15 @@ const de = {
       stateEndpoint: "Der Suchdienst ist nicht erreichbar (Endpunkt nicht verfügbar).",
       stateRateLimited:
         "Zu viele Websuchen in kurzer Zeit – bitte kurz warten und erneut versuchen.",
-      stateDailyBudget:
-        "Das tägliche Websuche-Limit ist erreicht – bitte am nächsten Tag erneut versuchen.",
+      stateDailyQuota:
+        "Dein heutiges Websuche-Limit ist erreicht. Neu ab {time} (Europe/Berlin).",
+      stateQuotaUnavailable:
+        "Die Kontingent-Prüfung war gerade nicht möglich – es wurde keine Websuche gestartet (keine Kosten).",
       stateProviderError: "Die Websuche ist fehlgeschlagen – bitte erneut versuchen.",
       stateTimeout: "Die Websuche hat zu lange gedauert – bitte erneut versuchen.",
+      remainingToday: "Heute noch {remaining} von {limit} Websuchen übrig",
+      quotaExhausted:
+        "Tageslimit von {limit} Websuchen erreicht – neu ab {time} (Europe/Berlin).",
     },
   },
 };
@@ -4409,10 +4414,15 @@ const en: Dict = {
       stateEndpoint: "The search service is unreachable (endpoint unavailable).",
       stateRateLimited:
         "Too many web searches in a short time — please wait a moment and retry.",
-      stateDailyBudget:
-        "The daily web search limit has been reached — please try again tomorrow.",
+      stateDailyQuota:
+        "Your daily web-search limit is reached. Resets at {time} (Europe/Berlin).",
+      stateQuotaUnavailable:
+        "The quota check was not possible just now — no web search was started (no charges).",
       stateProviderError: "The web search failed — please retry.",
       stateTimeout: "The web search took too long — please retry.",
+      remainingToday: "{remaining} of {limit} web searches remaining today",
+      quotaExhausted:
+        "Daily limit of {limit} web searches reached — resets at {time} (Europe/Berlin).",
     },
   },
 };
@@ -6588,10 +6598,15 @@ const fr: Dict = {
       stateEndpoint: "Le service de recherche est injoignable (point d'accès indisponible).",
       stateRateLimited:
         "Trop de recherches web en peu de temps — veuillez patienter un instant et réessayer.",
-      stateDailyBudget:
-        "La limite quotidienne de recherche web est atteinte — réessayez demain.",
+      stateDailyQuota:
+        "Votre limite quotidienne de recherche web est atteinte. Réinitialisation à {time} (Europe/Berlin).",
+      stateQuotaUnavailable:
+        "La vérification du quota n'a pas été possible — aucune recherche n'a été lancée (aucune charge).",
       stateProviderError: "La recherche web a échoué — veuillez réessayer.",
       stateTimeout: "La recherche web a pris trop de temps — veuillez réessayer.",
+      remainingToday: "{remaining} recherches web restantes aujourd'hui (sur {limit})",
+      quotaExhausted:
+        "Limite quotidienne de {limit} recherches web atteinte — réinitialisation à {time} (Europe/Berlin).",
     },
   },
 };
@@ -8712,9 +8727,15 @@ const ar: Dict = {
       stateEndpoint: "خدمة البحث غير متاحة (نقطة الوصول غير متوفرة).",
       stateRateLimited:
         "عدد كبير جدًّا من عمليات بحث الويب في وقت قصير — انتظر لحظة ثم أعد المحاولة.",
-      stateDailyBudget: "تم بلوغ الحد اليومي لبحث الويب — أعد المحاولة في اليوم التالي.",
+      stateDailyQuota:
+        "تم بلوغ حدك اليومي لبحث الويب. يُعاد التعيين عند {time} (Europe/Berlin).",
+      stateQuotaUnavailable:
+        "تعذّر فحص الحصة الآن — لم يُطلق أي بحث (دون أي تكلفة).",
       stateProviderError: "فشل بحث الويب — يُرجى إعادة المحاولة.",
       stateTimeout: "استغرق بحث الويب وقتًا طويلاً — يُرجى إعادة المحاولة.",
+      remainingToday: "تبقّى اليوم {remaining} من {limit} عمليات بحث على الويب",
+      quotaExhausted:
+        "تم بلوغ الحد اليومي ({limit} عمليات بحث) — يُعاد التعيين عند {time} (Europe/Berlin).",
     },
   },
 };

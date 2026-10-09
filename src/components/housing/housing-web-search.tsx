@@ -31,7 +31,8 @@ type Status =
   | "tool_blocked"
   | "endpoint_unavailable"
   | "rate_limited"
-  | "daily_budget_exhausted"
+  | "daily_quota_exhausted"
+  | "quota_unavailable"
   | "provider_error"
   | "timeout";
 
@@ -39,6 +40,17 @@ interface WebSearchDomain {
   domain: string;
   label: string;
   fetchable: boolean;
+}
+
+/** The user's per-day search allowance (server-side source of truth). */
+interface QuotaInfo {
+  limit: number;
+  used: number;
+  remaining: number;
+  /** Europe/Berlin calendar day ("YYYY-MM-DD"). */
+  usageDate: string;
+  /** ISO instant of the next reset (next Berlin midnight). */
+  resetsAt: string;
 }
 
 interface WebSearchOutcome {
@@ -53,6 +65,7 @@ interface WebSearchOutcome {
   warnings: string[];
   cached: boolean;
   fetchedAt: string;
+  quota: QuotaInfo | null;
 }
 
 /** The subset of the filter set the web-search API accepts. */
@@ -74,28 +87,40 @@ function domainLabel(domain: string, domains: WebSearchDomain[]): string {
 }
 
 export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [domains, setDomains] = useState<WebSearchDomain[]>([]);
   const [mode, setMode] = useState<Mode>("web");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [phase, setPhase] = useState<"idle" | "loading" | "done">("idle");
   const [outcome, setOutcome] = useState<WebSearchOutcome | null>(null);
   const [httpError, setHttpError] = useState<Status | null>(null);
+  const [quota, setQuota] = useState<QuotaInfo | null>(null);
 
-  // The allowlist is served by the API (single source of truth, server-side).
+  // The allowlist and the per-user daily quota are served by the API (single
+  // source of truth, server-side — the browser can never inflate its own
+  // allowance).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/housing/web-search/domains");
-        if (!res.ok) return;
-        const data = (await res.json()) as { domains?: WebSearchDomain[] };
-        if (cancelled || !data.domains) return;
-        setDomains(data.domains);
-        // Default: all reviewed websites selected.
-        setSelected(new Set(data.domains.map((d) => d.domain)));
+        const [res, quotaRes] = await Promise.all([
+          fetch("/api/housing/web-search/domains"),
+          fetch("/api/housing/web-search"),
+        ]);
+        if (res.ok) {
+          const data = (await res.json()) as { domains?: WebSearchDomain[] };
+          if (!cancelled && data.domains) {
+            setDomains(data.domains);
+            // Default: all reviewed websites selected.
+            setSelected(new Set(data.domains.map((d) => d.domain)));
+          }
+        }
+        if (quotaRes.ok) {
+          const q = (await quotaRes.json()) as { quota?: QuotaInfo | null };
+          if (!cancelled && q.quota) setQuota(q.quota);
+        }
       } catch {
-        /* non-fatal: targeted mode simply shows no picker */
+        /* non-fatal: the run path re-checks everything server-side */
       }
     })();
     return () => {
@@ -129,6 +154,7 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
       const data = (await res.json()) as WebSearchOutcome;
       setPhase("done");
       setOutcome(data);
+      if (data.quota) setQuota(data.quota);
     } catch {
       setPhase("done");
       setHttpError("provider_error");
@@ -159,7 +185,8 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
     | "stateToolBlocked"
     | "stateEndpoint"
     | "stateRateLimited"
-    | "stateDailyBudget"
+    | "stateDailyQuota"
+    | "stateQuotaUnavailable"
     | "stateProviderError"
     | "stateTimeout"
     | null =
@@ -171,13 +198,20 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
           ? "stateEndpoint"
           : status === "rate_limited"
             ? "stateRateLimited"
-            : status === "daily_budget_exhausted"
-              ? "stateDailyBudget"
-              : status === "timeout"
-                ? "stateTimeout"
-                : status === "provider_error"
-                  ? "stateProviderError"
-                  : null;
+            : status === "daily_quota_exhausted"
+              ? "stateDailyQuota"
+              : status === "quota_unavailable"
+                ? "stateQuotaUnavailable"
+                : status === "timeout"
+                  ? "stateTimeout"
+                  : status === "provider_error"
+                    ? "stateProviderError"
+                    : null;
+
+  /** Server-declared reset time (next Berlin midnight), formatted for display. */
+  const resetsAt = quota?.resetsAt ?? outcome?.quota?.resetsAt ?? null;
+  const resetTime = formatResetsAt(resetsAt, lang);
+  const quotaExhausted = quota !== null && quota.remaining <= 0;
 
   return (
     <section className="rounded-3xl border border-line bg-surface p-5 shadow-[var(--shadow-card)]">
@@ -245,7 +279,11 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
 
       {/* run control */}
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button size="sm" disabled={phase === "loading"} onClick={() => void run()}>
+        <Button
+          size="sm"
+          disabled={phase === "loading" || quotaExhausted}
+          onClick={() => void run()}
+        >
           {phase === "loading" ? (
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
           ) : (
@@ -254,6 +292,22 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
           {phase === "loading" ? t("housing.webSearch.running") : t("housing.webSearch.run")}
         </Button>
         <p className="text-[11px] text-faint">{t("housing.webSearch.costNote")}</p>
+        {quota &&
+          (quota.remaining > 0 ? (
+            <p className="text-[11px] font-semibold text-ink-soft">
+              {t("housing.webSearch.remainingToday", {
+                remaining: quota.remaining,
+                limit: quota.limit,
+              })}
+            </p>
+          ) : (
+            <p className="rounded-xl bg-warning-soft px-2.5 py-1 text-[11px] font-semibold text-warning">
+              {t("housing.webSearch.quotaExhausted", {
+                limit: quota.limit,
+                time: resetTime,
+              })}
+            </p>
+          ))}
       </div>
 
       {/* results */}
@@ -263,7 +317,11 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
             <div className="flex items-start gap-3 rounded-2xl border border-line-strong bg-surface-2 p-4 text-sm text-muted">
               <Icon name="alert" size={16} strokeWidth={2} className="mt-0.5 shrink-0 text-faint" />
               <div className="flex-1">
-                <p>{t(`housing.webSearch.${stateKey}`)}</p>
+                <p>
+                  {stateKey === "stateDailyQuota"
+                    ? t("housing.webSearch.stateDailyQuota", { time: resetTime })
+                    : t(`housing.webSearch.${stateKey}`)}
+                </p>
                 {status === "rate_limited" || status === "provider_error" || status === "timeout" ? (
                   <Button variant="secondary" size="sm" className="mt-2" onClick={() => void run()}>
                     {t("common.retry")}
@@ -437,4 +495,17 @@ function formatTimestamp(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
+
+/** The quota resets at the next Europe/Berlin midnight (server-anchored);
+ *  format that wall-clock time in the user's UI language. */
+function formatResetsAt(iso: string | null, lang: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat(lang, {
+    timeZone: "Europe/Berlin",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
 }

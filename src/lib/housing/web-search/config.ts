@@ -176,14 +176,6 @@ export function resolveSearchProvider(): ResolvedSearchProvider | null {
   return null;
 }
 
-/** Daily soft budget (per process instance) — env may LOWER it. */
-export function dailySearchBudget(): number {
-  const raw = (process.env.HOUSING_WEB_SEARCH_DAILY_MAX ?? "").trim();
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isInteger(parsed) && parsed > 0) return parsed;
-  return 2000;
-}
-
 /** Look up the allowlist entry for a host (suffix match, www-stripped). */
 export function domainForHost(host: string): AllowedDomain | null {
   const normalized = host.toLowerCase().replace(/^www\./, "");

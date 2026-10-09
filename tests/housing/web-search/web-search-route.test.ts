@@ -24,8 +24,29 @@ vi.mock("@/lib/housing/web-search/discovery", () => ({
 }));
 const { runHousingWebSearch } = await import("@/lib/housing/web-search/discovery");
 
-const { POST } = await import("@/app/api/housing/web-search/route");
-const { GET } = await import("@/app/api/housing/web-search/domains/route");
+vi.mock("@/lib/housing/web-search/quota", () => ({
+  reserveHousingWebSearch: vi.fn(async () => ({ status: "reserved", used: 1, remaining: 19 })),
+  releaseHousingWebSearch: vi.fn(async () => true),
+  completeHousingWebSearch: vi.fn(async () => true),
+  getHousingWebSearchStatus: vi.fn(async () => ({
+    limit: 20,
+    used: 0,
+    remaining: 20,
+    usageDate: "2026-10-09",
+    resetsAt: "2026-10-09T23:00:00.000Z",
+  })),
+  getHousingWebSearchDailyLimit: () => 20,
+  nextBerlinMidnight: () => new Date("2026-10-09T23:00:00.000Z"),
+}));
+const {
+  reserveHousingWebSearch,
+  releaseHousingWebSearch,
+  completeHousingWebSearch,
+  getHousingWebSearchStatus,
+} = await import("@/lib/housing/web-search/quota");
+
+const { POST, GET: GET_QUOTA } = await import("@/app/api/housing/web-search/route");
+const { GET: GET_DOMAINS } = await import("@/app/api/housing/web-search/domains/route");
 import type { HousingWebSearchOutcome } from "@/lib/housing/web-search/discovery";
 
 type AuthResult = Awaited<ReturnType<typeof getCurrentUserAndProfile>>;
@@ -105,10 +126,11 @@ describe("POST /api/housing/web-search", () => {
     ["unknown top-level field", { mode: "web", params: {}, hacker: true }],
     ["unknown param field", { mode: "web", params: { city: "Köln", injected_price: 1 } }],
     ["invalid mode", { mode: "deep", params: {} }],
-    ["invalid availability date format", { mode: "web", params: { available_before: "2026.11.01" } }],
+    ["invalid availability date format", { mode: "web", params: { available_before: "2026.13.01" } }],
     ["rooms out of range", { mode: "web", params: { rooms: 11 } }],
     ["rent out of range", { mode: "web", params: { max_warm_rent: 99999 } }],
     ["radius out of range", { mode: "web", params: { radius_km: 101 } }],
+    ["invalid request_id (non-uuid)", { mode: "web", params: {}, request_id: "not-a-uuid" }],
     ["too many domains", { mode: "targeted", params: {}, domains: Array.from({ length: 101 }, (_, i) => `d${i}.de`) }],
   ])("rejects %s with 400", async (_name, body) => {
     const res = await POST(req(body));
@@ -167,19 +189,124 @@ describe("POST /api/housing/web-search", () => {
     expect(data.status).toBe("provider_error");
     expect(data.message).not.toContain("sk-live-abc123");
     expect(data.message).not.toContain("stacktrace");
+    // The reserved slot is refunded on unexpected failure.
+    expect(vi.mocked(releaseHousingWebSearch)).toHaveBeenCalled();
+  });
+});
+
+describe("per-user daily quota (server-side, before any provider call)", () => {
+  it("reserves a slot BEFORE the provider and settles it as succeeded on success", async () => {
+    vi.mocked(runHousingWebSearch).mockResolvedValue(makeOutcome());
+    const res = await POST(req({ mode: "web", params: {}, request_id: "11111111-1111-4111-8111-111111111111" }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(reserveHousingWebSearch)).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    expect(vi.mocked(completeHousingWebSearch)).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    expect(vi.mocked(releaseHousingWebSearch)).not.toHaveBeenCalled();
+    const data = (await res.json()) as { quota: { used: number; remaining: number; limit: number } };
+    expect(data.quota).toMatchObject({ limit: 20, used: 1, remaining: 19 });
   });
 
+  it("generates its own idempotency key when the client sends none", async () => {
+    vi.mocked(runHousingWebSearch).mockResolvedValue(makeOutcome());
+    await POST(req({ mode: "web", params: {} }));
+    const runId = vi.mocked(reserveHousingWebSearch).mock.calls[0][0];
+    expect(runId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  it("blocks at the limit WITHOUT calling the provider, and reports the reset time", async () => {
+    vi.mocked(reserveHousingWebSearch).mockResolvedValueOnce({
+      status: "quota_exhausted",
+      used: 20,
+      remaining: 0,
+    });
+    const res = await POST(req({ mode: "web", params: {} }));
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      status: string;
+      listings: unknown[];
+      quota: { used: number; remaining: number; resetsAt: string };
+    };
+    expect(data.status).toBe("daily_quota_exhausted");
+    expect(data.listings).toEqual([]);
+    expect(data.quota).toMatchObject({ used: 20, remaining: 0 });
+    expect(data.quota.resetsAt).toBe("2026-10-09T23:00:00.000Z");
+    expect(vi.mocked(runHousingWebSearch)).not.toHaveBeenCalled(); // no paid call
+  });
+
+  it("fails closed (no provider call) when the quota RPC itself fails", async () => {
+    vi.mocked(reserveHousingWebSearch).mockResolvedValueOnce(null);
+    const res = await POST(req({ mode: "web", params: {} }));
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { status: string; quota: null };
+    expect(data.status).toBe("quota_unavailable");
+    expect(data.quota).toBeNull();
+    expect(vi.mocked(runHousingWebSearch)).not.toHaveBeenCalled();
+  });
+
+  it("refunds the slot for a result-cache hit (no paid call happened)", async () => {
+    vi.mocked(runHousingWebSearch).mockResolvedValue(makeOutcome({ cached: true }));
+    const res = await POST(req({ mode: "web", params: {}, request_id: "22222222-2222-4222-8222-222222222222" }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(releaseHousingWebSearch)).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222");
+    expect(vi.mocked(completeHousingWebSearch)).not.toHaveBeenCalled();
+    const data = (await res.json()) as { quota: { used: number; remaining: number } };
+    expect(data.quota).toMatchObject({ used: 0, remaining: 20 }); // refunded
+  });
+
+  it("refunds the slot for provider failures (user not charged for a failed search)", async () => {
+    vi.mocked(runHousingWebSearch).mockResolvedValue(
+      makeOutcome({ status: "tool_blocked", message: "tool blocked" }),
+    );
+    const res = await POST(req({ mode: "web", params: {}, request_id: "33333333-3333-4333-8333-333333333333" }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(releaseHousingWebSearch)).toHaveBeenCalledWith("33333333-3333-4333-8333-333333333333");
+    expect(vi.mocked(completeHousingWebSearch)).not.toHaveBeenCalled();
+    const data = (await res.json()) as { status: string; quota: { used: number; remaining: number } };
+    expect(data.status).toBe("tool_blocked");
+    expect(data.quota).toMatchObject({ used: 0, remaining: 20 });
+  });
+});
+
+describe("GET /api/housing/web-search (quota status)", () => {
+  it("requires authentication", async () => {
+    vi.mocked(getCurrentUserAndProfile).mockResolvedValue(unauthenticated());
+    const res = await GET_QUOTA();
+    expect(res.status).toBe(401);
+    expect(vi.mocked(getHousingWebSearchStatus)).not.toHaveBeenCalled();
+  });
+
+  it("reports the per-user remaining quota without consuming anything", async () => {
+    const res = await GET_QUOTA();
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      status: string;
+      quota: { limit: number; used: number; remaining: number; resetsAt: string };
+    };
+    expect(data.status).toBe("ok");
+    expect(data.quota).toMatchObject({ limit: 20, used: 0, remaining: 20 });
+    expect(data.quota.resetsAt).toBe("2026-10-09T23:00:00.000Z");
+    expect(vi.mocked(reserveHousingWebSearch)).not.toHaveBeenCalled(); // read-only
+  });
+
+  it("answers an honest quota_unavailable when the status RPC failed", async () => {
+    vi.mocked(getHousingWebSearchStatus).mockResolvedValueOnce(null);
+    const res = await GET_QUOTA();
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { status: string; quota: null };
+    expect(data.status).toBe("quota_unavailable");
+    expect(data.quota).toBeNull();
+  });
 });
 
 describe("GET /api/housing/web-search/domains", () => {
   it("requires authentication", async () => {
     vi.mocked(getCurrentUserAndProfile).mockResolvedValue(unauthenticated());
-    const res = await GET();
+    const res = await GET_DOMAINS();
     expect(res.status).toBe(401);
   });
 
   it("lists the allowlist with fetchability (no internal rationale leaks to the client)", async () => {
-    const res = await GET();
+    const res = await GET_DOMAINS();
     expect(res.status).toBe(200);
     const data = (await res.json()) as { domains: Array<{ domain: string; label: string; fetchable: boolean }> };
     expect(data.domains.length).toBeGreaterThanOrEqual(6);
