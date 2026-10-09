@@ -192,14 +192,26 @@ export interface AffordabilityInput {
 }
 
 export interface AffordabilityResult {
-  /** warm + other costs, EUR/month. */
   monthly_total: number;
-  /** One-off deposit, EUR. */
   deposit_total: number;
-  /** Warm rent as a share of net income (0..1+). */
   rent_share: number;
-  /** True when the warm rent is at or under the 30% guideline. */
   affordable: boolean;
-  /** Guideline share used for the check. */
   guideline_share: number;
+}
+
+/**
+ * Trust-badge gate (UI-facing, pure, client-safe).
+ *
+ * The green "verified source" badge may ONLY appear on LIVE data — i.e.
+ * listings produced by a registered provider adapter, which searchHousing
+ * re-stamps with `data_status: "live"`. Demo fixtures are NEVER verified,
+ * no matter what their `verified` field says: in sample data that flag is
+ * display metadata, not evidence of any real source verification. There is
+ * no live provider contract yet (PROVIDER_ADAPTERS = []), so this gate
+ * currently returns false for every listing the app can serve.
+ */
+export function isVerifiedListing(
+  listing: Pick<HousingListing, "data_status" | "verified">,
+): boolean {
+  return listing.data_status === "live" && listing.verified;
 }

@@ -4,7 +4,7 @@ import { useI18n } from "@/lib/i18n";
 import { Icon } from "@/components/icon";
 import { formatEur } from "@/lib/housing/affordability";
 import { SaveListingButton } from "./save-listing-button";
-import type { HousingListing } from "@/lib/housing/types";
+import { isVerifiedListing, type HousingListing } from "@/lib/housing/types";
 
 interface Props {
   listing: HousingListing;
@@ -45,12 +45,20 @@ export function ListingCard({ listing, saved, selected, onSelect, onSavedChange 
         <div className="flex h-full items-center justify-center text-accent/40">
           <Icon name="home" size={52} strokeWidth={1.4} />
         </div>
-        {listing.verified && (
+        {isVerifiedListing(listing) ? (
+          // Green "verified" is reserved for genuine LIVE data whose source
+          // verification is substantiated by the provider integration.
           <span className="absolute start-3 top-3 inline-flex items-center gap-1 rounded-full bg-surface/85 px-2.5 py-1 text-[11px] font-bold text-success shadow-sm backdrop-blur">
             <Icon name="check" size={12} strokeWidth={2.5} />
             {t("housing.verified")}
           </span>
-        )}
+        ) : listing.data_status === "demo" ? (
+          // Neutral indicator for sample data — never styled as "verified".
+          <span className="absolute start-3 top-3 inline-flex items-center gap-1 rounded-full bg-surface/85 px-2.5 py-1 text-[11px] font-bold text-muted shadow-sm backdrop-blur">
+            <Icon name="image" size={12} strokeWidth={2} />
+            {t("housing.demoSource")}
+          </span>
+        ) : null}
         <SaveListingButton
           className="absolute end-3 top-3"
           provider={listing.provider}
@@ -117,7 +125,7 @@ export function ListingCard({ listing, saved, selected, onSelect, onSavedChange 
         <div className="flex items-center justify-between border-t border-line pt-3 text-xs">
           <span className="inline-flex items-center gap-1.5 text-faint">
             <span className="rounded bg-surface-2 px-1.5 py-0.5 font-semibold text-muted">
-              {t("housing.demoSource")}
+              {listing.data_status === "demo" ? t("housing.demoSource") : listing.provider}
             </span>
           </span>
           <a
