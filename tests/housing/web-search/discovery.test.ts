@@ -650,21 +650,23 @@ describe("location correctness (the 2026-10-10 Berlin→Frankfurt incident)", ()
     );
 
     expect(outcome.status).toBe("ok");
-    expect(outcome.listings).toHaveLength(2);
-    // The Frankfurt listing is REJECTED — never shown as a Berlin result.
+    // The Berlin listing stays. The Frankfurt listing is REJECTED (city
+    // mismatch) — never shown as a Berlin result. The source-only immonet
+    // link has NO title anywhere (no citation title, no JSON) — it is
+    // rejected and counted: a generic "Anzeige auf <host>" label must never
+    // be presented as a listing.
+    expect(outcome.listings).toHaveLength(1);
     expect(outcome.listings.every((l) => !l.listing_url.includes("555555555"))).toBe(true);
+    expect(outcome.listings.every((l) => !l.listing_url.includes("333333333"))).toBe(true);
     expect(outcome.funnel.cityMismatches).toBe(1);
+    expect(outcome.funnel.untitledRejected).toBe(1);
     expect(outcome.warnings).toContain("city_mismatch_rejected=1");
+    expect(outcome.warnings).toContain("candidates_dropped_untitled=1");
 
     const berlin = outcome.listings.find((l) => l.listing_url.includes("123456789"))!;
     expect(berlin.city).toBe("Berlin");
     expect(berlin.city_unverified).toBe(false);
     expect(berlin.rent_warm_eur).toBe(1200);
-
-    // The evidence-free immonet link stays — but is flagged, never labelled "Berlin".
-    const unknown = outcome.listings.find((l) => l.listing_url.includes("333333333"))!;
-    expect(unknown.city).toBe("");
-    expect(unknown.city_unverified).toBe(true);
   });
 
   it("does NOT reject unknown district names for the requested city (Neukölln ≈ Berlin)", async () => {
@@ -703,17 +705,118 @@ describe("location correctness (the 2026-10-10 Berlin→Frankfurt incident)", ()
     expect(nrw.field_provenance?.city).toBe("page");
   });
 
-  it("source-only candidates get an honest derived title, never 'Titel unbekannt'", async () => {
+  it("source-only candidates WITHOUT any title are rejected + counted (no generic host labels)", async () => {
     const { impl } = makeFetch({
       azure: [azurePayload([], "Angebote.", ["https://wg-gesucht.de/2-zimmer-koeln-555555555.html"])],
     });
     const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toEqual([]);
+    expect(outcome.funnel.untitledRejected).toBe(1);
+    expect(outcome.warnings).toContain("candidates_dropped_untitled=1");
+    // A zero-valid-listing outcome is NEVER cached — the identical repeat
+    // search must run the provider again (no "bad result on repeat").
+    const again = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(again.cached).toBe(false);
+    expect(again.listings).toEqual([]);
+  });
+
+  it("an untitled candidate is rescued by the fetched page's own <title> (page-derived, marked as fallback)", async () => {
+    const { impl } = makeFetch({
+      azure: [azurePayload([], "Angebote.", [NW_A])],
+      page: (url) =>
+        url.startsWith(NW_A)
+          ? new Response(
+              `<html><head><title>Mietwohnung in Köln – offen</title></head><body><script type="application/ld+json">${JSON.stringify({
+                "@context": "https://schema.org",
+                "@type": "Apartment",
+                numRooms: 2,
+                address: { addressLocality: "Köln", postalCode: "50667" },
+              })}</script></body></html>`,
+              { status: 200, headers: { "content-type": "text/html" } },
+            )
+          : null,
+    });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.status).toBe("ok");
     expect(outcome.listings).toHaveLength(1);
-    expect(outcome.listings[0].title).toBe("Anzeige auf wg-gesucht.de");
+    expect(outcome.listings[0].title).toBe("Mietwohnung in Köln – offen");
+    // Page-derived <title> is a REAL (not invented) title — but it is the
+    // document title, so the UI marks it as derived.
     expect(outcome.listings[0].title_is_fallback).toBe(true);
-    // The URL slug contains the requested city → location confirmed.
-    expect(outcome.listings[0].city).toBe("Köln");
-    expect(outcome.listings[0].city_unverified).toBe(false);
+    expect(outcome.funnel.untitledRejected).toBe(0);
+  });
+});
+
+describe("evidence-based acceptance (the 2026-10-10 'Anzeige auf <host>' defect)", () => {
+  const SALE_URL = "https://kauf-immo.de/wohnung/42424242";
+  const RENTAL_URL = "https://miet-immo.de/wohnung/43434343";
+  // Bare numeric id, no listing vocabulary → on unreviewed domains this is
+  // `direct_listing_id`: kept ONLY with substantive JSON evidence.
+  const RESCUE_URL = "https://miet-immo.de/2-zimmer-koeln/43434343.html";
+
+  it("a JSON rescue requires SUBSTANTIVE property fields (title-only JSON does not rescue a page)", async () => {
+    // The model names a generic portal page with only a title — NOT an
+    // individual offer. Old behavior: rescued via the exact-URL JSON match
+    // and shown as a listing. Now: rejected as non-listing content.
+    const titleOnlyJson = JSON.stringify([
+      { url: "https://immobilien.de/wohnungen-koeln", title: "Wohnungen Köln", city: "Köln", rent_cold_eur: null, rent_warm_eur: null, additional_costs_eur: null, rooms: null, living_area_sqm: null, floor: null, available_from: null, furnished: null, source: "immobilien.de" },
+    ]);
+    const { impl } = makeFetch({
+      azure: [azurePayload([], titleOnlyJson, ["https://immobilien.de/wohnungen-koeln"])],
+    });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toEqual([]);
+    expect(outcome.funnel.jsonOnlyKept).toBe(0);
+    expect(outcome.funnel.contentRejected).toBeGreaterThanOrEqual(1);
+
+    // Same URL WITH a real property fact (rent) is an individual offer → kept.
+    const withRentJson = JSON.stringify([
+      { url: RESCUE_URL, title: "2-Zi Wohnung Köln", city: "Köln", rent_cold_eur: 850, rent_warm_eur: null, additional_costs_eur: null, rooms: null, living_area_sqm: null, floor: null, available_from: null, furnished: null, source: "miet-immo.de" },
+    ]);
+    const { impl: impl2 } = makeFetch({
+      azure: [azurePayload([], withRentJson, [RESCUE_URL])],
+    });
+    const outcome2 = await runHousingWebSearch(
+      input(),
+      { now: () => NOW, provider: AZURE, fetchImpl: impl2 },
+    );
+    expect(outcome2.funnel.jsonOnlyKept).toBe(1);
+    const kept = outcome2.listings.find((l) => l.listing_url === RESCUE_URL)!;
+    expect(kept).toBeDefined();
+    expect(kept.rent_cold_eur).toBe(850);
+  });
+
+  it("a title with clear SALE evidence is rejected (this is a rental search)", async () => {
+    const { impl } = makeFetch({
+      azure: [azurePayload([{ url: SALE_URL, title: "Haus zum Kauf in Köln-Ehrenfeld" }])],
+    });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toEqual([]);
+    expect(outcome.funnel.nonRentalRejected).toBe(1);
+    expect(outcome.warnings).toContain("candidates_dropped_non_rental=1");
+  });
+
+  it("a sale word inside a RENTAL title does not kill the listing", async () => {
+    const { impl } = makeFetch({
+      azure: [azurePayload([{ url: RENTAL_URL, title: "Wohnung mieten Köln – Kaution 1.500 EUR" }])],
+    });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.funnel.nonRentalRejected).toBe(0);
+    expect(outcome.listings).toHaveLength(1);
+    expect(outcome.listings[0].title).toBe("Wohnung mieten Köln – Kaution 1.500 EUR");
+  });
+
+  it("a portal root URL is a portal page, not a listing", async () => {
+    const { impl } = makeFetch({
+      azure: [azurePayload([], "Angebote.", ["https://immobilien.de/"])],
+    });
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(outcome.listings).toEqual([]);
+    expect(outcome.funnel.uniqueSearchPages).toBe(1);
+    expect(outcome.funnel.contentRejected).toBe(0);
   });
 });
 
@@ -1201,6 +1304,50 @@ describe("caching and budgets", () => {
     });
     expect(other.cached).toBe(false);
     expect(calls.filter((c) => c.url.endsWith("/responses")).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("concurrent identical searches coalesce into ONE provider run (no double spend)", async () => {
+    // A provider call that resolves LATE — both searches are in flight
+    // while it is pending, so the second must ride the first.
+    let release!: (v: ReturnType<typeof azurePayload>) => void;
+    const gate = new Promise<ReturnType<typeof azurePayload>>((r) => (release = r));
+    const impl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/responses")) return Response.json(await gate);
+      return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+
+    const a = runHousingWebSearch(input({ mode: "targeted" }), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    const b = runHousingWebSearch(input({ mode: "targeted" }), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    release(azurePayload([{ url: IS24_A, title: "A" }]));
+    const [ra, rb] = await Promise.all([a, b]);
+
+    expect(impl).toHaveBeenCalledTimes(1); // exactly ONE paid API call
+    expect(ra.cached).toBe(false);
+    expect(ra.deduplicated ?? false).toBe(false);
+    expect(rb.cached).toBe(false);
+    expect(rb.deduplicated).toBe(true); // rider: refunded by the route
+    expect(rb.listings).toEqual(ra.listings);
+
+    // The coalesced result is cacheable (ok + ≥1 listing) → a THIRD call
+    // is served from the cache, still no extra provider run.
+    const c = await runHousingWebSearch(input({ mode: "targeted" }), { now: () => NOW, provider: AZURE, fetchImpl: impl });
+    expect(c.cached).toBe(true);
+    expect(impl).toHaveBeenCalledTimes(1);
+  });
+
+  it("case-different city input shares one cache entry (berlin === Berlin)", async () => {
+    const { impl } = makeFetch({ azure: [azurePayload([{ url: IS24_A, title: "A" }])] });
+    const first = await runHousingWebSearch(
+      input({ mode: "targeted", params: { ...baseParams, city: "Berlin" } }),
+      { now: () => NOW, provider: AZURE, fetchImpl: impl },
+    );
+    const second = await runHousingWebSearch(
+      input({ mode: "targeted", params: { ...baseParams, city: "berlin" } }),
+      { now: () => NOW, provider: AZURE, fetchImpl: impl },
+    );
+    expect(first.cached).toBe(false);
+    expect(second.cached).toBe(true);
   });
 });
 

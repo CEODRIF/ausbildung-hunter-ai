@@ -30,6 +30,8 @@ vi.mock("@/lib/housing/web-search/discovery", () => ({
     searchPagesRejected: 0,
     uniqueSearchPages: 0,
     contentRejected: 0,
+    untitledRejected: 0,
+    nonRentalRejected: 0,
     jsonOnlyKept: 0,
     cityMismatches: 0,
     duplicateResults: 0,
@@ -308,6 +310,17 @@ describe("per-user daily quota (server-side, before any provider call)", () => {
     expect(vi.mocked(completeHousingWebSearch)).not.toHaveBeenCalled();
     const data = (await res.json()) as { quota: { used: number; remaining: number } };
     expect(data.quota).toMatchObject({ used: 0, remaining: 20 }); // refunded
+  });
+
+  it("refunds the slot for an in-flight duplicate (rider consumed no paid call)", async () => {
+    vi.mocked(runHousingWebSearch).mockResolvedValue(makeOutcome({ deduplicated: true }));
+    const res = await POST(req({ mode: "web", params: {}, request_id: "44444444-4444-4444-8444-444444444444" }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(releaseHousingWebSearch)).toHaveBeenCalledWith("44444444-4444-4444-8444-444444444444");
+    expect(vi.mocked(completeHousingWebSearch)).not.toHaveBeenCalled();
+    const data = (await res.json()) as { quota: { used: number; remaining: number }; deduplicated?: boolean };
+    expect(data.quota).toMatchObject({ used: 0, remaining: 20 }); // refunded
+    expect(data.deduplicated).toBe(true); // surfaced to the client
   });
 
   it("refunds the slot for provider failures (user not charged for a failed search)", async () => {

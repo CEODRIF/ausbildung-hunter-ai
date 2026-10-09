@@ -58,6 +58,20 @@ function FactCell({ label, children }: { label: string; children: React.ReactNod
   );
 }
 
+/** Yes/No/Nicht verfügbar for boolean|null facts (pets, WG suitability) —
+ *  unknown is NEVER rendered as "no". */
+function YesNoValue({ value }: { value: boolean | null }) {
+  const { t } = useI18n();
+  if (value === null) {
+    return <span className="text-sm font-medium text-faint">{t("housing.webSearch.notAvailable")}</span>;
+  }
+  return (
+    <span className="text-sm font-bold text-ink">
+      {value ? t("housing.webSearch.valueYes") : t("housing.webSearch.valueNo")}
+    </span>
+  );
+}
+
 /** Tiny "where did this section's values come from" tag (honesty rule:
  *  fetched page ≠ search result — the user must see the difference). */
 function ProvenanceLabel({
@@ -252,21 +266,38 @@ export function ListingDetailModal({
                 <FactValue value={listing.floor ?? null} />
               </FactCell>
             </div>
+            <div className="mt-2">
+              <FactCell label={t("housing.webSearch.address")}>
+                <FactValue value={listing.address ?? null} />
+              </FactCell>
+            </div>
           </section>
 
-          {/* availability + furnishings */}
-          <section className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {/* availability, furnishings + living conditions */}
+          <section className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <FactCell label={t("housing.webSearch.availability")}>
               <FactValue
                 value={availableFrom ? `${t("housing.webSearch.from")} ${availableFrom}` : null}
               />
             </FactCell>
             <FactCell label={t("housing.webSearch.furnished")}>
-              <span className="text-sm font-bold text-ink">
-                {listing.furnished
-                  ? t("housing.webSearch.furnishedYes")
-                  : t("housing.webSearch.notAvailable")}
-              </span>
+              {/* furnished=false without provenance means "not stated" —
+                  only an explicit source value may render as "Nein". */}
+              {listing.furnished ? (
+                <span className="text-sm font-bold text-ink">{t("housing.webSearch.furnishedYes")}</span>
+              ) : listing.field_provenance?.furnished ? (
+                <span className="text-sm font-bold text-ink">{t("housing.webSearch.valueNo")}</span>
+              ) : (
+                <span className="text-sm font-medium text-faint">
+                  {t("housing.webSearch.notAvailable")}
+                </span>
+              )}
+            </FactCell>
+            <FactCell label={t("housing.webSearch.pets")}>
+              <YesNoValue value={listing.pets_allowed} />
+            </FactCell>
+            <FactCell label={t("housing.webSearch.wgSuitable")}>
+              <YesNoValue value={listing.wg_suitable} />
             </FactCell>
           </section>
 

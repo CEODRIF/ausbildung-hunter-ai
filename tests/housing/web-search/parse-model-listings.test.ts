@@ -154,4 +154,38 @@ describe("parseModelListings — field coercion and sanity ranges (no fabricatio
     );
     expect(res.items).toHaveLength(1);
   });
+
+  it("parses the extended detail fields (deposit, address, pets, WG) with coercion", () => {
+    const res = parseModelListings(
+      JSON.stringify([
+        item({
+          deposit_eur: "1.500",
+          address: "Musterstraße 12",
+          pets_allowed: true,
+          wg_suitable: false,
+        }),
+      ]),
+    );
+    expect(res.items[0].deposit_eur).toBe(1500);
+    expect(res.items[0].address).toBe("Musterstraße 12");
+    expect(res.items[0].pets_allowed).toBe(true);
+    expect(res.items[0].wg_suitable).toBe(false);
+  });
+
+  it("rejects out-of-range / wrongly-typed extended fields (unknown stays null)", () => {
+    const res = parseModelListings(
+      JSON.stringify([
+        item({
+          deposit_eur: 99999999,
+          address: "x".repeat(300),
+          pets_allowed: "true",
+          wg_suitable: 1,
+        }),
+      ]),
+    );
+    expect(res.items[0].deposit_eur).toBeNull();
+    expect(res.items[0].address).toBeNull();
+    expect(res.items[0].pets_allowed).toBeNull();
+    expect(res.items[0].wg_suitable).toBeNull();
+  });
 });

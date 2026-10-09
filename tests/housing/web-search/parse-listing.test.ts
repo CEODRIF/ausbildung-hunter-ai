@@ -120,7 +120,7 @@ describe("parseListingPage — malformed content", () => {
   });
 
   it("returns nulls for everything absent — never invents values", () => {
-    const p = parseListingPage("<html><body><p>Haus zum Mieten</p></body></html>");
+    const p = parseListingPage("<html><body><p>Schönes Objekt in ruhiger Lage</p></body></html>");
     expect(p).toEqual({
       fromJsonLd: false,
       title: null,
@@ -134,6 +134,10 @@ describe("parseListingPage — malformed content", () => {
       availableUntil: null,
       images: [],
       ogImage: null,
+      docTitle: null,
+      depositEur: null,
+      address: null,
+      rentalSignal: null,
     });
   });
 
@@ -199,9 +203,62 @@ describe("parseListingPage — German number parsing", () => {
     expect(p.livingAreaSqm).toBe(80);
   });
 
+  it("extracts the deposit (Kaution) only when explicitly labelled", () => {
+    const p = parseListingPage("<html><body><p>Kaution: 1.500 €</p></body></html>");
+    expect(p.depositEur).toBe(1500);
+    const none = parseListingPage("<html><body><p>1.500 €</p></body></html>");
+    expect(none.depositEur).toBeNull();
+  });
+
   it("does not extract unlabelled numbers", () => {
     const p = parseListingPage("<html><body><p>Preis 500 € für die Miete</p></body></html>");
     expect(p.rentColdEur).toBeNull();
     expect(p.rentWarmEur).toBeNull();
+  });
+});
+
+describe("parseListingPage — extended fields (docTitle, address, rental signal)", () => {
+  it("extracts the document <title> even when JSON-LD provides a different name", () => {
+    const p = parseListingPage(jsonLdPage({ "@type": "Apartment", name: "JSON-LD Name" }));
+    expect(p.title).toBe("JSON-LD Name");
+    expect(p.docTitle).toBe("Fallback Title");
+  });
+
+  it("extracts the document <title> from the text fallback too", () => {
+    const p = parseListingPage("<html><head><title>Mietwohnung Köln</title></head><body></body></html>");
+    expect(p.docTitle).toBe("Mietwohnung Köln");
+  });
+
+  it("returns null docTitle when no <title>/og:title exists", () => {
+    expect(parseListingPage("<html><body><p>Kaltmiete 500 €</p></body></html>").docTitle).toBeNull();
+  });
+
+  it("extracts streetAddress from JSON-LD (address), city stays the locality", () => {
+    const p = parseListingPage(
+      jsonLdPage({
+        "@type": "Apartment",
+        name: "x",
+        address: { addressLocality: "Köln", postalCode: "50667", streetAddress: "Musterstraße 12" },
+      }),
+    );
+    expect(p.city).toBe("Köln");
+    expect(p.address).toBe("Musterstraße 12");
+  });
+
+  it("classifies a rental page (rental markers without sale markers)", () => {
+    const p = parseListingPage(
+      "<html><body><p>Kaltmiete 800 €</p><p>Warmmiete 1000 €</p><p>Kaution 1600 €</p></body></html>",
+    );
+    expect(p.rentalSignal).toBe("rental");
+  });
+
+  it("classifies a sale page (sale markers without rental markers)", () => {
+    const p = parseListingPage("<html><body><p>Kaufpreis 350.000 €</p></body></html>");
+    expect(p.rentalSignal).toBe("sale");
+  });
+
+  it("stays null when both rental and sale markers appear (ambiguous)", () => {
+    const p = parseListingPage("<html><body><p>Kaufpreis 300.000 € oder Miete 1500 €</p></body></html>");
+    expect(p.rentalSignal).toBeNull();
   });
 });

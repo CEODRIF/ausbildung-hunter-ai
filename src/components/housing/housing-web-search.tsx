@@ -63,6 +63,10 @@ interface SearchFunnel {
   uniqueSearchPages: number;
   /** Unreviewed content pages the model did not name as offers. */
   contentRejected: number;
+  /** Candidates rejected: no credible title could be established. */
+  untitledRejected: number;
+  /** Candidates rejected: title/page evidence identifies a sale, not a rental. */
+  nonRentalRejected: number;
   /** Candidates kept only via the model's exact-URL JSON reference. */
   jsonOnlyKept: number;
   cityMismatches: number;
@@ -90,6 +94,9 @@ interface WebSearchOutcome {
   funnel: SearchFunnel;
   warnings: string[];
   cached: boolean;
+  /** Rode an identical in-flight search (no second provider call, no second
+   *  quota slot) — shown with the same "cache" indicator. */
+  deduplicated?: boolean;
   fetchedAt: string;
   quota: QuotaInfo | null;
 }
@@ -269,7 +276,7 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
         "robots_unknown",
         "unsafe_url_skipped",
         "expired_listing_discarded",
-        "second_call_failed",
+        "complementary_call_failed",
         "json_truncated_salvaged",
       ].some((prefix) => w.startsWith(prefix)),
     );
@@ -313,6 +320,8 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
     (funnel?.duplicateResults ?? 0) +
       (funnel?.searchPagesRejected ?? 0) +
       (funnel?.contentRejected ?? 0) +
+      (funnel?.untitledRejected ?? 0) +
+      (funnel?.nonRentalRejected ?? 0) +
       (funnel?.offAllowlist ?? 0) +
       (funnel?.invalidUrls ?? 0) +
       (funnel?.fabricatedRejected ?? 0) +
@@ -333,6 +342,8 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
                 // page arrives in several calls ("28 in, 34 excluded").
                 pages: funnel.uniqueSearchPages,
                 dups: funnel.duplicateResults,
+                untitled: funnel.untitledRejected,
+                nonRental: funnel.nonRentalRejected,
               })
           : funnel && (funnel.webSearchCalls ?? 0) === 0
             ? t("housing.webSearch.emptyNoSearchCall")
@@ -466,8 +477,10 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
             <>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-bold text-ink">
-                  {t("housing.webSearch.results", { n: listings.length })}
-                  {outcome?.cached && <span className="ms-2 text-xs font-medium text-faint">{t("housing.webSearch.cached")}</span>}
+                    {t("housing.webSearch.results", { n: listings.length })}
+                    {(outcome?.cached || outcome?.deduplicated) && (
+                      <span className="ms-2 text-xs font-medium text-faint">{t("housing.webSearch.cached")}</span>
+                    )}
                 </p>
                 {outcome && outcome.stats.pagesFetched > 0 && (
                   <p className="text-[11px] text-faint">

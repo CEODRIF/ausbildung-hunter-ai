@@ -110,7 +110,7 @@ describe("buildHousingQueries", () => {
     expect(built.queries[0]).not.toContain("frei ab");
   });
 
-  it("keeps ALL queries bounded (raw part ≤400 chars + fixed instruction ≤1400 total)", () => {
+  it("keeps ALL queries bounded (raw part ≤400 chars + fixed instruction ≤1700 total)", () => {
     const built = buildHousingQueries({
       ...base,
       city: "Köln",
@@ -122,7 +122,7 @@ describe("buildHousingQueries", () => {
       available_before: "2026-11-01",
     });
     for (const q of built.queries) {
-      expect(q.length).toBeLessThanOrEqual(1400);
+      expect(q.length).toBeLessThanOrEqual(1700);
     }
   });
 });

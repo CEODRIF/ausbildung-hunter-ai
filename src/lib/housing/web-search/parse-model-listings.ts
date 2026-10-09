@@ -34,6 +34,14 @@ export interface ModelListingItem {
   /** ISO date (yyyy-mm-dd) or null. */
   available_from: string | null;
   furnished: boolean | null;
+  /** Deposit (Kaution) in EUR, one-time, or null. */
+  deposit_eur: number | null;
+  /** Street + house number (no city), or null. */
+  address: string | null;
+  /** Pets allowed per the offer (true/false), null = not stated. */
+  pets_allowed: boolean | null;
+  /** Suitable as WG/shared flat (true/false), null = not stated. */
+  wg_suitable: boolean | null;
   source: string | null;
 }
 
@@ -124,6 +132,10 @@ function coerceItem(raw: unknown): ModelListingItem | null {
     floor: asCleanString(rec.floor),
     available_from: asIsoDate(rec.available_from),
     furnished: asBool(rec.furnished),
+    deposit_eur: asMoney(rec.deposit_eur),
+    address: asCleanString(rec.address),
+    pets_allowed: asBool(rec.pets_allowed),
+    wg_suitable: asBool(rec.wg_suitable),
     source: asCleanString(rec.source),
   };
 }

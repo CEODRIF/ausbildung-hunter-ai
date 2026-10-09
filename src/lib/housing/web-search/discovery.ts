@@ -73,6 +73,8 @@ export type ResultUrlKind =
 
 export function classifyResultUrl(url: URL, domain: AllowedDomain | null): ResultUrlKind {
   const path = url.pathname;
+  // Root / empty path = the portal home page — never an individual offer.
+  if (path === "/" || path === "") return "portal_page";
   if (NON_LISTING_PATH_RE.test(path)) return "portal_page";
   if (SEARCH_RESULTS_PATH_RE.test(path)) return "portal_page";
   // Open-data dataset pages are "listings" for our purposes (machine-readable
@@ -162,9 +164,16 @@ export interface SearchFunnel {
   /** DISTINCT urls rejected as portal/search/overview/legal pages. */
   uniqueSearchPages: number;
   /** Occurrences of unreviewed-domain content pages that the model did
-   *  NOT identify as an individual offer (articles, directories, slugged
-   *  non-listings). */
+    *  NOT identify as an individual offer (articles, directories, slugged
+    *  non-listings). */
   contentRejected: number;
+  /** Candidates REJECTED because no credible title could be established
+    *  (no citation title, no model title, no page title) — a generic
+    *  "Anzeige auf <host>" label is never presented as a listing. */
+  untitledRejected: number;
+  /** Candidates REJECTED because title or page evidence identifies a SALE
+    *  (Kauf/Verkauf) rather than a rental. */
+  nonRentalRejected: number;
   /** Candidates kept ONLY because the model's JSON referenced the exact
    *  URL (web mode, unreviewed domains — slugged listings without a
    *  numeric id that the generic listing pattern does not catch). */
@@ -214,6 +223,10 @@ export interface HousingWebSearchOutcome {
   funnel: SearchFunnel;
   warnings: string[];
   cached: boolean;
+  /** True when this caller rode an IDENTICAL search that was already in
+   *  flight (in-memory coalescing) — no second provider call, and the
+   *  route refunds this caller's reserved quota slot. */
+  deduplicated?: boolean;
   fetchedAt: string;
 }
 
@@ -226,6 +239,8 @@ export const ZERO_FUNNEL: SearchFunnel = {
   searchPagesRejected: 0,
   uniqueSearchPages: 0,
   contentRejected: 0,
+  untitledRejected: 0,
+  nonRentalRejected: 0,
   jsonOnlyKept: 0,
   cityMismatches: 0,
   duplicateResults: 0,
@@ -254,11 +269,28 @@ export function clearWebSearchCache(): void {
 function cacheKey(input: HousingWebSearchInput): string {
   const norm = JSON.stringify({
     mode: input.mode,
-    p: input.params,
+    // The key covers ALL material params (p = every search filter). City is
+    // normalized (trim + lowercase) because "berlin" and "Berlin" are the
+    // same search — the key only; the query text keeps the user's casing.
+    p: { ...input.params, city: input.params.city.trim().toLowerCase() },
     d: input.domains ? [...input.domains].sort() : null,
   });
   return createHash("sha256").update(norm).digest("hex").slice(0, 32);
 }
+
+/**
+ * Only a SUCCESSFUL run with at least one validated listing is cacheable.
+ * Errors, timeouts, empty results and zero-valid-listing runs are NEVER
+ * cached — the next identical search re-runs the provider calls instead of
+ * replaying a bad result (the defect behind a low-quality card being
+ * served "aus dem Kurzzeit-Cache").
+ */
+function isCacheable(outcome: HousingWebSearchOutcome): boolean {
+  return outcome.status === "ok" && outcome.listings.length > 0;
+}
+
+/** In-flight identical searches coalesce onto ONE provider run. */
+const inFlightSearches = new Map<string, Promise<HousingWebSearchOutcome>>();
 
 // --- candidate handling ------------------------------------------------------
 
@@ -378,15 +410,17 @@ interface CollectResult {
  *   URLs are dropped and counted).
  * - web mode: no display filter — any valid individual-listing URL is
  *   accepted (the allowlist only governs fetchability, via `domain`).
- * - `jsonUrls`: the model's JSON item URLs (normalized). Used ONLY for
- *   the maybe_listing keep-rule on unreviewed web-mode domains.
+ * - `jsonEvidenceUrls`: normalized URLs the model's JSON names WITH
+ *   substantive property evidence (see itemHasSubstance). Used ONLY for the
+ *   keep-rule on unreviewed web-mode domains (maybe_listing /
+ *   direct_listing_id): a bare title is not evidence of an offer.
  */
 function collectCandidates(
   citations: SearchCitation[],
   sources: string[],
   input: HousingWebSearchInput,
   sourceImages: Record<string, string> = {},
-  jsonUrls: Set<string> = new Set(),
+  jsonEvidenceUrls: Set<string> = new Set(),
 ): CollectResult {
   const inTargeted = input.mode === "targeted";
   const selectedDomains =
@@ -477,11 +511,13 @@ function collectCandidates(
     }
     // direct_listing_id / maybe_listing on an UNREVIEWED domain (web mode
     // only — targeted mode already returned above): keep it when — and
-    // only when — the model's JSON names exactly this URL as an individual
-    // offer (the model saw the actual results; the query contract forbids
-    // non-offers). Rescues genuine slugged / bare-id listings, keeps news
-    // articles, reports and directories out of the results.
-    if (jsonUrls.has(normalized)) {
+    // only when — the model's JSON names exactly this URL AND carries
+    // substantive property evidence for it (the model saw the actual
+    // results; the query contract forbids non-offers). Rescues genuine
+    // slugged / bare-id listings, keeps news articles, reports and
+    // directories out of the results — and, crucially, a generic portal
+    // URL the model merely mentioned without property facts.
+    if (jsonEvidenceUrls.has(normalized)) {
       keep(normalized, entry, true);
       return;
     }
@@ -518,6 +554,40 @@ function countDistinctRealUrls(citations: SearchCitation[], sources: string[]): 
   }
   return seen.size;
 }
+
+/**
+ * A model JSON item carries SUBSTANTIVE property evidence when at least one
+ * property field is non-null. Title/city/source alone are NOT evidence that
+ * a page is an individual listing — a model naming a generic portal URL with
+ * only a title was the root cause of "Anzeige auf <host>" cards.
+ */
+export function itemHasSubstance(item: ModelListingItem): boolean {
+  return (
+    item.rent_cold_eur !== null ||
+    item.rent_warm_eur !== null ||
+    item.additional_costs_eur !== null ||
+    item.rooms !== null ||
+    item.living_area_sqm !== null ||
+    item.floor !== null ||
+    item.available_from !== null ||
+    item.furnished !== null ||
+    item.deposit_eur !== null ||
+    item.address !== null ||
+    item.pets_allowed !== null ||
+    item.wg_suitable !== null
+  );
+}
+
+/**
+ * SALE intent in a resolved title: explicit purchase vocabulary. Deliberately
+ * narrow — NEUBAU/EFH are NOT included (new-build and family-house RENTALS
+ * exist and must not be killed by this rule).
+ */
+const SALE_TITLE_RE =
+  /\b(zum\s+kauf|kaufpreis|kaufangebot|kaufobjekt|kaufen|verkauft|verkauf)\b/i;
+/** Rental intent that neutralizes an incidental sale word in the title. */
+const RENTAL_TITLE_RE =
+  /\b(miete|mieten|warmmiete|kaltmiete|nebenkosten|kaution|mietzins|mietvertrag)\b/i;
 
 function titleExtractsRent(title: string): { cold: number | null; warm: number | null } {
   const cold = title.match(/Kalt(?:miete)?\s*(?:von)?\s*[:\-–]?\s*(\d{1,5}(?:[ .,]\d{1,3}){0,3})\s*(?:€|EUR|Euro)/i);
@@ -556,7 +626,7 @@ export interface DiscoveryDependencies {
    */
 }
 
-export async function runHousingWebSearch(
+async function executeHousingWebSearch(
   input: HousingWebSearchInput,
   deps: DiscoveryDependencies = {},
 ): Promise<HousingWebSearchOutcome> {
@@ -595,14 +665,8 @@ export async function runHousingWebSearch(
     return fail("not_configured", "no_search_provider", null);
   }
 
-  // 2) Result cache (same search within TTL → no paid call).
-  const key = cacheKey(input);
-  const cachedEntry = resultCache.get(key);
-  if (cachedEntry && now() - cachedEntry.at <= LIMITS.cacheTtlMs) {
-    return { ...cachedEntry.outcome, cached: true };
-  }
-
-  // 3) Build queries (two complementary German queries for general mode).
+  // 2) Build queries (two complementary German queries for general mode).
+  //    (The result cache is handled by the runHousingWebSearch wrapper.)
   const built = buildHousingQueries(input.params);
   const location = input.params.city.trim() || input.params.postal_code.trim();
   const userLocation = location
@@ -667,11 +731,15 @@ export async function runHousingWebSearch(
     return res;
   };
 
-  /** Normalized URLs the model's JSON names (the keep-evidence for
-   *  maybe_listing candidates on unreviewed web-mode domains). */
-  const normalizedJsonUrls = (): Set<string> => {
+  /** Normalized URLs the model's JSON names WITH substantive property
+   *  evidence (the keep-evidence for maybe_listing / direct_listing_id
+   *  candidates on unreviewed web-mode domains). A JSON item that only has
+   *  a title/city is NOT evidence — that was how a generic portal page got
+   *  presented as a listing. */
+  const jsonEvidenceUrls = (): Set<string> => {
     const s = new Set<string>();
     for (const item of jsonItems) {
+      if (!itemHasSubstance(item)) continue;
       const n = normalizeUrl(item.url);
       if (n) s.add(n);
     }
@@ -713,7 +781,7 @@ export async function runHousingWebSearch(
       const complements = built.queries.slice(1);
       if (complements.length > 0) {
         const probeCandidates = (): number =>
-          collectCandidates(citations, sources, input, sourceImages, normalizedJsonUrls())
+          collectCandidates(citations, sources, input, sourceImages, jsonEvidenceUrls())
             .candidates.length;
         let stalled = false; // one call added nothing new → stop the pool
         const poolGuard = (): boolean => {
@@ -789,7 +857,7 @@ export async function runHousingWebSearch(
   }
 
   // 5) Collect + dedupe candidates.
-  const collected = collectCandidates(citations, sources, input, sourceImages, normalizedJsonUrls());
+  const collected = collectCandidates(citations, sources, input, sourceImages, jsonEvidenceUrls());
   funnel.providerCalls = searchCalls.length;
   funnel.webSearchCalls = webSearchCalls;
   funnel.rawCandidates = collected.rawCandidates;
@@ -963,9 +1031,13 @@ export async function runHousingWebSearch(
         json.additional_costs_eur !== null ||
         json.rooms !== null ||
         json.living_area_sqm !== null ||
-        json.floor !== null ||
-        json.available_from !== null ||
-        json.furnished !== null);
+         json.floor !== null ||
+         json.available_from !== null ||
+         json.furnished !== null ||
+         json.deposit_eur !== null ||
+         json.address !== null ||
+         json.pets_allowed !== null ||
+         json.wg_suitable !== null);
     if (verification === "unverified" && hasJsonFacts) verification = "partially_verified";
 
     if (parsed == null && candidate.title) {
@@ -1015,13 +1087,37 @@ export async function runHousingWebSearch(
       continue;
     }
 
-    // 10) Neutral, explicitly-derived title when no real title was obtained
-    //     (never presented as the provider's title).
-    const titleIsFallback = !candidate.title && json?.title == null;
-    const title =
-      candidate.title ||
-      json?.title ||
-      `Anzeige auf ${hostnameOf(candidate.url)}`;
+    // 10) Title — an individual listing needs a CREDIBLE title from real
+    //     evidence, in priority order: search citation > cross-validated
+    //     model JSON > fetched-page JSON-LD name > the page's own <title>.
+    //     When NONE exists the candidate is REJECTED and counted — a
+    //     generic "Anzeige auf <host>" label must never be presented as a
+    //     listing (root cause of the title-less Berlin cards).
+    const citationTitle = candidate.title || null;
+    const jsonTitle = json?.title ?? null;
+    const pageListingTitle = parsed?.title ?? null;
+    const title = citationTitle ?? jsonTitle ?? pageListingTitle ?? parsed?.docTitle ?? null;
+    if (title === null) {
+      funnel.untitledRejected += 1;
+      continue;
+    }
+    // docTitle-derived (a real, page-sourced title, but the document's own
+    // <title> — not the provider's listing title) is marked as fallback so
+    // the UI can note it; it is NOT invented.
+    const titleIsFallback =
+      citationTitle === null && jsonTitle === null && pageListingTitle === null;
+
+    // 10a) Rental verification — this is a RENTAL search. Clear SALE
+    //     evidence (page text classified as sale, or a title with purchase
+    //     vocabulary and no rental intent) rejects the candidate and is
+    //     counted. No clear sale evidence → keep (absence of evidence is
+    //     not evidence of sale; URL classification + JSON substance already
+    //     established that this is an individual offer).
+    const titleIsSale = SALE_TITLE_RE.test(title) && !RENTAL_TITLE_RE.test(title);
+    if (parsed?.rentalSignal === "sale" || titleIsSale) {
+      funnel.nonRentalRejected += 1;
+      continue;
+    }
 
     // 10b) Photos — only the two legitimate channels, page metadata beats
     //      search metadata. Every URL is server-validated (https-only, no
@@ -1053,6 +1149,12 @@ export async function runHousingWebSearch(
     else if (json?.available_from) field_provenance.available_from = "search";
     if (json?.floor != null) field_provenance.floor = "search";
     if (json?.furnished != null) field_provenance.furnished = "search";
+    if (parsed?.depositEur != null) field_provenance.deposit_eur = "page";
+    else if (json?.deposit_eur != null) field_provenance.deposit_eur = "search";
+    if (parsed?.address != null) field_provenance.address = "page";
+    else if (json?.address != null) field_provenance.address = "search";
+    if (json?.pets_allowed != null) field_provenance.pets_allowed = "search";
+    if (json?.wg_suitable != null) field_provenance.wg_suitable = "search";
     if (pageImages.length > 0) field_provenance.images = "page";
     else if (images.length > 0) field_provenance.images = "search";
     if (parsed?.city) field_provenance.city = "page";
@@ -1076,20 +1178,20 @@ export async function runHousingWebSearch(
       listing_url: candidate.url,
       city,
       postal_code: parsed?.postalCode || null,
-      address: null,
+      address: parsed?.address ?? json?.address ?? null,
       latitude: null,
       longitude: null,
       rent_cold_eur: parsed?.rentColdEur ?? json?.rent_cold_eur ?? titleRentCold ?? null,
       additional_costs_eur: json?.additional_costs_eur ?? null,
       rent_warm_eur: parsed?.rentWarmEur ?? json?.rent_warm_eur ?? titleRentWarm ?? null,
-      deposit_eur: null,
+      deposit_eur: parsed?.depositEur ?? json?.deposit_eur ?? null,
       rooms: parsed?.rooms ?? json?.rooms ?? null,
       living_area_sqm: parsed?.livingAreaSqm ?? json?.living_area_sqm ?? null,
       available_from: parsed?.availableFrom ?? json?.available_from ?? null,
       furnished: json?.furnished ?? false,
       balcony: false,
-      pets_allowed: null,
-      wg_suitable: false, // unknown from search — never claimed
+      pets_allowed: json?.pets_allowed ?? null,
+      wg_suitable: json?.wg_suitable ?? null, // null = not stated — never claimed
       verified: false, // we never claim portal-side verification
       accommodation_type: input.params.accommodation_type === "all" ? "apartment" : input.params.accommodation_type,
       images,
@@ -1121,6 +1223,12 @@ export async function runHousingWebSearch(
   if (funnel.cityMismatches > 0) {
     warnings.push(`city_mismatch_rejected=${funnel.cityMismatches}`);
   }
+  if (funnel.untitledRejected > 0) {
+    warnings.push(`candidates_dropped_untitled=${funnel.untitledRejected}`);
+  }
+  if (funnel.nonRentalRejected > 0) {
+    warnings.push(`candidates_dropped_non_rental=${funnel.nonRentalRejected}`);
+  }
 
   const outcome: HousingWebSearchOutcome = {
     status: "ok",
@@ -1141,6 +1249,53 @@ export async function runHousingWebSearch(
     fetchedAt: new Date(now()).toISOString(),
   };
 
-  resultCache.set(key, { at: now(), outcome });
+  return outcome;
+}
+
+/**
+ * Public entry point — wraps executeHousingWebSearch with the two
+ * correctness layers the task requires:
+ *
+ * 1) RESULT CACHE (same search within TTL → no paid call). Only
+ *    cacheable outcomes (ok + ≥1 validated listing, see isCacheable) are
+ *    ever written; stale or zero-valid-listing entries are bypassed on
+ *    read defensively.
+ *
+ * 2) IN-FLIGHT COALESCING — concurrent identical searches share ONE
+ *    provider run. Riders get the same outcome flagged `deduplicated:
+ *    true`; the route refunds their reserved quota slot, so a duplicate
+ *    request never burns a second paid call or a second quota unit.
+ */
+export async function runHousingWebSearch(
+  input: HousingWebSearchInput,
+  deps: DiscoveryDependencies = {},
+): Promise<HousingWebSearchOutcome> {
+  const now = deps.now ?? Date.now;
+  const key = cacheKey(input);
+
+  const cachedEntry = resultCache.get(key);
+  if (
+    cachedEntry &&
+    now() - cachedEntry.at <= LIMITS.cacheTtlMs &&
+    cachedEntry.outcome.status === "ok" &&
+    cachedEntry.outcome.listings.length > 0
+  ) {
+    return { ...cachedEntry.outcome, cached: true, deduplicated: false };
+  }
+
+  const inFlight = inFlightSearches.get(key);
+  if (inFlight) {
+    const shared = await inFlight;
+    return { ...shared, cached: false, deduplicated: true };
+  }
+
+  const promise = executeHousingWebSearch(input, deps).finally(() => {
+    inFlightSearches.delete(key);
+  });
+  inFlightSearches.set(key, promise);
+  const outcome = await promise;
+  if (isCacheable(outcome)) {
+    resultCache.set(key, { at: now(), outcome });
+  }
   return outcome;
 }

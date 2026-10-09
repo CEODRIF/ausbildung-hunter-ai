@@ -2249,9 +2249,14 @@ const de = {
       area: "Wohnfläche",
       propertyType: "Objekttyp",
       floor: "Etage",
+      address: "Adresse",
       availability: "Verfügbarkeit",
       furnished: "Möbliert",
       furnishedYes: "Möbliert",
+      pets: "Haustiere",
+      wgSuitable: "WG-tauglich",
+      valueYes: "Ja",
+      valueNo: "Nein",
       provenanceSearch:
         "Angaben aus Websuche-Ergebnissen (Bing) – keine vollständige Originalbeschreibung des Portals.",
       provenanceFetched:
@@ -2283,7 +2288,7 @@ const de = {
       emptyCityMismatch:
         "Ursache: {n} Funde wurden verworfen, weil sie nachweislich eine andere Stadt betreffen.",
       emptyFiltered:
-        "Ursache: {n} eindeutige Suchtreffer erhalten – {pages} Such-/Portalseiten (keine Einzelangebote) und {dups} Duplikate wurden aussortiert.",
+        "Ursache: {n} eindeutige Suchtreffer erhalten – {pages} Such-/Portalseiten (keine Einzelangebote), {untitled} titellose Treffer, {nonRental} Verkaufsanzeigen und {dups} Duplikate wurden aussortiert.",
       emptyNoSearchCall:
         "Ursache: Der Suchdienst wurde für diese Anfrage nicht aufgerufen. Bitte versuche es erneut.",
     },
@@ -4476,9 +4481,14 @@ const en: Dict = {
       area: "Living area",
       propertyType: "Property type",
       floor: "Floor",
+      address: "Address",
       availability: "Availability",
       furnished: "Furnished",
       furnishedYes: "Furnished",
+      pets: "Pets",
+      wgSuitable: "WG-suitable",
+      valueYes: "Yes",
+      valueNo: "No",
       provenanceSearch:
         "Details from web-search results (Bing) — not the portal's full original description.",
       provenanceFetched:
@@ -4510,7 +4520,7 @@ const en: Dict = {
       emptyCityMismatch:
         "Cause: {n} results were rejected because they demonstrably concern a different city.",
       emptyFiltered:
-        "Cause: {n} distinct search hits received — {pages} search/portal pages (no individual offers) and {dups} duplicates were sorted out.",
+        "Cause: {n} distinct search hits received — {pages} search/portal pages (no individual offers), {untitled} untitled results, {nonRental} sale ads and {dups} duplicates were sorted out.",
       emptyNoSearchCall: "Cause: the search service was not invoked for this request. Please try again.",
     },
   },
@@ -6704,9 +6714,14 @@ const fr: Dict = {
       area: "Surface habitable",
       propertyType: "Type de bien",
       floor: "Étage",
+      address: "Adresse",
       availability: "Disponibilité",
       furnished: "Meublé",
       furnishedYes: "Meublé",
+      pets: "Animaux",
+      wgSuitable: "Convient en colocation",
+      valueYes: "Oui",
+      valueNo: "Non",
       provenanceSearch:
         "Données issues des résultats de recherche web (Bing) — pas la description complète du portail.",
       provenanceFetched:
@@ -6738,7 +6753,7 @@ const fr: Dict = {
       rateLimitHint: "Veuillez patienter environ {seconds} secondes et réessayez.",
       emptyCityMismatch: "Cause : {n} résultats rejetés car situés dans une autre ville.",
       emptyFiltered:
-        "Cause : {n} résultats de recherche distincts reçus — {pages} pages portail/recherche (pas d'annonces individuelles) et {dups} doublons écartés.",
+        "Cause : {n} résultats de recherche distincts reçus — {pages} pages portail/recherche (pas d'annonces individuelles), {untitled} résultats sans titre, {nonRental} annonces de vente et {dups} doublons écartés.",
       emptyNoSearchCall:
         "Cause : le service de recherche n'a pas été invoqué pour cette requête. Réessayez.",
     },
@@ -8879,9 +8894,14 @@ const ar: Dict = {
       area: "المساحة",
       propertyType: "نوع الوحدة",
       floor: "الطابق",
+      address: "العنوان",
       availability: "التوفر",
       furnished: "مفروش",
       furnishedYes: "مفروش",
+      pets: "الحيوانات الأليفة",
+      wgSuitable: "مناسب للعيش المشترك",
+      valueYes: "نعم",
+      valueNo: "لا",
       provenanceSearch:
         "المعلومات من نتائج بحث الويب (Bing) — وليست الوصف الكامل الأصلي للإعلان.",
       provenanceFetched:
@@ -8912,7 +8932,7 @@ const ar: Dict = {
       rateLimitHint: "يُرجى الانتظار نحو {seconds} ثانية ثم إعادة المحاولة.",
       emptyCityMismatch: "السبب: تم رفض {n} نتيجة لأنها تخص مدينة أخرى بشكل مؤكد.",
         emptyFiltered:
-        "السبب: تم استلام {n} نتيجة بحث مميزة — استُبعدت {pages} صفحة بوابة/بحث (ليست إعلانات فردية) و{dups} من التكرارات.",
+        "السبب: تم استلام {n} نتيجة بحث مميزة — استُبعدت {pages} صفحة بوابة/بحث (ليست إعلانات فردية)، و{untitled} نتيجة بلا عنوان، و{nonRental} إعلان بيع، و{dups} من التكرارات.",
       emptyNoSearchCall: "السبب: لم يتم استدعاء خدمة البحث لهذا الطلب. أعد المحاولة.",
     },
   },

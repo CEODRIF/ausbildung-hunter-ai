@@ -28,6 +28,20 @@ export interface ParsedListingPage {
   /** og:image / twitter:image content of the fetched page, when present.
    *  RAW, may be relative (resolved + validated in the pipeline). */
   ogImage: string | null;
+  /** The document's own <title>/og:title (ALWAYS extracted, even when
+   *  JSON-LD exists). The pipeline may use it as the title fallback that
+   *  is "derived from the actual page" — a defensible, verifiable title. */
+  docTitle: string | null;
+  /** Deposit (Kaution) stated on the page, when explicit. */
+  depositEur: number | null;
+  /** Street address / street+number from JSON-LD, when present. */
+  address: string | null;
+  /** Strong page-text signal that the offer is a RENTAL vs. a SALE.
+    *  "rental": Miete/Warmmiete/Kaltmiete/Nebenkosten/Kaution present
+    *  (without any sale marker).
+    *  "sale": Kaufpreis/Verkauf present WITHOUT any rental marker.
+    *  null: ambiguous (both) or no strong signal either way. */
+  rentalSignal: "rental" | "sale" | null;
 }
 
 const JSONLD_RE = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
@@ -117,6 +131,7 @@ function extractFromJsonLd(nodes: JsonLdNode[]): Partial<ParsedListingPage> {
         result.city = asString(location.addressLocality) ?? asString(location.addressRegion) ?? null;
       }
       if (result.postalCode == null) result.postalCode = asString(location.postalCode);
+      if (result.address == null) result.address = asString(location.streetAddress);
     }
     // images
     const img = node.image;
@@ -207,10 +222,44 @@ function extractFromText(html: string): Partial<ParsedListingPage> {
   const area = text.match(/(?:Wohnfl[äa]che|Gr[öo]ße)\s*(?:von)?\s*[:\-–]?\s*(\d{2,4}(?:[.,]\d{1,2})?)\s*(?:m²|qm|q\.m\.?|Quadratmeter)/i);
   if (area) result.livingAreaSqm = parseGermanNumber(area[1]);
 
+  const deposit = text.match(/Kaution\s*(?:von)?\s*[:\-–]?\s*(\d{1,5}(?:[ .,]\d{1,3}){0,3})\s*(?:€|EUR|Euro)/i);
+  if (deposit) result.depositEur = parseGermanNumber(deposit[1]);
+
   const titleTag = text.match(/<title[^>]*>([\s\S]{6,200}?)<\/title>/i);
   if (titleTag) result.title = titleTag[1].replace(/\s+/g, " ").trim().slice(0, 200) || null;
 
   return result;
+}
+
+/** The document's own <title> (or og:title), ALWAYS extracted — the
+ *  pipeline's last-resort title, defensibly derived from the actual page. */
+function extractDocTitle(html: string): string | null {
+  const titleTag = html.match(/<title[^>]*>([\s\S]{4,300}?)<\/title>/i);
+  const raw = titleTag
+    ? titleTag[1]
+    : metaContent(html, "og:title") ?? metaContent(html, "twitter:title") ?? "";
+  const cleaned = raw.replace(/\s+/g, " ").trim().slice(0, 200);
+  return cleaned === "" ? null : cleaned;
+}
+
+/** Rental-vs-sale markers in the page body (scripts stripped).
+ *  A page with BOTH rental and sale vocabulary is ambiguous → null (no
+ *  strong signal; the pipeline keeps it and the title-level check decides).
+ *  Only a CLEAN sale signal (no rental vocabulary at all) classifies a
+ *  page as a sale. */
+function extractRentalSignal(html: string): "rental" | "sale" | null {
+  const text = html.replace(/<script[\s\S]*?<\/script>/gi, " ");
+  // Bare "miete/mieten" counts as a rental marker on pages too (a sale page
+  // with rental vocabulary is ambiguous → null → no strong signal either
+  // way; the title-level check in the pipeline applies the same logic).
+  const rental =
+    /\b(warmmiete|kaltmiete|miete|mieten|nebenkosten|kaution|mietzins|mietvertrag|mietzahlung)\b/i.test(
+      text,
+    );
+  const sale = /\b(kaufpreis|kaufangebot|kaufobjekt|ver[äa]ußerung|verkauft|ankauf)\b/i.test(text);
+  if (rental && !sale) return "rental";
+  if (sale && !rental) return "sale";
+  return null;
 }
 
 /**
@@ -231,6 +280,10 @@ export function parseListingPage(html: string): ParsedListingPage {
     availableUntil: null,
     images: [],
     ogImage: null,
+    docTitle: null,
+    depositEur: null,
+    address: null,
+    rentalSignal: null,
   };
 
   const ldBlocks = [...html.matchAll(JSONLD_RE)];
@@ -262,5 +315,9 @@ export function parseListingPage(html: string): ParsedListingPage {
     availableUntil: fromLd.availableUntil ?? null,
     images: fromLd.images ?? [],
     ogImage: extractSocialImage(html),
+    docTitle: extractDocTitle(html),
+    depositEur: fromText.depositEur ?? null,
+    address: fromLd.address ?? null,
+    rentalSignal: extractRentalSignal(html),
   };
 }

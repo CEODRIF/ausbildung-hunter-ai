@@ -86,19 +86,23 @@ export interface BuiltQueries {
 function wrapInstruction(rawQuery: string): string {
   return (
     `Führe eine Websuche im aktuellen Internet durch und finde konkrete, aktuell ausstehende ` +
-    `Mietangebote für: ${rawQuery}. ` +
+    `MIETangebote (keine Kaufangebote!) für: ${rawQuery}. ` +
     `Antworte AUSSCHLIESSLICH mit einem gültigen JSON-Array (kein Markdown, keine Code-Zeichen, ` +
     `kein anderer Text). Jedes Element beschreibt genau EINES der gefundenen Einzelangebote mit den ` +
     `Feldern: "url" (die exakte, direkte URL der EINZELNEN Angebotsseite – keine Such-, ` +
     `Übersichts- oder Startseite), "title", "city", "rent_cold_eur" (Kaltmiete EUR/Monat), ` +
     `"rent_warm_eur" (Warmmiete EUR/Monat), "additional_costs_eur" (Nebenkosten EUR/Monat), ` +
     `"rooms" (Zimmer), "living_area_sqm" (Wohnfläche m²), "floor" (Etage, z. B. "1. OG"), ` +
-    `"available_from" ("YYYY-MM-DD" oder null), "furnished" (true/false/null), "source" (Portalname). ` +
+    `"available_from" ("YYYY-MM-DD" oder null), "furnished" (true/false/null), ` +
+    `"deposit_eur" (Kaution in EUR, einmalig), "address" (Straße und Hausnummer, ohne Stadtname), ` +
+    `"pets_allowed" (Haustiere erlaubt: true/false/null), "wg_suitable" (auch als WG geeignet: ` +
+    `true/false/null), "source" (Portalname). ` +
     `Regeln: Liste SO VIELE konkrete Einzelangebote wie in den Suchergebnissen vorhanden (mind. 5, ` +
     `soweit möglich). Nenne für JEDES Angebot seinen direkten Link (URL) und zitiere die Quellen. ` +
     `Jedes unbekannte Feld muss null sein. Nutze Werte NUR aus den tatsächlichen Websuche-Ergebnissen. ` +
     `Erfinde niemals Preise, Adressen, Zimmerzahlen, Bilder oder sonstige Details. ` +
-    `Füge kein Angebot hinzu, das die Websuche nicht tatsächlich zurückgegeben hat.`
+    `Füge kein Angebot hinzu, das die Websuche nicht tatsächlich zurückgegeben hat. ` +
+    `Nenne KEINE Startseite, Suchseite oder Kategorie-Seite als Angebot.`
   );
 }
 

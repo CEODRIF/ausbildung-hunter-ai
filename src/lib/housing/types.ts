@@ -42,7 +42,9 @@ export interface HousingListing {
   furnished: boolean;
   balcony: boolean;
   pets_allowed: boolean | null;
-  wg_suitable: boolean;
+  /** `null` = the source did not state WG suitability (web discovery);
+   *  the UI treats unknown as "not shown as WG-suitable". */
+  wg_suitable: boolean | null;
   /** True when the source marks the listing as verified/professional. */
   verified: boolean;
   accommodation_type: AccommodationType;
@@ -120,9 +122,13 @@ export interface HousingListing {
       | "living_area_sqm"
       | "available_from"
       | "city"
-      | "floor"
-      | "furnished"
-      | "images",
+       | "floor"
+       | "furnished"
+       | "deposit_eur"
+       | "address"
+       | "pets_allowed"
+       | "wg_suitable"
+       | "images",
       "page" | "search"
     >
   >;
