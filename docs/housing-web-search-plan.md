@@ -50,7 +50,7 @@ Branch: `feat/housing-web-search` (based on `6e56ef7` — tip of the merged PR #
 
 **Cost of enabling**: first real call ≈ 1–4 transactions ≈ **$0.014–0.056** + negligible tokens. Bounded per-user request cost is the design target (see §5).
 
-**Provider (updated 2026-10-10 — Azure only)**: housing web search resolves to the **Azure** Foundry Responses `web_search` tool or to an honest "web search not configured" UI state — there is **no Tavily fallback** (enforced in `src/lib/housing/web-search/config.ts`, not via env). The Germany Copilot's separate Tavily integration is unaffected. The endpoint must be the documented Foundry Responses base `https://{resource}.openai.azure.com/openai/v1` (validated at resolution time); anything else fails safe before any paid call. `AI_API_URL/AI_API_KEY/AI_MODEL` are reused when `AI_API_URL` is itself a valid Foundry Responses base.
+**Provider (updated 2026-10-10 — Azure only)**: housing web search resolves to the **Azure** Foundry Responses `web_search` tool or to an honest "web search not configured" UI state — there is **no Tavily fallback** (enforced in `src/lib/housing/web-search/config.ts`, not via env). The Germany Copilot's separate Tavily integration is unaffected. The endpoint must be a documented Foundry Responses base — `https://{resource}.openai.azure.com/openai/v1` **or** `https://{resource}.services.ai.azure.com/openai/v1` (both documented; validated at resolution time); anything else fails safe before any paid call. `AI_API_URL/AI_API_KEY/AI_MODEL` are reused when `AI_API_URL` is itself a valid Foundry Responses base.
 
 ## 4. Compliance (Grounding with Bing **enterprise** TOU, Nov 2025 — applies to Azure Foundry use)
 

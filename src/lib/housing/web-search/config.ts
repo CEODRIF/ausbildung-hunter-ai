@@ -134,9 +134,11 @@ export const FETCH_USER_AGENT =
 export type SearchProviderKind = "azure";
 
 /**
- * Fully validated Azure provider. `base` is guaranteed to be
- * `https://{resource}.openai.azure.com/openai/v1` (no trailing slash), so
- * the client's `${base}/responses` URL matches the documented contract.
+ * Fully validated Azure provider. `base` is guaranteed to be a documented
+ * Foundry Responses base (`https://{resource}.openai.azure.com/openai/v1`
+ * or `https://{resource}.services.ai.azure.com/openai/v1`, no trailing
+ * slash), so the client's `${base}/responses` URL matches the documented
+ * contract.
  */
 export interface ResolvedSearchProvider {
   kind: SearchProviderKind;
@@ -148,9 +150,14 @@ export interface ResolvedSearchProvider {
 }
 
 /**
- * The ONLY base-URL form the documented Responses endpoint accepts
- * (learn.microsoft.com/azure/foundry/openai/how-to/web-search, 2026-06-05):
+ * The two base-URL forms the documented Responses endpoint accepts
+ * (learn.microsoft.com/azure/foundry/foundry-models/concepts/endpoints,
+ * 2026-08-01: "The base URL accepts both
+ * https://{resource}.openai.azure.com/openai/v1/ and
+ * https://{resource}.services.ai.azure.com/openai/v1/ formats"; the
+ * web-search how-to uses the same /openai/v1 surface):
  *   https://{resource}.openai.azure.com/openai/v1
+ *   https://{resource}.services.ai.azure.com/openai/v1
  * Returns the normalized base (no trailing slash) or null. Strict on
  * purpose: an endpoint from a different surface (playground display,
  * native Azure path, OpenAI standard API) would silently produce wrong or
@@ -165,7 +172,10 @@ export function validateAzureEndpoint(base: string): string | null {
   }
   if (u.protocol !== "https:") return null;
   const host = u.hostname.toLowerCase();
-  if (host === "openai.azure.com" || !host.endsWith(".openai.azure.com")) return null;
+  const hostOk =
+    (host.endsWith(".openai.azure.com") && host !== "openai.azure.com") ||
+    (host.endsWith(".services.ai.azure.com") && host !== "services.ai.azure.com");
+  if (!hostOk) return null;
   if (u.pathname.replace(/\/+$/, "") !== "/openai/v1") return null;
   return `${u.protocol}//${host}${u.pathname.replace(/\/+$/, "")}`;
 }

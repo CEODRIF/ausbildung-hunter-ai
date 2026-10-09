@@ -171,6 +171,16 @@ describe("azureWebSearch", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("accepts the Foundry Services host (services.ai.azure.com) and posts to /openai/v1/responses", async () => {
+    const svc = "https://aboukhadija065-5137-resource.services.ai.azure.com/openai/v1";
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ output_text: "ok" }));
+    await expect(
+      azureWebSearch({ base: svc, key: KEY, model: MODEL, input: "q", fetchImpl: fetchImpl as never }),
+    ).resolves.toMatchObject({ text: "ok" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0][0])).toBe(`${svc}/responses`);
+  });
+
   it("rejects malformed (non-Foundry) endpoint bases BEFORE any network call", async () => {
     const fetchImpl = vi.fn();
     for (const bad of [

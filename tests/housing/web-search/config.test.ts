@@ -33,15 +33,24 @@ describe("validateAzureEndpoint (documented Responses base only)", () => {
     expect(validateAzureEndpoint(`${AZURE_BASE}//`)).toBe(AZURE_BASE);
   });
 
+  it("accepts the documented Foundry Services form https://{resource}.services.ai.azure.com/openai/v1", () => {
+    const svc = "https://aboukhadija065-5137-resource.services.ai.azure.com/openai/v1";
+    expect(validateAzureEndpoint(svc)).toBe(svc);
+    expect(validateAzureEndpoint(`${svc}/`)).toBe(svc);
+  });
+
   it.each([
     ["OpenAI standard API base (wrong surface + wrong auth)", "https://api.openai.com/v1"],
     ["non-https scheme", "http://res.openai.azure.com/openai/v1"],
+    ["non-https scheme (services.ai host)", "http://res.services.ai.azure.com/openai/v1"],
     ["missing /openai/v1 path", "https://res.openai.azure.com"],
+    ["missing /openai/v1 path (services.ai host)", "https://res.services.ai.azure.com"],
     ["wrong path /openai", "https://res.openai.azure.com/openai"],
     ["wrong path /openai/v2", "https://res.openai.azure.com/openai/v2"],
     ["apex domain is not a resource", "https://openai.azure.com/openai/v1"],
+    ["apex domain is not a resource (services.ai)", "https://services.ai.azure.com/openai/v1"],
     ["lookalike host (suffix trap)", "https://evil-openai.azure.com/openai/v1"],
-    ["unrelated azure.com host", "https://res.services.ai.azure.com/openai/v1"],
+    ["unrelated azure.com host", "https://res.cognitiveservices.azure.com/openai/v1"],
     ["not a URL", "res.openai.azure.com/openai/v1"],
   ])("rejects %s", (_name, base) => {
     expect(validateAzureEndpoint(base)).toBeNull();
