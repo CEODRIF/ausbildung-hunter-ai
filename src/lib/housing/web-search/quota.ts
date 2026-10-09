@@ -135,14 +135,22 @@ interface PostgrestErrorLike {
   code?: string;
 }
 
+/**
+ * Sanitized diagnostic logging. Records ONLY the operation, the PostgREST
+ * error code/message (it carries the PGSQLSTATE + function signature when
+ * a function is missing — the key evidence for "migration not applied" vs
+ * "permission denied"), and the run_id correlation ID (a random UUID, not
+ * PII). Never logs keys, tokens, cookies, or user IDs.
+ */
 function logQuotaRpcFailure(
   kind: "rpc" | "threw" | "unauthenticated",
   rpcName: string,
   authenticated: boolean,
   error: PostgrestErrorLike | null,
+  runId?: string,
 ): void {
   console.error(
-    `[housing-web-search] quota ${kind} route=${ROUTE} rpc=${rpcName} auth=${authenticated ? "authenticated" : "unauthenticated"} postgrest_code=${error?.code ?? "n/a"} message=${error?.message ?? "unknown"}`,
+    `[housing-web-search] quota ${kind} route=${ROUTE} rpc=${rpcName} auth=${authenticated ? "authenticated" : "unauthenticated"} postgrest_code=${error?.code ?? "n/a"} message=${error?.message ?? "unknown"}${runId ? ` run_id=${runId}` : ""}`,
   );
 }
 
@@ -156,6 +164,7 @@ async function callQuotaRpc(
   name: string,
   args: Record<string, unknown>,
   authenticated: boolean,
+  runId?: string,
 ): Promise<RpcRow | null> {
   try {
     const supabase = await createClient();
@@ -164,7 +173,7 @@ async function callQuotaRpc(
       error: PostgrestErrorLike | null;
     };
     if (error) {
-      logQuotaRpcFailure("rpc", name, authenticated, error);
+      logQuotaRpcFailure("rpc", name, authenticated, error, runId);
       return null;
     }
     const row = Array.isArray(data) ? data[0] : data;
@@ -172,7 +181,7 @@ async function callQuotaRpc(
       logQuotaRpcFailure("rpc", name, authenticated, {
         message: "malformed_rpc_row",
         code: "shape",
-      });
+      }, runId);
       return null;
     }
     const record = row as Record<string, unknown>;
@@ -180,7 +189,7 @@ async function callQuotaRpc(
       logQuotaRpcFailure("rpc", name, authenticated, {
         message: "malformed_rpc_row",
         code: "shape",
-      });
+      }, runId);
       return null;
     }
     return {
@@ -192,7 +201,7 @@ async function callQuotaRpc(
     logQuotaRpcFailure("threw", name, authenticated, {
       message: error instanceof Error ? error.message : "unknown",
       code: "transport",
-    });
+    }, runId);
     return null;
   }
 }
@@ -298,13 +307,14 @@ export async function reserveHousingWebSearch(runId: string): Promise<ReserveOut
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      logQuotaRpcFailure("unauthenticated", RPC, false, null);
+      logQuotaRpcFailure("unauthenticated", RPC, false, null, runId);
       return null;
     }
     const row = await callQuotaRpc(
       RPC,
       { target_user_id: user.id, p_run_id: runId, p_daily_limit: limit },
       true,
+      runId,
     );
     if (!row) return null;
     if (row.status === "already_reserved") {
@@ -338,20 +348,21 @@ export async function releaseHousingWebSearch(runId: string): Promise<boolean> {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      logQuotaRpcFailure("unauthenticated", RPC, false, null);
+      logQuotaRpcFailure("unauthenticated", RPC, false, null, runId);
       return false;
     }
     const row = await callQuotaRpc(
       RPC,
       { target_user_id: user.id, p_run_id: runId, p_daily_limit: getHousingWebSearchDailyLimit() },
       true,
+      runId,
     );
     return row?.status === "released";
   } catch (error) {
     logQuotaRpcFailure("threw", RPC, true, {
       message: error instanceof Error ? error.message : "unknown",
       code: "transport",
-    });
+    }, runId);
     return false;
   }
 }
@@ -373,7 +384,7 @@ export async function completeHousingWebSearch(runId: string): Promise<boolean> 
       p_run_id: runId,
     })) as { error: PostgrestErrorLike | null };
     if (error) {
-      logQuotaRpcFailure("rpc", RPC, true, error);
+      logQuotaRpcFailure("rpc", RPC, true, error, runId);
       return false;
     }
     return true;
@@ -381,7 +392,7 @@ export async function completeHousingWebSearch(runId: string): Promise<boolean> 
     logQuotaRpcFailure("threw", RPC, true, {
       message: error instanceof Error ? error.message : "unknown",
       code: "transport",
-    });
+    }, runId);
     return false;
   }
 }

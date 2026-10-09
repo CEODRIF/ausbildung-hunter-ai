@@ -29,13 +29,13 @@ import {
   runHousingWebSearch,
   type HousingWebSearchInput,
 } from "@/lib/housing/web-search/discovery";
+import { resolveSearchProvider } from "@/lib/housing/web-search/config";
 import { clearRobotsCache } from "@/lib/housing/web-search/robots";
 
 const NOW = 1_760_000_000_000; // 2025-10-09T09:46:40Z — deterministic clock
 const NOW_ISO = new Date(NOW).toISOString();
 
 const AZURE = { kind: "azure" as const, base: "https://res.openai.azure.com/openai/v1", key: "k", model: "gpt-5-mini" };
-const TAVILY = { kind: "tavily" as const };
 
 const baseParams = {
   city: "Köln",
@@ -479,41 +479,83 @@ describe("targeted mode", () => {
   });
 });
 
-describe("Tavily fallback branch", () => {
-  it("post-filters to the allowlist and upgrades confidence from explicit snippet rents only", async () => {
-    const client = {
-      // Signature mirrors TavilyClient.search; call args asserted via
-      // toHaveBeenCalledWith below.
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      search: vi.fn(async (_q: string, _n: number, _opts?: { includeDomains?: string[] }) => [
-        { url: IS24_A, title: "3-Zimmer in Köln", snippet: "Kaltmiete 750 €, Warmmiete 980 €" },
-        { url: "https://evil.example.com/expose/111222333", title: "x", snippet: "" },
-      ]),
-    };
-    vi.mocked(getWebSearchClient).mockReturnValue(client as never);
-    const { impl, calls } = makeFetch({});
+describe("Azure-only provider enforcement (no Tavily fallback)", () => {
+  it("resolves to azure via the real resolver even when TAVILY_API_KEY is present", async () => {
+    vi.stubEnv("HOUSING_WEB_SEARCH", "");
+    vi.stubEnv("AZURE_WEB_SEARCH_ENDPOINT", "https://res.openai.azure.com/openai/v1");
+    vi.stubEnv("AZURE_WEB_SEARCH_KEY", "azure-test-key");
+    vi.stubEnv("AZURE_WEB_SEARCH_MODEL", "gpt-5-mini");
+    vi.stubEnv("TAVILY_API_KEY", "tvly-test-key");
+    const { impl, calls } = makeFetch({ azure: [azurePayload([{ url: IS24_A, title: "A" }])] });
 
-    const outcome = await runHousingWebSearch(targeted(["immobilienscout24.de"]), {
-      now: () => NOW,
-      provider: TAVILY,
-      fetchImpl: impl,
-    });
+    // No `provider` dep injected → resolveSearchProvider() runs for real.
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, fetchImpl: impl });
 
     expect(outcome.status).toBe("ok");
-    expect(outcome.provider).toBe("tavily");
-    expect(client.search).toHaveBeenCalledTimes(1);
-    expect(client.search).toHaveBeenCalledWith(
-      expect.stringContaining("Mietwohnung"),
-      10,
-      expect.objectContaining({ includeDomains: ["immobilienscout24.de"] }),
-    );
-    expect(outcome.listings).toHaveLength(1); // evil.example.com dropped
-    const l = outcome.listings[0];
-    expect(l.verification_status).toBe("partially_verified"); // snippet stated rents explicitly
-    expect(l.rent_cold_eur).toBe(750);
-    expect(l.rent_warm_eur).toBe(980);
-    expect(l.source_type).toBe("web_search");
-    expect(calls).toEqual([]); // search_only portal never fetched
+    expect(outcome.provider).toBe("azure");
+    expect(calls.filter((c) => c.url.endsWith("/responses")).length).toBeGreaterThan(0);
+    // The paid call went to the Foundry Responses endpoint with the
+    // documented body (deployment name + hosted web_search tool; general
+    // mode also carries user_location for the German/city bias).
+    const body = calls.find((c) => c.url.endsWith("/responses"))!.body!;
+    expect(body.model).toBe("gpt-5-mini");
+    expect(body.tools).toHaveLength(1);
+    expect((body.tools as Array<Record<string, unknown>>)[0]).toMatchObject({
+      type: "web_search",
+      user_location: { country: "DE", city: "Köln" },
+    });
+    // Housing must NEVER touch the shared Tavily client.
+    expect(getWebSearchClient).not.toHaveBeenCalled();
+  });
+
+  it("returns not_configured (no network call) when Azure is missing, even with TAVILY_API_KEY present", async () => {
+    vi.stubEnv("HOUSING_WEB_SEARCH", "azure");
+    vi.stubEnv("AZURE_WEB_SEARCH_ENDPOINT", "");
+    vi.stubEnv("AZURE_WEB_SEARCH_KEY", "");
+    vi.stubEnv("AZURE_WEB_SEARCH_MODEL", "");
+    vi.stubEnv("AI_API_URL", "");
+    vi.stubEnv("AI_API_KEY", "");
+    vi.stubEnv("AI_MODEL", "");
+    vi.stubEnv("TAVILY_API_KEY", "tvly-test-key");
+    const { impl, calls } = makeFetch({});
+
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, fetchImpl: impl });
+
+    expect(outcome.status).toBe("not_configured");
+    expect(outcome.provider).toBeNull();
+    expect(calls).toEqual([]); // no paid call of any kind
+    expect(getWebSearchClient).not.toHaveBeenCalled();
+  });
+
+  it("treats a non-Foundry endpoint (OpenAI standard API) as not_configured, never as Azure", async () => {
+    vi.stubEnv("HOUSING_WEB_SEARCH", "azure");
+    vi.stubEnv("AZURE_WEB_SEARCH_ENDPOINT", "https://api.openai.com/v1");
+    vi.stubEnv("AZURE_WEB_SEARCH_KEY", "azure-test-key");
+    vi.stubEnv("AZURE_WEB_SEARCH_MODEL", "gpt-5-mini");
+    vi.stubEnv("TAVILY_API_KEY", "tvly-test-key");
+    const { impl, calls } = makeFetch({});
+
+    const outcome = await runHousingWebSearch(input(), { now: () => NOW, fetchImpl: impl });
+
+    expect(outcome.status).toBe("not_configured");
+    expect(calls).toEqual([]); // malformed config fails safe BEFORE any paid call
+  });
+
+  it("ignores HOUSING_WEB_SEARCH=tavily (azure when ready, null otherwise — never tavily)", async () => {
+    vi.stubEnv("HOUSING_WEB_SEARCH", "tavily");
+    vi.stubEnv("TAVILY_API_KEY", "tvly-test-key");
+    vi.stubEnv("AZURE_WEB_SEARCH_ENDPOINT", "");
+    vi.stubEnv("AZURE_WEB_SEARCH_KEY", "");
+    vi.stubEnv("AZURE_WEB_SEARCH_MODEL", "");
+    vi.stubEnv("AI_API_URL", "");
+    vi.stubEnv("AI_API_KEY", "");
+    vi.stubEnv("AI_MODEL", "");
+    expect(resolveSearchProvider()).toBeNull();
+
+    vi.stubEnv("AZURE_WEB_SEARCH_ENDPOINT", "https://res.openai.azure.com/openai/v1");
+    vi.stubEnv("AZURE_WEB_SEARCH_KEY", "azure-test-key");
+    vi.stubEnv("AZURE_WEB_SEARCH_MODEL", "gpt-5-mini");
+    expect(resolveSearchProvider()).toMatchObject({ kind: "azure" });
   });
 });
 

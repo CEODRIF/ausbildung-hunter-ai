@@ -8,9 +8,9 @@ import type { HousingSearchParams } from "@/lib/housing/types";
  * generated only as a retry when the first call yields fewer than 3 usable
  * candidates — so the common case is exactly one (paid) search call.
  *
- * Targeted mode uses ONE query: the domain restriction is applied by the
- * search API itself (`allowed_domains` / Tavily `include_domains`), never by
- * stuffing `site:` into the query text.
+  * Targeted mode uses ONE query: the domain restriction is applied by the
+  * search API itself (Azure `web_search` tool `allowed_domains` filter),
+  * never by stuffing `site:` into the query text.
  */
 
 type TypeKey = HousingSearchParams["accommodation_type"];

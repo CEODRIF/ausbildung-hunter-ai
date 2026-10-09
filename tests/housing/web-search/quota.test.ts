@@ -180,6 +180,47 @@ describe("reserveHousingWebSearch", () => {
     await expect(reserveHousingWebSearch("run-1")).resolves.toBeNull();
   });
 
+  it.each([
+    [
+      "a missing function (42883 — migration not applied)",
+      { message: "function public.reserve_housing_web_search(uuid, uuid, integer) does not exist", code: "42883" },
+    ],
+    [
+      "a permission denial (42501 — EXECUTE not granted)",
+      { message: "permission denied for function reserve_housing_web_search", code: "42501" },
+    ],
+  ])("fails closed on %s", async (_name, error) => {
+    setFakeClient({ rpc: async () => ({ data: null, error }) });
+    await expect(reserveHousingWebSearch("run-1")).resolves.toBeNull();
+  });
+
+  it("logs sanitized diagnostics with the run_id correlation on RPC failure", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      setFakeClient({
+        rpc: async () => ({
+          data: null,
+          error: {
+            message: "function public.reserve_housing_web_search(uuid, uuid, integer) does not exist",
+            code: "42883",
+          },
+        }),
+      });
+      const RUN = "9f86d081-884c-40b0-9e2f-0e1c5b6a1234";
+      await expect(reserveHousingWebSearch(RUN)).resolves.toBeNull();
+      const line = spy
+        .mock.calls.map((c) => String(c[0]))
+        .find((m) => m.includes("rpc=reserve_housing_web_search"));
+      expect(line).toBeDefined();
+      expect(line).toContain("postgrest_code=42883");
+      expect(line).toContain(`run_id=${RUN}`);
+      // No user ID (PII) in the diagnostic line.
+      expect(line).not.toContain("user-1");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("fails closed: unauthenticated → null", async () => {
     setFakeClient({ user: null });
     await expect(reserveHousingWebSearch("run-1")).resolves.toBeNull();

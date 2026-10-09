@@ -1,6 +1,6 @@
 import "server-only";
 
-import { LIMITS } from "./config";
+import { LIMITS, validateAzureEndpoint } from "./config";
 
 /**
  * Azure AI Foundry — hosted `web_search` tool via the Responses API.
@@ -82,10 +82,16 @@ export interface ResponsesRequest {
 
 export async function azureWebSearch(req: ResponsesRequest): Promise<WebDiscoveryResult> {
   const key = req.key;
-  const base = req.base.replace(/\/+$/, "");
   const model = req.model;
-  if (base === "" || key === "" || model === "") {
+  if (req.base === "" || key === "" || model === "") {
     throw new WebSearchApiError("not_configured", "Azure web search is not configured.");
+  }
+  // Defensive re-validation (the resolver already enforces this): the final
+  // URL must be the documented https://{resource}.openai.azure.com/openai/v1
+  // /responses endpoint. A malformed base fails safe BEFORE any paid call.
+  const base = validateAzureEndpoint(req.base);
+  if (!base) {
+    throw new WebSearchApiError("not_configured", "Azure web search endpoint is not configured correctly.");
   }
   const url = `${base}/responses`;
   const body: Record<string, unknown> = {

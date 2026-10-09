@@ -3,7 +3,6 @@ import "server-only";
 import { createHash } from "node:crypto";
 
 import type { HousingListing, HousingSearchParams } from "@/lib/housing/types";
-import { getWebSearchClient } from "@/lib/web-search";
 
 import {
   azureWebSearch,
@@ -82,7 +81,8 @@ export type WebSearchStatus =
 export interface HousingWebSearchOutcome {
   status: WebSearchStatus;
   message: string | null;
-  provider: "azure" | "tavily" | null;
+  /** Azure-only feature — never anything else (see ./config). */
+  provider: "azure" | null;
   mode: WebSearchMode;
   listings: HousingListing[];
   /** Citations exactly as returned by the search tool (display required). */
@@ -232,8 +232,8 @@ export interface DiscoveryDependencies {
   /** Inject a provider (tests). Omitted → resolveSearchProvider(). */
   provider?: ResolvedSearchProvider | null;
   /**
-   * Tests inject `fetchImpl` (drives the Azure call, robots and page fetches)
-   * and mock `getWebSearchClient` (Tavily). No network is needed.
+   * Tests inject `fetchImpl` (drives the Azure call, robots and page
+   * fetches). No network is needed.
    */
 }
 
@@ -248,7 +248,7 @@ export async function runHousingWebSearch(
   const fail = (
     status: WebSearchStatus,
     message: string | null,
-    provider: "azure" | "tavily" | null,
+    provider: "azure" | null,
     extra: Partial<Pick<HousingWebSearchOutcome, "citations" | "queries" | "listings">> = {},
   ): HousingWebSearchOutcome => ({
     status,
@@ -296,42 +296,26 @@ export async function runHousingWebSearch(
   let sources: string[] = [];
   let text = "";
 
-  const snippetByUrl = new Map<string, string>();
-
+  // Azure-only search call: the resolver (./config) guarantees `provider`
+  // is a fully validated `azure` provider or null (handled above). There is
+  // deliberately NO fallback provider in the housing pipeline.
   const runOneCall = async (
     query: string,
     allowed: string[] | undefined,
   ): Promise<WebDiscoveryResult> => {
     searchCalls.push(query);
-    if (provider.kind === "azure") {
-      const res = await azureWebSearch({
-        base: provider.base!,
-        key: provider.key!,
-        model: provider.model!,
-        input: query,
-        allowedDomains: allowed,
-        userLocation,
-        fetchImpl: deps.fetchImpl,
-      });
-      bingRequests =
-        bingRequests === null ? res.numRequests : bingRequests + (res.numRequests ?? 0);
-      return res;
-    }
-    // Tavily: one request, domain filter is an optimization — we post-filter.
-    const client = getWebSearchClient({ maxRequests: 1 });
-    if (!client) throw new WebSearchApiError("not_configured", "tavily key missing");
-    const results = await client.search(query, 10, { includeDomains: allowed });
-    for (const r of results) {
-      const norm = normalizeUrl(r.url);
-      if (norm) snippetByUrl.set(norm, r.snippet ?? "");
-    }
-    return {
-      text: "",
-      citations: results.map((r) => ({ url: r.url, title: r.title })),
-      sources: [],
-      queries: [query],
-      numRequests: null,
-    };
+    const res = await azureWebSearch({
+      base: provider.base,
+      key: provider.key,
+      model: provider.model,
+      input: query,
+      allowedDomains: allowed,
+      userLocation,
+      fetchImpl: deps.fetchImpl,
+    });
+    bingRequests =
+      bingRequests === null ? res.numRequests : bingRequests + (res.numRequests ?? 0);
+    return res;
   };
 
   try {
@@ -444,7 +428,7 @@ export async function runHousingWebSearch(
     } else if (input.mode === "targeted" && candidate.domain.policy === "search_only") {
       // Restricted site: link only — never fetched (ToS). A snippet that
       // explicitly states a rent upgrades confidence — nothing else does.
-      const snippet = candidate.snippet || snippetByUrl.get(candidate.url) || "";
+      const snippet = candidate.snippet;
       const rents = snippetExtractsRent(snippet);
       if (rents.cold != null || rents.warm != null) verification = "partially_verified";
       snippetRentCold = rents.cold;

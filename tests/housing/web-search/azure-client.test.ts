@@ -171,6 +171,23 @@ describe("azureWebSearch", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed (non-Foundry) endpoint bases BEFORE any network call", async () => {
+    const fetchImpl = vi.fn();
+    for (const bad of [
+      "https://api.openai.com/v1", // OpenAI standard API — wrong surface, wrong auth header
+      "http://res.openai.azure.com/openai/v1", // not https
+      "https://res.openai.azure.com", // missing /openai/v1 path
+      "https://res.openai.azure.com/openai", // wrong path
+      "https://res.openai.azure.com/openai/v2", // wrong path
+      "not a url",
+    ]) {
+      await expect(
+        azureWebSearch({ base: bad, key: KEY, model: MODEL, input: "q", fetchImpl: fetchImpl as never }),
+      ).rejects.toMatchObject({ failure: "not_configured" });
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it.each([
     [401, "tool_blocked"],
     [403, "tool_blocked"],

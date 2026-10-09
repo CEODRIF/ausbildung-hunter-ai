@@ -56,7 +56,7 @@ interface QuotaInfo {
 interface WebSearchOutcome {
   status: Status;
   message: string | null;
-  provider: "azure" | "tavily" | null;
+  provider: "azure" | null;
   mode: Mode;
   listings: HousingListing[];
   citations: Array<{ url: string; title: string }>;

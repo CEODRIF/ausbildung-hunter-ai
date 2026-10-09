@@ -44,13 +44,13 @@ Branch: `feat/housing-web-search` (based on `6e56ef7` — tip of the merged PR #
 ## 3. Can the existing setup serve this without new resources?
 
 **Yes, conditionally** — the Responses API is served by the existing Foundry resource/deployment. Three prerequisites, none creatable from here:
-1. `AI_API_URL` must be the Foundry OpenAI-compatible base (e.g. `https://{resource}.openai.azure.com/openai/v1`) — true per project setup; detection is runtime (URL contains `azure.com`).
+1. `AI_API_URL` must be the Foundry OpenAI-compatible base (e.g. `https://{resource}.openai.azure.com/openai/v1`) — true per project setup; detection is runtime (strict validation against the documented form, `validateAzureEndpoint`).
 2. The `web_search` tool must not be blocked at subscription level (admin check, or first-call error tells us: controlled error → honest UI state).
 3. The existing key must be a resource key with model access (it already serves chat).
 
 **Cost of enabling**: first real call ≈ 1–4 transactions ≈ **$0.014–0.056** + negligible tokens. Bounded per-user request cost is the design target (see §5).
 
-**Fallback**: the existing **Tavily** client (already a paid, configured feature) is wired behind the same interface as provider `tavily`. Provider resolution `auto` = Azure Foundry when the endpoint is Azure-shaped, else Tavily when its key exists, else an honest "web search not configured" UI state. Nothing in this PR changes chat behavior.
+**Provider (updated 2026-10-10 — Azure only)**: housing web search resolves to the **Azure** Foundry Responses `web_search` tool or to an honest "web search not configured" UI state — there is **no Tavily fallback** (enforced in `src/lib/housing/web-search/config.ts`, not via env). The Germany Copilot's separate Tavily integration is unaffected. The endpoint must be the documented Foundry Responses base `https://{resource}.openai.azure.com/openai/v1` (validated at resolution time); anything else fails safe before any paid call. `AI_API_URL/AI_API_KEY/AI_MODEL` are reused when `AI_API_URL` is itself a valid Foundry Responses base.
 
 ## 4. Compliance (Grounding with Bing **enterprise** TOU, Nov 2025 — applies to Azure Foundry use)
 

@@ -1,23 +1,28 @@
 import "server-only";
 
-import { resolveTavilyKey } from "@/lib/web-search";
-
 /**
  * Housing / "Wohnen" — web-discovery configuration.
  *
- * Two bounded, server-side search backends behind one interface:
- *   1. azure  — Azure AI Foundry Responses API with the hosted `web_search`
- *               tool (Grounding with Bing Search). Uses the EXISTING Foundry
- *               resource/deployment (gpt-5-mini) — no new Azure resource.
- *               Docs: https://learn.microsoft.com/azure/foundry/openai/how-to/web-search
- *   2. tavily — the app's existing Tavily client (already configured + billed
- *               for the Germany copilot). Fallback when the Azure endpoint is
- *               not configured.
+ * AZURE ONLY (enforced in this resolver, not in an environment variable):
+ *   Azure AI Foundry Responses API with the hosted `web_search` tool
+ *   (Grounding with Bing Search). Reuses the EXISTING Foundry
+ *   resource/deployment (gpt-5-mini) — no new Azure resource.
+ *   Docs: https://learn.microsoft.com/azure/foundry/openai/how-to/web-search
  *
- * Provider resolution is `HOUSING_WEB_SEARCH=auto|azure|tavily` (default
- * auto = Azure when the app's AI endpoint is a Foundry endpoint, else Tavily).
- * Nothing is paid for unless a search is actually run, and every run is
- * bounded (see LIMITS) — see docs/housing-web-search-plan.md.
+ * The housing pipeline has NO Tavily fallback: the resolver returns either a
+ * fully validated `azure` provider or null ("not_configured" state in the
+ * UI, never a paid call). The Germany Copilot's independent Tavily
+ * integration (src/lib/web-search, src/lib/germany-research.ts) is a
+ * separate feature and is NOT affected by this change.
+ *
+ * Endpoint contract (official docs, verified 2026-10-10):
+ *   POST https://{resource}.openai.azure.com/openai/v1/responses
+ *   header `api-key`, `model` in the body (the deployment name).
+ * Anything that does not produce exactly that URL shape fails safe at
+ * resolution time (not_configured) BEFORE any provider call.
+ *
+ * Provider selection: `HOUSING_WEB_SEARCH=azure` is the supported explicit
+ * setting; any other value is ignored with a one-time warning.
  *
  * DOMAIN POLICY (per domain, reviewed 2026-10-09):
  *   search_only — the site's ToS prohibit automated retrieval. We use the
@@ -126,54 +131,85 @@ export const LIMITS = {
 export const FETCH_USER_AGENT =
   "AusbildungsWegBot/1.0 (+https://ausbildungsweg.net; housing listing verification)";
 
-export type SearchProviderKind = "azure" | "tavily";
+export type SearchProviderKind = "azure";
 
+/**
+ * Fully validated Azure provider. `base` is guaranteed to be
+ * `https://{resource}.openai.azure.com/openai/v1` (no trailing slash), so
+ * the client's `${base}/responses` URL matches the documented contract.
+ */
 export interface ResolvedSearchProvider {
   kind: SearchProviderKind;
-  /** azure only: OpenAI-compatible base (…/v1). */
-  base?: string;
-  /** azure only: resource API key (server-side only). */
-  key?: string;
-  /** azure only: model deployment (gpt-5-mini). */
-  model?: string;
+  base: string;
+  /** resource API key (server-side only — never logged or returned). */
+  key: string;
+  /** model deployment (e.g. "gpt-5-mini"; the body's `model` field). */
+  model: string;
 }
 
-const AZURE_ENDPOINT_RE = /(openai\.azure\.com|services\.ai\.azure\.com|azure\.com)/i;
+/**
+ * The ONLY base-URL form the documented Responses endpoint accepts
+ * (learn.microsoft.com/azure/foundry/openai/how-to/web-search, 2026-06-05):
+ *   https://{resource}.openai.azure.com/openai/v1
+ * Returns the normalized base (no trailing slash) or null. Strict on
+ * purpose: an endpoint from a different surface (playground display,
+ * native Azure path, OpenAI standard API) would silently produce wrong or
+ * rejected paid requests — fail safe at resolution time instead.
+ */
+export function validateAzureEndpoint(base: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(base);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:") return null;
+  const host = u.hostname.toLowerCase();
+  if (host === "openai.azure.com" || !host.endsWith(".openai.azure.com")) return null;
+  if (u.pathname.replace(/\/+$/, "") !== "/openai/v1") return null;
+  return `${u.protocol}//${host}${u.pathname.replace(/\/+$/, "")}`;
+}
+
+/** One-time warning when the operator set a non-azure provider mode. */
+let warnedNonAzureMode = false;
 
 /**
  * Which search backend serves housing web discovery right now.
  * Returns null = nothing configured → the UI shows an honest
  * "web search not configured" state instead of failing.
+ *
+ * Azure-only by construction: there is no code path that returns a
+ * non-azure provider, regardless of any other environment variable
+ * (e.g. TAVILY_API_KEY is read by the Germany Copilot, never here).
  */
 export function resolveSearchProvider(): ResolvedSearchProvider | null {
-  const forced = (process.env.HOUSING_WEB_SEARCH ?? "auto").trim().toLowerCase();
+  const forced = (process.env.HOUSING_WEB_SEARCH ?? "azure").trim().toLowerCase();
+  if (forced !== "azure" && forced !== "" && !warnedNonAzureMode) {
+    warnedNonAzureMode = true;
+    console.warn(
+      `[housing-web-search] HOUSING_WEB_SEARCH='${forced}' ignored — housing web search is Azure-only (no fallback)`,
+    );
+  }
 
-  const aiUrl = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
-  const aiKey = (process.env.AI_API_KEY ?? "").trim();
-  const aiModel = (process.env.AI_MODEL ?? "").trim();
-  const isAzure = aiUrl !== "" && AZURE_ENDPOINT_RE.test(aiUrl);
+  // Explicit overrides win; otherwise reuse the app's AI endpoint when it
+  // IS a documented Foundry Responses base (the strict validator decides).
+  const explicitBase = validateAzureEndpoint((process.env.AZURE_WEB_SEARCH_ENDPOINT ?? "").trim());
+  const appBase = validateAzureEndpoint((process.env.AI_API_URL ?? "").trim());
 
-  // Explicit overrides win; otherwise reuse the existing app AI endpoint when
-  // it is a Foundry endpoint (the Responses API is served on the same base).
-  const azureBase =
-    (process.env.AZURE_WEB_SEARCH_ENDPOINT ?? "").trim().replace(/\/+$/, "") ||
-    (isAzure ? aiUrl : "");
-  const azureKey =
-    (process.env.AZURE_WEB_SEARCH_KEY ?? "").trim() || (isAzure ? aiKey : "");
-  const azureModel =
-    (process.env.AZURE_WEB_SEARCH_MODEL ?? "").trim() ||
-    (isAzure ? aiModel : "");
+  let base: string | null = explicitBase;
+  let key = (process.env.AZURE_WEB_SEARCH_KEY ?? "").trim();
+  let model = (process.env.AZURE_WEB_SEARCH_MODEL ?? "").trim();
+  if (!base) {
+    base = appBase;
+    key = key || (process.env.AI_API_KEY ?? "").trim();
+    model = model || (process.env.AI_MODEL ?? "").trim();
+  }
 
-  const azureReady = azureBase !== "" && azureKey !== "" && azureModel !== "";
-  const tavilyReady = resolveTavilyKey() !== null;
-
-  if (forced === "azure") return azureReady ? { kind: "azure", base: azureBase, key: azureKey, model: azureModel } : null;
-  if (forced === "tavily") return tavilyReady ? { kind: "tavily" } : null;
-  // auto: prefer Azure (the configured Foundry deployment), fall back to the
-  // already-in-use Tavily key.
-  if (azureReady) return { kind: "azure", base: azureBase, key: azureKey, model: azureModel };
-  if (tavilyReady) return { kind: "tavily" };
-  return null;
+  // All three must resolve for Azure to be ready (endpoint + key + model
+  // deployment with the web_search tool). Malformed/missing → null, and
+  // the pipeline answers "not_configured" before any paid call.
+  if (!base || key === "" || model === "") return null;
+  return { kind: "azure", base, key, model };
 }
 
 /** Look up the allowlist entry for a host (suffix match, www-stripped). */
