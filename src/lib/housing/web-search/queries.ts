@@ -35,8 +35,9 @@ import type { HousingSearchParams } from "@/lib/housing/types";
 
 type TypeKey = HousingSearchParams["accommodation_type"];
 
-/** Primary German term per accommodation type. */
-const TYPE_DE: Record<TypeKey, string> = {
+/** Primary German term per accommodation type. Exported so the multi-round
+ *  query planner (./query-planner) reuses the exact same type wording. */
+export const TYPE_DE: Record<TypeKey, string> = {
   all: "Mietwohnung",
   apartment: "Mietwohnung",
   wg_room: "WG-Zimmer",
@@ -44,8 +45,9 @@ const TYPE_DE: Record<TypeKey, string> = {
   studio: "Studio-Wohnung",
 };
 
-/** Complementary German phrasing (different index ranking). */
-const TYPE_DE_ALT: Record<TypeKey, string> = {
+/** Complementary German phrasing (different index ranking). Exported for
+ *  the same reason as TYPE_DE. */
+export const TYPE_DE_ALT: Record<TypeKey, string> = {
   all: "Wohnung mieten",
   apartment: "Wohnung mieten",
   wg_room: "Zimmer in WG mieten",
@@ -56,9 +58,10 @@ const TYPE_DE_ALT: Record<TypeKey, string> = {
 /**
  * Query families for accommodation_type "all" — one per market segment.
  * Order = call order (primary first; the rest are complementary and
- * subject to the cost-aware early-stop).
+ * subject to the cost-aware early-stop). Exported so the multi-round
+ * query planner (./query-planner) reuses the exact same families.
  */
-const ALL_TYPE_FAMILIES: readonly string[] = [
+export const ALL_TYPE_FAMILIES: readonly string[] = [
   "Mietwohnung", // apartments (incl. normal private rentals)
   "WG-Zimmer mieten", // shared rooms / WG
   "Studentenwohnung mieten", // student housing (also surfaces WGH offers)
@@ -73,6 +76,55 @@ export interface BuiltQueries {
   targetedQuery: string;
 }
 
+export type QueryParams = Pick<
+  HousingSearchParams,
+  | "city"
+  | "postal_code"
+  | "radius_km"
+  | "max_warm_rent"
+  | "accommodation_type"
+  | "rooms"
+  | "min_area_sqm"
+  | "available_before"
+>;
+
+/**
+ * Build ONE raw German query for a type term + the user's constraints.
+ * Exported so the multi-round query planner (./query-planner) and the
+ * classic pipeline share the exact same constraint wording.
+ */
+export function buildDeRawQuery(params: QueryParams, typeTerm: string): string {
+  const city = params.city.trim();
+  const plz = params.postal_code.trim();
+  const location = city !== "" ? city : plz;
+
+  const roomsDe = params.rooms === "all" ? null : `${params.rooms} Zimmer`;
+
+  const partsDe: string[] = [typeTerm];
+  if (location !== "") partsDe.push(location);
+  if (params.max_warm_rent != null) {
+    partsDe.push(`bis ${params.max_warm_rent.toLocaleString("de-DE")} Euro Warmmiete`);
+  }
+  if (roomsDe) partsDe.push(roomsDe);
+  if (params.min_area_sqm != null) partsDe.push(`mind. ${params.min_area_sqm} m²`);
+  if (params.available_before) {
+    // Round-trip validation: some engines normalize overflow dates
+    // (e.g. "2026-02-30" → March), which must not leak into the query.
+    const d = new Date(params.available_before);
+    const [y, m, day] = params.available_before.split("-").map(Number);
+    if (
+      !Number.isNaN(d.getTime()) &&
+      d.getUTCFullYear() === y &&
+      d.getUTCMonth() + 1 === m &&
+      d.getUTCDate() === day
+    ) {
+      partsDe.push(`frei ab ${d.toISOString().slice(0, 10)}`);
+    }
+  }
+  if (params.radius_km > 0 && city !== "") partsDe.push(`in der Umgebung von ${city}`);
+  return partsDe.filter(Boolean).join(", ").slice(0, 400);
+}
+
 /**
  * Explicit web-search + structured-output instruction.
  *
@@ -83,7 +135,7 @@ export interface BuiltQueries {
  * answer machine-readable, with explicit anti-fabrication rules. The raw
  * constraint query is preserved verbatim inside (tests assert this).
  */
-function wrapInstruction(rawQuery: string): string {
+export function wrapInstruction(rawQuery: string): string {
   return (
     `Führe eine Websuche im aktuellen Internet durch und finde konkrete, aktuell ausstehende ` +
     `MIETangebote (keine Kaufangebote!) für: ${rawQuery}. ` +
@@ -110,50 +162,8 @@ function wrapInstruction(rawQuery: string): string {
  * Build the search queries for one housing search.
  * Location = the user's city (wins) or postal code.
  */
-export function buildHousingQueries(
-  params: Pick<
-    HousingSearchParams,
-    | "city"
-    | "postal_code"
-    | "radius_km"
-    | "max_warm_rent"
-    | "accommodation_type"
-    | "rooms"
-    | "min_area_sqm"
-    | "available_before"
-  >,
-): BuiltQueries {
-  const city = params.city.trim();
-  const plz = params.postal_code.trim();
-  const location = city !== "" ? city : plz;
-
-  const roomsDe = params.rooms === "all" ? null : `${params.rooms} Zimmer`;
-
-  const buildDe = (typeTerm: string): string => {
-    const partsDe: string[] = [typeTerm];
-    if (location !== "") partsDe.push(location);
-    if (params.max_warm_rent != null) {
-      partsDe.push(`bis ${params.max_warm_rent.toLocaleString("de-DE")} Euro Warmmiete`);
-    }
-    if (roomsDe) partsDe.push(roomsDe);
-    if (params.min_area_sqm != null) partsDe.push(`mind. ${params.min_area_sqm} m²`);
-    if (params.available_before) {
-      // Round-trip validation: some engines normalize overflow dates
-      // (e.g. "2026-02-30" → March), which must not leak into the query.
-      const d = new Date(params.available_before);
-      const [y, m, day] = params.available_before.split("-").map(Number);
-      if (
-        !Number.isNaN(d.getTime()) &&
-        d.getUTCFullYear() === y &&
-        d.getUTCMonth() + 1 === m &&
-        d.getUTCDate() === day
-      ) {
-        partsDe.push(`frei ab ${d.toISOString().slice(0, 10)}`);
-      }
-    }
-    if (params.radius_km > 0 && city !== "") partsDe.push(`in der Umgebung von ${city}`);
-    return partsDe.filter(Boolean).join(", ").slice(0, 400);
-  };
+export function buildHousingQueries(params: QueryParams): BuiltQueries {
+  const buildDe = (typeTerm: string): string => buildDeRawQuery(params, typeTerm);
 
   const type = params.accommodation_type;
   // "all" → one query per market segment (apartments, WG, student, private

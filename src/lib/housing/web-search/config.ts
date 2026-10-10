@@ -97,6 +97,70 @@ export const ALLOWED_DOMAINS: readonly AllowedDomain[] = [
   },
 ];
 
+/**
+ * Multi-provider search budget (2026-10-10 high-coverage engine task).
+ *
+ * GOOGLE (Gemini API + official `google_search` grounding tool — verified
+ * official docs 2026-10-10, page last updated 2026-10-09):
+ *   The Custom Search JSON API is CLOSED TO NEW CUSTOMERS (official note on
+ *   developers.google.com), so the self-serve official Google web-search
+ *   surface is Gemini grounding. Billing: per executed search query on
+ *   Gemini 3+ models — 5,000 queries/month free, then $14 per 1,000
+ *   (1.4 ¢/query). Each call may execute 1–3 queries (the model decides).
+ *   Worst case = all three rounds run (thin market): 9 calls × 3 queries =
+ *   27 queries ≈ 38 ¢ — inside the default 50 ¢ cost cap, which is
+ *   enforced on the measured count BEFORE the next paid call is issued.
+ *
+ * AZURE: unchanged bounded budget (4 Responses calls / 4 Bing transactions)
+ * — it now runs as the COMPLEMENTARY source, not the only one.
+ */
+export const PROVIDER_LIMITS = {
+  /** Max Gemini (google_search) calls per whole-web run — hard backstop
+   *  equal to the sum of the round caps (3+3+3); the rounds themselves
+   *  gate on candidate thresholds, this is the absolute ceiling. */
+  maxGoogleCallsPerRun: 9,
+  /** Google calls in round 1 (breadth). */
+  googleRound1Calls: 3,
+  /** Google calls in round 2 (deep-dive) — issued only while unique
+   *  candidates stay below the round-2 threshold. */
+  googleRound2Calls: 3,
+  /** Google calls in round 3 (gap-filling via site: queries). */
+  googleRound3Calls: 3,
+  /** Azure calls in round 1 (complementary to Google, same bounded pool
+   *  logic as the single-provider era). */
+  azureRound1Calls: 2,
+  /** Run a second round while unique candidates < this (breadth gate). */
+  roundTwoCandidateThreshold: 30,
+  /** Run a third round while unique candidates < this (gap gate). */
+  roundThreeCandidateThreshold: 15,
+  /** Default estimated-cost cap per run (Google side, cents). Env may
+   *  LOWER via HOUSING_SEARCH_MAX_COST_CENTS_PER_RUN. */
+  defaultMaxCostCentsPerRun: 50,
+  /**
+   * Estimated cost of ONE executed Google search query (list price
+   * $14/1,000). The monthly free tier (5,000 queries) is reported in
+   * diagnostics but not tracked persistently (no DB by design) — the
+   * per-run cap is the hard control.
+   */
+  googleCostCentsPerQuery: 1.4,
+  /** Parallelism across providers within a round. */
+  discoveryParallelism: 2,
+  /**
+   * Search SESSIONS for "load more" (in-memory, consistent with the 15-min
+   * result cache: warm serverless instances resolve the token; a cold-miss
+   * token degrades to a clear "start a new search" UI state — never a
+   * paid re-run, never stale data presented as fresh).
+   */
+  sessionTtlMs: 10 * 60 * 1000,
+  sessionMaxEntries: 200,
+  /** Hard cap of candidates a single session may hold. */
+  sessionMaxCandidates: 500,
+  /** First-page size (cards). */
+  pageSize: 24,
+  /** Max page fetches per CONTINUATION (enrichment of the next page only). */
+  continuationFetchBudget: 8,
+} as const;
+
 /** Hard, code-level limits. Env may lower (never raise) some of them. */
 export const LIMITS = {
   /**
@@ -132,6 +196,13 @@ export const LIMITS = {
   minRemainingForCallMs: 8_000,
   /** Max pages fetched per user request (targeted mode, fetchable domains only). */
   maxPagesToFetch: 3,
+  /**
+   * Page-fetch budget for WHOLE-WEB (multi-round) runs — larger than
+   * targeted mode because round 1 can validate more candidates, and
+   * fetchable (open-data) domains are where verified fields come from.
+   * Still bounded: robots-checked, SSRF-guarded, deadline-capped.
+   */
+  webModeMaxPagesToFetch: 6,
   fetchTimeoutMs: 10_000,
   robotsTimeoutMs: 8_000,
   /** Page bodies larger than this are truncated (parse best-effort). */
@@ -150,12 +221,13 @@ export const LIMITS = {
   /** Manual redirect hops, each hop re-validated against the URL guard. */
   maxRedirects: 3,
   /**
-   * Max listings returned per run. A single Bing call typically yields
-   * ~8–15 results; the multi-query merge can produce more, so this cap must
-   * not be the reason results get truncated (the 2026-10-10 "seven results"
-   * audit found it was not the cause, but it would have clipped the merge).
+   * Max VALIDATED listings one run may hold (2026-10-10 high-coverage
+   * engine: raised from 40). The multi-round, multi-provider merge
+   * routinely exceeds 40 unique candidates; display pagination (see
+   * PROVIDER_LIMITS.pageSize + sessions) serves them page by page, so the
+   * cap must not be the reason results get truncated.
    */
-  maxResults: 40,
+  maxResults: 120,
   /**
    * General (whole-web) mode: complementary paid search calls only run
    * (and keep running) while the merged result set has fewer than this
@@ -282,6 +354,48 @@ export function resolveSearchProvider(): ResolvedSearchProvider | null {
   // the pipeline answers "not_configured" before any paid call.
   if (!base || key === "" || model === "") return null;
   return { kind: "azure", base, key, model };
+}
+
+/**
+ * GOOGLE provider — Gemini API with the official `google_search` grounding
+ * tool (verified 2026-10-10; the Custom Search JSON API is closed to new
+ * customers, this is the supported self-serve Google web-search surface).
+ *
+ *   POST https://generativelanguage.googleapis.com/v1beta/interactions
+ *   header `x-goog-api-key: <key>`
+ *   body   { model, input, tools: [{ type: "google_search" }] }
+ *
+ * `GEMINI_API_KEY` is SERVER-SIDE ONLY — it must never appear in
+ * NEXT_PUBLIC_*, client bundles, logs, or responses. Missing/empty key →
+ * null → the engine runs Azure-only (graceful, reported in diagnostics).
+ */
+export interface ResolvedGeminiProvider {
+  kind: "gemini";
+  /** API key (server-side only). */
+  key: string;
+  /** Model name; default is a supported Flash model (see docs table). */
+  model: string;
+}
+
+let warnedGeminiModel = false;
+
+export function resolveGeminiProvider(): ResolvedGeminiProvider | null {
+  const key = (process.env.GEMINI_API_KEY ?? "").trim();
+  if (key === "") return null;
+  const raw = (process.env.HOUSING_GEMINI_MODEL ?? "gemini-3.5-flash").trim();
+  // Defensive guard: the grounding tool is not available on every model —
+  // restrict to the documented Gemini families (docs table, 2026-10-09).
+  const model =
+    /^(gemini-3[.\d]*[-\w]*|gemini-2[.\d]*[-\w]*)$/i.test(raw)
+      ? raw
+      : "gemini-3.5-flash";
+  if (model !== raw && !warnedGeminiModel) {
+    warnedGeminiModel = true;
+    console.warn(
+      `[housing-web-search] HOUSING_GEMINI_MODEL='${raw}' not a documented grounding model — using ${model}`,
+    );
+  }
+  return { kind: "gemini", key, model };
 }
 
 /** Look up the allowlist entry for a host (suffix match, www-stripped). */
