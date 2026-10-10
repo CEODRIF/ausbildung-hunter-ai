@@ -1,19 +1,19 @@
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui";
 import { getCurrentUserAndProfile } from "@/lib/auth";
-import { listDraftsBySender } from "@/lib/application-drafts";
 import {
   getDisconnectBlockers,
-  listEmailAccounts,
+  listEmailAccountsWithStatus,
   type DisconnectBlockers,
-  type SafeEmailAccount,
+  type EmailAccountStatus,
 } from "@/lib/email-oauth";
+import {
+  providerSection,
+  type EmailProviderId,
+} from "@/lib/email-provider-state";
 import { getServerT, getRequestLang } from "@/lib/i18n/server";
 import { localeForLang } from "@/lib/i18n/core";
-import {
-  disconnectEmailAccount,
-  reassignDraftSender,
-} from "@/app/settings/email/actions";
+import { disconnectEmailAccount } from "@/app/settings/email/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +55,16 @@ export default async function EmailSettingsPage({
 }) {
   const { user } = await getCurrentUserAndProfile();
   if (!user) redirect("/login");
-  const accounts = await listEmailAccounts(user.id);
+  // Server-derived CURRENT account state (fresh row per request — no cached
+  // client state). On read failure we must not claim any connection: render
+  // the neutral connect cards plus an explicit error notice.
+  let accounts: EmailAccountStatus[] = [];
+  let accountLoadError = false;
+  try {
+    accounts = await listEmailAccountsWithStatus(user.id);
+  } catch {
+    accountLoadError = true;
+  }
   const params = await searchParams;
   const [t, lang] = await Promise.all([getServerT(), getRequestLang()]);
   const locale = localeForLang(lang);
@@ -92,20 +101,23 @@ export default async function EmailSettingsPage({
             )}
           </Notice>
         )}
+        {accountLoadError && (
+          <Notice tone="error">{t("account.statusLoadError")}</Notice>
+        )}
         <section className="mt-2 grid gap-4 md:grid-cols-2">
-          <ProviderCard
+          <ProviderSectionCard
             t={t}
             provider="gmail"
             title="Gmail"
             description={t("account.gmailDesc")}
-            href="/api/email/connect/gmail"
+            accounts={accounts}
           />
-          <ProviderCard
+          <ProviderSectionCard
             t={t}
             provider="outlook"
             title="Outlook"
             description={t("account.outlookDesc")}
-            href="/api/email/connect/outlook"
+            accounts={accounts}
           />
         </section>
         {/* Smart Sending — always-on sender pacing. Deliberately static:
@@ -165,31 +177,18 @@ export default async function EmailSettingsPage({
             {accounts.length ? (
               (
                 await Promise.all(
-                  accounts.map(async (account) => {
-                    const blockers = await getDisconnectBlockers(
-                      user.id,
-                      account.id,
-                    );
-                    // Phase 18 — only for blocked accounts: which drafts use
-                    // this sender (user-scoped read, display fields only).
-                    const drafts =
-                      blockers.drafts > 0
-                        ? await listDraftsBySender(user.id, account.id)
-                        : [];
-                    return { account, blockers, drafts };
-                  }),
+                  accounts.map(async (account) => ({
+                    account,
+                    blockers: await getDisconnectBlockers(user.id, account.id),
+                  })),
                 )
-              ).map(({ account, blockers, drafts }) => (
+              ).map(({ account, blockers }) => (
                 <AccountRow
                   key={account.id}
                   t={t}
                   locale={locale}
                   account={account}
                   blockers={blockers}
-                  drafts={drafts}
-                  destinations={accounts.filter(
-                    (other) => other.id !== account.id && other.is_active,
-                  )}
                 />
               ))
             ) : (
@@ -209,31 +208,93 @@ export default async function EmailSettingsPage({
   );
 }
 
-function ProviderCard({
+/**
+ * Top provider card, derived from the CURRENT database state
+ * (see providerSection): a healthy account renders a green "Connected"
+ * state with the linked email and NO connect button; an expired/revoked
+ * account renders a separate Reconnect action; only a user without any
+ * account sees the initial connect card.
+ */
+function ProviderSectionCard({
   t,
   provider,
   title,
   description,
-  href,
+  accounts,
 }: {
   t: T;
-  provider: "gmail" | "outlook";
+  provider: EmailProviderId;
   title: string;
   description: string;
-  href: string;
+  accounts: readonly EmailAccountStatus[];
 }) {
-  return (
-    <Card className="p-6">
-      <div className="flex items-start justify-between">
-        <span
-          className={`flex h-12 w-12 items-center justify-center rounded-2xl text-lg font-bold ${provider === "gmail" ? "bg-danger-soft text-danger" : "bg-accent-soft text-accent-deep"}`}
-        >
-          {provider === "gmail" ? "G" : "O"}
+  const section = providerSection(accounts, provider);
+  const href = `/api/email/connect/${provider}`;
+  const head = (
+    <div className="flex items-start justify-between">
+      <span
+        className={`flex h-12 w-12 items-center justify-center rounded-2xl text-lg font-bold ${provider === "gmail" ? "bg-danger-soft text-danger" : "bg-accent-soft text-accent-deep"}`}
+      >
+        {provider === "gmail" ? "G" : "O"}
+      </span>
+      {section.kind === "connected" ? (
+        <span className="flex items-center gap-1.5 rounded-lg bg-success-soft px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-success">
+          <span
+            aria-hidden="true"
+            className="h-1.5 w-1.5 rounded-full bg-success"
+          />
+          {t("account.connectedBadge")}
         </span>
+      ) : (
         <span className="rounded-lg bg-surface-2 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-muted">
           OAuth 2.0
         </span>
-      </div>
+      )}
+    </div>
+  );
+
+  if (section.kind === "connected") {
+    const [primary, ...rest] = section.active;
+    return (
+      <Card className="border-success/25 p-6">
+        {head}
+        <h3 className="mt-7 text-lg font-bold text-ink-soft">{title}</h3>
+        <p className="mt-2 min-h-12 text-sm leading-6 text-ink-soft" dir="ltr">
+          {primary.email}
+          {rest.length > 0 && (
+            <span className="mt-1 block text-xs text-faint" dir="auto">
+              {t("account.connectedCount", { count: section.active.length })}
+            </span>
+          )}
+        </p>
+      </Card>
+    );
+  }
+
+  if (section.kind === "reconnect") {
+    return (
+      <Card className="border-warning/25 p-6">
+        {head}
+        <h3 className="mt-7 text-lg font-bold text-ink-soft">{title}</h3>
+        <p className="mt-2 min-h-12 text-sm leading-6 text-muted" dir="ltr">
+          {section.account.email}
+        </p>
+        <p className="mt-1 text-xs font-medium text-warning">
+          {t("account.needReconnect")}
+        </p>
+        <a
+          href={href}
+          className="mt-5 flex h-11 items-center justify-center rounded-xl border border-warning/40 bg-warning-soft px-4 text-sm font-semibold text-warning transition hover:opacity-90"
+        >
+          {t("account.reconnect")} <span className="ms-2">→</span>
+        </a>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-6">
+      {head}
       <h3 className="mt-7 text-lg font-bold text-ink-soft">{title}</h3>
       <p className="mt-2 min-h-12 text-sm leading-6 text-muted">
         {description}
@@ -253,17 +314,14 @@ function AccountRow({
   locale,
   account,
   blockers,
-  drafts,
-  destinations,
 }: {
   t: T;
   locale: string;
-  account: SafeEmailAccount;
+  account: EmailAccountStatus;
   blockers: DisconnectBlockers;
-  drafts: Array<{ id: string; subject: string; goal: string }>;
-  destinations: SafeEmailAccount[];
 }) {
   const inUse = blockers.activeCampaigns > 0 || blockers.drafts > 0;
+  const needsReconnect = !account.is_active || account.requires_reconnect;
   return (
     <div>
       <Card className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
@@ -279,11 +337,19 @@ function AccountRow({
                 ? t("account.connectedGmail")
                 : t("account.connectedOutlook")}
             </p>
-            <p className="mt-1 text-xs text-muted">{account.email}</p>
+            <p className="mt-1 text-xs text-muted" dir="ltr">
+              {account.email}
+            </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3 sm:justify-end">
-          <span className="rounded-lg bg-success-soft px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-success">
+          <span
+            className={`rounded-lg px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] ${
+              account.is_active
+                ? "bg-success-soft text-success"
+                : "bg-surface-2 text-muted"
+            }`}
+          >
             {account.is_active ? t("account.active") : t("account.inactive")}
           </span>
           <span className="text-xs text-faint">
@@ -311,72 +377,24 @@ function AccountRow({
               {t("account.disconnect")}
             </button>
           </form>
-          <a
-            href={`/api/email/connect/${account.provider}`}
-            className="rounded-lg border border-line-strong px-3 py-2 text-xs font-semibold text-accent hover:bg-surface-2"
-          >
-            {t("account.reconnect")}
-          </a>
+          {/* Reconnect is a SEPARATE action, shown only when the current
+              status actually requires re-authorization. Healthy accounts
+              have no re-link control here (the top card also hides the
+              connect button in that case). */}
+          {needsReconnect && (
+            <a
+              href={`/api/email/connect/${account.provider}`}
+              className="rounded-lg border border-line-strong px-3 py-2 text-xs font-semibold text-accent hover:bg-surface-2"
+            >
+              {t("account.reconnect")}
+            </a>
+          )}
         </div>
       </Card>
-      {/* Phase 18 — minimal reassignment UI, shown only while drafts block
-       *  this account. Server-rendered form; all checks re-run server-side. */}
-      {drafts.length > 0 && (
-        <div className="mt-2 rounded-xl border border-warning/25 bg-warning-soft p-4">
-          <p className="text-xs font-semibold text-warning">
-            {t("account.draftsBlockIntro", {
-              count: drafts.length,
-              email: account.email,
-            })}
-          </p>
-          <div className="mt-3 space-y-2">
-            {drafts.map((draft) => (
-              <form
-                key={draft.id}
-                action={reassignDraftSender}
-                className="flex flex-wrap items-center gap-2"
-              >
-                <input type="hidden" name="draftId" value={draft.id} />
-                <span className="max-w-56 truncate text-xs text-muted">
-                  {draft.subject.trim() ||
-                    (draft.goal === "arbeit"
-                      ? t("account.untitledArbeit")
-                      : t("account.untitledAusbildung"))}
-                </span>
-                {destinations.length ? (
-                  <>
-                    <select
-                      name="emailAccountId"
-                      defaultValue=""
-                      required
-                      className="rounded-lg border border-warning/25 bg-surface px-2 py-1.5 text-xs text-ink-soft"
-                    >
-                      <option value="" disabled>
-                        {t("account.chooseSender")}
-                      </option>
-                      {destinations.map((destination) => (
-                        <option key={destination.id} value={destination.id}>
-                          {destination.email}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="submit"
-                      className="rounded-lg bg-navy px-3 py-1.5 text-xs font-semibold text-white hover:bg-navy-soft"
-                    >
-                      {t("account.moveDraft")}
-                    </button>
-                  </>
-                ) : (
-                  <span className="text-xs text-muted">
-                    {t("account.connectOther")}
-                  </span>
-                )}
-              </form>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* NOTE: the former yellow "drafts use this sender" reassignment box
+          was removed from the UI on purpose. Drafts themselves, their
+          storage and the server-side draft-reassignment action in
+          ./actions.ts are untouched. */}
     </div>
   );
 }

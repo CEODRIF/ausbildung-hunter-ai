@@ -237,6 +237,32 @@ export async function listEmailAccounts(userId: string) {
   return (data ?? []) as SafeEmailAccount[];
 }
 
+/**
+ * Safe projection for the Email Assistant settings page: the same fields as
+ * SafeEmailAccount plus the CURRENT re-authorization state
+ * (`requires_reconnect`, set by the provider layer when a token refresh
+ * fails or the grant is revoked). Still token-free — encrypted tokens stay
+ * server-side and are never part of this projection.
+ */
+export type EmailAccountStatus = SafeEmailAccount & {
+  requires_reconnect: boolean;
+};
+
+export async function listEmailAccountsWithStatus(
+  userId: string,
+): Promise<EmailAccountStatus[]> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("email_accounts")
+    .select(
+      "id, provider, email, is_active, created_at, updated_at, last_used_at, requires_reconnect",
+    )
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as EmailAccountStatus[];
+}
+
 export async function revokeEmailAuthorization(
   userId: string,
   accountId: string,
