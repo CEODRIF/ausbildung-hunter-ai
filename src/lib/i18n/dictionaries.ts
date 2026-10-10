@@ -2201,11 +2201,11 @@ const de = {
       domainsTitle: "Websites wählen",
       hintFetchable: "Seite wird geprüft",
       hintSearchOnly: "nur Verweis",
-      run: "Web-Suche starten",
-      running: "Suche läuft …",
-      costNote:
-        "Jeder Start nutzt eine bezahlte Websuche (max. 2 Suchaufrufe) – starte sie nur, wenn du suchst.",
-      results: "{n} Funde über Websuche",
+       run: "Web-Suche starten",
+       running: "Suche läuft …",
+       costNote:
+         "Jeder Start nutzt bezahlte Websuchen (begrenztes Budget, mehrstufig) – starte sie nur, wenn du suchst.",
+       results: "{n} Funde über Websuche",
       cached: "aus dem Kurzzeit-Cache",
       checkedCount: "{n} Seiten abgerufen und geprüft",
       warningPartial:
@@ -2219,8 +2219,8 @@ const de = {
       lastChecked: "Geprüft: {date}",
       external: "Zur Anzeige",
       from: "frei ab",
-      attribution:
-        "Ergebnisse einer Internet-Websuche (Bing). Alle Angaben ohne Gewähr – bitte vor einer Kontaktaufnahme direkt auf der Quellenseite prüfen.",
+       attribution:
+         "Ergebnisse einer Internet-Websuche (Google & Bing). Alle Angaben ohne Gewähr – bitte vor einer Kontaktaufnahme direkt auf der Quellenseite prüfen.",
       stateNotConfigured:
         "Die Websuche ist derzeit nicht konfiguriert – es wurden keine Suchaufrufe ausgelöst.",
       stateToolBlocked:
@@ -2257,10 +2257,10 @@ const de = {
       wgSuitable: "WG-tauglich",
       valueYes: "Ja",
       valueNo: "Nein",
-      provenanceSearch:
-        "Angaben aus Websuche-Ergebnissen (Bing) – keine vollständige Originalbeschreibung des Portals.",
-      provenanceFetched:
-        "Angaben aus der abgerufenen Quellseite – keine vollständige Originalbeschreibung des Portals.",
+       provenanceSearch:
+         "Angaben aus Websuche-Ergebnissen (Google & Bing) – keine vollständige Originalbeschreibung des Portals.",
+       provenanceFetched:
+         "Angaben aus der abgerufenen Quellseite – keine vollständige Originalbeschreibung des Portals.",
       confirmNote:
         "Bitte prüfe die Verfügbarkeit direkt auf dem Portal – Angebote können inzwischen vergeben sein.",
       openOriginal: "Zur Original-Anzeige",
@@ -2291,6 +2291,33 @@ const de = {
         "Ursache: {n} eindeutige Suchtreffer erhalten – {pages} Such-/Portalseiten (keine Einzelangebote), {untitled} titellose Treffer, {nonRental} Verkaufsanzeigen und {dups} Duplikate wurden aussortiert.",
       emptyNoSearchCall:
         "Ursache: Der Suchdienst wurde für diese Anfrage nicht aufgerufen. Bitte versuche es erneut.",
+      // --- Multi-provider engine (2026-10-10) ---
+      providerGoogle: "Google-Websuche",
+      providerAzure: "Bing-Websuche",
+      providerStatusOk: "verwendet",
+      providerStatusError: "Fehler",
+      providerStatusNotConfigured: "nicht konfiguriert",
+      sessionExpired:
+        "Diese Ergebnisliste ist im Kurzzeit-Speicher abgelaufen – bitte starte eine neue Websuche.",
+      loadMore: "Weitere {n} Funde laden",
+      loadMoreLoading: "Lade weitere Funde …",
+      allShown: "Alle {n} Funde dieser Suche werden angezeigt",
+      uniqueCount: "{n} eindeutige Angebote insgesamt",
+      descriptionTitle: "Beschreibung (von der Quellseite)",
+      publishedSince: "Gelistet seit: {date}",
+      discoveredVia: "Gefunden über: {sources}",
+      reasonCityMatch: "Stimmt mit deiner Stadt überein",
+      reasonCityUnknown: "Standort unbestätigt",
+      reasonDirectListing: "Direkter Anzeigelink",
+      reasonRentKnown: "Miete ist angegeben",
+      reasonRentUnknown: "Kein Preis angegeben",
+      reasonBudgetFit: "Innerhalb deines Budgets",
+      reasonBudgetOver: "Über deinem Budget",
+      reasonTypeMatch: "Objekttyp passt",
+      reasonRoomsArea: "Zimmer & Fläche bekannt",
+      reasonFresh: "Kürzlich veröffentlicht",
+      reasonSourceQuality: "Geprüfter Anbieter",
+      reasonVerified: "Seite geprüft",
     },
   },
 };
@@ -4433,11 +4460,11 @@ const en: Dict = {
       domainsTitle: "Choose websites",
       hintFetchable: "page is checked",
       hintSearchOnly: "link only",
-      run: "Start web search",
-      running: "Searching …",
-      costNote:
-        "Each run uses a paid web search (max. 2 search calls) — start it only when you actually search.",
-      results: "{n} findings via web search",
+       run: "Start web search",
+       running: "Searching …",
+       costNote:
+         "Each run uses paid web searches (bounded budget, multi-round) — start it only when you actually search.",
+       results: "{n} findings via web search",
       cached: "from short-term cache",
       checkedCount: "{n} pages fetched and checked",
       warningPartial:
@@ -4451,8 +4478,8 @@ const en: Dict = {
       lastChecked: "Checked: {date}",
       external: "To listing",
       from: "available from",
-      attribution:
-        "Results of an internet web search (Bing). All details without guarantee — please verify on the source page before contacting anyone.",
+       attribution:
+         "Results of an internet web search (Google & Bing). All details without guarantee — please verify on the source page before contacting anyone.",
       stateNotConfigured:
         "Web search is not configured right now — no search calls were issued.",
       stateToolBlocked:
@@ -4489,10 +4516,10 @@ const en: Dict = {
       wgSuitable: "WG-suitable",
       valueYes: "Yes",
       valueNo: "No",
-      provenanceSearch:
-        "Details from web-search results (Bing) — not the portal's full original description.",
-      provenanceFetched:
-        "Details from the fetched source page — not the portal's full original description.",
+       provenanceSearch:
+         "Details from web-search results (Google & Bing) — not the portal's full original description.",
+       provenanceFetched:
+         "Details from the fetched source page — not the portal's full original description.",
       confirmNote:
         "Please check availability directly on the portal — listings may already be taken.",
       openOriginal: "Open original listing",
@@ -4521,7 +4548,34 @@ const en: Dict = {
         "Cause: {n} results were rejected because they demonstrably concern a different city.",
       emptyFiltered:
         "Cause: {n} distinct search hits received — {pages} search/portal pages (no individual offers), {untitled} untitled results, {nonRental} sale ads and {dups} duplicates were sorted out.",
-      emptyNoSearchCall: "Cause: the search service was not invoked for this request. Please try again.",
+       emptyNoSearchCall: "Cause: the search service was not invoked for this request. Please try again.",
+      // --- Multi-provider engine (2026-10-10) ---
+      providerGoogle: "Google web search",
+      providerAzure: "Bing web search",
+      providerStatusOk: "used",
+      providerStatusError: "error",
+      providerStatusNotConfigured: "not configured",
+      sessionExpired:
+        "This result list expired in short-term storage — please start a new web search.",
+      loadMore: "Load {n} more findings",
+      loadMoreLoading: "Loading more findings …",
+      allShown: "All {n} findings of this search are shown",
+      uniqueCount: "{n} unique listings in total",
+      descriptionTitle: "Description (from the source page)",
+      publishedSince: "Listed since: {date}",
+      discoveredVia: "Found via: {sources}",
+      reasonCityMatch: "Matches your city",
+      reasonCityUnknown: "Location unverified",
+      reasonDirectListing: "Direct listing link",
+      reasonRentKnown: "Rent stated",
+      reasonRentUnknown: "No price stated",
+      reasonBudgetFit: "Within your budget",
+      reasonBudgetOver: "Above your budget",
+      reasonTypeMatch: "Property type matches",
+      reasonRoomsArea: "Rooms & area known",
+      reasonFresh: "Recently published",
+      reasonSourceQuality: "Reviewed source",
+      reasonVerified: "Page checked",
     },
   },
 };
@@ -6669,7 +6723,7 @@ const fr: Dict = {
       run: "Lancer la recherche web",
       running: "Recherche en cours …",
       costNote:
-        "Chaque lancement utilise une recherche web payante (2 requêtes max.) — ne la lancez que si vous cherchez vraiment.",
+        "Chaque lancement utilise des recherches web payantes (budget borné, multi-étapes) — ne la lancez que si vous cherchez vraiment.",
       results: "{n} résultats via recherche web",
       cached: "de la mémoire cache temporaire",
       checkedCount: "{n} pages consultées et vérifiées",
@@ -6685,7 +6739,7 @@ const fr: Dict = {
       external: "Voir l'annonce",
       from: "disponible à partir du",
       attribution:
-        "Résultats d'une recherche internet (Bing). Tous les détails sans garantie — veuillez vérifier sur la page source avant tout contact.",
+        "Résultats d'une recherche internet (Google & Bing). Tous les détails sans garantie — veuillez vérifier sur la page source avant tout contact.",
       stateNotConfigured:
         "La recherche web n'est pas configurée pour l'instant — aucune requête n'a été lancée.",
       stateToolBlocked:
@@ -6723,7 +6777,7 @@ const fr: Dict = {
       valueYes: "Oui",
       valueNo: "Non",
       provenanceSearch:
-        "Données issues des résultats de recherche web (Bing) — pas la description complète du portail.",
+        "Données issues des résultats de recherche web (Google & Bing) — pas la description complète du portail.",
       provenanceFetched:
         "Données issues de la page source consultée — pas la description complète du portail.",
       confirmNote:
@@ -6756,6 +6810,33 @@ const fr: Dict = {
         "Cause : {n} résultats de recherche distincts reçus — {pages} pages portail/recherche (pas d'annonces individuelles), {untitled} résultats sans titre, {nonRental} annonces de vente et {dups} doublons écartés.",
       emptyNoSearchCall:
         "Cause : le service de recherche n'a pas été invoqué pour cette requête. Réessayez.",
+      // --- Moteur multi-fournisseurs (2026-10-10) ---
+      providerGoogle: "Recherche web Google",
+      providerAzure: "Recherche web Bing",
+      providerStatusOk: "utilisée",
+      providerStatusError: "erreur",
+      providerStatusNotConfigured: "non configurée",
+      sessionExpired:
+        "Cette liste de résultats a expiré en mémoire temporaire — veuillez lancer une nouvelle recherche web.",
+      loadMore: "Charger {n} résultats de plus",
+      loadMoreLoading: "Chargement des résultats…",
+      allShown: "Tous les {n} résultats de cette recherche sont affichés",
+      uniqueCount: "{n} annonces uniques au total",
+      descriptionTitle: "Description (de la page source)",
+      publishedSince: "Publié depuis le : {date}",
+      discoveredVia: "Trouvé via : {sources}",
+      reasonCityMatch: "Correspond à votre ville",
+      reasonCityUnknown: "Emplacement non confirmé",
+      reasonDirectListing: "Lien direct vers l'annonce",
+      reasonRentKnown: "Loyer indiqué",
+      reasonRentUnknown: "Aucun prix indiqué",
+      reasonBudgetFit: "Dans votre budget",
+      reasonBudgetOver: "Au-dessus de votre budget",
+      reasonTypeMatch: "Type de bien correspondant",
+      reasonRoomsArea: "Pièces et surface connues",
+      reasonFresh: "Publié récemment",
+      reasonSourceQuality: "Source vérifiée",
+      reasonVerified: "Page vérifiée",
     },
   },
 };
@@ -8852,7 +8933,7 @@ const ar: Dict = {
       run: "بدء البحث على الويب",
       running: "جارٍ البحث …",
       costNote:
-        "كل تشغيل يستخدم بحث ويب مدفوعًا (بحد أقصى استدعاءا بحث) — شغّله فقط عندما تبحث فعلًا.",
+        "كل تشغيل يستخدم عمليات بحث ويب مدفوعة (بميزانية محدودة، على مراحل) — شغّله فقط عندما تبحث فعلًا.",
       results: "{n} نتائج عبر بحث الويب",
       cached: "من ذاكرة مؤقتة قصيرة",
       checkedCount: "تم استعراض {n} صفحات والتحقق منها",
@@ -8867,7 +8948,7 @@ const ar: Dict = {
       external: "إلى الإعلان",
       from: "متاح من",
       attribution:
-        "نتائج بحث إنترنت (بينغ). جميع التفاصيل دون ضمان — يُرجى التحقق منها على الصفحة المصدرية قبل أي تواصل.",
+        "نتائج بحث إنترنت (جوجل وبينغ). جميع التفاصيل دون ضمان — يُرجى التحقق منها على الصفحة المصدرية قبل أي تواصل.",
       stateNotConfigured: "بحث الويب غير مُهيّأ حاليًا — لم تُطلق أي طلبات بحث.",
       stateToolBlocked: "خدمة بحث الويب معطّلة على الحساب. يُرجى إبلاغ المزوّد.",
       stateEndpoint: "خدمة البحث غير متاحة (نقطة الوصول غير متوفرة).",
@@ -8903,7 +8984,7 @@ const ar: Dict = {
       valueYes: "نعم",
       valueNo: "لا",
       provenanceSearch:
-        "المعلومات من نتائج بحث الويب (Bing) — وليست الوصف الكامل الأصلي للإعلان.",
+        "المعلومات من نتائج بحث الويب (جوجل وBing) — وليست الوصف الكامل الأصلي للإعلان.",
       provenanceFetched:
         "المعلومات من الصفحة المصدر المُسترجعة — وليست الوصف الكامل الأصلي للإعلان.",
       confirmNote:
@@ -8934,6 +9015,33 @@ const ar: Dict = {
         emptyFiltered:
         "السبب: تم استلام {n} نتيجة بحث مميزة — استُبعدت {pages} صفحة بوابة/بحث (ليست إعلانات فردية)، و{untitled} نتيجة بلا عنوان، و{nonRental} إعلان بيع، و{dups} من التكرارات.",
       emptyNoSearchCall: "السبب: لم يتم استدعاء خدمة البحث لهذا الطلب. أعد المحاولة.",
+      // --- محرك البحث متعدد المزودين (2026-10-10) ---
+      providerGoogle: "بحث الويب عبر جوجل",
+      providerAzure: "بحث الويب عبر بينغ",
+      providerStatusOk: "تم الاستخدام",
+      providerStatusError: "خطأ",
+      providerStatusNotConfigured: "غير مُهيّأ",
+      sessionExpired:
+        "انتهت صلاحية هذه القائمة في الذاكرة المؤقتة — يُرجى بدء بحث ويب جديد.",
+      loadMore: "تحميل {n} نتائج إضافية",
+      loadMoreLoading: "جارٍ تحميل المزيد من النتائج…",
+      allShown: "يتم عرض جميع نتائج هذا البحث ({n})",
+      uniqueCount: "{n} إعلانًا فريدًا إجمالًا",
+      descriptionTitle: "الوصف (من الصفحة المصدرية)",
+      publishedSince: "نُشر منذ: {date}",
+      discoveredVia: "تم العثور عليه عبر: {sources}",
+      reasonCityMatch: "يطابق مدينتك",
+      reasonCityUnknown: "الموقع غير مؤكد",
+      reasonDirectListing: "رابط مباشر للإعلان",
+      reasonRentKnown: "الإيجار مذكور",
+      reasonRentUnknown: "لا يوجد سعر مذكور",
+      reasonBudgetFit: "ضمن ميزانيتك",
+      reasonBudgetOver: "فوق ميزانيتك",
+      reasonTypeMatch: "نوع العقار مطابق",
+      reasonRoomsArea: "الغرف والمساحة معلومتان",
+      reasonFresh: "نُشر حديثًا",
+      reasonSourceQuality: "مصدر مُوثّق",
+      reasonVerified: "تم التحقق من الصفحة",
     },
   },
 };
