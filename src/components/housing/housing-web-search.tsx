@@ -10,11 +10,16 @@ import { ListingCard, listingSourceLabel, type WebSearchDomain } from "./listing
 import { ListingDetailModal } from "./listing-detail";
 
 /**
- * On-demand live web search for housing listings (Azure AI Foundry
- * `web_search` — the ONLY listing source on this surface, no demo data).
+ * On-demand live web search for housing listings (MULTI-PROVIDER
+ * discovery — Google via Gemini `google_search` grounding + Azure AI
+ * Foundry `web_search`/Bing — no demo data; each provider is optional and
+ * degrades gracefully, the per-provider status chips show what actually
+ * ran).
  *
- *  - Runs only on explicit user click (cost control: each run spends up to
- *    two paid search calls) and reuses the current filter values.
+ *  - Runs only on explicit user click (cost control: each run is bounded —
+ *    see src/lib/housing/web-search/config.ts: ≤4 Bing transactions +
+ *    ≤9 Google grounding calls under a per-run cost cap) and reuses the
+ *    current filter values.
  *  - Results render as professional cards; clicking a card opens the
  *    INTERNAL detail view with everything we genuinely obtained.
  *  - Every result carries its original source link, an honest provenance

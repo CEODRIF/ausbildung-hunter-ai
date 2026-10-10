@@ -3,26 +3,35 @@ import "server-only";
 /**
  * Housing / "Wohnen" — web-discovery configuration.
  *
- * AZURE ONLY (enforced in this resolver, not in an environment variable):
- *   Azure AI Foundry Responses API with the hosted `web_search` tool
- *   (Grounding with Bing Search). Reuses the EXISTING Foundry
- *   resource/deployment (gpt-5-mini) — no new Azure resource.
- *   Docs: https://learn.microsoft.com/azure/foundry/openai/how-to/web-search
+ * TWO independent, server-side-validated resolvers (2026-10-10
+ * high-coverage engine): each returns a fully validated provider or null
+ * (the "not_configured" UI state — never a paid call), and the pipeline
+ * (./discovery) runs whatever is ready, isolated per provider:
  *
- * The housing pipeline has NO Tavily fallback: the resolver returns either a
- * fully validated `azure` provider or null ("not_configured" state in the
- * UI, never a paid call). The Germany Copilot's independent Tavily
+ *   AZURE (resolveSearchProvider) — Azure AI Foundry Responses API with
+ *   the hosted `web_search` tool (Grounding with Bing Search). Reuses the
+ *   EXISTING Foundry resource/deployment (gpt-5-mini) — no new Azure
+ *   resource. Docs:
+ *   https://learn.microsoft.com/azure/foundry/openai/how-to/web-search
+ *   Endpoint contract (official docs, verified 2026-10-10):
+ *     POST https://{resource}.openai.azure.com/openai/v1/responses
+ *     header `api-key`, `model` in the body (the deployment name).
+ *   Anything that does not produce exactly that URL shape fails safe at
+ *   resolution time (not_configured) BEFORE any provider call.
+ *   Provider selection: `HOUSING_WEB_SEARCH=azure` is the supported
+ *   explicit setting; any other value is ignored with a one-time warning.
+ *   This resolver returns ONLY `azure` or null by design.
+ *
+ *   GOOGLE (resolveGeminiProvider) — Gemini API with the official
+ *   `google_search` grounding tool (see that function's docblock for the
+ *   verified endpoint/contract and the model rules). Server-side
+ *   `GEMINI_API_KEY` (the app's shared key — no housing-specific key) +
+ *   optional `HOUSING_GEMINI_MODEL` override.
+ *
+ * The housing pipeline has NO Tavily fallback: the resolvers above are the
+ * only provider sources. The Germany Copilot's independent Tavily
  * integration (src/lib/web-search, src/lib/germany-research.ts) is a
- * separate feature and is NOT affected by this change.
- *
- * Endpoint contract (official docs, verified 2026-10-10):
- *   POST https://{resource}.openai.azure.com/openai/v1/responses
- *   header `api-key`, `model` in the body (the deployment name).
- * Anything that does not produce exactly that URL shape fails safe at
- * resolution time (not_configured) BEFORE any provider call.
- *
- * Provider selection: `HOUSING_WEB_SEARCH=azure` is the supported explicit
- * setting; any other value is ignored with a one-time warning.
+ * separate feature and is NOT affected by this module.
  *
  * DOMAIN POLICY (per domain, reviewed 2026-10-09):
  *   search_only — the site's ToS prohibit automated retrieval. We use the
