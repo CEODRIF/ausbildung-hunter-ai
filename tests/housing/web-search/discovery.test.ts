@@ -46,6 +46,7 @@ const baseParams = {
   rooms: "all" as const,
   min_area_sqm: null,
   available_before: null,
+  sort: "newest" as const,
 };
 
 const input = (over: Partial<HousingWebSearchInput> = {}): HousingWebSearchInput => ({
@@ -168,13 +169,17 @@ function makeFetch(opts: {
 
 const PUBLIC = "93.184.216.34";
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  dnsLookup.mockReset();
-  dnsLookup.mockResolvedValue([{ address: PUBLIC, family: 4 }]);
-  clearWebSearchCache();
-  clearRobotsCache();
-});
+  beforeEach(() => {
+    vi.clearAllMocks();
+    dnsLookup.mockReset();
+    dnsLookup.mockResolvedValue([{ address: PUBLIC, family: 4 }]);
+    // Deterministic provider resolution: these tests target the Azure
+    // pipeline explicitly; the Gemini (Google) provider is OFF unless a
+    // test injects it via deps.geminiProvider.
+    vi.stubEnv("GEMINI_API_KEY", "");
+    clearWebSearchCache();
+    clearRobotsCache();
+  });
 
 afterEach(() => {
   vi.unstubAllEnvs();

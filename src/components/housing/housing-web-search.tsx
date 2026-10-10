@@ -80,12 +80,32 @@ interface SearchFunnel {
   validListings: number;
   displayedListings: number;
   elapsedMs: number;
+  googleCalls?: number;
+  googleQueries?: number;
+  rounds?: number;
+  crossSourceMerges?: number;
+}
+
+/** Per-provider diagnostics (server-side, counts only). */
+interface ProviderStatus {
+  provider: "google" | "azure";
+  status: "ok" | "not_configured" | "error" | "rate_limited" | "timeout";
+  calls: number;
+  candidates: number;
+  searchQueries: number;
+  error: string | null;
+}
+
+interface LoadMoreInfo {
+  token: string | null;
+  hasMore: boolean;
+  remaining: number;
 }
 
 interface WebSearchOutcome {
   status: Status;
   message: string | null;
-  provider: "azure" | null;
+  provider: "azure" | "google" | "azure+google" | null;
   mode: Mode;
   listings: HousingListing[];
   citations: Array<{ url: string; title: string }>;
@@ -99,6 +119,12 @@ interface WebSearchOutcome {
   deduplicated?: boolean;
   fetchedAt: string;
   quota: QuotaInfo | null;
+  providers?: ProviderStatus[];
+  cost?: Array<{ provider: "google" | "azure"; units: number; estimatedCostCents: number | null }>;
+  /** "Load more" state (page 1 of a paginated run). */
+  loadMore?: LoadMoreInfo | null;
+  /** Continuation with an unknown/expired session token. */
+  sessionExpired?: boolean;
 }
 
 /** The subset of the filter set the web-search API accepts. */
@@ -112,6 +138,7 @@ function pickParams(p: HousingSearchParams): Record<string, unknown> {
     rooms: p.rooms,
     min_area_sqm: p.min_area_sqm,
     available_before: p.available_before,
+    sort: p.sort,
   };
 }
 
@@ -174,6 +201,13 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
   const [openListing, setOpenListing] = useState<HousingListing | null>(null);
   /** Seconds to wait before a retry after a 429 (server retry-after). */
   const [rateLimitWait, setRateLimitWait] = useState<number | null>(null);
+  /** "Load more": pages already served by continuation calls. */
+  const [extraListings, setExtraListings] = useState<HousingListing[]>([]);
+  /** Pagination state (token of the current session; null = all shown). */
+  const [loadMore, setLoadMore] = useState<LoadMoreInfo | null>(null);
+  const [continuing, setContinuing] = useState(false);
+  /** Continuation token expired (cold instance) — offer a fresh search. */
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   // The allowlist and the per-user daily quota are served by the API (single
   // source of truth, server-side — the browser can never inflate its own
@@ -211,6 +245,9 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
     setPhase("loading");
     setHttpError(null);
     setOpenListing(null);
+    setExtraListings([]);
+    setLoadMore(null);
+    setSessionExpired(false);
     try {
       // Idempotency key for THIS run: an accidental duplicate/resend with
       // the same id is never charged twice server-side; a genuinely new
@@ -242,12 +279,53 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
       const data = (await res.json()) as WebSearchOutcome;
       setPhase("done");
       setOutcome(data);
+      setLoadMore(data.loadMore ?? null);
       if (data.quota) setQuota(data.quota);
     } catch {
       setPhase("done");
       setHttpError("provider_error");
     }
   }, [mode, params, selected]);
+
+  /**
+   * "Load more" — claims the next page of the run's in-memory session.
+   * No quota slot, no paid search calls (server-side contract); on a
+   * session cold-miss the server answers `sessionExpired` and the UI
+   * offers a fresh search instead of re-paying.
+   */
+  const loadMorePage = useCallback(async () => {
+    if (!loadMore?.token || continuing) return;
+    setContinuing(true);
+    setSessionExpired(false);
+    try {
+      const res = await fetch("/api/housing/web-search", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          mode: "web",
+          params: pickParams(params),
+          continue: { token: loadMore.token },
+        }),
+      });
+      if (!res.ok) {
+        // Network/HTTP trouble: keep the served pages, stop paging.
+        setLoadMore(null);
+        return;
+      }
+      const data = (await res.json()) as WebSearchOutcome;
+      if (data.sessionExpired || data.status !== "ok") {
+        setSessionExpired(true);
+        setLoadMore(null);
+        return;
+      }
+      setExtraListings((prev) => [...prev, ...data.listings]);
+      setLoadMore(data.loadMore ?? null);
+    } catch {
+      setLoadMore(null);
+    } finally {
+      setContinuing(false);
+    }
+  }, [loadMore, continuing, params]);
 
   const toggleDomain = (d: string) => {
     setSelected((prev) => {
@@ -260,8 +338,9 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
 
   const status: Status | null = httpError ?? outcome?.status ?? null;
   const rawListings = useMemo(
-    () => (outcome?.status === "ok" ? outcome.listings : []),
-    [outcome],
+    () =>
+      outcome?.status === "ok" ? [...outcome.listings, ...extraListings] : [],
+    [outcome, extraListings],
   );
   // Consistent post-search filter application (honest: unknown values kept).
   const listings = useMemo(() => applyClientFilters(rawListings, params), [rawListings, params]);
@@ -481,6 +560,14 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
                     {(outcome?.cached || outcome?.deduplicated) && (
                       <span className="ms-2 text-xs font-medium text-faint">{t("housing.webSearch.cached")}</span>
                     )}
+                  {outcome &&
+                    outcome.funnel.validListings > listings.length && (
+                      <span className="ms-2 text-xs font-medium text-faint">
+                        {t("housing.webSearch.uniqueCount", {
+                          n: outcome.funnel.validListings,
+                        })}
+                      </span>
+                    )}
                 </p>
                 {outcome && outcome.stats.pagesFetched > 0 && (
                   <p className="text-[11px] text-faint">
@@ -488,6 +575,40 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
                   </p>
                 )}
               </div>
+
+              {/* per-provider status (counts only, from the server) */}
+              {outcome && outcome.providers && outcome.providers.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {outcome.providers.map((p) => (
+                    <span
+                      key={p.provider}
+                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                        p.status === "ok"
+                          ? "bg-success-soft text-success"
+                          : p.status === "not_configured"
+                            ? "bg-surface-2 text-faint"
+                            : "bg-warning-soft text-warning"
+                      }`}
+                    >
+                      {p.provider === "google"
+                        ? t("housing.webSearch.providerGoogle")
+                        : t("housing.webSearch.providerAzure")}
+                      {" · "}
+                      {p.status === "ok"
+                        ? t("housing.webSearch.providerStatusOk")
+                        : p.status === "not_configured"
+                          ? t("housing.webSearch.providerStatusNotConfigured")
+                          : t("housing.webSearch.providerStatusError")}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {sessionExpired && (
+                <p className="rounded-2xl bg-warning-soft p-3 text-xs font-semibold text-warning">
+                  {t("housing.webSearch.sessionExpired")}
+                </p>
+              )}
 
               {filteredOut > 0 && (
                 <p className="rounded-2xl bg-surface-2 p-3 text-xs text-muted">
@@ -521,18 +642,43 @@ export function HousingWebSearch({ params }: { params: HousingSearchParams }) {
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {listings.map((l) => (
-                      <ListingCard
-                        key={l.source_id}
-                        listing={l}
-                        sourceLabel={listingSourceLabel(l, domains)}
-                        onOpen={setOpenListing}
-                      />
-                    ))}
-                  </div>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      {listings.map((l) => (
+                        <ListingCard
+                          key={l.source_id}
+                          listing={l}
+                          sourceLabel={listingSourceLabel(l, domains)}
+                          onOpen={setOpenListing}
+                        />
+                      ))}
+                    </div>
 
-                  {/* safe count-only diagnostics when results were dropped */}
+                    {/* pagination: "load more" (session token) / all shown */}
+                    {loadMore?.hasMore && loadMore.token ? (
+                      <div className="flex justify-center">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={continuing}
+                          onClick={() => void loadMorePage()}
+                        >
+                          {continuing ? (
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-current/40 border-t-current" />
+                          ) : (
+                            <Icon name="chevron" size={14} strokeWidth={2} />
+                          )}
+                          {continuing
+                            ? t("housing.webSearch.loadMoreLoading")
+                            : t("housing.webSearch.loadMore", { n: loadMore.remaining })}
+                        </Button>
+                      </div>
+                    ) : loadMore && !loadMore.hasMore && (
+                      <p className="text-center text-[11px] font-medium text-faint">
+                        {t("housing.webSearch.allShown", { n: rawListings.length })}
+                      </p>
+                    )}
+
+                    {/* safe count-only diagnostics when results were dropped */}
                   {funnelDropped && funnel && (
                     <p className="text-[11px] text-faint">
                       {t("housing.webSearch.funnel", {

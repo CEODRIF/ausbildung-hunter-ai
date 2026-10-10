@@ -11,6 +11,7 @@ import {
   listingSourceLabel,
   safeHostname,
   VerificationBadge,
+  VIA_LABELS,
   type WebSearchDomain,
 } from "./listing-card";
 
@@ -152,6 +153,23 @@ export function ListingDetailModal({
         new Date(listing.last_checked_at),
       )
     : null;
+
+  // The SOURCE's own publication date (never our verification time).
+  // Accepts both date-only ("2025-09-30") and full ISO datetimes.
+  const published = listing.published_at
+    ? new Intl.DateTimeFormat(lang, { dateStyle: "medium" }).format(
+        new Date(
+          listing.published_at.length === 10
+            ? `${listing.published_at}T00:00:00`
+            : listing.published_at,
+        ),
+      )
+    : null;
+  // Which search provider(s) surfaced this ad (cross-source dedup shows
+  // ONE card; the user sees where it came from).
+  const viaSources = (listing.discovered_via ?? [])
+    .map((v) => VIA_LABELS[v] ?? v)
+    .filter(Boolean);
 
   return (
     <div
@@ -301,6 +319,18 @@ export function ListingDetailModal({
             </FactCell>
           </section>
 
+          {/* description — ONLY the source page's own metadata text */}
+          {listing.description && (
+            <section>
+              <h3 className="mb-2 text-xs font-bold tracking-wide text-faint uppercase">
+                {t("housing.webSearch.descriptionTitle")}
+              </h3>
+              <p className="rounded-2xl bg-surface-2 p-3 text-sm leading-6 text-ink-soft">
+                {listing.description}
+              </p>
+            </section>
+          )}
+
           {/* honest provenance note: what we have is search-result data,
               NOT the portal's full description */}
           <p className="flex items-start gap-2 rounded-2xl border border-line-strong bg-surface-2 p-3 text-xs leading-5 text-muted">
@@ -332,9 +362,19 @@ export function ListingDetailModal({
               </span>
               <span className="truncate">{safeHostname(listing.listing_url)}</span>
             </p>
-            {lastChecked && (
+            {published && (
               <p className="mt-1 text-faint">
+                {t("housing.webSearch.publishedSince", { date: published })}
+              </p>
+            )}
+            {lastChecked && (
+              <p className="text-faint">
                 {t("housing.webSearch.lastChecked", { date: lastChecked })}
+              </p>
+            )}
+            {viaSources.length > 0 && (
+              <p className="mt-1 text-faint">
+                {t("housing.webSearch.discoveredVia", { sources: viaSources.join(", ") })}
               </p>
             )}
           </div>

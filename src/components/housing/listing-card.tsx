@@ -136,6 +136,28 @@ function formatDate(iso: string, lang: string): string {
   }).format(d);
 }
 
+/** Ranking-engine reason keys → i18n keys (top 2 shown on the card). */
+const REASON_I18N: Record<string, string> = {
+  "rank.cityMatch": "housing.webSearch.reasonCityMatch",
+  "rank.cityUnknown": "housing.webSearch.reasonCityUnknown",
+  "rank.directListing": "housing.webSearch.reasonDirectListing",
+  "rank.rentKnown": "housing.webSearch.reasonRentKnown",
+  "rank.rentUnknown": "housing.webSearch.reasonRentUnknown",
+  "rank.budgetFit": "housing.webSearch.reasonBudgetFit",
+  "rank.budgetOver": "housing.webSearch.reasonBudgetOver",
+  "rank.typeMatch": "housing.webSearch.reasonTypeMatch",
+  "rank.roomsArea": "housing.webSearch.reasonRoomsArea",
+  "rank.fresh": "housing.webSearch.reasonFresh",
+  "rank.sourceQuality": "housing.webSearch.reasonSourceQuality",
+  "rank.verified": "housing.webSearch.reasonVerified",
+};
+
+/** "Discovered via" provider names for the detail view. */
+export const VIA_LABELS: Record<string, string> = {
+  google: "Google",
+  azure: "Bing",
+};
+
 /**
  * Verification badge — three honest states:
  *  - verified           (green):  we FETCHED the page and parsed structured
@@ -311,6 +333,18 @@ export function ListingCard({
               </span>
             ))}
           </div>
+        )}
+
+        {/* relevance reason (ranking engine — short, honest, top 2) */}
+        {listing.relevance && listing.relevance.reasons.length > 0 && (
+          <p className="text-[11px] font-medium leading-4 text-faint">
+            {listing.relevance.reasons
+              .slice(0, 2)
+              .map((r) => REASON_I18N[r])
+              .filter(Boolean)
+              .map((k) => t(k))
+              .join(" · ")}
+          </p>
         )}
 
         {/* footer: source + verification + external link */}
