@@ -1,0 +1,78 @@
+# Email scheduler — GitHub Actions fallback.
+#
+# PRIMARY trigger for scheduled sends is Vercel Cron (vercel.json →
+# /api/cron/email-scheduler, every minute). This workflow drives the SAME
+# durable engine (claim + batch over the existing internal worker
+# endpoints) as a fallback for deployments without Vercel Cron.
+#
+# DISABLED BY DEFAULT: the job only runs when the repository VARIABLE
+# `EMAIL_SCHEDULER_GH` is set to the exact string `true`. Enabling it
+# requires the repository SECRET `EMAIL_WORKER_SECRET` (the same value
+# production uses for /api/internal/email-worker*) — without it the job
+# fails loudly instead of hammering unauthenticated.
+#
+# Optional repository variables:
+#   EMAIL_SCHEDULER_URL   — production origin (default: https://ausbildungsweg.net)
+#
+# Safety: bounded work per run (3 claim+process rounds), the endpoints are
+# atomic (SKIP LOCKED claims), so overlapping runs (schedule + dispatch)
+# can never double-send. Nothing secret is echoed.
+name: Email Scheduler (GH fallback)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    name: scheduler tick
+    # Gated: off unless the repo variable says exactly "true".
+    if: vars.EMAIL_SCHEDULER_GH == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: email-scheduler-tick
+      cancel-in-progress: false # never kill a tick mid-batch
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Scheduler tick
+        env:
+          EMAIL_WORKER_SECRET: ${{ secrets.EMAIL_WORKER_SECRET }}
+          DEPLOY_URL: ${{ vars.EMAIL_SCHEDULER_URL || 'https://ausbildungsweg.net' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EMAIL_WORKER_SECRET:-}" ]; then
+            echo "::error::EMAIL_WORKER_SECRET is not set in repository secrets."
+            exit 1
+          fi
+          if [ -z "$DEPLOY_URL" ]; then
+            DEPLOY_URL="https://ausbildungsweg.net"
+          fi
+          DEPLOY_URL="${DEPLOY_URL%/}"
+          claimed=0
+          processed=0
+          for round in 1 2 3; do
+            claim_json="$(curl -sS --fail-with-body -X POST \
+              -H "x-email-worker-secret: $EMAIL_WORKER_SECRET" \
+              -H "content-type: application/json" \
+              -d '{}' \
+              "$DEPLOY_URL/api/internal/email-worker/claim")"
+            user_id="$(printf '%s' "$claim_json" | jq -r '.campaign.userId // empty')"
+            campaign_id="$(printf '%s' "$claim_json" | jq -r '.campaign.campaignId // empty')"
+            if [ -z "$campaign_id" ] || [ -z "$user_id" ]; then
+              echo "Queue empty (round $round) — nothing due."
+              break
+            fi
+            claimed=$((claimed + 1))
+            result_json="$(curl -sS --fail-with-body -X POST \
+              -H "x-email-worker-secret: $EMAIL_WORKER_SECRET" \
+              -H "content-type: application/json" \
+              -d "{\"userId\": \"$user_id\", \"campaignId\": \"$campaign_id\"}" \
+              "$DEPLOY_URL/api/internal/email-worker")"
+            processed_in_round="$(printf '%s' "$result_json" | jq -r '.processed // 0')"
+            processed=$((processed + processed_in_round))
+            echo "Round $round: claimed campaign, processed $processed_in_round message(s)."
+          done
+          echo "Tick done: claimed=$claimed processed=$processed"

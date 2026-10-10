@@ -5,18 +5,42 @@ import { getCurrentUserAndProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   recoverStaleCampaigns, getCampaign, getSenderSlotWaitMs } from "@/lib/email-campaigns";
-import { getServerT } from "@/lib/i18n/server";
+import { formatScheduledLocal, utcToLocalParts } from "@/lib/schedule-time";
+import { getRequestLang, getServerT } from "@/lib/i18n/server";
+import { localeForLang } from "@/lib/i18n/core";
 import {
   cancelCampaignAction,
   processCampaign,
+  rescheduleCampaignAction,
 } from "@/app/applications/campaign/[id]/actions";
+import { ScheduleForm } from "@/components/schedule-form";
 import { CampaignMonitor } from "@/app/applications/campaign/[id]/campaign-monitor";
 
 export const dynamic = "force-dynamic";
+
+/** Request-scoped schedule status, kept OUTSIDE the component so the
+ *  `Date.now()` comparison lives in a plain helper (server render is
+ *  one-shot per request; this satisfies the render-purity rule). */
+function scheduleStatus(scheduledAt: string | null): {
+  scheduledMs: number | null;
+  future: boolean;
+} {
+  const parsed = scheduledAt ? Date.parse(scheduledAt) : null;
+  const valid = parsed !== null && Number.isFinite(parsed);
+  return {
+    scheduledMs: valid ? parsed : null,
+    // future = the due-gate still holds; past+queued = the scheduler is
+    // late (honest "waiting" state, the monitor keeps draining).
+    future: valid && parsed > Date.now(),
+  };
+}
+
 export default async function CampaignPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { user, profile } = await getCurrentUserAndProfile();
   if (!user || !profile || profile.account_status !== "active")
@@ -31,6 +55,31 @@ export default async function CampaignPage({
     ? { ...data.campaign, status: recovery.status }
     : data.campaign;
   const t = await getServerT();
+  const locale = localeForLang(await getRequestLang());
+  const search = await searchParams;
+  // One-time notices for the just-finished actions (the page state itself
+  // already reflects them after the redirect).
+  const notice =
+    search.scheduled === "1"
+      ? t("account.scheduledNotice")
+      : search.rescheduled === "1"
+        ? t("account.rescheduledNotice")
+        : null;
+  const { scheduledMs, future: scheduleFuture } = scheduleStatus(
+    campaignState.scheduled_at,
+  );
+  // Reschedule form prefill: the campaign's CURRENT scheduled time as local
+  // wall-clock parts in its own zone (so the form shows what it will change).
+  const rescheduleDefaults = (() => {
+    if (!campaignState.scheduled_at || !campaignState.timezone) return undefined;
+    const parts = utcToLocalParts(
+      campaignState.scheduled_at,
+      campaignState.timezone,
+    );
+    return parts
+      ? { ...parts, timeZone: campaignState.timezone }
+      : undefined;
+  })();
   const terminal = [
     "completed",
     "partially_failed",
@@ -80,6 +129,33 @@ export default async function CampaignPage({
         >
           ← Applications
         </Link>
+        {notice && (
+          <div className="mt-3 rounded-2xl border border-success/25 bg-success-soft px-4 py-3 text-sm font-semibold text-success">
+            {notice}
+          </div>
+        )}
+        {scheduledMs !== null && Number.isFinite(scheduledMs) && (
+          <div
+            className={`mt-3 rounded-2xl border px-4 py-3 text-sm font-semibold ${
+              scheduleFuture
+                ? "border-accent/25 bg-accent-soft text-accent-deep"
+                : !terminal
+                  ? "border-warning/25 bg-warning-soft text-warning"
+                  : ""
+            }`}
+          >
+            {scheduleFuture
+              ? t("account.scheduledBanner", {
+                  time: formatScheduledLocal(
+                    campaignState.scheduled_at!,
+                    campaignState.timezone ?? "UTC",
+                    locale,
+                  ),
+                  timezone: campaignState.timezone ?? "UTC",
+                })
+              : t("account.dueBanner")}
+          </div>
+        )}
         <div className="mt-2 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <h1 className="text-2xl font-bold text-ink">
@@ -97,16 +173,23 @@ export default async function CampaignPage({
             <CampaignMonitor campaignId={id} />
           </div>
           <div className="flex gap-2">
-            <form action={processCampaign}>
-              <input type="hidden" name="campaignId" value={id} />
-              <button
-                disabled={terminal}
-                className="h-10 rounded-xl bg-accent px-4 text-xs font-semibold text-white disabled:opacity-50"
-                type="submit"
-              >
-                {t("account.processBatch")}
-              </button>
-            </form>
+            {/* Manual processing is hidden while the schedule is still in
+                the future — the claim gate cannot see due messages, so the
+                button would do nothing and only mislead. Once the instant
+                has passed it comes back (it then also serves as a
+                recovery trigger if the scheduler was down). */}
+            {!scheduleFuture && (
+              <form action={processCampaign}>
+                <input type="hidden" name="campaignId" value={id} />
+                <button
+                  disabled={terminal}
+                  className="h-10 rounded-xl bg-accent px-4 text-xs font-semibold text-white disabled:opacity-50"
+                  type="submit"
+                >
+                  {t("account.processBatch")}
+                </button>
+              </form>
+            )}
             {!terminal && (
               <form action={cancelCampaignAction}>
                 <input type="hidden" name="campaignId" value={id} />
@@ -138,6 +221,28 @@ export default async function CampaignPage({
             value={String(data.usage.remaining)}
           />
         </section>
+        {/* Reschedule — only while the campaign is queued AND the instant
+            is still in the future. The RPC itself is the authority: once
+            any message has been claimed it refuses atomically. */}
+        {campaignState.status === "queued" && scheduleFuture && (
+          <Card className="mt-6 p-5 sm:p-6">
+            <h2 className="font-bold text-ink-soft">
+              {t("account.rescheduleTitle")}
+            </h2>
+            <p className="mt-1 text-xs text-muted">
+              {t("account.rescheduleHint")}
+            </p>
+            <div className="mt-4">
+              <ScheduleForm
+                action={rescheduleCampaignAction}
+                extraHidden={[{ name: "campaignId", value: id }]}
+                defaults={rescheduleDefaults}
+                submitLabel={t("account.rescheduleSubmit")}
+                pendingLabel={t("account.rescheduling")}
+              />
+            </div>
+          </Card>
+        )}
         <Card className="mt-6 overflow-hidden">
           <div className="grid grid-cols-[minmax(0,1fr)_minmax(100px,0.5fr)_90px_minmax(100px,0.8fr)] gap-3 border-b border-line bg-surface-2 px-5 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-faint">
             <span>{t("account.recipient")}</span>
