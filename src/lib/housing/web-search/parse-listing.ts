@@ -36,6 +36,12 @@ export interface ParsedListingPage {
   depositEur: number | null;
   /** Street address / street+number from JSON-LD, when present. */
   address: string | null;
+  /** The SOURCE's stated publication date (JSON-LD `datePublished`),
+   *  ISO when present. NEVER our own verification timestamp. */
+  publishedAt: string | null;
+  /** The page's own description (og:description / meta description), when
+   *  present — public page metadata of an already-fetched page. */
+  description: string | null;
   /** Strong page-text signal that the offer is a RENTAL vs. a SALE.
     *  "rental": Miete/Warmmiete/Kaltmiete/Nebenkosten/Kaution present
     *  (without any sale marker).
@@ -140,6 +146,8 @@ function extractFromJsonLd(nodes: JsonLdNode[]): Partial<ParsedListingPage> {
     } else if (img && typeof img === "string" && result.images === undefined) {
       result.images = [img];
     }
+    // publication date (the source's own datePublished — never ours)
+    if (result.publishedAt == null) result.publishedAt = asString(node.datePublished);
     // offers / prices
     const offers = asRecord(node.offers);
     if (offers) {
@@ -283,6 +291,8 @@ export function parseListingPage(html: string): ParsedListingPage {
     docTitle: null,
     depositEur: null,
     address: null,
+    publishedAt: null,
+    description: null,
     rentalSignal: null,
   };
 
@@ -318,6 +328,9 @@ export function parseListingPage(html: string): ParsedListingPage {
     docTitle: extractDocTitle(html),
     depositEur: fromText.depositEur ?? null,
     address: fromLd.address ?? null,
+    publishedAt: fromLd.publishedAt ?? null,
+    description:
+      metaContent(html, "og:description") ?? metaContent(html, "description") ?? null,
     rentalSignal: extractRentalSignal(html),
   };
 }

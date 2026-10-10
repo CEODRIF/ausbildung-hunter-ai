@@ -46,7 +46,15 @@ export const maxDuration = 60;
  *     atomic Postgres RPCs (migration 20261107000000_housing_web_search_quota)
  *   - honest provider resolution: nothing configured → 200 with status
  *     "not_configured" (NOT an error, and no paid call)
- *   - ≤2 search calls + ≤3 page fetches per request, 25s request budget
+ *   - bounded paid budget per request (multi-provider engine: ≤4 Azure
+ *     Responses calls / ≤4 Bing transactions, ≤9 Google grounding calls
+ *     with a per-run cost cap, ≤6 web-mode page fetches), 55 s budget
+ *
+ * "Load more" continuations (`continue: { token }`): NO quota slot is
+ * reserved — a continuation is not a new search; it serves the already
+ * validated in-memory session (at most a few robots-checked page fetches,
+ * never a paid provider call). Unknown/expired token → 200 with
+ * `sessionExpired: true` (the UI offers a fresh search).
  *
  * Quota settlement: one slot is reserved BEFORE the provider call. It is
  * refunded (released) when no paid call ran — result-cache hit, provider
@@ -73,6 +81,9 @@ const paramsSchema = z
       .regex(/^\d{4}-\d{2}-\d{2}$/)
       .nullable()
       .default(null),
+    /** Result ordering: "newest" = best match first (the ranking engine's
+     *  default); price sorts put unknown prices last. */
+    sort: z.enum(["newest", "price_asc", "price_desc"]).default("newest"),
   })
   .strict();
 
@@ -84,6 +95,14 @@ const bodySchema = z
     /** Optional client idempotency key: a retry resending the SAME id is
      *  never charged twice (already_reserved). */
     request_id: z.string().uuid().optional(),
+    /** "Load more": resume a search session (token from a previous run's
+     *  `loadMore`). Consumes NO quota slot and issues no paid calls. */
+    continue: z
+      .object({
+        token: z.string().min(8).max(64),
+        limit: z.number().int().min(1).max(48).optional(),
+      })
+      .optional(),
   })
   .strict();
 
@@ -110,6 +129,9 @@ function emptyOutcome(
     warnings: [],
     cached: false,
     fetchedAt: new Date().toISOString(),
+    providers: [],
+    cost: [],
+    loadMore: null,
   };
 }
 
@@ -171,6 +193,36 @@ export async function POST(request: Request) {
   }
   const body = parsed.data;
 
+  // ------------------------------------------------------------------
+  // "Load more" continuation — NO quota slot, NO paid provider calls.
+  // It pages through the already-validated in-memory session (at most a
+  // few robots-checked page fetches). The rate limit above still applies
+  // (it is a per-user request cap, not a paid-call gate).
+  // ------------------------------------------------------------------
+  if (body.continue) {
+    const runId = body.request_id ?? randomUUID();
+    try {
+      const outcome = await runHousingWebSearch({
+        mode: "web",
+        params: body.params,
+        continueSession: body.continue,
+      });
+      // Count-only diagnostics (no URLs, no tokens, no keys).
+      console.info(
+        `[housing-web-search] continuation run_id=${runId} session_expired=${outcome.sessionExpired === true} listings=${outcome.listings.length} pages_fetched=${outcome.stats.pagesFetched} elapsed_ms=${outcome.funnel.elapsedMs}`,
+      );
+      return NextResponse.json(
+        { ...outcome, quota: null },
+        { status: 200, headers: rateLimitHeaders(limited) },
+      );
+    } catch {
+      return NextResponse.json(
+        { ...emptyOutcome("provider_error", "The web search request failed.", "web"), quota: null },
+        { status: 502, headers: rateLimitHeaders(limited) },
+      );
+    }
+  }
+
   // Domain allowlist is binding server-side: unknown domains are dropped and
   // reported, never silently fetched or searched.
   const requested = body.domains ?? [];
@@ -228,7 +280,7 @@ export async function POST(request: Request) {
     // no response text, no keys). `status=ok listings=0` is the signature of
     // a search that ran but displayed nothing; the warnings + funnel say why.
     console.info(
-       `[housing-web-search] run finished run_id=${runId} status=${outcome.status} provider=${outcome.provider ?? "n/a"} provider_calls=${outcome.funnel.providerCalls} web_search_calls=${outcome.funnel.webSearchCalls} raw=${outcome.funnel.rawCandidates} unique=${outcome.funnel.uniqueCandidates} invalid_urls=${outcome.funnel.invalidUrls} search_pages_rejected=${outcome.funnel.searchPagesRejected} unique_search_pages=${outcome.funnel.uniqueSearchPages} non_listing_content=${outcome.funnel.contentRejected} untitled_rejected=${outcome.funnel.untitledRejected} non_rental_rejected=${outcome.funnel.nonRentalRejected} kept_via_json=${outcome.funnel.jsonOnlyKept} city_mismatches=${outcome.funnel.cityMismatches} duplicates=${outcome.funnel.duplicateResults} off_allowlist=${outcome.funnel.offAllowlist} json_items=${outcome.funnel.jsonItems} json_matched=${outcome.funnel.jsonMatched} fabricated=${outcome.funnel.fabricatedRejected} enriched=${outcome.funnel.detailsEnriched} images=${outcome.funnel.imagesAttached} valid=${outcome.funnel.validListings} displayed=${outcome.funnel.displayedListings} deduplicated=${outcome.deduplicated === true} elapsed_ms=${outcome.funnel.elapsedMs} bing_requests=${outcome.stats.bingRequests ?? "n/a"} warnings=[${outcome.warnings.slice(0, 6).join(",")}]`,
+        `[housing-web-search] run finished run_id=${runId} status=${outcome.status} provider=${outcome.provider ?? "n/a"} rounds=${outcome.funnel.rounds} provider_calls=${outcome.funnel.providerCalls} web_search_calls=${outcome.funnel.webSearchCalls} google_calls=${outcome.funnel.googleCalls} google_queries=${outcome.funnel.googleQueries} cross_source_merged=${outcome.funnel.crossSourceMerges} raw=${outcome.funnel.rawCandidates} unique=${outcome.funnel.uniqueCandidates} invalid_urls=${outcome.funnel.invalidUrls} search_pages_rejected=${outcome.funnel.searchPagesRejected} unique_search_pages=${outcome.funnel.uniqueSearchPages} non_listing_content=${outcome.funnel.contentRejected} untitled_rejected=${outcome.funnel.untitledRejected} non_rental_rejected=${outcome.funnel.nonRentalRejected} kept_via_json=${outcome.funnel.jsonOnlyKept} city_mismatches=${outcome.funnel.cityMismatches} duplicates=${outcome.funnel.duplicateResults} off_allowlist=${outcome.funnel.offAllowlist} json_items=${outcome.funnel.jsonItems} json_matched=${outcome.funnel.jsonMatched} fabricated=${outcome.funnel.fabricatedRejected} enriched=${outcome.funnel.detailsEnriched} images=${outcome.funnel.imagesAttached} valid=${outcome.funnel.validListings} displayed=${outcome.funnel.displayedListings} has_more=${outcome.loadMore?.hasMore === true} deduplicated=${outcome.deduplicated === true} elapsed_ms=${outcome.funnel.elapsedMs} bing_requests=${outcome.stats.bingRequests ?? "n/a"} google_cost_cents=${outcome.cost.find((c) => c.provider === "google")?.estimatedCostCents ?? 0} warnings=[${outcome.warnings.slice(0, 6).join(",")}]`,
     );
     // Settle the reserved slot: refund when NO paid search ran for THIS
     // caller (cache hit, in-flight duplicate, or non-ok status); otherwise

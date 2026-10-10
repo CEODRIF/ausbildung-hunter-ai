@@ -155,6 +155,37 @@ export interface HousingListing {
    * AI extraction alone NEVER yields `verified`.
    */
   verification_status?: "unverified" | "partially_verified" | "verified";
+  /**
+   * Web-discovery only: ranking-engine output — an explicit 0..100 score
+   * and the top reason keys (localized by the UI, e.g. "rank.budgetFit").
+   * `null`/absent = ranking not applied (saved snapshots predate it).
+   */
+  relevance?: { score: number; reasons: string[] } | null;
+  /**
+   * Web-discovery only: the provider(s) that discovered this listing
+   * ("google", "azure") — the "discovered via" list. Cross-source dedup
+   * renders ONE card even when several sources surfaced the same ad.
+   */
+  discovered_via?: string[];
+  /**
+   * Web-discovery only: 0..100 — share of the core fact set (rent, city,
+   * rooms, area, move-in, furnished-when-stated, deposit, description)
+   * that is KNOWN (not null). `null`/absent = not computed.
+   */
+  data_completeness?: number | null;
+  /**
+   * Web-discovery only: whether WE checked the listing page for
+   * availability. `page_checked` — the page was fetched + parsed;
+   * `not_checked` — discovery-level data only. Neither value is an
+   * availability guarantee (the source decides when an ad expires).
+   */
+  availability_status?: "page_checked" | "not_checked";
+  /**
+   * Web-discovery only: the SOURCE's stated publication date (ISO) when
+   * the fetched page carries one (JSON-LD datePublished). `null`/absent =
+   * unknown. NEVER derived from our own verification timestamp.
+   */
+  published_at?: string | null;
 }
 
 export interface HousingSearchParams {

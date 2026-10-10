@@ -14,11 +14,25 @@ import {
   ALLOWED_DOMAINS,
   domainForHost,
   LIMITS,
+  PROVIDER_LIMITS,
+  resolveGeminiProvider,
   resolveSearchProvider,
   type AllowedDomain,
+  type ResolvedGeminiProvider,
   type ResolvedSearchProvider,
 } from "./config";
-import { buildHousingQueries } from "./queries";
+import { buildHousingQueries, wrapInstruction } from "./queries";
+import { planRound, type RoundPlan } from "./query-planner";
+import { geminiWebSearch } from "./gemini-client";
+import { dedupKeys, isSameListing, listingIdFromUrl, type DedupKey } from "./dedup";
+import { rankListing } from "./ranking";
+import { CostTracker, type ProviderCost } from "./cost";
+import {
+  claimNextPage,
+  createSession,
+  markEnriched,
+  wasEnriched,
+} from "./sessions";
 import { parseModelListings, type ModelListingItem } from "./parse-model-listings";
 import { extractCityFromText, matchCity } from "./geo";
 import { guardedFetch, UnsafeUrlError } from "./url-guard";
@@ -107,9 +121,38 @@ export interface HousingWebSearchInput {
     | "rooms"
     | "min_area_sqm"
     | "available_before"
+    | "sort"
   >;
   /** targeted mode: subset of the allowlist (default: all allowlisted). */
   domains?: string[];
+  /**
+   * "Load more": resume an in-memory search session (token from a previous
+   * run's `loadMore`). Continuations serve the ALREADY DISCOVERED + VALIDATED
+   * candidates — no new paid provider calls, no quota slot (route), at most
+   * a few robots-checked page fetches for lazy enrichment.
+   */
+  continueSession?: { token: string; limit?: number } | null;
+}
+
+/** Per-provider diagnostics for one run (counts only — never URLs/text). */
+export interface ProviderStatus {
+  provider: "google" | "azure";
+  status: "ok" | "not_configured" | "error" | "rate_limited" | "timeout";
+  /** Paid API calls actually issued. */
+  calls: number;
+  /** New unique candidates this provider contributed (diagnostic). */
+  candidates: number;
+  /** Search queries / Bing transactions the provider reports as executed. */
+  searchQueries: number;
+  /** Stable machine reason (never a raw provider payload). */
+  error: string | null;
+}
+
+/** Pagination state for "load more". */
+export interface LoadMoreInfo {
+  token: string | null;
+  hasMore: boolean;
+  remaining: number;
 }
 
 /**
@@ -201,18 +244,30 @@ export interface SearchFunnel {
   displayedListings: number;
   /** Wall-clock pipeline duration. */
   elapsedMs: number;
+  /** Gemini (Google) API calls issued this run. */
+  googleCalls: number;
+  /** Search queries Google reports as EXECUTED (the billable unit). */
+  googleQueries: number;
+  /** Discovery rounds executed (1–3). */
+  rounds: number;
+  /** Candidates merged across sources/paths (listing-id or fingerprint
+   *  identity — the same ad found via Google AND Azure). */
+  crossSourceMerges: number;
 }
 
 export interface HousingWebSearchOutcome {
   status: WebSearchStatus;
   message: string | null;
-  /** Azure-only feature — never anything else (see ./config). */
-  provider: "azure" | null;
+  /** Which providers served this run (diagnostic label; `null` = none
+   *  configured or a continuation). Targeted mode is always azure-only. */
+  provider: "azure" | "google" | "azure+google" | null;
   mode: WebSearchMode;
+  /** Page 1 of the validated listings. Whole-web runs with more than one
+   *  page serve the rest via `loadMore` + session token ("load more"). */
   listings: HousingListing[];
   /** Citations exactly as returned by the search tool (display required). */
   citations: SearchCitation[];
-  /** The queries actually sent to the search provider. */
+  /** The queries actually sent to the search provider(s). */
   queries: string[];
   stats: {
     searchCalls: number;
@@ -228,6 +283,14 @@ export interface HousingWebSearchOutcome {
    *  route refunds this caller's reserved quota slot. */
   deduplicated?: boolean;
   fetchedAt: string;
+  /** Per-provider diagnostics (counts only — never URLs or response text). */
+  providers: ProviderStatus[];
+  /** Measured per-provider consumption + cost basis (never a secret). */
+  cost: ProviderCost[];
+  /** "Load more" state — non-null when this run has further pages. */
+  loadMore: LoadMoreInfo | null;
+  /** Continuation requested with an unknown/expired session token. */
+  sessionExpired?: boolean;
 }
 
 export const ZERO_FUNNEL: SearchFunnel = {
@@ -253,6 +316,10 @@ export const ZERO_FUNNEL: SearchFunnel = {
   validListings: 0,
   displayedListings: 0,
   elapsedMs: 0,
+  googleCalls: 0,
+  googleQueries: 0,
+  rounds: 0,
+  crossSourceMerges: 0,
 };
 
 // --- result cache (in-memory, TTL — work-product scope only) ----------------
@@ -306,6 +373,8 @@ interface Candidate {
   domain: AllowedDomain | null;
   /** Model-stated fields, cross-validated against the real result set. */
   json: ModelListingItem | null;
+  /** Which provider(s) surfaced this URL ("discovered via", sorted). */
+  via?: ("google" | "azure")[];
 }
 
 /** Legal / auth / info pages that can never be an individual listing. */
@@ -607,6 +676,26 @@ function stableSourceId(url: string): string {
   return createHash("sha1").update(url).digest("hex").slice(0, 16);
 }
 
+/**
+ * Data completeness (0..100) — share of the CORE fact set that is KNOWN
+ * (not null). "Furnished" counts only when the source actually stated it
+ * (field provenance) — the default `false` is not knowledge. Pure, honest
+ * metric: missing data lowers the number, it is never padded.
+ */
+function completenessOf(l: HousingListing): number {
+  const checks: boolean[] = [
+    l.rent_warm_eur != null || l.rent_cold_eur != null,
+    l.city.trim() !== "",
+    l.rooms != null,
+    l.living_area_sqm != null,
+    l.available_from != null,
+    l.field_provenance?.furnished != null,
+    l.deposit_eur != null,
+    l.description != null,
+  ];
+  return Math.round((checks.filter(Boolean).length / checks.length) * 100);
+}
+
 function isPastIsoDate(value: string | null, now: number): boolean {
   if (!value) return false;
   const ts = Date.parse(value);
@@ -618,11 +707,15 @@ function isPastIsoDate(value: string | null, now: number): boolean {
 export interface DiscoveryDependencies {
   now?: () => number;
   fetchImpl?: typeof fetch;
-  /** Inject a provider (tests). Omitted → resolveSearchProvider(). */
+  /** Inject the Azure provider (tests). Omitted → resolveSearchProvider(). */
   provider?: ResolvedSearchProvider | null;
+  /** Inject the Google/Gemini provider (tests). Omitted → resolveGeminiProvider(). */
+  geminiProvider?: ResolvedGeminiProvider | null;
+  /** Gemini API base override (tests). */
+  geminiBaseUrl?: string;
   /**
-   * Tests inject `fetchImpl` (drives the Azure call, robots and page
-   * fetches). No network is needed.
+   * Tests inject `fetchImpl` (drives the Azure + Gemini calls, robots and
+   * page fetches). No network is needed.
    */
 }
 
@@ -638,16 +731,30 @@ async function executeHousingWebSearch(
   // Declared before `fail` (which reports them on every failure path).
   const searchCalls: string[] = [];
   let bingRequests: number | null = null;
+  let googleCalls = 0;
+  let googleQueries = 0; // executed Google search queries (the billable unit)
+  let azureSucceeded = 0;
+  let googleSucceeded = 0;
+  let lastGoogleFailure: string | null = null;
+  const cost = new CostTracker();
+  let azureReady = false;
+  let geminiReady = false;
+  const providerLabel = (): "azure" | "google" | "azure+google" | null => {
+    if (input.mode === "targeted") return azureReady ? "azure" : null;
+    if (azureReady && geminiReady) return "azure+google";
+    if (geminiReady) return "google";
+    if (azureReady) return "azure";
+    return null;
+  };
 
   const fail = (
     status: WebSearchStatus,
     message: string | null,
-    provider: "azure" | null,
     extra: Partial<Pick<HousingWebSearchOutcome, "citations" | "queries" | "listings">> = {},
   ): HousingWebSearchOutcome => ({
     status,
     message,
-    provider,
+    provider: providerLabel(),
     mode: input.mode,
     listings: extra.listings ?? [],
     citations: extra.citations ?? [],
@@ -657,12 +764,33 @@ async function executeHousingWebSearch(
     warnings,
     cached: false,
     fetchedAt: new Date(started).toISOString(),
+    providers: [],
+    cost: cost.snapshot(),
+    loadMore: null,
   });
 
-  // 1) Provider resolution (honest "not configured" state, not an error).
-  const provider = deps.provider === undefined ? resolveSearchProvider() : deps.provider;
-  if (!provider) {
-    return fail("not_configured", "no_search_provider", null);
+  // "Load more" continuations serve an already-validated in-memory session —
+  // no providers, no paid calls (at most a few robots-checked page fetches).
+  if (input.continueSession) {
+    return executeContinuation(input.continueSession, deps);
+  }
+
+  // 1) Provider resolution — Azure (existing config) and Google (Gemini
+  //    grounding, server-side key only). At least one must be ready; a
+  //    single configured provider runs alone (graceful degradation).
+  const azureProvider =
+    deps.provider === undefined ? resolveSearchProvider() : deps.provider;
+  const geminiProvider =
+    deps.geminiProvider === undefined ? resolveGeminiProvider() : deps.geminiProvider;
+  azureReady = azureProvider !== null;
+  geminiReady = geminiProvider !== null;
+  if (!azureReady && !geminiReady) {
+    return fail("not_configured", "no_search_provider");
+  }
+  // Targeted mode honors the user's explicit site selection — only Azure's
+  // domain-restricted web_search tool supports it (Google never runs here).
+  if (input.mode === "targeted" && !azureReady) {
+    return fail("not_configured", "no_search_provider");
   }
 
   // 2) Build queries (two complementary German queries for general mode).
@@ -703,22 +831,24 @@ async function executeHousingWebSearch(
     return Math.min(LIMITS.searchTimeoutMs, remaining);
   };
 
-  // Azure-only search call: the resolver (./config) guarantees `provider`
-  // is a fully validated `azure` provider or null (handled above). There is
-  // deliberately NO fallback provider in the housing pipeline.
+  // Azure search call: the resolver (./config) guarantees `azureProvider`
+  // is a fully validated `azure` provider or null (handled above).
   const runOneCall = async (
     query: string,
     allowed: string[] | undefined,
   ): Promise<WebDiscoveryResult> => {
+    if (!azureProvider) {
+      throw new WebSearchApiError("not_configured", "Azure web search is not configured.");
+    }
     // Re-check the deadline at issue time (the pool guard ran a moment
     // earlier; a parallel call may have consumed the remaining budget).
     const t = timeoutForCall();
     if (t === null) throw new CallBudgetExhausted();
     searchCalls.push(query);
     const res = await azureWebSearch({
-      base: provider.base,
-      key: provider.key,
-      model: provider.model,
+      base: azureProvider.base,
+      key: azureProvider.key,
+      model: azureProvider.model,
       input: query,
       allowedDomains: allowed,
       userLocation,
@@ -728,6 +858,35 @@ async function executeHousingWebSearch(
     bingRequests =
       bingRequests === null ? res.numRequests : bingRequests + (res.numRequests ?? 0);
     webSearchCalls += res.webSearchCalls;
+    azureSucceeded += 1;
+    return res;
+  };
+
+  // Google (Gemini grounding) search call — the broad-discovery provider.
+  // Isolated by design: a Google failure NEVER blocks Azure and vice versa.
+  const runGoogleCall = async (rawQuery: string): Promise<WebDiscoveryResult> => {
+    if (!geminiProvider) {
+      throw new WebSearchApiError(
+        "not_configured",
+        "Google (Gemini) web search is not configured.",
+      );
+    }
+    if (googleCalls >= PROVIDER_LIMITS.maxGoogleCallsPerRun) throw new CallBudgetExhausted();
+    if (cost.googleCapReached()) throw new CallBudgetExhausted();
+    const t = timeoutForCall();
+    if (t === null) throw new CallBudgetExhausted();
+    const res = await geminiWebSearch({
+      key: geminiProvider.key,
+      model: geminiProvider.model,
+      input: wrapInstruction(rawQuery),
+      fetchImpl: deps.fetchImpl,
+      timeoutMs: t,
+      baseUrl: deps.geminiBaseUrl,
+    });
+    googleCalls += 1;
+    googleQueries += res.numRequests ?? 0;
+    cost.addGoogleQueries(res.numRequests);
+    googleSucceeded += 1;
     return res;
   };
 
@@ -746,7 +905,22 @@ async function executeHousingWebSearch(
     return s;
   };
 
-  const mergeCall = (res: WebDiscoveryResult): void => {
+  /** Which provider(s) surfaced each normalized URL ("discovered via"). */
+  const providerByUrl = new Map<string, Set<"google" | "azure">>();
+  const tagProvider = (raw: string, prov: "google" | "azure"): void => {
+    const n = normalizeUrl(raw);
+    if (!n) return;
+    let set = providerByUrl.get(n);
+    if (!set) {
+      set = new Set();
+      providerByUrl.set(n, set);
+    }
+    set.add(prov);
+  };
+
+  const mergeCall = (res: WebDiscoveryResult, prov: "google" | "azure"): void => {
+    for (const c of res.citations) tagProvider(c.url, prov);
+    for (const s of res.sources) tagProvider(s, prov);
     citations = [...citations, ...res.citations];
     sources = [...sources, ...res.sources];
     // First call's image metadata wins on URL conflicts (deterministic).
@@ -756,6 +930,7 @@ async function executeHousingWebSearch(
     const parsed = parseModelListings(res.text);
     if (parsed.truncated) warnings.push("json_truncated_salvaged");
     jsonItems = [...jsonItems, ...parsed.items];
+    if (prov === "azure") cost.addBingTransactions(res.numRequests);
   };
 
   const selectedDomains =
@@ -765,68 +940,217 @@ async function executeHousingWebSearch(
 
   try {
     if (input.mode === "targeted") {
-      mergeCall(await runOneCall(built.targetedQuery, selectedDomains));
+      mergeCall(await runOneCall(built.targetedQuery, selectedDomains), "azure");
       primaryWebSearchCalls = webSearchCalls;
     } else {
-      // Cost-aware MULTI-QUERY retrieval: the primary query family always
-      // runs; the complementary families (WG / student / private rental
-      // for "all", the alt phrasing for specific types) run in a bounded-
-      // parallelism pool with early stop:
-      //   - probe ≥ webModeSecondCallThreshold candidates → done,
-      //   - a call added no NEW candidates (stall) → done,
-      //   - maxSearchCallsPerRun / maxBingTransactionsPerRun → done,
-      //   - not enough deadline left for a call that could pay off → done.
-      mergeCall(await runOneCall(built.queries[0], undefined));
-      primaryWebSearchCalls = webSearchCalls;
-      const complements = built.queries.slice(1);
-      if (complements.length > 0) {
-        const probeCandidates = (): number =>
-          collectCandidates(citations, sources, input, sourceImages, jsonEvidenceUrls())
-            .candidates.length;
-        let stalled = false; // one call added nothing new → stop the pool
-        const poolGuard = (): boolean => {
-          if (stalled) return false;
-          if (searchCalls.length >= LIMITS.maxSearchCallsPerRun) return false;
-          if (bingRequests !== null && bingRequests >= LIMITS.maxBingTransactionsPerRun)
-            return false;
-          return timeoutForCall() !== null;
+      // MULTI-ROUND, MULTI-PROVIDER discovery (2026-10-10 high-coverage
+      // engine):
+      //   AZURE — the classic cost-aware multi-query pipeline, UNCHANGED:
+      //     primary call always runs first; the complementary query
+      //     families (WG / student / private rental for "all"; the alt
+      //     phrasing for specific types) run in a bounded-parallelism
+      //     pool with early stop (rich result set, stall, call cap,
+      //     Bing-transaction cap, deadline). Worst case: 4 calls / 4
+      //     Bing transactions — the documented budget.
+      //   GOOGLE — multi-round breadth in PARALLEL: round 1 = three core
+      //     families; round 2 = deep-dive phrasings while unique
+      //     candidates < 30; round 3 = `site:` gap-filling while < 15.
+      //     Every call deadline- and cost-cap guarded.
+      // A provider failure NEVER blocks the other (per-call isolation +
+      // count-only warnings + the whole-run check below).
+      const probeCandidates = (): number =>
+        collectCandidates(citations, sources, input, sourceImages, jsonEvidenceUrls())
+          .candidates.length;
+
+      const googleBudgetLeft = (): boolean =>
+        geminiReady &&
+        googleCalls < PROVIDER_LIMITS.maxGoogleCallsPerRun &&
+        !cost.googleCapReached() &&
+        timeoutForCall() !== null;
+
+      /** Google rounds — its own bounded budget, isolated from Azure. */
+      const googleRounds = async (): Promise<void> => {
+        if (!geminiReady) return;
+        let googleDown = false;
+        funnel.rounds = 1; // Google participation starts at round 1
+        const runGooglePlan = async (plan: RoundPlan): Promise<void> => {
+          let gnext = 0;
+          const googleWorker = async (): Promise<void> => {
+            while (gnext < plan.google.length && !googleDown) {
+              if (!googleBudgetLeft()) break;
+              const query = plan.google[gnext++].query;
+              try {
+                mergeCall(await runGoogleCall(query), "google");
+              } catch (error) {
+                if (error instanceof CallBudgetExhausted) break;
+                const failed =
+                  error instanceof WebSearchApiError ? error.failure : "provider_error";
+                lastGoogleFailure = failed;
+                warnings.push(`google_call_failed:${failed}`);
+                // Definitive provider errors (key rejected, endpoint gone,
+                // rate limit) will not heal inside one run — stop hammering.
+                if (
+                  error instanceof WebSearchApiError &&
+                  (error.failure === "tool_blocked" ||
+                    error.failure === "endpoint_unavailable" ||
+                    error.failure === "rate_limited")
+                ) {
+                  googleDown = true;
+                }
+                continue; // one failed Google call never stops the next one
+              }
+            }
+          };
+          if (plan.google.length === 0) return;
+          const workers = Math.min(PROVIDER_LIMITS.discoveryParallelism, plan.google.length);
+          const tasks: Promise<void>[] = [];
+          for (let i = 0; i < workers; i += 1) tasks.push(googleWorker());
+          await Promise.all(tasks);
         };
-        let next = 0;
-        const worker = async (): Promise<void> => {
-          while (next < complements.length && poolGuard()) {
-            const query = complements[next++];
-            const before = probeCandidates();
-            if (before >= LIMITS.webModeSecondCallThreshold) break;
-            try {
-              mergeCall(await runOneCall(query, undefined));
-            } catch (error) {
-              // A successful call already happened — keep its results and
-              // report the partial run honestly instead of failing the whole
-              // search. Budget exhaustion simply ends the pool.
-              if (error instanceof CallBudgetExhausted) break;
-              const failed =
-                error instanceof WebSearchApiError ? error.failure : "provider_error";
-              warnings.push(`complementary_call_failed:${failed}`);
-              continue;
-            }
-            if (probeCandidates() === before) {
-              // Cost-aware stop: the index surfaced no NEW individual
-              // listings for this city/budget. Deliberately NOT a warning
-              // (it is the normal outcome on thin markets — warnings drive
-              // the UI's partial-results banner); the funnel counters
-              // (providerCalls vs. uniqueCandidates) document it.
-              stalled = true;
-            }
+
+        await runGooglePlan(planRound(input.params, 1));
+        let unique = probeCandidates();
+        if (unique < PROVIDER_LIMITS.roundTwoCandidateThreshold && googleBudgetLeft()) {
+          funnel.rounds = 2;
+          await runGooglePlan(planRound(input.params, 2));
+          unique = probeCandidates();
+        }
+        if (unique < PROVIDER_LIMITS.roundThreeCandidateThreshold && googleBudgetLeft()) {
+          funnel.rounds = 3;
+          // Gap-fill only the major portals that surfaced NO candidate yet
+          // (coverage of the market, not repetition of what we already have).
+          const existingHosts = new Set<string>();
+          for (const c of citations) {
+            const h = hostnameOf(c.url);
+            if (h) existingHosts.add(h);
           }
-        };
-        const workers = Math.min(LIMITS.webModeParallelism, complements.length);
-        await Promise.all(Array.from({ length: workers }, () => worker()));
+          for (const s of sources) {
+            const h = hostnameOf(s);
+            if (h) existingHosts.add(h);
+          }
+          await runGooglePlan(planRound(input.params, 3, existingHosts));
+        }
+      };
+
+      // Google starts immediately and runs alongside the Azure pipeline.
+      const googleTask = googleRounds();
+
+      // AZURE — classic pipeline (primary first, then the cost-aware pool).
+      // Skipped entirely when Azure is not configured (Google-only runs
+      // must not emit spurious "provider failed" warnings).
+      let azurePrimaryBlocked: WebSearchStatus | null = null;
+      if (azureReady) {
+        try {
+          mergeCall(await runOneCall(built.queries[0], undefined), "azure");
+        } catch (error) {
+          // A failed PRIMARY is not fatal when the other provider may still
+          // deliver results — record it, skip the Azure pool (the provider is
+          // down or the deadline is gone; more Azure calls would fail too),
+          // and let the whole-run check below decide the run status.
+          if (error instanceof CallBudgetExhausted) {
+            azurePrimaryBlocked = "timeout";
+          } else {
+            const failed =
+              error instanceof WebSearchApiError ? error.failure : "provider_error";
+            warnings.push(`complementary_call_failed:${failed}`);
+            azurePrimaryBlocked =
+              failed === "tool_blocked"
+                ? "tool_blocked"
+                : failed === "endpoint_unavailable"
+                  ? "endpoint_unavailable"
+                  : failed === "rate_limited"
+                    ? "rate_limited"
+                    : failed === "timeout"
+                      ? "timeout"
+                      : "provider_error";
+          }
+        }
+        primaryWebSearchCalls = webSearchCalls;
+
+        const complements = built.queries.slice(1);
+        if (complements.length > 0 && azurePrimaryBlocked === null) {
+          let stalled = false; // one call added nothing new → stop the pool
+          const poolGuard = (): boolean => {
+            if (stalled) return false;
+            if (searchCalls.length >= LIMITS.maxSearchCallsPerRun) return false;
+            if (bingRequests !== null && bingRequests >= LIMITS.maxBingTransactionsPerRun)
+              return false;
+            return timeoutForCall() !== null;
+          };
+          let next = 0;
+          const worker = async (): Promise<void> => {
+            while (next < complements.length && poolGuard()) {
+              const query = complements[next++];
+              const before = probeCandidates();
+              if (before >= LIMITS.webModeSecondCallThreshold) break;
+              try {
+                mergeCall(await runOneCall(query, undefined), "azure");
+              } catch (error) {
+                // A successful call already happened — keep its results and
+                // report the partial run honestly instead of failing the whole
+                // search. Budget exhaustion simply ends the pool.
+                if (error instanceof CallBudgetExhausted) break;
+                const failed =
+                  error instanceof WebSearchApiError ? error.failure : "provider_error";
+                warnings.push(`complementary_call_failed:${failed}`);
+                continue;
+              }
+              if (probeCandidates() === before) {
+                // Cost-aware stop: the index surfaced no NEW individual
+                // listings for this family (normal on thin markets; the
+                // funnel counters document it).
+                stalled = true;
+              }
+            }
+          };
+          const workers = Math.min(LIMITS.webModeParallelism, complements.length);
+          await Promise.all(Array.from({ length: workers }, () => worker()));
+        }
+      }
+
+      await googleTask;
+
+      // Whole-run provider failure: NEITHER provider produced a single
+      // successful call → report the first recorded failure as the run
+      // status (a silent ok+0 would hide the outage).
+      if (azureSucceeded === 0 && googleSucceeded === 0) {
+        let status: WebSearchStatus;
+        let message: string;
+        if (azurePrimaryBlocked !== null) {
+          status = azurePrimaryBlocked;
+          message =
+            status === "timeout"
+              ? "request_budget_exhausted"
+              : "The web search provider rejected the request.";
+        } else if (timeoutForCall() === null) {
+          // No call could be issued at all because the request budget was
+          // already exhausted (not a provider fault — honest "timeout").
+          status = "timeout";
+          message = "request_budget_exhausted";
+        } else {
+          const first =
+            warnings.find((w) => w.startsWith("complementary_call_failed:")) ??
+            warnings.find((w) => w.startsWith("google_call_failed:"));
+          const code = first ? first.slice(first.lastIndexOf(":") + 1) : "provider_error";
+          status =
+            code === "tool_blocked"
+              ? "tool_blocked"
+              : code === "endpoint_unavailable"
+                ? "endpoint_unavailable"
+                : code === "rate_limited"
+                  ? "rate_limited"
+                  : code === "timeout"
+                    ? "timeout"
+                    : "provider_error";
+          message = "The web search provider rejected the request.";
+        }
+        return fail(status, message, { citations, queries: searchCalls });
       }
     }
   } catch (error) {
     if (error instanceof CallBudgetExhausted) {
       // The PRIMARY call itself had no deadline room (not a provider fault).
-      return fail("timeout", "request_budget_exhausted", provider.kind, {
+      return fail("timeout", "request_budget_exhausted", {
         citations,
         queries: searchCalls,
       });
@@ -842,15 +1166,15 @@ async function executeHousingWebSearch(
               : error.failure === "timeout"
                 ? "timeout"
                 : "provider_error";
-      return fail(status, error.message, provider.kind, { citations, queries: searchCalls });
+      return fail(status, error.message, { citations, queries: searchCalls });
     }
     if (error instanceof Error && error.name === "WebSearchError") {
-      return fail("provider_error", "The web search provider rejected the request.", provider.kind, {
+      return fail("provider_error", "The web search provider rejected the request.", {
         citations,
         queries: searchCalls,
       });
     }
-    return fail("provider_error", "The web search request failed.", provider.kind, {
+    return fail("provider_error", "The web search request failed.", {
       citations,
       queries: searchCalls,
     });
@@ -949,6 +1273,62 @@ async function executeHousingWebSearch(
     funnel.jsonMatched = 0;
   }
 
+  // 6b) Cross-source dedup BEYOND URL identity (collectCandidates already
+  //     applied rule 1 — normalized URL). Rule 2: same host + same portal
+  //     offer id. Rule 3: same host + same content fingerprint (title +
+  //     cold rent + rooms + non-empty city). Conservative by construction:
+  //     two DIFFERENT listings are never merged (host must match in both
+  //     rules; rule 3 additionally needs a known city).
+  {
+    const seen: Array<{ key: DedupKey; candidate: Candidate }> = [];
+    const survivors: Candidate[] = [];
+    for (const c of collected.candidates) {
+      const facts = {
+        title: c.json?.title ?? (c.title !== "" ? c.title : null),
+        rentColdEur: c.json?.rent_cold_eur ?? null,
+        rooms: c.json?.rooms ?? null,
+        city: c.json?.city ?? null,
+      };
+      const key = dedupKeys(c.url, facts);
+      if (!key) {
+        survivors.push(c);
+        continue;
+      }
+      const hit = seen.find((s) => isSameListing(s.key, key, key.host, facts.city));
+      if (hit) {
+        funnel.crossSourceMerges += 1;
+        // Union the "discovered via" providers of the merged-in candidate
+        // (different URL shape, same listing → the survivor shows both).
+        const mergedProvs = providerByUrl.get(c.url);
+        if (mergedProvs) {
+          let survivorProvs = providerByUrl.get(hit.candidate.url);
+          if (!survivorProvs) {
+            survivorProvs = new Set();
+            providerByUrl.set(hit.candidate.url, survivorProvs);
+          }
+          for (const p of mergedProvs) survivorProvs.add(p);
+        }
+        // Carry facts the survivor was missing (never overwrite real data).
+        if (hit.candidate.json === null && c.json !== null) hit.candidate.json = c.json;
+        if (hit.candidate.title === "" && c.title !== "") hit.candidate.title = c.title;
+        if (hit.candidate.imageUrl === null && c.imageUrl !== null) {
+          hit.candidate.imageUrl = c.imageUrl;
+        }
+        continue;
+      }
+      seen.push({ key, candidate: c });
+      survivors.push(c);
+    }
+    collected.candidates = survivors;
+  }
+
+  // 6c) "Discovered via" — which provider(s) surfaced each surviving
+  //     candidate (the UI shows ONE card, with the source list).
+  for (const c of collected.candidates) {
+    const provs = providerByUrl.get(c.url);
+    c.via = provs ? [...provs].sort() : [];
+  }
+
   const candidates = collected.candidates.slice(0, LIMITS.maxResults);
 
   // 7) Enrichment + location gating. Fetch + verify on allowlisted
@@ -956,6 +1336,10 @@ async function executeHousingWebSearch(
   //    validate the location evidence and build the normalized listing.
   const listings: HousingListing[] = [];
   let pagesFetched = 0;
+  // Web-mode runs validate more candidates, so their fetch budget is larger
+  // (still bounded; robots-checked + SSRF-guarded + deadline-capped).
+  const fetchBudget =
+    input.mode === "targeted" ? LIMITS.maxPagesToFetch : LIMITS.webModeMaxPagesToFetch;
 
   for (const candidate of candidates) {
     if (now() > requestDeadline) {
@@ -973,7 +1357,7 @@ async function executeHousingWebSearch(
 
     const fetchable = candidate.domain?.policy === "fetchable";
     if (fetchable && candidate.domain) {
-      if (pagesFetched >= LIMITS.maxPagesToFetch) {
+      if (pagesFetched >= fetchBudget) {
         warnings.push("fetch_budget_exhausted");
       } else {
         const url = new URL(candidate.url);
@@ -1199,7 +1583,12 @@ async function executeHousingWebSearch(
       // render the neutral placeholder otherwise (never a substitute image).
       ...(images.length > 0 ? { image_url: images[0] } : {}),
       features: [],
-      description: null,
+      // The fetched page's own description, when it carries one — public
+      // page metadata, never model text (null stays honest).
+      description: parsed?.description ?? null,
+      // The SOURCE's publication date (JSON-LD datePublished) — never our
+      // verification timestamp (that would fake freshness).
+      published_at: parsed?.publishedAt ?? null,
       provider_updated_at: null,
       last_checked_at: new Date(now()).toISOString(),
       source_terms_version: null,
@@ -1213,12 +1602,72 @@ async function executeHousingWebSearch(
       title_is_fallback: titleIsFallback,
       field_provenance,
       verification_notes: note,
+      discovered_via: candidate.via ?? [],
     };
     listings.push(listing);
   }
 
+  // 13) Ranking — explicit, explainable signals (./ranking), never keyword
+  //     inflation. The score orders the page; the top reason keys are shown
+  //     to the user as short chips ("matches city & budget", "no price").
+  for (const l of listings) {
+    l.relevance = rankListing({
+      city: l.city !== "" ? l.city : null,
+      cityVerified: !l.city_unverified,
+      listingUrl: l.listing_url,
+      hasListingId: listingIdFromUrl(l.listing_url) !== null,
+      rentWarmEur: l.rent_warm_eur,
+      rentColdEur: l.rent_cold_eur,
+      rooms: l.rooms,
+      livingAreaSqm: l.living_area_sqm,
+      floor: l.floor ?? null,
+      availableFrom: l.available_from,
+      furnished: l.field_provenance?.furnished != null ? l.furnished : null,
+      accommodationType: l.accommodation_type,
+      requestedType: input.params.accommodation_type,
+      maxWarmRent: input.params.max_warm_rent,
+      sourceHost: hostnameOf(l.listing_url),
+      pageVerified: l.verification_status === "verified",
+      nowMs: started,
+    });
+    l.data_completeness = completenessOf(l);
+    l.availability_status =
+      l.verification_status === "verified" ? "page_checked" : "not_checked";
+  }
+
+  // Deterministic ordering: "newest" (the default) = best match first;
+  // price sorts put unknown prices LAST (never mixed in as "free").
+  if (input.params.sort === "newest") {
+    listings.sort((a, b) => (b.relevance?.score ?? 0) - (a.relevance?.score ?? 0));
+  } else {
+    const dir = input.params.sort === "price_asc" ? 1 : -1;
+    listings.sort((a, b) => {
+      const ra = a.rent_warm_eur ?? a.rent_cold_eur;
+      const rb = b.rent_warm_eur ?? b.rent_cold_eur;
+      if (ra == null && rb == null) return (b.relevance?.score ?? 0) - (a.relevance?.score ?? 0);
+      if (ra == null) return 1;
+      if (rb == null) return -1;
+      if (ra !== rb) return dir * (ra - rb);
+      return (b.relevance?.score ?? 0) - (a.relevance?.score ?? 0);
+    });
+  }
+
+  // 14) Pagination — page 1 now; the rest lives in an in-memory session
+  //     (./sessions, no DB) that "load more" claims by token. Serving more
+  //     candidates than one page shows is what makes the volume targets
+  //     reachable without a second paid run.
+  let pageListings: HousingListing[] = listings;
+  let loadMore: LoadMoreInfo | null = null;
+  if (listings.length > PROVIDER_LIMITS.pageSize) {
+    const sess = createSession(listings, now());
+    pageListings = listings.slice(0, PROVIDER_LIMITS.pageSize);
+    loadMore = { token: sess.token, hasMore: sess.hasMore, remaining: sess.remaining };
+  }
+
   funnel.validListings = listings.length;
-  funnel.displayedListings = listings.length;
+  funnel.displayedListings = pageListings.length;
+  funnel.googleCalls = googleCalls;
+  funnel.googleQueries = googleQueries;
   funnel.elapsedMs = now() - started;
   if (funnel.cityMismatches > 0) {
     warnings.push(`city_mismatch_rejected=${funnel.cityMismatches}`);
@@ -1229,13 +1678,42 @@ async function executeHousingWebSearch(
   if (funnel.nonRentalRejected > 0) {
     warnings.push(`candidates_dropped_non_rental=${funnel.nonRentalRejected}`);
   }
+  if (funnel.crossSourceMerges > 0) {
+    warnings.push(`cross_source_merged=${funnel.crossSourceMerges}`);
+  }
+
+  // Per-provider diagnostics (counts only — never URLs or response text).
+  const providerStatusesOut: ProviderStatus[] = [
+    {
+      provider: "azure",
+      status: azureReady ? (azureSucceeded > 0 ? "ok" : "error") : "not_configured",
+      calls: searchCalls.length,
+      candidates: collected.candidates.filter((c) => c.via?.includes("azure")).length,
+      searchQueries: bingRequests ?? 0,
+      error:
+        azureReady && azureSucceeded === 0
+          ? (warnings.find((w) => w.startsWith("complementary_call_failed:"))?.split(":")[1] ??
+            "no_call_issued")
+          : null,
+    },
+  ];
+  if (input.mode === "web") {
+    providerStatusesOut.push({
+      provider: "google",
+      status: geminiReady ? (googleSucceeded > 0 ? "ok" : "error") : "not_configured",
+      calls: googleCalls,
+      candidates: collected.candidates.filter((c) => c.via?.includes("google")).length,
+      searchQueries: googleQueries,
+      error: geminiReady && googleSucceeded === 0 ? (lastGoogleFailure ?? "no_call_issued") : null,
+    });
+  }
 
   const outcome: HousingWebSearchOutcome = {
     status: "ok",
     message: null,
-    provider: provider.kind,
+    provider: providerLabel(),
     mode: input.mode,
-    listings,
+    listings: pageListings,
     citations,
     queries: searchCalls,
     stats: {
@@ -1247,9 +1725,194 @@ async function executeHousingWebSearch(
     warnings: [...new Set(warnings)],
     cached: false,
     fetchedAt: new Date(now()).toISOString(),
+    providers: providerStatusesOut,
+    cost: cost.snapshot(),
+    loadMore,
   };
 
   return outcome;
+}
+
+/**
+ * "Load more" continuation — claims the next page of an existing search
+ * session and lazily enriches it (robots-checked page fetches for
+ * fetchable-policy domains, bounded budget, once per URL per session).
+ *
+ * Contract:
+ *   - NO paid provider calls (the session already holds validated results).
+ *   - NO result-cache interaction, NO in-flight coalescing (see wrapper).
+ *   - Unknown/expired token (TTL or cold serverless instance) → status
+ *     "ok" + `sessionExpired: true` + empty page — the UI shows a clear
+ *     "start a new search" state; we NEVER re-run a paid search here.
+ */
+async function executeContinuation(
+  cont: { token: string; limit?: number },
+  deps: DiscoveryDependencies = {},
+): Promise<HousingWebSearchOutcome> {
+  const now = deps.now ?? Date.now;
+  const started = now();
+  const warnings: string[] = [];
+  const funnel: SearchFunnel = { ...ZERO_FUNNEL };
+
+  const claimed = claimNextPage(cont.token, cont.limit ?? PROVIDER_LIMITS.pageSize, now());
+  if (!claimed) {
+    return {
+      status: "ok",
+      message: "session_expired",
+      provider: null,
+      mode: "web",
+      listings: [],
+      citations: [],
+      queries: [],
+      stats: { searchCalls: 0, pagesFetched: 0, bingRequests: null },
+      funnel: { ...funnel, elapsedMs: now() - started },
+      warnings: ["session_expired"],
+      cached: false,
+      fetchedAt: new Date(started).toISOString(),
+      providers: [],
+      cost: [],
+      loadMore: null,
+      sessionExpired: true,
+    };
+  }
+
+  // Lazy enrichment of the page just served.
+  let pagesFetched = 0;
+  let newlyEnriched = 0;
+  const deadline = started + LIMITS.requestTimeoutMs;
+  for (const listing of claimed.page) {
+    if (pagesFetched >= PROVIDER_LIMITS.continuationFetchBudget) break;
+    if (now() > deadline) {
+      warnings.push("request_timeout_budget");
+      break;
+    }
+    if (listing.source_type === "page_fetch") continue; // already fetched
+    if (wasEnriched(cont.token, listing.listing_url)) continue; // fetched before
+    const domain = domainForHost(hostnameOf(listing.listing_url));
+    if (!domain || domain.policy !== "fetchable") continue; // ToS: link-only
+    markEnriched(cont.token, listing.listing_url);
+    let url: URL;
+    try {
+      url = new URL(listing.listing_url);
+    } catch {
+      continue;
+    }
+    const verdict = await robotsVerdictForUrl(url, { fetchImpl: deps.fetchImpl, now });
+    if (verdict !== "allowed") {
+      if (listing.verification_status !== "verified") {
+        listing.verification_notes =
+          verdict === "disallowed" ? "robots_blocked" : "fetch_failed";
+      }
+      continue;
+    }
+    try {
+      const page = await guardedFetch(listing.listing_url, domain, {
+        fetchImpl: deps.fetchImpl,
+      });
+      pagesFetched += 1;
+      const parsed = parseListingPage(page.text);
+      const fp = (key: keyof NonNullable<HousingListing["field_provenance"]>): void => {
+        listing.field_provenance = { ...(listing.field_provenance ?? {}), [key]: "page" };
+      };
+      if (parsed.rentColdEur != null) {
+        listing.rent_cold_eur = parsed.rentColdEur;
+        fp("rent_cold_eur");
+      }
+      if (parsed.rentWarmEur != null) {
+        listing.rent_warm_eur = parsed.rentWarmEur;
+        fp("rent_warm_eur");
+      }
+      if (parsed.rooms != null) {
+        listing.rooms = parsed.rooms;
+        fp("rooms");
+      }
+      if (parsed.livingAreaSqm != null) {
+        listing.living_area_sqm = parsed.livingAreaSqm;
+        fp("living_area_sqm");
+      }
+      if (parsed.availableFrom) {
+        listing.available_from = parsed.availableFrom;
+        fp("available_from");
+      }
+      if (parsed.depositEur != null) {
+        listing.deposit_eur = parsed.depositEur;
+        fp("deposit_eur");
+      }
+      if (parsed.address) {
+        listing.address = parsed.address;
+        fp("address");
+      }
+      if (parsed.postalCode && !listing.postal_code) listing.postal_code = parsed.postalCode;
+      if (parsed.title && (listing.title_is_fallback || listing.title.trim() === "")) {
+        listing.title = parsed.title;
+        listing.title_is_fallback = false;
+      }
+      if (parsed.publishedAt) listing.published_at = parsed.publishedAt;
+      if (parsed.description && !listing.description) listing.description = parsed.description;
+      const pageImages = sanitizeImageUrls(
+        [...parsed.images, ...(parsed.ogImage ? [parsed.ogImage] : [])],
+        page.finalUrl,
+      );
+      if (pageImages.length > 0) {
+        listing.images = pageImages;
+        listing.image_url = pageImages[0];
+        fp("images");
+      }
+      const strong =
+        parsed.fromJsonLd ||
+        parsed.rentColdEur != null ||
+        parsed.rentWarmEur != null ||
+        parsed.rooms != null ||
+        parsed.livingAreaSqm != null;
+      if (strong) {
+        listing.verification_status = "verified";
+        listing.verification_notes = "page_fetched";
+        listing.availability_status = "page_checked";
+      } else if (listing.verification_status === "unverified") {
+        listing.verification_status = "partially_verified";
+        listing.verification_notes = "page_unstructured";
+      }
+      listing.source_type = "page_fetch";
+      listing.last_checked_at = new Date(now()).toISOString();
+      newlyEnriched += 1;
+    } catch (error) {
+      if (error instanceof UnsafeUrlError) {
+        warnings.push(`unsafe_url_skipped:${domain.domain}`);
+      } else {
+        warnings.push(`fetch_failed:${domain.domain}`);
+        if (listing.verification_status !== "verified") {
+          listing.verification_notes = "fetch_failed";
+        }
+      }
+    }
+  }
+
+  funnel.validListings = claimed.page.length;
+  funnel.displayedListings = claimed.page.length;
+  funnel.detailsEnriched = newlyEnriched;
+  funnel.elapsedMs = now() - started;
+
+  return {
+    status: "ok",
+    message: null,
+    provider: null,
+    mode: "web",
+    listings: claimed.page,
+    citations: [],
+    queries: [],
+    stats: { searchCalls: 0, pagesFetched, bingRequests: null },
+    funnel: { ...funnel },
+    warnings: [...new Set(warnings)],
+    cached: false,
+    fetchedAt: new Date(now()).toISOString(),
+    providers: [],
+    cost: [],
+    loadMore: {
+      token: claimed.hasMore ? cont.token : null,
+      hasMore: claimed.hasMore,
+      remaining: claimed.remaining,
+    },
+  };
 }
 
 /**
@@ -1265,11 +1928,18 @@ async function executeHousingWebSearch(
  *    provider run. Riders get the same outcome flagged `deduplicated:
  *    true`; the route refunds their reserved quota slot, so a duplicate
  *    request never burns a second paid call or a second quota unit.
+ *
+ * Continuations ("load more") bypass BOTH layers: they serve the session's
+ * own candidates and must never replay a cached first page nor ride a
+ * fresh paid run.
  */
 export async function runHousingWebSearch(
   input: HousingWebSearchInput,
   deps: DiscoveryDependencies = {},
 ): Promise<HousingWebSearchOutcome> {
+  if (input.continueSession) {
+    return executeHousingWebSearch(input, deps);
+  }
   const now = deps.now ?? Date.now;
   const key = cacheKey(input);
 
