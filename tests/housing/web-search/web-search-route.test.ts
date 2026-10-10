@@ -44,6 +44,10 @@ vi.mock("@/lib/housing/web-search/discovery", () => ({
     validListings: 0,
     displayedListings: 0,
     elapsedMs: 0,
+    googleCalls: 0,
+    googleQueries: 0,
+    rounds: 0,
+    crossSourceMerges: 0,
   },
 }));
 const { runHousingWebSearch, ZERO_FUNNEL } = await import("@/lib/housing/web-search/discovery");
@@ -101,6 +105,9 @@ function makeOutcome(over: Record<string, unknown> = {}): HousingWebSearchOutcom
     warnings: [] as string[],
     cached: false,
     fetchedAt: "2025-10-09T00:00:00.000Z",
+    providers: [] as never[],
+    cost: [] as never[],
+    loadMore: null,
     ...over,
   } as HousingWebSearchOutcome;
 }

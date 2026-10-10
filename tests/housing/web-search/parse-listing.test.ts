@@ -137,8 +137,32 @@ describe("parseListingPage — malformed content", () => {
       docTitle: null,
       depositEur: null,
       address: null,
+      publishedAt: null,
+      description: null,
       rentalSignal: null,
     });
+  });
+
+  it("extracts the source's own datePublished (never our verification time)", () => {
+    const html = `<html><body><script type="application/ld+json">${JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "Apartment",
+      datePublished: "2025-09-30",
+    })}</script></body></html>`;
+    const p = parseListingPage(html);
+    expect(p.publishedAt).toBe("2025-09-30");
+  });
+
+  it("extracts og:description / meta description (page metadata)", () => {
+    const og = parseListingPage(
+      `<html><head><meta property="og:description" content="Helle 2-Zi im Zentrum"></head><body></body></html>`,
+    );
+    expect(og.description).toBe("Helle 2-Zi im Zentrum");
+    const meta = parseListingPage(
+      `<html><head><meta name="description" content="Zimmer in ruhiger WG"></head><body></body></html>`,
+    );
+    expect(meta.description).toBe("Zimmer in ruhiger WG");
+    expect(parseListingPage("<html></html>").description).toBeNull();
   });
 
   it("never throws on empty input", () => {
