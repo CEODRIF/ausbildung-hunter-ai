@@ -4,7 +4,12 @@
  * DST facts used below (tzdb, 2026):
  *  - Europe/Berlin: spring-forward 29.03.2026 01:00 UTC (02:00→03:00 local);
  *    fall-back 25.10.2026 01:00 UTC (03:00→02:00 local).
- *  - Africa/Casablanca: UTC+1 in November 2026 (Morocco is on winter time).
+ *  - Africa/Casablanca: UTC+0 in November 2026. Morocco's 2018 rule
+ *    (+1 year-round except Ramadan) ended during 2026 (last +1 stretch ran
+ *    into late summer); tzdb now projects Morocco back to UTC+0, so
+ *    November 2026 is the plain +0 offset. (Older tzdata bundled in some
+ *    2026 Node builds still shows +1 here — Node ≥ 22.23.3 / current
+ *    browsers are +0, which is the value asserted below.)
  *  - America/New_York: EDT (UTC−4) in July, EST (UTC−5) in November.
  */
 import { describe, expect, it } from "vitest";
@@ -24,14 +29,15 @@ const reasonOf = (result: ScheduleTimeResult): string =>
 
 describe("basic wall-clock → UTC conversion", () => {
   it("converts a normal (non-DST) local time, incl. the task's example zone", () => {
-    // 25 Nov 2026, 14:35 in Africa/Casablanca (UTC+1) → 13:35 UTC
+    // 25 Nov 2026, 14:35 in Africa/Casablanca (UTC+0 since the 2026 rule
+    // change — Morocco reverted to plain WET) → 14:35 UTC
     const result = wallClockToUtc(
       { year: 2026, month: 11, day: 25, hour: 14, minute: 35 },
       "Africa/Casablanca",
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.utcIso).toBe("2026-11-25T13:35:00.000Z");
+      expect(result.utcIso).toBe("2026-11-25T14:35:00.000Z");
       expect(result.resolvedAmbiguity).toBeNull();
     }
   });
@@ -152,9 +158,9 @@ describe("display helpers (UTC → local preview)", () => {
   it("formats the stored instant in the campaign's zone, locale-aware", () => {
     const iso = "2026-11-25T13:35:00.000Z";
     expect(formatScheduledLocal(iso, "Africa/Casablanca", "de")).toBe(
-      "25.11.2026, 14:35",
+      "25.11.2026, 13:35",
     );
-    // Same instant in Berlin (UTC+1) → 14:35 as well (round-trip sanity),
+    // Same instant in Berlin (UTC+1) → 14:35 (round-trip sanity),
     // and in New York (UTC−5) → 08:35.
     // "en" (en-US) formats month-first: 11/25/2026.
     expect(formatScheduledLocal(iso, "Europe/Berlin", "en")).toMatch(
@@ -166,8 +172,9 @@ describe("display helpers (UTC → local preview)", () => {
   });
 
   it("offset labels are signed and minute-exact", () => {
+    // Morocco is on plain UTC+0 in November 2026 (2026 tzdb rule change).
     expect(offsetLabelAt("2026-11-25T13:35:00.000Z", "Africa/Casablanca")).toBe(
-      "+01:00",
+      "+00:00",
     );
     expect(offsetLabelAt("2026-07-15T12:35:00.000Z", "Europe/Berlin")).toBe(
       "+02:00",
