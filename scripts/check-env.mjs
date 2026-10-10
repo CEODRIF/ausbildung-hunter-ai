@@ -97,7 +97,6 @@ const CHECKS = [
   { name: "AI_VISION_MODEL", required: false, kind: "id" },
   { name: "ARBEITSAGENTUR_API_KEY", required: false, kind: "id" },
   { name: "TAVILY_API_KEY", required: false, kind: "secret" },
-  { name: "GEMINI_API_KEY", required: false, kind: "secret" },
   // Community voice (Phase 4 + 6B eviction seam): server-side only.
   { name: "LIVEKIT_URL", required: "production", kind: "wsUrl" },
   { name: "LIVEKIT_API_KEY", required: "production", kind: "id" },

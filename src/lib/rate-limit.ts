@@ -43,12 +43,9 @@ export type RateLimitScope =
   | "ai_upload"
   | "ai_generate_file"
   | "scanner_scan"
-  // Paid third-party web lookups issued by the Germany copilot chat.
-  | "web_search"
-  // Housing live web search (Azure Foundry web_search tool / Tavily): each
-  // request = 1–2 paid search calls + up to 3 bounded page fetches.
-  | "housing_web_search"
-  // Unauthenticated auth flows — keyed by a hashed client IP, never a user id
+   // Paid third-party web lookups issued by the Germany copilot chat.
+   | "web_search"
+   // Unauthenticated auth flows — keyed by a hashed client IP, never a user id
   // (there is no session yet). See clientIpKey().
   | "register"
   | "login"
@@ -81,22 +78,15 @@ export type RateLimitScope =
   | "community_prefs"
   // Community Phase 4 — voice join tokens + count sync (per session user).
   | "community_voice"
-  // Community Phase 5 — advanced community (per session user).
-  | "community_search"
-  | "community_question"
-  | "community_answer"
-  | "community_report"
-  | "community_pin"
-  | "community_moderation"
-  | "community_role"
-  | "community_room_settings"
-  // Housing / Wohnen MVP (per session user). The AI-backed helpers
-  // (application draft + scam summary) are the expensive ones and get a 10-min
-  // budget; plain search/save are cheap reads/writes capped per minute.
-  | "housing_search"
-  | "housing_save"
-  | "housing_application_ai"
-  | "housing_scam_ai";
+   // Community Phase 5 — advanced community (per session user).
+   | "community_search"
+   | "community_question"
+   | "community_answer"
+   | "community_report"
+   | "community_pin"
+   | "community_moderation"
+   | "community_role"
+   | "community_room_settings";
 
 /**
  * Per-scope budgets. Rationale:
@@ -152,15 +142,7 @@ export const RATE_LIMITS: Record<
   // web_search: one live lookup per question that needs current information.
   // Generous for a real conversation, but a cap on third-party spend.
   web_search: { max: 20, windowSeconds: 600 },
-  // housing_web_search: multi-provider run budget (2026-10-10 engine) —
-  // up to 4 Bing transactions (Azure credits, plan-priced) AND up to
-  // 9 Google grounding calls / ~27 executed queries (per-run cost cap
-  // 50 ¢ default, see src/lib/housing/web-search/config.ts) plus up to
-  // 6 robots-checked page fetches. 10/hour per user is far above
-  // deliberate interactive use and bounds spend (on top of the strict
-  // per-user DAILY quota enforced in the route).
-  housing_web_search: { max: 10, windowSeconds: 3600 },
-  // Unauthenticated auth flows (per client IP, 10-minute window). These are a
+   // Unauthenticated auth flows (per client IP, 10-minute window). These are a
   // thin app-level layer on top of Supabase Auth's own built-in limits — they
   // stop invitation-code brute force and signup/login/resend spam from a
   // single origin without getting in the way of legitimate humans (8 signups,
@@ -226,15 +208,7 @@ export const RATE_LIMITS: Record<
   community_pin: { max: 10, windowSeconds: 60 },
   community_moderation: { max: 30, windowSeconds: 60 },
   community_role: { max: 10, windowSeconds: 60 },
-  community_room_settings: { max: 10, windowSeconds: 60 },
-  // Housing / Wohnen MVP: search is a cheap, local (fixture) filter — 10/min
-  // keeps interactive use smooth and caps spam. Save is a small upsert —
-  // 10/min. The two AI-backed helpers each make one paid AI call, so they share
-  // the expensive-AI budget class (5 per 10 min) like scanner_scan.
-  housing_search: { max: 10, windowSeconds: 60 },
-  housing_save: { max: 10, windowSeconds: 60 },
-  housing_application_ai: { max: 5, windowSeconds: 600 },
-  housing_scam_ai: { max: 5, windowSeconds: 600 },
+   community_room_settings: { max: 10, windowSeconds: 60 },
 };
 
 export function rateLimitKey(scope: RateLimitScope, userId: string): string {

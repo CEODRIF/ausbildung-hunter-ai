@@ -68,9 +68,8 @@ describe("environment documentation (deployment contract)", () => {
       const value = line.slice(line.indexOf("=") + 1).trim();
       // Placeholder conventions: "your-…", "replace-…", localhost redirects,
       // a documented public API base URL, the provider label, the
-      // documented public grounding model name, the documented public
-      // BA client id, or the documented housing web-search provider mode
-      // label ("azure" — a public config value, not a secret).
+      // documented public BA client id, or a short public config value
+      // (e.g. a provider mode label — public, not a secret).
       const isPlaceholder =
         value === "" ||
         value.startsWith("your-") ||

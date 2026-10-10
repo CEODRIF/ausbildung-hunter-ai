@@ -141,17 +141,23 @@ const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // Housing / Wohnen (MVP). Labels come from the housing.* i18n block.
-    titleKey: "housing.nav.section",
+    // Guides & calculators (replaces the former Housing section; the /wohnen
+    // routes are kept so existing bookmarks to the section root still land on
+    // the new landing page). Labels come from the guides.* i18n block.
+    titleKey: "guides.nav.section",
     items: [
-      { labelKey: "housing.nav.find", href: "/wohnen", icon: "home" },
-      { labelKey: "housing.nav.kosten", href: "/wohnen/kostenrechner", icon: "chart" },
-      { labelKey: "housing.nav.suchen", href: "/wohnen/suchen", icon: "search" },
+      { labelKey: "guides.nav.gehalt", href: "/wohnen/gehalt", icon: "chart" },
       {
-        labelKey: "housing.nav.gespeichert",
-        href: "/wohnen/gespeichert",
-        icon: "bookmark",
+        labelKey: "guides.nav.neu",
+        href: "/wohnen/neu-in-deutschland",
+        icon: "globe",
       },
+      {
+        labelKey: "guides.nav.vertrag",
+        href: "/wohnen/nach-dem-vertrag",
+        icon: "file",
+      },
+      { labelKey: "guides.nav.konsulat", href: "/wohnen/konsulat", icon: "idCard" },
     ],
   },
   {
@@ -267,48 +273,24 @@ interface PageHeading {
 
 const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: PageHeading }> = [
   {
-    match: (p) => p === "/wohnen/wg-zimmer",
-    heading: { titleKey: "housing.page.wg.title", subtitleKey: "housing.page.wg.subtitle" },
+    match: (p) => p === "/wohnen/gehalt",
+    heading: { titleKey: "guides.page.gehaltTitle", subtitleKey: "guides.page.gehaltSubtitle" },
   },
   {
-    match: (p) => p === "/wohnen/moebliert",
-    heading: {
-      titleKey: "housing.page.moebliert.title",
-      subtitleKey: "housing.page.moebliert.subtitle",
-    },
+    match: (p) => p === "/wohnen/neu-in-deutschland",
+    heading: { titleKey: "guides.page.neuTitle", subtitleKey: "guides.page.neuSubtitle" },
   },
   {
-    match: (p) => p === "/wohnen/miet-check",
-    heading: {
-      titleKey: "housing.page.mietCheck.title",
-      subtitleKey: "housing.page.mietCheck.subtitle",
-    },
+    match: (p) => p === "/wohnen/nach-dem-vertrag",
+    heading: { titleKey: "guides.page.vertragTitle", subtitleKey: "guides.page.vertragSubtitle" },
   },
   {
-    match: (p) => p === "/wohnen/kostenrechner",
-    heading: {
-      titleKey: "housing.page.kosten.title",
-      subtitleKey: "housing.page.kosten.subtitle",
-    },
-  },
-  {
-    match: (p) => p === "/wohnen/suchen",
-    heading: { titleKey: "housing.page.suchen.title", subtitleKey: "housing.page.suchen.subtitle" },
-  },
-  {
-    match: (p) => p === "/wohnen/gespeichert",
-    heading: {
-      titleKey: "housing.page.gespeichert.title",
-      subtitleKey: "housing.page.gespeichert.subtitle",
-    },
-  },
-  {
-    match: (p) => p === "/wohnen/tipps",
-    heading: { titleKey: "housing.page.tipps.title", subtitleKey: "housing.page.tipps.subtitle" },
+    match: (p) => p === "/wohnen/konsulat",
+    heading: { titleKey: "guides.page.konsulatTitle", subtitleKey: "guides.page.konsulatSubtitle" },
   },
   {
     match: (p) => p === "/wohnen",
-    heading: { titleKey: "housing.page.find.title", subtitleKey: "housing.page.find.subtitle" },
+    heading: { titleKey: "guides.page.landTitle", subtitleKey: "guides.page.landSubtitle" },
   },
   {
     match: (p) => p === "/dashboard/templates",
