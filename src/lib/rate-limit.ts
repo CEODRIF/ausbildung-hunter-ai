@@ -152,9 +152,13 @@ export const RATE_LIMITS: Record<
   // web_search: one live lookup per question that needs current information.
   // Generous for a real conversation, but a cap on third-party spend.
   web_search: { max: 20, windowSeconds: 600 },
-  // housing_web_search: each run spends 1–2 Bing transactions
-  // (~$0.014–0.056 each at $14/1,000) plus up to 3 page fetches. 10/hour
-  // per user is far above deliberate interactive use and bounds spend.
+  // housing_web_search: multi-provider run budget (2026-10-10 engine) —
+  // up to 4 Bing transactions (Azure credits, plan-priced) AND up to
+  // 9 Google grounding calls / ~27 executed queries (per-run cost cap
+  // 50 ¢ default, see src/lib/housing/web-search/config.ts) plus up to
+  // 6 robots-checked page fetches. 10/hour per user is far above
+  // deliberate interactive use and bounds spend (on top of the strict
+  // per-user DAILY quota enforced in the route).
   housing_web_search: { max: 10, windowSeconds: 3600 },
   // Unauthenticated auth flows (per client IP, 10-minute window). These are a
   // thin app-level layer on top of Supabase Auth's own built-in limits — they
