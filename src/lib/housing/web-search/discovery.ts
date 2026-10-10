@@ -62,12 +62,16 @@ import { robotsVerdictForUrl } from "./robots";
  *              closed), SSRF-guarded. Unreviewed domains are never fetched.
  *
  * Result-URL classification (./classifyResultUrl):
- *   direct_listing — kept (individual-offer signal: portal listing
- *     pattern / 6+ digit listing id / listing segment / id query param).
- *   portal_page    — homepage / search / browse / legal pages: rejected
- *     and counted DISTINCTLY (uniqueSearchPages) so the funnel shows how
- *     many real results were lost — occurrences (searchPagesRejected)
- *     overstate when a url arrives in several calls.
+ *   direct_listing — kept (individual-offer signal: listing vocabulary
+ *     PAIRED WITH an offer id — 6+ digit id in path or id query param —
+ *     or a bare 6+ digit id on a reviewed/audited domain).
+ *   portal_page    — homepage / search / browse / category / legal pages:
+ *     rejected and counted DISTINCTLY (uniqueSearchPages) so the funnel
+ *     shows how many real results were lost — occurrences
+ *     (searchPagesRejected) overstate when a url arrives in several
+ *     calls. Category trees (kaufen/mieten/…) and bare listing words
+ *     WITHOUT an offer id ("…/expose", "wg-gesucht.de/rooms/koeln/") are
+ *     portal pages: a section page is never shown as a listing.
  *   direct_listing_id — a BARE 6+ digit path id without listing vocabulary.
  *     On REVIEWED (audited) domains: a direct listing. On UNREVIEWED web-mode
  *     domains: kept only with the model's JSON reference (news article ids
@@ -96,14 +100,36 @@ export function classifyResultUrl(url: URL, domain: AllowedDomain | null): Resul
   if (domain && (domain.domain === "open.nrw" || domain.domain === "opendata.de")) {
     return /\/(dataset|data|api)\//i.test(path) ? "direct_listing" : "portal_page";
   }
-  // Strong listing vocabulary (any domain): explicit individual-offer paths.
+  // An individual offer URL carries an OFFER ID (6+ digits in path or query).
+  // Category/section pages contain listing words but no id.
+  const hasOfferId = /\d{6,}/.test(`${path} ${url.search}`);
+  // Category / SECTION pages (kaufen/mieten trees, magazines, price indices,
+  // community): never individual offers — UNLESS they carry an offer id
+  // (e.g. immonet-style /mieten/<objnr>/ detail URLs), in which case the
+  // id rules below take over. On unreviewed domains they stay
+  // maybe_listing, so the model's substantive JSON evidence can still
+  // rescue a genuine slugged ad that a portal places under a category tree.
+  if (!hasOfferId && CATEGORY_PATH_RE.test(path)) {
+    return domain !== null ? "portal_page" : "maybe_listing";
+  }
+  // Strong listing vocabulary.
   if (LISTING_SEGMENT_RE.test(path) || LISTING_QUERY_RE.test(url.search)) {
-    return "direct_listing";
+    // Vocabulary ALONE is not enough: "immobilienscout24.de/expose",
+    // "wg-gesucht.de/rooms/koeln/", "immowelt.de/mieten/wohnung" and
+    // "…/kaufen/wohnung" are section pages that a search tool returns
+    // alongside real ads — presenting them as listings was the 2026-10-10
+    // "12 hits, 0 real listings" defect. A real individual ad pairs the
+    // vocabulary with an offer id. Without one: rejected on reviewed
+    // domains (their URL schemes are audited), and on unreviewed domains
+    // rescued ONLY via the model's substantive JSON evidence (the
+    // existing maybe_listing keep-rule) — never fabricated.
+    if (hasOfferId) return "direct_listing";
+    return domain !== null ? "portal_page" : "maybe_listing";
   }
   // Editorial / media sections are never offers (even with long path ids).
   if (MEDIA_PATH_RE.test(path)) return "maybe_listing";
   // Bare numeric id: unambiguous on audited domains, ambiguous elsewhere.
-  if (/\d{6,}/.test(path)) return domain !== null ? "direct_listing" : "direct_listing_id";
+  if (hasOfferId) return domain !== null ? "direct_listing" : "direct_listing_id";
   return "maybe_listing";
 }
 
@@ -387,6 +413,17 @@ const NON_LISTING_PATH_RE =
  */
 const SEARCH_RESULTS_PATH_RE =
   /\/(suche|suchergebnisse|search|browse|kategorie|kategorien|category|categories|stadt|staedte|region|regionen|ort|orte|preiskarte|preise-check|markt|s-wohnung|s-hauser|s-zimmer|s-angebot)([/?#-]|$)/i;
+
+/**
+ * Portal CATEGORY / SECTION trees — the browse hierarchy (kaufen/mieten),
+ * editorial (magazin/ratgeber/news), price data and community. A URL in
+ * these trees is an individual offer ONLY when it carries an offer id
+ * (e.g. immonet detail pages live under /mieten/<objnr>/); the id check in
+ * classifyResultUrl gates that. (The 2026-10-10 production defect: Bing
+ * returned 12 of these section pages and they were shown as listings.)
+ */
+const CATEGORY_PATH_RE =
+  /\/(kaufen|kauf|mieten|miete|verkauf|vermieten|vermietung|neubau|magazin|ratgeber|guide|community|forum|news|blog|newsletter|preise|preisindex|preisentwicklung|mietspiegel|marktbericht|marktberichte|statistik|daten|download|downloads|check|kaufpreis|mietpreise)([/?#-]|$)/i;
 
 /**
  * Domain-AGNOSTIC individual-listing indicators. German portals put a 6+

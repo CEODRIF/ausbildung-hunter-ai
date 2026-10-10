@@ -88,11 +88,32 @@ export async function geminiWebSearch(req: GeminiSearchRequest): Promise<WebDisc
     if (res.status === 401 || res.status === 403) failure = "tool_blocked";
     else if (res.status === 404) failure = "endpoint_unavailable";
     else if (res.status === 429) failure = "rate_limited";
-    // Do NOT read/echo the provider error body (it can contain request
-    // details) — status code only.
+    // Safe root-cause diagnostics: extract ONLY the stable machine
+    // `status` enum from the error envelope (e.g. "NOT_FOUND" = unknown
+    // model/endpoint, "INVALID_ARGUMENT", "PERMISSION_DENIED",
+    // "RESOURCE_EXHAUSTED") — never the message text (it can echo request
+    // details), never the key. This is what makes production logs identify
+    // the failure without exposing anything sensitive.
+    let apiStatus: string | null = null;
+    try {
+      const errJson = (await res.clone().json().catch(() => null)) as
+        | { error?: { status?: unknown } }
+        | null;
+      const s = errJson?.error?.status;
+      if (typeof s === "string" && /^[A-Z][A-Z_]{2,31}$/.test(s)) apiStatus = s;
+    } catch {
+      // non-JSON error body — ignore, the HTTP status is enough.
+    }
+    if (apiStatus) {
+      console.warn(
+        `[housing-web-search] gemini api error http=${res.status} api_status=${apiStatus} model=${req.model}`,
+      );
+    }
     throw new WebSearchApiError(
       failure,
-      `The Google search provider rejected the request (HTTP ${res.status}).`,
+      apiStatus
+        ? `The Google search provider rejected the request (HTTP ${res.status}, ${apiStatus}).`
+        : `The Google search provider rejected the request (HTTP ${res.status}).`,
       res.status,
     );
   }

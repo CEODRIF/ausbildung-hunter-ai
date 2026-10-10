@@ -31,7 +31,7 @@ const NOW = 1_760_000_000_000;
 const PUBLIC = "93.184.216.34";
 
 const AZURE = { kind: "azure" as const, base: "https://res.openai.azure.com/openai/v1", key: "azure-key-abc", model: "gpt-5-mini" };
-const GEMINI = { kind: "gemini" as const, key: "gemini-key-xyz", model: "gemini-3.5-flash" };
+const GEMINI = { kind: "gemini" as const, key: "gemini-key-xyz", model: "gemini-3.8-flash" };
 
 const baseParams = {
   city: "Köln",
@@ -509,6 +509,103 @@ describe("pagination + 'load more' continuation", () => {
     expect(next.listings).toHaveLength(0);
     expect(isAzureCall(calls)).toHaveLength(0);
     expect(isGeminiCall(calls)).toHaveLength(0);
+  });
+});
+
+// --- production defect 2026-10-10 ---------------------------------------------
+
+describe("production defect 2026-10-10: Google model 404 + portal pages as listings", () => {
+  it("Google answers 404 NOT_FOUND (unknown model) → run still ok via Azure; diagnostics carry the machine status, never the key", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const geminiErrBody = JSON.stringify({
+      error: { code: 404, message: "models/gemini-3.5-flash is not found (request id xyz)", status: "NOT_FOUND" },
+    });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/interactions")) {
+        return new Response(geminiErrBody, { status: 404, headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/responses")) {
+        return Response.json(azurePayload([{ url: IS24_A, title: "A" }]));
+      }
+      return new Response("<html></html>", { status: 200 });
+    });
+    const outcome = await runHousingWebSearch(input(), {
+      now: () => NOW,
+      provider: AZURE,
+      geminiProvider: { kind: "gemini" as const, key: "secret-prod-key", model: "gemini-3.5-flash" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toHaveLength(1); // Azure result kept
+    const g = outcome.providers.find((p) => p.provider === "google");
+    expect(g?.status).toBe("error");
+    const serialized = JSON.stringify(outcome);
+    expect(serialized).not.toContain("secret-prod-key");
+    expect(serialized).not.toContain("request id xyz");
+    // The RUNTIME LOG carries the root cause (HTTP + machine status + the
+    // model that was sent) — and nothing sensitive.
+    const warnLine = warn.mock.calls.map((c) => c[0]).find((l) => String(l).includes("api_status"));
+    expect(warnLine).toContain("http=404");
+    expect(warnLine).toContain("api_status=NOT_FOUND");
+    expect(warnLine).toContain("model=gemini-3.5-flash");
+    expect(warnLine).not.toContain("secret-prod-key");
+    warn.mockRestore();
+  });
+
+  it("portal/category/search pages are NOT shown as listings (honest empty state)", async () => {
+    // The 12-hit production shape: Bing returns portal section pages.
+    // None of them carries an offer id → all rejected, counted, and the
+    // run reports ok with ZERO listings (never fabricated).
+    const sectionPages = [
+      { url: "https://www.immobilienscout24.de/expose", title: "Wohnungen mieten – ImmoScout24" }, // bare listing word, no id
+      { url: "https://www.wg-gesucht.de/rooms/koeln/", title: "Wohnung mieten in Köln – WG-Gesucht" }, // browse page
+      { url: "https://www.immowelt.de/mieten/koeln/", title: "Wohnung mieten in Köln – ImmoWelt" }, // category tree
+      { url: "https://www.immobilienscout24.de/", title: "ImmoScout24 – Immobilienangebote" }, // root
+      { url: "https://www.immonet.de/kaufen/haeuser/koeln/", title: "Häuser kaufen in Köln – Immonet" }, // category (and sale)
+    ];
+    const { impl, calls } = makeFetch({ azure: [azurePayload(sectionPages)] });
+    const outcome = await runHousingWebSearch(input(), {
+      now: () => NOW,
+      provider: AZURE,
+      geminiProvider: null,
+      fetchImpl: impl,
+    });
+    expect(outcome.status).toBe("ok");
+    expect(outcome.listings).toEqual([]); // 0 real listings — honest
+    expect(outcome.funnel.uniqueSearchPages).toBeGreaterThanOrEqual(4);
+    expect(outcome.funnel.searchPagesRejected).toBeGreaterThanOrEqual(4);
+    expect(outcome.warnings).toContain(
+      `candidates_dropped_search_pages=${outcome.funnel.searchPagesRejected} unique=${outcome.funnel.uniqueSearchPages}`,
+    );
+    // And the pipeline still ran its provider call(s) normally (no crash).
+    expect(isAzureCall(calls).length).toBeGreaterThan(0);
+  });
+
+  it("regression guard: real individual ads WITH offer ids are still kept (original links intact)", async () => {
+    const realAds = [
+      { url: "https://www.immobilienscout24.de/expose/123456789", title: "2-Zi. Köln-Ehrenfeld" },
+      { url: "https://www.immowelt.de/expose/555555555", title: "Helle 3-Zi. Köln" },
+      { url: "https://www.wg-gesucht.de/rooms/12345678/koeln-ehrenfeld/", title: "Zimmer in WG Köln" },
+      { url: "https://www.immonet.de/mieten/654321987/", title: "Mietwohnung Köln" }, // category tree + id → the ad
+    ];
+    const { impl } = makeFetch({ azure: [azurePayload(realAds)] });
+    const outcome = await runHousingWebSearch(input(), {
+      now: () => NOW,
+      provider: AZURE,
+      geminiProvider: null,
+      fetchImpl: impl,
+    });
+    expect(outcome.status).toBe("ok");
+    const urls = outcome.listings.map((l) => l.listing_url).sort();
+    expect(urls).toEqual(
+      [
+        "https://immobilienscout24.de/expose/123456789",
+        "https://immowelt.de/expose/555555555",
+        "https://immonet.de/mieten/654321987/",
+        "https://wg-gesucht.de/rooms/12345678/koeln-ehrenfeld/",
+      ].sort(),
+    ); // original offer links preserved verbatim
   });
 });
 
