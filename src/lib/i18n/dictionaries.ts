@@ -787,13 +787,12 @@ const de = {
       "Lösen Sie zuerst die aktive Kampagne oder Entwürfe, die dieses Konto verwenden",
     disconnect: "Trennen",
     reconnect: "Erneut verbinden",
-    draftsBlockIntro:
-      "{count} Entwurf(e) verwenden {email} als Absender. Übertragen Sie einen Entwurf auf ein anderes verbundenes Konto (oder löschen Sie ihn), um die Trennung freizugeben:",
-    untitledArbeit: "Entwurf ohne Titel (Arbeit)",
-    untitledAusbildung: "Entwurf ohne Titel (Ausbildung)",
-    chooseSender: "Neuen Absender wählen…",
-    moveDraft: "Entwurf übertragen",
-    connectOther: "Verbinden Sie oben ein weiteres Konto, um diesen Entwurf zu übertragen.",
+    connectedBadge: "Verbunden",
+    connectedCount: "{count} Konten verbunden",
+    needReconnect:
+      "Diese Verbindung ist abgelaufen oder inaktiv. Verifizieren Sie das Konto erneut, um E-Mails zu senden.",
+    statusLoadError:
+      "Wir konnten den Status Ihrer E-Mail-Konten nicht laden. Bitte laden Sie die Seite neu.",
     never: "Nie",
     providerNotConfiguredTitle: "Abrechnungsdienst nicht konfiguriert",
     providerNotConfiguredBody:
@@ -3006,13 +3005,12 @@ const en: Dict = {
       "Resolve the active campaign or drafts using this account first",
     disconnect: "Disconnect",
     reconnect: "Reconnect",
-    draftsBlockIntro:
-      "{count} draft(s) use {email} as sender. Move a draft to another connected account (or delete it) to unblock the disconnect:",
-    untitledArbeit: "Untitled job draft",
-    untitledAusbildung: "Untitled training draft",
-    chooseSender: "Choose a new sender…",
-    moveDraft: "Move draft",
-    connectOther: "Connect another account above to move this draft.",
+    connectedBadge: "Connected",
+    connectedCount: "{count} accounts connected",
+    needReconnect:
+      "This connection is expired or inactive. Reconnect the account to send emails.",
+    statusLoadError:
+      "We could not load your email account status. Please reload the page.",
     never: "Never",
     providerNotConfiguredTitle: "Billing provider not configured",
     providerNotConfiguredBody:
@@ -5213,13 +5211,12 @@ const fr: Dict = {
       "Résolvez d'abord la campagne active ou les brouillons utilisant ce compte",
     disconnect: "Déconnecter",
     reconnect: "Reconnecter",
-    draftsBlockIntro:
-      "{count} brouillon(s) utilisent {email} comme expéditeur. Transférez un brouillon vers un autre compte connecté (ou supprimez-le) pour débloquer la déconnexion :",
-    untitledArbeit: "Brouillon sans titre (emploi)",
-    untitledAusbildung: "Brouillon sans titre (formation)",
-    chooseSender: "Choisir un nouvel expéditeur…",
-    moveDraft: "Transférer le brouillon",
-    connectOther: "Connectez un autre compte ci-dessus pour transférer ce brouillon.",
+    connectedBadge: "Connecté",
+    connectedCount: "{count} comptes connectés",
+    needReconnect:
+      "Cette connexion a expiré ou est inactif. Reconnectez le compte pour envoyer des e-mails.",
+    statusLoadError:
+      "Impossible de charger l'état de vos comptes e-mail. Veuillez recharger la page.",
     never: "Jamais",
     providerNotConfiguredTitle: "Prestataire de facturation non configuré",
     providerNotConfiguredBody:
@@ -7413,13 +7410,11 @@ const ar: Dict = {
     resolveFirst: "عالج الحملة النشطة أو المسودات التي تستخدم هذا الحساب أولًا",
     disconnect: "فصل",
     reconnect: "إعادة الربط",
-    draftsBlockIntro:
-      "تستخدم {count} مسودة {email} كمرسل. انقل مسودة إلى حساب آخر مرتبط (أو احذفها) لتتمكن من الفصل:",
-    untitledArbeit: "مسودة بدون عنوان (عمل)",
-    untitledAusbildung: "مسودة بدون عنوان (تدريب)",
-    chooseSender: "اختر مرسلًا جديدًا…",
-    moveDraft: "نقل المسودة",
-    connectOther: "اربط حسابًا آخر أعلاه لنقل هذه المسودة.",
+    connectedBadge: "متصل",
+    connectedCount: "تم ربط {count} حساب",
+    needReconnect:
+      "انتهت صلاحية هذا الاتصال أو أنه غير نشط. أعد ربط الحساب لإرسال الرسائل.",
+    statusLoadError: "تعذر تحميل حالة حسابات البريد الإلكتروني. يرجى تحديث الصفحة.",
     never: "أبدًا",
     providerNotConfiguredTitle: "مزود الفوترة غير مُعد",
     providerNotConfiguredBody:
