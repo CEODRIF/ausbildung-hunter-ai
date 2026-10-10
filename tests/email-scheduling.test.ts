@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -18,9 +18,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  *  - Stale recovery must not cancel a campaign that is merely waiting for
  *    its (future) instant; a campaign whose instant passed long ago
  *    (scheduler down) is still recovered.
- *  - The durable trigger: Vercel Cron → /api/cron/email-scheduler (bounded,
- *    fail-closed auth, atomic claims) + a gated GitHub Actions fallback
- *    driving the same engine through the existing internal endpoints.
+ *  - The durable trigger: GitHub Actions (public repo = free minutes) →
+ *    /api/cron/email-scheduler (bounded, fail-closed auth, atomic claims).
+ *    No Vercel Pro / paid service required (vercel.json is intentionally
+ *    absent — a second trigger would only risk double scheduling).
  */
 
 type Row = Record<string, unknown>;
@@ -682,9 +683,6 @@ describe("durable trigger and schema (source-level guarantees)", () => {
     "src/app/api/cron/email-scheduler/route.ts",
     "utf8",
   );
-  const VERCEL_JSON = JSON.parse(readFileSync("vercel.json", "utf8")) as {
-    crons: Array<{ path: string; schedule: string }>;
-  };
   const WORKFLOW = readFileSync(
     ".github/workflows/email-scheduler.yml",
     "utf8",
@@ -729,23 +727,27 @@ describe("durable trigger and schema (source-level guarantees)", () => {
     expect(CRON_ROUTE).not.toContain("NEXT_PUBLIC");
   });
 
-  it("vercel.json registers the scheduler every minute", () => {
-    expect(VERCEL_JSON.crons).toContainEqual({
-      path: "/api/cron/email-scheduler",
-      schedule: "* * * * *",
-    });
+  it("no paid-plan trigger: vercel.json is absent (Vercel Cron would require Pro)", () => {
+    expect(existsSync("vercel.json")).toBe(false);
   });
 
-  it("the GitHub fallback is OFF by default and drives the same engine", () => {
+  it("the GitHub scheduler is the primary trigger, OFF by default, single authenticated call", () => {
+    // Gated: off unless the repo variable says exactly "true".
     expect(WORKFLOW).toContain("EMAIL_SCHEDULER_GH == 'true'");
+    // GitHub's finest recurring cadence: every 5 minutes, plus a manual
+    // dispatch for on-demand ticks.
     expect(WORKFLOW).toContain('cron: "*/5 * * * *"');
-    expect(WORKFLOW).toContain("secrets.EMAIL_WORKER_SECRET");
-    expect(WORKFLOW).toContain("/api/internal/email-worker/claim");
-    expect(WORKFLOW).toContain("/api/internal/email-worker\"");
+    expect(WORKFLOW).toContain("workflow_dispatch");
+    // ONE authenticated call to the secure scheduler endpoint — the
+    // bounded claim+batch loop happens server-side.
+    expect(WORKFLOW).toContain("secrets.CRON_SECRET");
+    expect(WORKFLOW).toContain("Authorization: Bearer $CRON_SECRET");
+    expect(WORKFLOW).toContain("/api/cron/email-scheduler");
     // Fails loudly when the secret is missing — never an unauthenticated tick.
-    expect(WORKFLOW).toContain("::error::EMAIL_WORKER_SECRET is not set");
-    // Bounded: 3 rounds.
-    expect(WORKFLOW).toContain("for round in 1 2 3");
+    expect(WORKFLOW).toContain("::error::CRON_SECRET is not set");
+    // Idempotency under overlap: runs are serialized, never cancelled
+    // mid-batch; and the endpoint's atomic claims keep it safe regardless.
+    expect(WORKFLOW).toContain("cancel-in-progress: false");
   });
 
   it("the migration is additive: two columns, service-role-only RPCs, no enum or RLS changes", () => {

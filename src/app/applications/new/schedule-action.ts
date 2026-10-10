@@ -92,7 +92,8 @@ export async function scheduleApplications(formData: FormData) {
   });
 
   // Deliberately NO processCampaignBatch here: the instant is in the
-  // future, so the durable scheduler (Vercel Cron → claim loop) picks the
-  // campaign up at `scheduled_at`. The browser is not needed for sending.
+  // future, so the durable scheduler (GitHub Actions tick →
+  // /api/cron/email-scheduler → claim loop) picks the campaign up at
+  // `scheduled_at`. The browser is not needed for sending.
   redirect(`/applications/campaign/${result2.campaignId}?scheduled=1`);
 }

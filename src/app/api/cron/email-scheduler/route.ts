@@ -6,10 +6,12 @@ import { processCampaignBatch } from "@/lib/email-campaigns";
 /**
  * Email scheduler tick — the durable, browser-independent sender.
  *
- * Triggered every minute by Vercel Cron (`vercel.json`); a gated GitHub
- * Actions workflow (`.github/workflows/email-scheduler.yml`) can drive the
- * same engine when Vercel crons are unavailable. This endpoint is a thin,
- * BOUNDED driver over the existing durable engine:
+ * Triggered every 5 minutes by GitHub Actions
+ * (`.github/workflows/email-scheduler.yml`, gated by the repo variable
+ * EMAIL_SCHEDULER_GH) — the primary and only scheduler. Zero cost: the
+ * repo is public, so Actions minutes are free (no Vercel Pro required).
+ * This endpoint is a thin, BOUNDED driver over the existing durable
+ * engine:
  *
  *   claim_next_pending_campaign (atomic, SKIP LOCKED, service-role only)
  *   → processCampaignBatch (existing claim/finalize/retry/capacity logic)
