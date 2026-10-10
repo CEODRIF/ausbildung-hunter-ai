@@ -1,87 +1,61 @@
 import Link from "next/link";
 import { getServerT } from "@/lib/i18n/server";
-import { Icon } from "@/components/icon";
-import { HousingSearch } from "@/components/housing/housing-search";
+import { Icon, type IconName } from "@/components/icon";
 
-export const dynamic = "force-dynamic";
-
-interface ToolCard {
-  href: string;
-  icon: "chart" | "shield" | "book";
-  titleKey: string;
-  bodyKey: string;
-}
-
-const TOOL_CARDS: ToolCard[] = [
-  { href: "/wohnen/kostenrechner", icon: "chart", titleKey: "housing.calcTitle", bodyKey: "housing.calcSubtitle" },
-  { href: "/wohnen/miet-check", icon: "shield", titleKey: "housing.scamTitle", bodyKey: "housing.scamSubtitle" },
-  { href: "/wohnen/tipps", icon: "book", titleKey: "housing.nav.tipps", bodyKey: "housing.tip1Body" },
-];
-
-export default async function WohnenPage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
+/**
+ * Section landing page ("Ratgeber & Rechner") — replaces the former housing
+ * overview. Four cards, one per new tool/guide; all labels come from the
+ * guides.land i18n block (de/en/fr/ar).
+ */
+export default async function RatgeberLandingPage() {
   const t = await getServerT();
-  // A saved/shared search arrives as `?q=<json>` (from "Meine Suchen"); the
-  // raw string is forwarded as a prop and sanitized client-side.
-  const rawQ = (await searchParams).q;
-  const initialQuery = typeof rawQ === "string" ? rawQ : undefined;
-
+  const cards: Array<{ href: string; icon: IconName; titleKey: string; descKey: string }> = [
+    { href: "/wohnen/gehalt", icon: "chart", titleKey: "guides.land.c1Title", descKey: "guides.land.c1Desc" },
+    {
+      href: "/wohnen/neu-in-deutschland",
+      icon: "globe",
+      titleKey: "guides.land.c2Title",
+      descKey: "guides.land.c2Desc",
+    },
+    {
+      href: "/wohnen/nach-dem-vertrag",
+      icon: "file",
+      titleKey: "guides.land.c3Title",
+      descKey: "guides.land.c3Desc",
+    },
+    {
+      href: "/wohnen/konsulat",
+      icon: "idCard",
+      titleKey: "guides.land.c4Title",
+      descKey: "guides.land.c4Desc",
+    },
+  ];
   return (
-    <div className="px-4 py-6 sm:px-6 lg:px-10">
-      <div className="mx-auto max-w-6xl">
-        {/* hero */}
-        <div className="mb-6 flex flex-col gap-4 rounded-3xl border border-line bg-surface p-5 shadow-[var(--shadow-card)] sm:flex-row sm:items-center sm:justify-between sm:p-6">
-          <div className="flex items-start gap-4">
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-accent">
-              <Icon name="home" size={26} strokeWidth={1.6} />
-            </span>
-            <div>
-              <h1 className="text-xl font-extrabold text-ink sm:text-2xl">
-                {t("housing.heroTitle")}
-              </h1>
-              <p className="mt-1 max-w-2xl text-sm text-muted">{t("housing.heroSubtitle")}</p>
-            </div>
-          </div>
+    <div className="mx-auto max-w-4xl">
+      <p className="text-sm leading-relaxed text-muted">{t("guides.land.intro")}</p>
+      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {cards.map((c) => (
           <Link
-            href="/wohnen/tipps"
-            className="inline-flex shrink-0 items-center gap-2 rounded-2xl border border-line-strong bg-surface px-4 py-3 text-sm font-semibold text-ink-soft transition-colors hover:bg-surface-2"
+            key={c.href}
+            href={c.href}
+            className="surface-elevated group rounded-3xl p-5 transition-transform duration-200 hover:-translate-y-0.5 sm:p-6"
           >
-            {t("housing.guideCta")}
-            <Icon name="arrowRight" size={15} strokeWidth={2} />
-          </Link>
-        </div>
-
-        {/* tool cards */}
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {TOOL_CARDS.map((card) => (
-            <Link
-              key={card.href}
-              href={card.href}
-              className="group flex items-start gap-3 rounded-3xl border border-line bg-surface p-4 shadow-[var(--shadow-card)] transition-colors hover:border-line-strong"
-            >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-accent">
-                <Icon name={card.icon} size={20} strokeWidth={1.7} />
+            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+              <Icon name={c.icon} size={20} />
+            </span>
+            <h2 className="mt-3 text-base font-bold tracking-tight text-ink">{t(c.titleKey)}</h2>
+            <p className="mt-1.5 text-sm leading-relaxed text-muted">{t(c.descKey)}</p>
+            <span className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-accent">
+              {t("guides.land.open")}
+              <span
+                aria-hidden
+                className="transition-transform duration-200 group-hover:translate-x-0.5 rtl:-scale-x-100 rtl:group-hover:-translate-x-0.5"
+              >
+                →
               </span>
-              <div className="min-w-0">
-                <p className="flex items-center gap-1 text-sm font-bold text-ink">
-                  {t(card.titleKey)}
-                  <Icon
-                    name="arrowRight"
-                    size={14}
-                    strokeWidth={2}
-                    className="text-faint transition-transform group-hover:translate-x-0.5"
-                  />
-                </p>
-                <p className="mt-0.5 line-clamp-2 text-xs text-muted">{t(card.bodyKey)}</p>
-              </div>
-            </Link>
-          ))}
-        </div>
-
-        <HousingSearch initialQuery={initialQuery} />
+            </span>
+          </Link>
+        ))}
       </div>
     </div>
   );
