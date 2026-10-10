@@ -3,22 +3,22 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Profile } from "@/lib/auth";
+import {
+  buildScanRequestBody,
+  isAllowedScanFile,
+  type ScanGoal,
+} from "@/lib/bewerbung-scan-request";
 import { useI18n } from "@/lib/i18n";
 
-type Goal = "ausbildung" | "arbeit";
+type Goal = ScanGoal;
+/** Upload endpoint response; `size_bytes` is UI-only (file list label) and
+ *  must never be forwarded to the scan API — see buildScanRequestBody. */
 type ScanFile = {
   id: string;
   filename: string;
   mime_type: string;
   size_bytes: number;
 };
-const allowed = [
-  "application/pdf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "image/png",
-  "image/jpeg",
-];
 
 export function BewerbungScannerUpload({ profile }: { profile: Profile }) {
   const router = useRouter();
@@ -49,7 +49,7 @@ export function BewerbungScannerUpload({ profile }: { profile: Profile }) {
     try {
       const uploaded: ScanFile[] = [];
       for (const file of incoming) {
-        if (!allowed.includes(file.type) || file.size > 10 * 1024 * 1024)
+        if (!isAllowedScanFile(file))
           throw new Error(t("account.scannerFileTypes"));
         const form = new FormData();
         form.set("file", file);
@@ -81,10 +81,13 @@ export function BewerbungScannerUpload({ profile }: { profile: Profile }) {
     setError("");
     setStatus("analyzing");
     try {
+      // The state list carries UI-only fields (size_bytes for the "0.1 MB"
+      // label); the scan API's strict schema accepts only id/filename/
+      // mime_type per file — buildScanRequestBody projects to that contract.
       const response = await fetch("/api/bewerbung-scanner/scan", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ goal, files }),
+        body: JSON.stringify(buildScanRequestBody(goal, files)),
       });
       const result = await response.json();
       if (!response.ok)
