@@ -153,6 +153,116 @@ describe("geminiWebSearch — transport + security", () => {
     }
   });
 
+  describe("error diagnostics (production root-cause, no secrets)", () => {
+    // The 2026-10-10 production defect: an unknown model name (the old
+    // default "gemini-3.5-flash" is not in the official grounding
+    // supported-models table) → HTTP 404 + api status NOT_FOUND. The
+    // diagnostics must carry exactly that (HTTP status + machine status),
+    // never the provider's message text (it can echo request details),
+    // never the key.
+    it("404 NOT_FOUND (unknown model) → endpoint_unavailable with the machine status in the message", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const body = JSON.stringify({
+        error: {
+          code: 404,
+          message: "models/gemini-3.5-flash is not found (request id abc)",
+          status: "NOT_FOUND",
+        },
+      });
+      const server404 = vi.fn(async () =>
+        new Response(body, { status: 404, headers: { "content-type": "application/json" } }),
+      );
+      const err = await geminiWebSearch({
+        key: KEY,
+        model: "gemini-3.5-flash",
+        input: "q",
+        fetchImpl: server404 as unknown as typeof fetch,
+      }).catch((e) => e);
+      expect(err).toBeInstanceOf(WebSearchApiError);
+      expect(err.failure).toBe("endpoint_unavailable");
+      expect(err.httpStatus).toBe(404);
+      expect(err.message).toContain("HTTP 404");
+      expect(err.message).toContain("NOT_FOUND");
+      // The provider's free-text message body is NEVER echoed.
+      expect(err.message).not.toContain("is not found (request");
+      // The log line carries the safe machine status only.
+      expect(warn.mock.calls[0]?.[0]).toContain("http=404");
+      expect(warn.mock.calls[0]?.[0]).toContain("api_status=NOT_FOUND");
+      expect(warn.mock.calls[0]?.[0]).not.toContain("request id abc");
+      warn.mockRestore();
+    });
+
+    it("400 INVALID_ARGUMENT → provider_error with the machine status", async () => {
+      const body = JSON.stringify({
+        error: { code: 400, message: "tools[0].type invalid", status: "INVALID_ARGUMENT" },
+      });
+      const server400 = vi.fn(async () =>
+        new Response(body, { status: 400, headers: { "content-type": "application/json" } }),
+      );
+      const err = await geminiWebSearch({
+        key: KEY,
+        model: "m",
+        input: "q",
+        fetchImpl: server400 as unknown as typeof fetch,
+      }).catch((e) => e);
+      expect(err).toBeInstanceOf(WebSearchApiError);
+      expect(err.failure).toBe("provider_error");
+      expect(err.message).toContain("INVALID_ARGUMENT");
+      expect(err.message).not.toContain("tools[0].type");
+    });
+
+    it("403 PERMISSION_DENIED → tool_blocked with the machine status", async () => {
+      const body = JSON.stringify({
+        error: { code: 403, message: "API key not valid", status: "PERMISSION_DENIED" },
+      });
+      const server403 = vi.fn(async () =>
+        new Response(body, { status: 403, headers: { "content-type": "application/json" } }),
+      );
+      const err = await geminiWebSearch({
+        key: KEY,
+        model: "m",
+        input: "q",
+        fetchImpl: server403 as unknown as typeof fetch,
+      }).catch((e) => e);
+      expect(err).toBeInstanceOf(WebSearchApiError);
+      expect(err.failure).toBe("tool_blocked");
+      expect(err.message).toContain("PERMISSION_DENIED");
+      expect(err.message).not.toContain("API key not valid");
+    });
+
+    it("non-JSON error body → still a controlled message, no crash", async () => {
+      const server502 = vi.fn(async () => new Response("<html>bad gateway</html>", { status: 502 }));
+      const err = await geminiWebSearch({
+        key: KEY,
+        model: "m",
+        input: "q",
+        fetchImpl: server502 as unknown as typeof fetch,
+      }).catch((e) => e);
+      expect(err).toBeInstanceOf(WebSearchApiError);
+      expect(err.failure).toBe("provider_error");
+      expect(err.message).toBe("The Google search provider rejected the request (HTTP 502).");
+    });
+
+    it("never leaks the key in error messages or logs", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const body = JSON.stringify({ error: { code: 404, message: "not found", status: "NOT_FOUND" } });
+      const server404 = vi.fn(async () =>
+        new Response(body, { status: 404, headers: { "content-type": "application/json" } }),
+      );
+      const err = await geminiWebSearch({
+        key: "secret-key-abc",
+        model: "m",
+        input: "q",
+        fetchImpl: server404 as unknown as typeof fetch,
+      }).catch((e) => e);
+      expect(err.message).not.toContain("secret-key-abc");
+      for (const call of warn.mock.calls) {
+        for (const arg of call) expect(String(arg)).not.toContain("secret-key-abc");
+      }
+      warn.mockRestore();
+    });
+  });
+
   it("maps 5xx / network / timeout to controlled, key-free messages", async () => {
     const server500 = vi.fn(async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
     await expect(geminiWebSearch({ key: KEY, model: "m", input: "q", fetchImpl: server500 }))

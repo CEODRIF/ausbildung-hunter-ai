@@ -365,10 +365,17 @@ export function resolveSearchProvider(): ResolvedSearchProvider | null {
  *   header `x-goog-api-key: <key>`
  *   body   { model, input, tools: [{ type: "google_search" }] }
  *
- * `GEMINI_API_KEY` is SERVER-SIDE ONLY — it must never appear in
- * NEXT_PUBLIC_*, client bundles, logs, or responses. Missing/empty key →
- * null → the engine runs Azure-only (graceful, reported in diagnostics).
- */
+  * `GEMINI_API_KEY` is SERVER-SIDE ONLY — it must never appear in
+  * NEXT_PUBLIC_*, client bundles, logs, or responses. Missing/empty key →
+  * null → the engine runs Azure-only (graceful, reported in diagnostics).
+  *
+  * MODEL (verified against the official supported-models table, page last
+  * updated 2026-10-09): the 3.5 generation offers `gemini-3.5-flash-lite`
+  * ONLY — there is no plain `gemini-3.5-flash`. The current Flash model is
+  * `gemini-3.8-flash` (the default here). Sending an unknown model name is
+  * exactly the 2026-10-10 production failure: HTTP 404 / api_status
+  * NOT_FOUND → the Google provider chip showed "error" while Bing worked.
+  */
 export interface ResolvedGeminiProvider {
   kind: "gemini";
   /** API key (server-side only). */
@@ -382,13 +389,17 @@ let warnedGeminiModel = false;
 export function resolveGeminiProvider(): ResolvedGeminiProvider | null {
   const key = (process.env.GEMINI_API_KEY ?? "").trim();
   if (key === "") return null;
-  const raw = (process.env.HOUSING_GEMINI_MODEL ?? "gemini-3.5-flash").trim();
+  // Default: gemini-3.8-flash — the current Flash model in the official
+  // grounding supported-models table (see the interface docblock). The
+  // family regex is a shape guard only; a valid-shape but nonexistent model
+  // name is the provider's NOT_FOUND to report, not ours to guess.
+  const raw = (process.env.HOUSING_GEMINI_MODEL ?? "gemini-3.8-flash").trim();
   // Defensive guard: the grounding tool is not available on every model —
   // restrict to the documented Gemini families (docs table, 2026-10-09).
   const model =
     /^(gemini-3[.\d]*[-\w]*|gemini-2[.\d]*[-\w]*)$/i.test(raw)
       ? raw
-      : "gemini-3.5-flash";
+      : "gemini-3.8-flash";
   if (model !== raw && !warnedGeminiModel) {
     warnedGeminiModel = true;
     console.warn(
