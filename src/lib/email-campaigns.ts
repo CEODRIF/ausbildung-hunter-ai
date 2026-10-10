@@ -77,11 +77,24 @@ export async function activateQuotaCode(code: string) {
   return Number(data);
 }
 
+/** A server-validated schedule. `utcIso` is the canonical instant the
+ *  scheduler must use; `timeZone` is the IANA zone for display/audit;
+ *  `usageDate` (UTC) is the daily quota the reservation belongs to. */
+export interface CampaignScheduling {
+  utcIso: string;
+  timeZone: string;
+  usageDate: string;
+}
+
 export async function createCampaign(input: {
   draftId: string;
   senderAccountId: string;
   goal: ApplicationGoal;
   recipientEmails: Array<{ email: string; companyName?: string | null }>;
+  /** When set, the campaign is queued but gated until `utcIso` — it flows
+   *  through the same durable worker at the scheduled instant. Omit for
+   *  the unchanged immediate-send path. */
+  scheduling?: CampaignScheduling;
 }) {
   const current = await getCurrentUserAndProfile();
   if (
@@ -130,9 +143,18 @@ export async function createCampaign(input: {
     );
   if (validRecipients.length > 1000)
     throw new Error("A campaign cannot contain more than 1,000 recipients.");
+  // Scheduled sends reserve against the SCHEDULED UTC date (not today), so
+  // the whole existing capacity lifecycle (finalize/cancel release against
+  // usage_date) stays unchanged. Immediate sends keep the original RPC.
   const { data: capacity, error: capacityError } = await admin.rpc(
-    "reserve_email_capacity",
-    { target_user_id: current.user.id, requested: validRecipients.length },
+    input.scheduling ? "reserve_email_capacity_on" : "reserve_email_capacity",
+    input.scheduling
+      ? {
+          target_user_id: current.user.id,
+          requested: validRecipients.length,
+          on_date: input.scheduling.usageDate,
+        }
+      : { target_user_id: current.user.id, requested: validRecipients.length },
   );
   if (capacityError)
     throw new Error(
@@ -152,6 +174,15 @@ export async function createCampaign(input: {
       total_recipients: validRecipients.length,
       queued_count: validRecipients.length,
       reserved_count: validRecipients.length,
+      // Scheduling: queued + gated. The messages' next_attempt_at (below)
+      // is what the existing claim predicates use to hold the campaign back
+      // until the instant; scheduled_at/timezone are canonical + audit.
+      ...(input.scheduling
+        ? {
+            scheduled_at: input.scheduling.utcIso,
+            timezone: input.scheduling.timeZone,
+          }
+        : {}),
     })
     .select("id")
     .single<{ id: string }>();
@@ -171,6 +202,10 @@ export async function createCampaign(input: {
       company_name: recipient.company_name,
       subject: draft.subject,
       status: "queued",
+      // Due-gate: a message is claimable only at/after this instant, so a
+      // scheduled campaign can never be sent early by ANY worker, poller or
+      // open browser tab. Immediate campaigns leave it null (unchanged).
+      next_attempt_at: input.scheduling ? input.scheduling.utcIso : null,
     })),
   );
   if (messagesError) {
@@ -200,7 +235,7 @@ async function getCampaignContext(userId: string, campaignId: string) {
   const { data, error } = await admin
     .from("email_campaigns")
     .select(
-      "id, user_id, draft_id, email_account_id, usage_date, status, started_at, created_at",
+      "id, user_id, draft_id, email_account_id, usage_date, status, started_at, created_at, scheduled_at, timezone",
     )
     .eq("id", campaignId)
     .eq("user_id", userId)
@@ -217,6 +252,10 @@ async function getCampaignContext(userId: string, campaignId: string) {
       status: CampaignStatus;
       started_at: string | null;
       created_at: string;
+      /** Canonical UTC instant for scheduled campaigns; null = immediate. */
+      scheduled_at: string | null;
+      /** IANA zone the user chose (display/audit); null = immediate. */
+      timezone: string | null;
     }>();
   if (error || !data) throw new Error("Campaign not found.");
   return data;
@@ -294,8 +333,15 @@ export async function recoverStaleCampaigns(
 
   let staleCampaignCancelled = false;
   if (campaign.status === "queued" && !campaign.started_at) {
-    const staleBeforeMs = Date.now() - STALE_QUEUED_AFTER_HOURS * 3_600_000;
-    if (new Date(campaign.created_at).getTime() < staleBeforeMs) {
+    // Abandoned-TTL baseline: an immediate campaign ages from created_at.
+    // A SCHEDULED campaign ages from its scheduled instant instead — the
+    // queued state before the instant is normal (the campaign may be days
+    // away), and after the instant it gets the same 24h grace for
+    // scheduler downtime before being cancelled + capacity-released.
+    const baselineMs = campaign.scheduled_at
+      ? Date.parse(campaign.scheduled_at)
+      : new Date(campaign.created_at).getTime();
+    if (Date.now() > baselineMs + STALE_QUEUED_AFTER_HOURS * 3_600_000) {
       const { data, error } = await admin.rpc("cancel_queued_campaign", {
         target_user_id: userId,
         target_campaign_id: campaign.id,
@@ -622,6 +668,50 @@ export async function cancelCampaign(userId: string, campaignId: string) {
   });
 }
 
+/**
+ * Reschedule a not-yet-started campaign to a new future instant.
+ *
+ * Ownership is enforced twice: getCampaignContext (the campaign must belong
+ * to the user) and the RPC itself (user-scoped FOR UPDATE lock). The RPC is
+ * atomic — it refuses once any message was claimed (status 'sending' or
+ * started_at set), and a quota-shortfall on the new date rolls back the
+ * whole move. Only ever reachable while `scheduled_at` is still in the
+ * future; already-sent messages can never be recalled (existing behaviour).
+ */
+export async function rescheduleCampaign(
+  userId: string,
+  campaignId: string,
+  scheduling: CampaignScheduling,
+) {
+  await getCampaignContext(userId, campaignId); // ownership + existence
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc("reschedule_campaign", {
+    target_user_id: userId,
+    target_campaign_id: campaignId,
+    new_scheduled_at: scheduling.utcIso,
+    new_timezone: scheduling.timeZone,
+    new_usage_date: scheduling.usageDate,
+  });
+  if (error)
+    throw new Error(
+      error.message.includes("daily_quota_exceeded")
+        ? "Daily email quota exceeded for the new date."
+        : "Unable to reschedule campaign.",
+    );
+  if (data !== true)
+    throw new Error(
+      "This campaign can no longer be rescheduled — sending has already started.",
+    );
+  await admin.from("activity_logs").insert({
+    user_id: userId,
+    activity_type: "campaign_rescheduled",
+    title: "Application campaign rescheduled",
+    description: "The scheduled send time was changed before sending started.",
+    metadata: { campaign_id: campaignId, scheduled_at: scheduling.utcIso },
+  });
+  return getCampaignContext(userId, campaignId);
+}
+
 /** One row of the Applications list. Either a campaign (one row PER
  *  campaign — campaigns never overwrite each other) or a composer draft
  *  that has not been sent yet. Every value is read from the database,
@@ -643,6 +733,10 @@ export interface ApplicationListItem {
   /** Sender address only (display; the account itself lives in Email). */
   sender_email: string | null;
   created_at: string;
+  /** Canonical UTC instant for scheduled campaigns (null = immediate). */
+  scheduled_at: string | null;
+  /** IANA zone the user chose (display/audit; null = immediate). */
+  timezone: string | null;
 }
 
 function applicationTitle(
@@ -668,7 +762,7 @@ export async function listUserCampaigns(
     admin
       .from("email_campaigns")
       .select(
-        "id, draft_id, email_account_id, status, total_recipients, sent_count, failed_count, created_at",
+        "id, draft_id, email_account_id, status, total_recipients, sent_count, failed_count, created_at, scheduled_at, timezone",
       )
       .eq("user_id", userId)
       .order("created_at", { ascending: false }),
@@ -692,6 +786,8 @@ export async function listUserCampaigns(
     sent_count: number | null;
     failed_count: number | null;
     created_at: string;
+    scheduled_at: string | null;
+    timezone: string | null;
   }>;
   const drafts = (draftsResult.data ?? []) as Array<{
     id: string;
@@ -761,12 +857,14 @@ export async function listUserCampaigns(
       total_recipients: campaign.total_recipients,
       sent_count: campaign.sent_count,
       failed_count: campaign.failed_count,
-      sender_email: campaign.email_account_id
-        ? (senderByAccount.get(campaign.email_account_id) ?? null)
-        : null,
-      created_at: campaign.created_at,
-    });
-  }
+       sender_email: campaign.email_account_id
+         ? (senderByAccount.get(campaign.email_account_id) ?? null)
+         : null,
+       created_at: campaign.created_at,
+       scheduled_at: campaign.scheduled_at,
+       timezone: campaign.timezone,
+     });
+   }
   for (const draft of pendingDrafts) {
     items.push({
       kind: "draft",
@@ -780,10 +878,12 @@ export async function listUserCampaigns(
       total_recipients: recipientCountByDraft.get(draft.id) ?? 0,
       sent_count: null,
       failed_count: null,
-      sender_email: senderByAccount.get(draft.sender_email_account_id) ?? null,
-      created_at: draft.created_at,
-    });
-  }
+       sender_email: senderByAccount.get(draft.sender_email_account_id) ?? null,
+       created_at: draft.created_at,
+       scheduled_at: null,
+       timezone: null,
+     });
+   }
   return items.sort(
     (a, b) =>
       b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id),

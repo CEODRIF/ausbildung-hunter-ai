@@ -1,0 +1,66 @@
+# Email Scheduler — the primary (and only) trigger for scheduled sends.
+#
+# Every 5 minutes on the default branch (main), each run makes ONE
+# authenticated GET to the secure server-side scheduler endpoint
+# /api/cron/email-scheduler, which then performs its bounded claim+batch
+# loop over the existing durable engine. The browser is never involved.
+#
+# Cost: the repository is PUBLIC, so GitHub Actions minutes are unlimited
+# and free — this scheduler costs zero (no Vercel Pro, no paid services).
+#
+# DISABLED BY DEFAULT: the job only runs when the repository VARIABLE
+# `EMAIL_SCHEDULER_GH` is set to the exact string `true`. Enable it ONLY
+# after BOTH of these are configured safely:
+#   1. This code is deployed to the production origin (the endpoint must
+#      exist there — a pre-deploy tick just 404s).
+#   2. Repository SECRET `CRON_SECRET` (Settings → Secrets and variables →
+#      Actions → New repository secret) contains the SAME random value
+#      (≥16 chars) as the app's server environment variable CRON_SECRET —
+#      the endpoint fails closed (401, no work) otherwise.
+#   Without the secret the job fails loudly instead of hammering.
+#
+# Optional repository variable:
+#   EMAIL_SCHEDULER_URL — production origin (default: https://ausbildungsweg.net)
+#
+# Safety:
+#  - Claims are atomic in Postgres (FOR UPDATE SKIP LOCKED) and the
+#    endpoint's batch loop is bounded (≤3 rounds, 45s): overlapping runs
+#    (schedule + manual workflow_dispatch) can never double-send, and
+#    messages are only claimable at/after their due instant — never early.
+#  - The job echoes only the endpoint's counter JSON
+#    (ok/claimed/processed/stop/elapsed_ms) — no secrets, no recipients.
+name: Email Scheduler
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    name: scheduler tick
+    # Gated: off unless the repo variable says exactly "true".
+    if: vars.EMAIL_SCHEDULER_GH == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: email-scheduler-tick
+      cancel-in-progress: false # serialize overlapping ticks, never kill mid-batch
+    steps:
+      - name: Scheduler tick
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DEPLOY_URL: ${{ vars.EMAIL_SCHEDULER_URL || 'https://ausbildungsweg.net' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::CRON_SECRET is not set in repository secrets."
+            exit 1
+          fi
+          : "${DEPLOY_URL:=https://ausbildungsweg.net}"
+          DEPLOY_URL="${DEPLOY_URL%/}"
+          # 401 (bad/missing secret) or 5xx fails the run on purpose —
+          # a red scheduler is better than a silent one.
+          body="$(curl -sS --fail-with-body --max-time 90 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$DEPLOY_URL/api/cron/email-scheduler")"
+          echo "Scheduler tick: $body"

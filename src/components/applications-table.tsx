@@ -35,6 +35,10 @@ export interface ApplicationRow {
   sent_count: number | null;
   failed_count: number | null;
   sender_email: string | null;
+  /** Canonical UTC instant for scheduled campaigns (null = immediate). */
+  scheduled_at: string | null;
+  /** IANA zone the user chose (display only; null = immediate). */
+  timezone: string | null;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -100,6 +104,23 @@ function formatDate(value: string, locale: string) {
       year: "numeric",
       month: "short",
       day: "numeric",
+    }).format(new Date(value));
+  } catch {
+    return "—";
+  }
+}
+
+/** "25.11.2026, 14:35" in the row's own IANA zone (locale-aware). */
+function formatScheduled(value: string, timeZone: string, locale: string) {
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      timeZone,
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
     }).format(new Date(value));
   } catch {
     return "—";
@@ -450,8 +471,26 @@ export function ApplicationsTable({
                       <td className="num px-4 py-3.5 text-muted">
                         {row.total_recipients ?? "—"}
                       </td>
-                      <td className="px-4 py-3.5">
-                        <StatusPill status={row.status} />
+                       <td className="px-4 py-3.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <StatusPill status={row.status} />
+                          {row.scheduled_at &&
+                            (row.status === "queued" ||
+                              row.status === "sending") && (
+                              <span
+                                title={row.timezone ?? undefined}
+                                className="inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-bold whitespace-nowrap text-accent-deep"
+                              >
+                                {row.timezone
+                                  ? formatScheduled(
+                                      row.scheduled_at,
+                                      row.timezone,
+                                      locale,
+                                    )
+                                  : row.scheduled_at.slice(0, 16)}
+                              </span>
+                            )}
+                        </div>
                       </td>
                       <td className="num px-4 py-3.5 text-muted">
                         {row.sent_count ?? "—"}
@@ -530,8 +569,22 @@ export function ApplicationsTable({
                       )}
                     </div>
                   </div>
-                  <span className="shrink-0">
+                  <span className="flex shrink-0 items-center gap-1.5">
                     <StatusPill status={row.status} />
+                    {row.scheduled_at &&
+                      (row.status === "queued" || row.status === "sending") &&
+                      row.timezone && (
+                        <span
+                          title={row.timezone}
+                          className="inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-bold whitespace-nowrap text-accent-deep"
+                        >
+                          {formatScheduled(
+                            row.scheduled_at,
+                            row.timezone,
+                            locale,
+                          )}
+                        </span>
+                      )}
                   </span>
                 </div>
                 <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-muted">

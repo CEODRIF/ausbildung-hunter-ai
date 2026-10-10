@@ -20,6 +20,8 @@ import {
 } from "@/app/applications/new/actions";
 import { DiscardDraftButton } from "@/components/discard-draft-button";
 import { sendApplications } from "@/app/applications/new/send-action";
+import { scheduleApplications } from "@/app/applications/new/schedule-action";
+import { ScheduleForm } from "@/components/schedule-form";
 import { createSendGate } from "@/lib/send-gate";
 import type {
   ApplicationDraft,
@@ -80,6 +82,9 @@ export function ApplicationComposer({
   );
   const [uploading, setUploading] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Confirm dialog: "Send now" is the default and keeps the EXACT existing
+  // flow; "Schedule" swaps in the scheduling form (own action, own gate).
+  const [sendMode, setSendMode] = useState<"now" | "schedule">("now");
   const [isPending, startTransition] = useTransition();
   // Dedicated to the send flow — the save/upload transition is untouched.
   const [isSending, startSend] = useTransition();
@@ -452,65 +457,131 @@ export function ApplicationComposer({
               <p className="mt-2 rounded-xl bg-surface-2 px-3 py-2 text-sm font-bold text-ink-soft">
                 {sender.email}
               </p>
-              <p className="mt-4 text-sm text-muted">
+              <p className="mt-3 truncate text-sm text-muted">
+                {t("apps.schedule.subject")}:{" "}
+                <span className="font-semibold text-ink-soft">
+                  {subject || "—"}
+                </span>
+              </p>
+              <p className="mt-2 text-sm text-muted">
                 Only valid recipients will be queued. Sending will continue
                 server-side after confirmation.
               </p>
-              {isSending && (
-                <p
-                  role="status"
-                  aria-live="polite"
-                  className="mt-4 flex items-center gap-2 text-xs font-semibold text-ink-soft"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-line-strong border-t-accent"
-                  />
-                  Sending applications… Please keep this page open.
-                </p>
-              )}
-              <div className="mt-6 flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setConfirmOpen(false)}
-                  disabled={isSending}
-                  className="h-11 rounded-2xl border border-line bg-surface px-4 text-sm font-bold text-muted shadow-[var(--shadow-card)] transition-colors hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Review again
-                </button>
-                <form action={sendApplications} onSubmit={handleSendSubmit}>
-                  <input type="hidden" name="draftId" value={draft.id} />
-                  <input
-                    type="hidden"
-                    name="senderAccountId"
-                    value={senderId}
-                  />
-                  <input type="hidden" name="goal" value={goal} />
-                  <input
-                    type="hidden"
-                    name="recipients"
-                    value={JSON.stringify(
-                      recipients.filter(
-                        (recipient) => recipient.status === "valid",
-                      ),
-                    )}
-                  />
+              {/* Send mode: "now" is the default and keeps the existing flow
+                  byte-for-byte; "schedule" swaps in the scheduling form. */}
+              <div
+                className="mt-4 grid grid-cols-2 gap-2"
+                role="radiogroup"
+                aria-label={t("apps.schedule.mode")}
+              >
+                {(
+                  [
+                    ["now", t("apps.schedule.now")],
+                    ["schedule", t("apps.schedule.schedule")],
+                  ] as const
+                ).map(([mode, label]) => (
                   <button
-                    type="submit"
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={sendMode === mode}
+                    onClick={() => setSendMode(mode)}
                     disabled={isSending}
-                    aria-busy={isSending}
-                    className="btn-neon flex h-11 items-center gap-2 rounded-2xl px-5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-70"
+                    className={`rounded-2xl border p-3 text-left text-xs font-bold transition-colors ${
+                      sendMode === mode
+                        ? "border-accent bg-accent-soft text-accent shadow-[var(--shadow-card)]"
+                        : "border-line text-muted hover:border-line-strong hover:text-ink-soft"
+                    }`}
                   >
-                    {isSending && (
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {sendMode === "now" ? (
+                <>
+                  {isSending && (
+                    <p
+                      role="status"
+                      aria-live="polite"
+                      className="mt-4 flex items-center gap-2 text-xs font-semibold text-ink-soft"
+                    >
                       <span
                         aria-hidden="true"
-                        className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                        className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-line-strong border-t-accent"
                       />
-                    )}
-                    {isSending ? "Sending…" : "Continue"}
-                  </button>
-                </form>
-              </div>
+                      Sending applications… Please keep this page open.
+                    </p>
+                  )}
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmOpen(false)}
+                      disabled={isSending}
+                      className="h-11 rounded-2xl border border-line bg-surface px-4 text-sm font-bold text-muted shadow-[var(--shadow-card)] transition-colors hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Review again
+                    </button>
+                    <form
+                      action={sendApplications}
+                      onSubmit={handleSendSubmit}
+                    >
+                      <input type="hidden" name="draftId" value={draft.id} />
+                      <input
+                        type="hidden"
+                        name="senderAccountId"
+                        value={senderId}
+                      />
+                      <input type="hidden" name="goal" value={goal} />
+                      <input
+                        type="hidden"
+                        name="recipients"
+                        value={JSON.stringify(
+                          recipients.filter(
+                            (recipient) => recipient.status === "valid",
+                          ),
+                        )}
+                      />
+                      <button
+                        type="submit"
+                        disabled={isSending}
+                        aria-busy={isSending}
+                        className="btn-neon flex h-11 items-center gap-2 rounded-2xl px-5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {isSending && (
+                          <span
+                            aria-hidden="true"
+                            className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                          />
+                        )}
+                        {isSending ? "Sending…" : "Continue"}
+                      </button>
+                    </form>
+                  </div>
+                </>
+              ) : (
+                <div className="mt-5">
+                  <ScheduleForm
+                    action={scheduleApplications}
+                    extraHidden={[
+                      { name: "draftId", value: draft.id },
+                      { name: "senderAccountId", value: senderId },
+                      { name: "goal", value: goal },
+                      {
+                        name: "recipients",
+                        value: JSON.stringify(
+                          recipients.filter(
+                            (recipient) => recipient.status === "valid",
+                          ),
+                        ),
+                      },
+                    ]}
+                    submitLabel={t("apps.schedule.submitSchedule")}
+                    pendingLabel={t("apps.schedule.scheduling")}
+                    cancelLabel="Review again"
+                    onCancel={() => setConfirmOpen(false)}
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}
