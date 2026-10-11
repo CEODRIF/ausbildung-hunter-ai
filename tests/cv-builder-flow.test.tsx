@@ -138,8 +138,14 @@ describe("step-2 template selection: real renderer, large A4 gallery, demo data"
     // Gallery geometry: A4 ratio (794:1123 ≈ 1:1.414) filling the card
     // width, 1 column mobile / 2 columns desktop.
     expect(selector).toContain('aspectRatio: "794 / 1123"');
-    expect(selector).toContain('transform: "scale(calc(100cqi / 794px))"');
-    expect(selector).toContain("containerType: \"inline-size\"");
+    // Card-width scaling via a MEASURED fit factor (clientWidth / 794,
+    // kept fresh by a ResizeObserver). The old container-query (cqi) scale
+    // resolved against the VIEWPORT and clipped the sheet on desktop —
+    // container queries are forbidden in this component now.
+    expect(selector).toContain("clientWidth");
+    expect(selector).toContain("ResizeObserver");
+    expect(selector).not.toContain("containerType");
+    expect(selector).not.toContain("100cqi");
     expect(selector).toContain("grid grid-cols-1 gap-5 lg:grid-cols-2");
   });
 
@@ -194,7 +200,10 @@ describe("step-2 template selection: real renderer, large A4 gallery, demo data"
     expect(html).not.toContain("Test Name");
     // Each card scales the real 794px sheet (4 wrappers + 4 sheets).
     expect(html.match(/width:794px/g)?.length ?? 0).toBe(8);
-    expect(html).toContain("scale(calc(100cqi / 794px))");
+    // Pre-hydration the sheet is hidden at scale(0) inside the A4-ratio
+    // box; the client then applies the measured fit scale (no overflow).
+    expect(html).toContain("scale(0)");
+    expect(html).not.toContain("cqi");
   });
 });
 

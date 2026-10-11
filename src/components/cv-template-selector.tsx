@@ -5,6 +5,15 @@
  * same component the preview uses) inside a scaled container — no fake
  * screenshots.
  *
+ * LARGE gallery scaling: the 794px A4 sheet is scaled by a factor MEASURED
+ * from the card's actual rendered width (ResizeObserver → width / 794).
+ * The original container-query-based scale did not resolve against the
+ * card — the relative length unit fell back to the VIEWPORT width — so on
+ * desktop the sheet rendered at viewport/794 ≈ 1.3–1.6× the card and
+ * `overflow-hidden` clipped the right side, while mobile looked fine only
+ * by coincidence (viewport ≈ card width). Measuring the container removes
+ * the dependency on container-query resolution entirely.
+ *
  * Two sizes share the same live-thumbnail pipeline:
  *  - "compact" (default): the dense 2/4-column row, previewing the USER's
  *    current CV data.
@@ -18,7 +27,14 @@
  * Selecting a template only changes `cv.templateId` — the CV content and the
  * customization settings are untouched and persist with the document.
  */
-import { useMemo } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useI18n } from "@/lib/i18n";
 import { Icon } from "@/components/icon";
 import type { CvDocument, CvTemplateId } from "@/lib/templates/cv";
@@ -35,6 +51,60 @@ import { CV_TEMPLATE_LIST } from "@/components/cv-templates";
 const THUMB_W = 132;
 const THUMB_H = Math.round((THUMB_W * 1123) / 794); // 187
 const THUMB_SCALE = THUMB_W / CV_SHEET_WIDTH;
+
+/**
+ * Exact A4-fit scale for the LARGE gallery previews: the card's rendered
+ * inline width divided by the 794px sheet width. Measured with a
+ * ResizeObserver, so the scale stays exact through window resizes and the
+ * 1-col ↔ 2-col grid breakpoint. Returns null until the first measurement
+ * (SSR / pre-hydration) — the caller then renders at scale(0) inside the
+ * aspect-ratio box, reserving height without ever overflowing.
+ */
+function useA4FitScale(boxRef: RefObject<HTMLDivElement | null>): number | null {
+  const [scale, setScale] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const update = () => {
+      const w = el.clientWidth;
+      if (w > 0) setScale(w / CV_SHEET_WIDTH);
+    };
+    update();
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(update);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+    // Fallback for engines without ResizeObserver:
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [boxRef]);
+  return scale;
+}
+
+/** One large gallery preview: A4-ratio box + the real sheet scaled to fit
+ *  the box width exactly (centered — the scaled sheet fills the box). */
+function LargeA4Preview({ node }: { node: ReactNode }) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const scale = useA4FitScale(boxRef);
+  return (
+    <div
+      ref={boxRef}
+      className="pointer-events-none w-full overflow-hidden border-b border-line bg-surface-2/60"
+      style={{ aspectRatio: "794 / 1123", direction: "ltr" }}
+    >
+      <div
+        style={{
+          width: CV_SHEET_WIDTH,
+          transform: scale == null ? "scale(0)" : `scale(${scale})`,
+          transformOrigin: "top left",
+        }}
+      >
+        {node}
+      </div>
+    </div>
+  );
+}
 
 export interface CvTemplateSelectorProps {
   cv: CvDocument;
@@ -116,28 +186,10 @@ export function CvTemplateSelector({
               )}
               {/* Scaled live miniature (the actual renderer, demo/user data). */}
               {large ? (
-                /* Gallery: true A4 ratio (794:1123 ≈ 1:1.414) that FILLS the
-                   card width. The real 794px sheet is scaled with a
-                   container-query unit (100cqi = box inline size), so the
-                   preview stays exact and responsive at any card width. */
-                <div
-                  className="pointer-events-none w-full overflow-hidden border-b border-line bg-surface-2/60"
-                  style={{
-                    aspectRatio: "794 / 1123",
-                    containerType: "inline-size",
-                    direction: "ltr",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: CV_SHEET_WIDTH,
-                      transform: "scale(calc(100cqi / 794px))",
-                      transformOrigin: "top left",
-                    }}
-                  >
-                    {node}
-                  </div>
-                </div>
+                // A4-ratio box; the 794px sheet is scaled to EXACTLY the box
+                // width — measured from the rendered card (see useA4FitScale),
+                // preserving the document's true proportions at any size.
+                <LargeA4Preview node={node} />
               ) : (
                 <div
                   className="pointer-events-none overflow-hidden border-b border-line bg-surface-2/60"
