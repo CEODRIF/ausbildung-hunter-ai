@@ -441,8 +441,22 @@ export function ApplicationComposer({
           </Card>
         </aside>
         {confirmOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/50 p-5 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 shadow-[var(--shadow-float)]">
+          /* The bottom nav (app-shell) is `fixed inset-x-3 bottom-3` with
+             paddingBottom max(0.5rem, env(safe-area-inset-bottom)), and it
+             PAINTS above this overlay — the shell's content wrapper is a
+             `relative z-10` stacking context that traps the overlay's z-50.
+             So the contract is geometric: below `lg` (where the nav exists)
+             reserve its full footprint + margin via bottom padding,
+             including the iOS safe-area inset. Desktop has no nav → `p-5`. */
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/50 p-5 pb-[calc(6rem_+_env(safe-area-inset-bottom))] backdrop-blur-sm lg:pb-5">
+            {/* Scrollable card: capped at the overlay's free area
+                (min(100%, …)) with a dynamic-viewport (dvh) cap where
+                supported (vh fallback before that), so on mobile Safari the
+                dialog fits the CURRENT visible viewport and its last action
+                button can always be scrolled fully above the bottom nav.
+                Desktop: content is normally shorter than the cap → identical
+                appearance, no scrollbar. */}
+            <div className="max-h-[min(100%,calc(100vh_-_2.5rem))] w-full max-w-md overflow-y-auto overscroll-contain rounded-3xl border border-line bg-surface p-6 shadow-[var(--shadow-float)] supports-[height:100dvh]:max-h-[min(100%,calc(100dvh_-_2.5rem))]">
               <h2 className="display-title text-2xl text-ink">
                 Confirm applications
               </h2>
