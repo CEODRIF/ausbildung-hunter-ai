@@ -186,16 +186,43 @@ describe("GET /api/health", () => {
     } as never);
   }
 
+  /** The tzdb probe is a runtime FACT (the IANA database bundled in THIS
+   *  Node build), so tests assert its shape/format — never specific
+   *  offsets (those would make the suite tzdata-version-sensitive). */
+  function expectTzdbProbeShape(probe: unknown): void {
+    expect(Array.isArray(probe)).toBe(true);
+    const list = probe as Array<Record<string, unknown>>;
+    expect(list).toHaveLength(2);
+    for (const entry of list) {
+      expect(Object.keys(entry).sort()).toEqual([
+        "current",
+        "instant",
+        "name",
+        "offset",
+        "zone",
+      ]);
+      expect(typeof entry.name).toBe("string");
+      expect(typeof entry.zone).toBe("string");
+      expect(typeof entry.instant).toBe("string");
+      expect(entry.offset).toMatch(/^[+-]\d{2}:\d{2}$/);
+      expect(typeof entry.current).toBe("boolean");
+    }
+  }
+
   it("200 ok with boolean checks only when the database responds", async () => {
     const { GET } = await import("@/app/api/health/route");
     mockHealthAdmin(true);
     const res = await GET();
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
-    expect(await res.json()).toEqual({
-      status: "ok",
-      checks: { database: true, workerSecretConfigured: true },
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.status).toBe("ok");
+    expect(body.checks).toEqual({
+      database: true,
+      workerSecretConfigured: true,
+      tzdbCurrent: expect.any(Boolean),
     });
+    expectTzdbProbeShape(body.tzdbProbe);
   });
 
   it("503 degraded when the database probe fails", async () => {
@@ -203,10 +230,14 @@ describe("GET /api/health", () => {
     mockHealthAdmin(false);
     const res = await GET();
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({
-      status: "degraded",
-      checks: { database: false, workerSecretConfigured: true },
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.status).toBe("degraded");
+    expect(body.checks).toEqual({
+      database: false,
+      workerSecretConfigured: true,
+      tzdbCurrent: expect.any(Boolean),
     });
+    expectTzdbProbeShape(body.tzdbProbe);
   });
 
   it("503 when the admin client throws entirely (no unhandled rejection)", async () => {
@@ -224,10 +255,14 @@ describe("GET /api/health", () => {
     mockHealthAdmin(true);
     const res = await GET();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      status: "ok",
-      checks: { database: true, workerSecretConfigured: false },
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.status).toBe("ok");
+    expect(body.checks).toEqual({
+      database: true,
+      workerSecretConfigured: false,
+      tzdbCurrent: expect.any(Boolean),
     });
+    expectTzdbProbeShape(body.tzdbProbe);
   });
 
   it("never leaks env var values or error details (public endpoint)", async () => {
@@ -237,13 +272,16 @@ describe("GET /api/health", () => {
     expect(raw).not.toContain(SECRET);
     expect(raw).not.toContain("db down");
     const body = JSON.parse(raw) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["checks", "status"]);
+    expect(Object.keys(body).sort()).toEqual(["checks", "status", "tzdbProbe"]);
     const checks = body["checks"] as Record<string, unknown>;
     expect(Object.keys(checks).sort()).toEqual([
       "database",
+      "tzdbCurrent",
       "workerSecretConfigured",
     ]);
     expect(typeof checks["database"]).toBe("boolean");
     expect(typeof checks["workerSecretConfigured"]).toBe("boolean");
+    expect(typeof checks["tzdbCurrent"]).toBe("boolean");
+    expectTzdbProbeShape(body["tzdbProbe"]);
   });
 });
