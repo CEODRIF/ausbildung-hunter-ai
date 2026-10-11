@@ -18,8 +18,10 @@ import {
   isSupportedTimezone,
   isValidCalendarDate,
   offsetLabelAt,
+  probeTzdb,
   tzOffsetMinutes,
   wallClockToUtc,
+  utcToLocalParts,
   type ScheduleTimeResult,
 } from "@/lib/schedule-time";
 
@@ -195,5 +197,149 @@ describe("display helpers (UTC → local preview)", () => {
       const preview = formatScheduledLocal(result.utcIso, "Europe/Berlin", "de");
       expect(preview).toBe("31.12.2026, 23:59");
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// tzdata consistency — the 2026-10-11 Casablanca incident (UI showed +01:00,
+// current tzdb says +00:00) and the invariants that keep the preview
+// (display) and the UTC conversion in agreement on ANY runtime tzdb.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The "+HH:MM" offset label implied by the conversion itself:
+ *  offset = wall-clock − UTC (the inverse of the utc − wall delta). */
+function labelFromDelta(
+  utcMs: number,
+  wall: { year: number; month: number; day: number; hour: number; minute: number },
+): string {
+  const deltaMin = Math.round(
+    (Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute) - utcMs) /
+      60000,
+  );
+  const sign = deltaMin < 0 ? "-" : "+";
+  const abs = Math.abs(deltaMin);
+  return `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(
+    abs % 60,
+  ).padStart(2, "0")}`;
+}
+
+describe("tzdata consistency (Morocco 2026 rule change + display/conversion parity)", () => {
+  it("the reported case: Africa/Casablanca on 2026-10-11 is UTC+0", () => {
+    // Morocco's 2018 rule (+1 except Ramadan) ended during 2026 — its last
+    // +1 stretch ran into late summer; current tzdb projects +0 from then
+    // on. Runtimes with OLDER tzdata (e.g. Node <= 22.23.2) still report
+    // +01:00 here; the /api/health tzdb probe exposes that divergence.
+    expect(
+      offsetLabelAt("2026-10-11T00:20:00.000Z", "Africa/Casablanca"),
+    ).toBe("+00:00");
+    const result = wallClockToUtc(
+      { year: 2026, month: 10, day: 11, hour: 0, minute: 20 },
+      "Africa/Casablanca",
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.utcIso).toBe("2026-10-11T00:20:00.000Z");
+      // Exactly the preview string the UI renders (en locale):
+      expect(formatScheduledLocal(result.utcIso, "Africa/Casablanca", "en")).toBe(
+        "10/11/2026, 00:20",
+      );
+    }
+  });
+
+  it("pins the Morocco rule change in both directions", () => {
+    // Version-independent pins (old AND current tzdb agree):
+    expect(offsetLabelAt("2025-11-25T23:20:00.000Z", "Africa/Casablanca")).toBe(
+      "+01:00",
+    ); // old rule still in force
+    expect(offsetLabelAt("2026-08-25T12:00:00.000Z", "Africa/Casablanca")).toBe(
+      "+01:00",
+    ); // last +1 stretch
+    // Current-tzdb pins (CI runs Node 22.23.3 / current tzdata):
+    expect(offsetLabelAt("2026-10-11T00:20:00.000Z", "Africa/Casablanca")).toBe(
+      "+00:00",
+    );
+    expect(offsetLabelAt("2027-03-10T12:00:00.000Z", "Africa/Casablanca")).toBe(
+      "+00:00",
+    );
+  });
+
+  it("preview and conversion always agree: round-trip + displayed offset == conversion delta (any tzdb version)", () => {
+    const cases: Array<{
+      wall: { year: number; month: number; day: number; hour: number; minute: number };
+      zone: string;
+    }> = [
+      { wall: { year: 2026, month: 1, day: 15, hour: 10, minute: 0 }, zone: "Europe/Berlin" },
+      { wall: { year: 2026, month: 7, day: 1, hour: 10, minute: 0 }, zone: "Europe/Berlin" },
+      { wall: { year: 2026, month: 1, day: 15, hour: 10, minute: 0 }, zone: "America/New_York" },
+      { wall: { year: 2026, month: 7, day: 1, hour: 10, minute: 0 }, zone: "America/New_York" },
+      { wall: { year: 2025, month: 11, day: 25, hour: 10, minute: 0 }, zone: "Africa/Casablanca" },
+      { wall: { year: 2026, month: 10, day: 11, hour: 0, minute: 20 }, zone: "Africa/Casablanca" },
+      { wall: { year: 2027, month: 3, day: 10, hour: 10, minute: 0 }, zone: "Africa/Casablanca" },
+    ];
+    for (const { wall, zone } of cases) {
+      const result = wallClockToUtc(wall, zone);
+      expect(result.ok, `${zone} ${wall.year}-${wall.month}-${wall.day}`).toBe(true);
+      if (!result.ok) continue;
+      // 1) The stored instant renders back to the entered wall-clock time.
+      expect(utcToLocalParts(result.utcIso, zone)).toEqual(wall);
+      // 2) The offset the UI displays equals the conversion's own delta —
+      //    display can never diverge from conversion, on any tzdb version.
+      expect(offsetLabelAt(result.utcIso, zone)).toBe(labelFromDelta(result.utcMs, wall));
+    }
+  });
+
+  it("America/New_York 2026: spring gap does not exist, fall fold is ambiguous", () => {
+    // US DST 2026: starts Sun 08.03.2026 07:00 UTC (02:00→03:00 local),
+    // ends Sun 01.11.2026 06:00 UTC (02:00→01:00 local).
+    expect(
+      reasonOf(
+        wallClockToUtc(
+          { year: 2026, month: 3, day: 8, hour: 2, minute: 30 },
+          "America/New_York",
+        ),
+      ),
+    ).toBe("nonexistent");
+    expect(
+      reasonOf(
+        wallClockToUtc(
+          { year: 2026, month: 11, day: 1, hour: 1, minute: 30 },
+          "America/New_York",
+        ),
+      ),
+    ).toBe("ambiguous");
+    const fold = wallClockToUtc(
+      { year: 2026, month: 11, day: 1, hour: 1, minute: 30 },
+      "America/New_York",
+    );
+    expect(fold.ok).toBe(false);
+    if (!fold.ok && fold.reason === "ambiguous") {
+      expect(fold.firstUtcIso).toBe("2026-11-01T05:30:00.000Z"); // EDT (-4)
+      expect(fold.secondUtcIso).toBe("2026-11-01T06:30:00.000Z"); // EST (-5)
+      // Explicit resolution picks the exact instant (parity with Berlin).
+      expect(
+        wallClockToUtc(
+          { year: 2026, month: 11, day: 1, hour: 1, minute: 30 },
+          "America/New_York",
+          "end",
+        ),
+      ).toMatchObject({ ok: true, utcIso: "2026-11-01T06:30:00.000Z", resolvedAmbiguity: "end" });
+    }
+  });
+
+  it("the tzdb probe exposes a stale runtime (current tzdb ⇒ all probes current)", () => {
+    const probes = probeTzdb();
+    expect(probes.map((p) => p.name)).toEqual([
+      "casablanca-2026-10",
+      "berlin-2026-11",
+    ]);
+    // Berlin is a stable control: every tzdb since 1996 says +01:00 —
+    // a mismatch here means Intl itself is broken, not the tzdata.
+    const berlin = probes.find((p) => p.name === "berlin-2026-11");
+    expect(berlin?.offset).toBe("+01:00");
+    expect(berlin?.current).toBe(true);
+    // Casablanca is the rule-change sentinel (current tzdb ⇒ +00:00).
+    const casablanca = probes.find((p) => p.name === "casablanca-2026-10");
+    expect(casablanca?.offset).toBe("+00:00");
+    expect(casablanca?.current).toBe(true);
   });
 });
