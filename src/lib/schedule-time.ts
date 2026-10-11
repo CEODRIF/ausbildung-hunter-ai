@@ -289,3 +289,64 @@ export function offsetLabelAt(utcIso: string, timeZone: string): string {
   const mm = String(abs % 60).padStart(2, "0");
   return `${sign}${hh}:${mm}`;
 }
+
+/**
+ * tzdata-freshness probes.
+ *
+ * The wall-clock→UTC mapping this module computes depends on the IANA tz
+ * database BUNDLED IN THE RUNTIME (server Node build / browser OS). Rules
+ * can change — Morocco's did during 2026 (its last UTC+1 stretch ended in
+ * late summer; current tzdb projects Africa/Casablanca at UTC+0 from then
+ * on, while older tzdata — e.g. Node ≤ 22.23.2 — still says +1). When two
+ * runtimes disagree, a preview and the persisted instant can be off by an
+ * hour SILENTLY. These fixed probe instants make that divergence
+ * observable: compare the returned labels against the current-tzdb
+ * expectations (see tests/schedule-time.test.ts).
+ *
+ *  - casablanca: rule-change sensitive (current tzdb ⇒ \"+00:00\").
+ *  - berlin:     stable control (every tzdb since 1996 ⇒ \"+01:00\").
+ */
+export const TZDB_PROBES: Array<{
+  name: string;
+  zone: string;
+  instant: string;
+  /** Expected label on a runtime with CURRENT tzdata. */
+  currentTzdbOffset: string;
+}> = [
+  {
+    name: "casablanca-2026-10",
+    zone: "Africa/Casablanca",
+    instant: "2026-10-11T00:20:00.000Z",
+    currentTzdbOffset: "+00:00",
+  },
+  {
+    name: "berlin-2026-11",
+    zone: "Europe/Berlin",
+    instant: "2026-11-25T13:35:00.000Z",
+    currentTzdbOffset: "+01:00",
+  },
+];
+
+/**
+ * The runtime's ACTUAL offset labels at the probe instants — exposed by
+ * /api/health so a stale runtime tzdb is detectable in production (server
+ * side; the browser side is the user's OS and cannot be probed remotely).
+ */
+export function probeTzdb(): Array<{
+  name: string;
+  zone: string;
+  instant: string;
+  offset: string;
+  current: boolean;
+}> {
+  return TZDB_PROBES.map((probe) => {
+    const offset = offsetLabelAt(probe.instant, probe.zone);
+    return {
+      name: probe.name,
+      zone: probe.zone,
+      instant: probe.instant,
+      offset,
+      current: offset === probe.currentTzdbOffset,
+    };
+  });
+}
