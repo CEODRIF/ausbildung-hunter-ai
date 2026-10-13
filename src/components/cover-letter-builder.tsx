@@ -203,19 +203,39 @@ function AiLetterModal({
     "h-12 w-full rounded-xl border border-line-strong bg-surface px-3.5 text-sm text-ink outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    /* The bottom nav (app-shell) is `fixed inset-x-3 bottom-3` with
+       paddingBottom max(0.5rem, env(safe-area-inset-bottom)), and it
+       PAINTS above this overlay — the shell's content wrapper is a
+       `relative z-10` stacking context that traps the overlay's z-50.
+       So the contract is geometric, not z-index (same fix as the
+       applications confirm dialog, see
+       tests/confirm-dialog-mobile.test.tsx): below `lg` (where the nav
+       exists) reserve the nav's FULL footprint + margin via bottom
+       padding, including the iOS safe-area inset. Desktop has no nav →
+       `p-4` is restored at `lg`, so the desktop layout is unchanged. */
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pb-[calc(6rem_+_env(safe-area-inset-bottom))] lg:pb-4">
       <button
         className="absolute inset-0 bg-navy/45 backdrop-blur-[2px] dark:bg-black/60"
         aria-label={t("common.close")}
         onClick={onClose}
       />
+      {/* Scrollable card: capped at the overlay's free area
+          (min(100%, …)) with a dynamic-viewport (dvh) cap where
+          supported (vh fallback before that), so on mobile Safari the
+          dialog fits the CURRENT visible viewport — including with the
+          keyboard open, where the fixed overlay's layout viewport
+          shrinks and the 100% term re-bounds the card — and the
+          Cancel/Generate row can always be scrolled fully above the
+          bottom nav. No hard-coded height, so nothing breaks when the
+          keyboard appears. Desktop: content is normally shorter than
+          the cap → identical appearance, no scrollbar. */}
       <div
         ref={dialogRef}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={t("coverLetter.aiModalTitle")}
-        className="relative z-10 max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-line bg-surface p-5 shadow-2xl outline-none sm:p-7"
+        className="relative z-10 max-h-[min(100%,calc(100vh_-_2.5rem))] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-5 shadow-2xl outline-none sm:p-7 supports-[height:100dvh]:max-h-[min(100%,calc(100dvh_-_2.5rem))]"
       >
         <div className="mb-5 flex items-start justify-between gap-4">
           <h2 className="text-lg font-bold text-ink sm:text-xl">
