@@ -14,6 +14,7 @@ import {
   type ApplicationGoal,
   type RecipientStatus,
 } from "@/lib/application-drafts";
+import { hasContactNameColumn } from "@/lib/contact-name-support";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 
 export async function saveDraft(input: {
@@ -56,8 +57,21 @@ export async function saveDraft(input: {
     .from("application_draft_recipients")
     .delete()
     .eq("draft_id", input.draftId);
+  // contact_name is OPTIONAL in the schema (manual migration) — only write
+  // it when the column exists. Writing it pre-migration would make this
+  // insert (and therefore EVERY draft autosave) fail, which disables the
+  // "Send applications" button indefinitely.
+  const supportsContactName = await hasContactNameColumn();
   const recipients = validateRecipientList(input.recipients).map(
-    (recipient) => ({ draft_id: input.draftId, ...recipient }),
+    (recipient) => ({
+      draft_id: input.draftId,
+      email: recipient.email,
+      company_name: recipient.company_name,
+      validation_status: recipient.validation_status,
+      ...(supportsContactName
+        ? { contact_name: recipient.contact_name }
+        : {}),
+    }),
   );
   if (recipients.length) {
     const { error: recipientError } = await admin

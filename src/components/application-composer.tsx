@@ -408,6 +408,19 @@ export function ApplicationComposer({
             >
               Send applications
             </button>
+            {/* A disabled button with only the tiny header chip would be a
+                SILENT failure: explain the blocked state right here. The
+                draft must be persisted before a campaign can be created, so
+                a stuck autosave is exactly why the button is off. */}
+            {saveState === "error" && (
+              <p
+                role="alert"
+                className="mt-3 text-xs font-semibold leading-5 text-danger"
+              >
+                Save failed — your draft must save before sending. Check your
+                connection and edit any field to retry.
+              </p>
+            )}
           </Card>
           <Card className="p-5">
             <p className="text-xs font-bold uppercase tracking-[0.12em] text-faint">

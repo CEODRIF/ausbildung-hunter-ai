@@ -22,6 +22,7 @@ import {
   PersonalizationError,
   renderPersonalizedMessage,
 } from "@/lib/personalization";
+import { hasContactNameColumn } from "@/lib/contact-name-support";
 
 export type CampaignStatus =
   | "draft"
@@ -123,16 +124,39 @@ export async function createCampaign(input: {
       sender_email_account_id: string;
     }>();
   if (draftError || !draft) throw new Error("Draft not found.");
-  const { data: persistedRecipients } = await admin
-    .from("application_draft_recipients")
-    .select("email, company_name, contact_name")
-    .eq("draft_id", input.draftId)
-    .order("created_at");
+  // contact_name is OPTIONAL in the schema (manual migration) — querying
+  // it on a pre-migration database would error and the campaign would see
+  // ZERO recipients ("Add a subject, message, and at least one valid
+  // recipient before sending."). The base select only names columns that
+  // always exist; the optional contact select runs (cached probe) only
+  // when the column is there. The greeting then degrades to the general
+  // formal one — exactly what the renderer does for missing metadata.
+  const supportsContactName = await hasContactNameColumn();
+  const [{ data: persistedRecipients }, { data: contactRows }] =
+    await Promise.all([
+      admin
+        .from("application_draft_recipients")
+        .select("email, company_name")
+        .eq("draft_id", input.draftId)
+        .order("created_at"),
+      supportsContactName
+        ? admin
+            .from("application_draft_recipients")
+            .select("email, contact_name")
+            .eq("draft_id", input.draftId)
+        : Promise.resolve({
+            data: [] as Array<{ email: string; contact_name: string | null }>,
+            error: null,
+          }),
+    ]);
+  const contactByEmail = new Map(
+    (contactRows ?? []).map((row) => [row.email, row.contact_name ?? null]),
+  );
   const recipients = validateRecipientList(
     (persistedRecipients ?? []).map((recipient) => ({
       email: recipient.email,
       companyName: recipient.company_name,
-      contactName: recipient.contact_name,
+      contactName: contactByEmail.get(recipient.email) ?? undefined,
     })),
   );
   const validRecipients = recipients.filter(
@@ -207,7 +231,10 @@ export async function createCampaign(input: {
       company_name: recipient.company_name,
       // Per-recipient personalization data: the worker renders each
       // message from THIS row's values only (see processCampaignBatch).
-      contact_name: recipient.contact_name,
+      // Omitted entirely when the column does not exist yet.
+      ...(supportsContactName
+        ? { contact_name: recipient.contact_name }
+        : {}),
       subject: draft.subject,
       status: "queued",
       // Due-gate: a message is claimable only at/after this instant, so a
@@ -493,14 +520,13 @@ export async function processCampaignBatch(
     try {
       const { data: recipient } = await admin
         .from("email_messages")
-        .select("recipient_email, subject, attempt_count, company_name, contact_name")
+        .select("recipient_email, subject, attempt_count, company_name")
         .eq("id", message.id)
         .single<{
           recipient_email: string;
           subject: string;
           attempt_count: number;
           company_name: string | null;
-          contact_name: string | null;
         }>();
       if (!recipient)
         throw {
@@ -517,6 +543,13 @@ export async function processCampaignBatch(
       // an unresolvable variable can never burn a send slot or reach the
       // provider. A render failure is deterministic → the existing
       // per-recipient failure path (finalize as failed, no retry).
+      // contact_name is OPTIONAL in the schema (manual migration): it is
+      // read from the CLAIMED row, because claim_next_email_message
+      // `returns public.email_messages` (the full record) — so the code
+      // never names the column in a query and keeps working pre-migration
+      // (undefined → the general formal greeting).
+      const contactName: string | null =
+        (message as { contact_name?: string | null }).contact_name ?? null;
       let rendered: { subject: string; bodyHtml: string; bodyText: string };
       try {
         rendered = renderPersonalizedMessage(
@@ -528,7 +561,7 @@ export async function processCampaignBatch(
           {
             email: recipient.recipient_email,
             companyName: recipient.company_name,
-            contactName: recipient.contact_name,
+            contactName,
           },
         );
       } catch (error) {
