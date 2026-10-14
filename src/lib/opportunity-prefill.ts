@@ -256,6 +256,9 @@ export async function applyOpportunityPrefill(
               id: "prefill",
               email: prefill.recipient.email,
               company_name: prefill.recipient.companyName,
+              // No contact person is provided by prefill — the greeting
+              // falls back to the general formal one at send time.
+              contact_name: null,
               validation_status: "valid" as const,
             },
           ]
@@ -283,6 +286,7 @@ export async function applyOpportunityPrefill(
               id: "prefill",
               email: prefill.recipient.email,
               company_name: prefill.recipient.companyName,
+              contact_name: null,
               validation_status: "valid" as const,
             },
           ]

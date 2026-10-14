@@ -26,11 +26,16 @@ export async function scheduleApplications(formData: FormData) {
   const senderAccountId = String(formData.get("senderAccountId") ?? "");
   const goal = String(formData.get("goal") ?? "");
   const rawRecipients = String(formData.get("recipients") ?? "[]");
-  let recipients: Array<{ email: string; companyName?: string | null }> = [];
+  let recipients: Array<{
+    email: string;
+    companyName?: string | null;
+    contactName?: string | null;
+  }> = [];
   try {
     recipients = JSON.parse(rawRecipients) as Array<{
       email: string;
       companyName?: string | null;
+      contactName?: string | null;
     }>;
   } catch {
     throw new Error("Invalid recipient list.");

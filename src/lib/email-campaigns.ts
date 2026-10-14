@@ -18,6 +18,10 @@ import {
   SENDER_SLOT_WAIT_BUDGET_MS,
   sendIntervalMs,
 } from "@/lib/email-rate-limit";
+import {
+  PersonalizationError,
+  renderPersonalizedMessage,
+} from "@/lib/personalization";
 
 export type CampaignStatus =
   | "draft"
@@ -121,13 +125,14 @@ export async function createCampaign(input: {
   if (draftError || !draft) throw new Error("Draft not found.");
   const { data: persistedRecipients } = await admin
     .from("application_draft_recipients")
-    .select("email, company_name")
+    .select("email, company_name, contact_name")
     .eq("draft_id", input.draftId)
     .order("created_at");
   const recipients = validateRecipientList(
     (persistedRecipients ?? []).map((recipient) => ({
       email: recipient.email,
       companyName: recipient.company_name,
+      contactName: recipient.contact_name,
     })),
   );
   const validRecipients = recipients.filter(
@@ -200,6 +205,9 @@ export async function createCampaign(input: {
       user_id: current.user.id,
       recipient_email: recipient.email,
       company_name: recipient.company_name,
+      // Per-recipient personalization data: the worker renders each
+      // message from THIS row's values only (see processCampaignBatch).
+      contact_name: recipient.contact_name,
       subject: draft.subject,
       status: "queued",
       // Due-gate: a message is claimable only at/after this instant, so a
@@ -485,12 +493,14 @@ export async function processCampaignBatch(
     try {
       const { data: recipient } = await admin
         .from("email_messages")
-        .select("recipient_email, subject, attempt_count")
+        .select("recipient_email, subject, attempt_count, company_name, contact_name")
         .eq("id", message.id)
         .single<{
           recipient_email: string;
           subject: string;
           attempt_count: number;
+          company_name: string | null;
+          contact_name: string | null;
         }>();
       if (!recipient)
         throw {
@@ -499,6 +509,39 @@ export async function processCampaignBatch(
           temporary: false,
           reconnect: false,
         } satisfies ProviderFailure;
+      // Smart personalization: render THIS recipient's independent copy
+      // from the draft template using only this row's data. The draft
+      // (with its tokens) is never modified, nothing is memoized across
+      // recipients, and no rendered output ever leaks into another
+      // recipient's message. Rendering BEFORE the provider is created so
+      // an unresolvable variable can never burn a send slot or reach the
+      // provider. A render failure is deterministic → the existing
+      // per-recipient failure path (finalize as failed, no retry).
+      let rendered: { subject: string; bodyHtml: string; bodyText: string };
+      try {
+        rendered = renderPersonalizedMessage(
+          {
+            subject: recipient.subject,
+            bodyHtml: draft.body_html,
+            bodyText: draft.body_text,
+          },
+          {
+            email: recipient.recipient_email,
+            companyName: recipient.company_name,
+            contactName: recipient.contact_name,
+          },
+        );
+      } catch (error) {
+        throw {
+          code: "personalization_failed",
+          message:
+            error instanceof PersonalizationError
+              ? "The message contains a personalization variable that could not be resolved for this recipient."
+              : "The message could not be personalized for this recipient.",
+          temporary: false,
+          reconnect: false,
+        } satisfies ProviderFailure;
+      }
       const provider = await createEmailProvider(
         userId,
         campaign.email_account_id,
@@ -511,9 +554,9 @@ export async function processCampaignBatch(
       logRateLimit("send_allowed", campaign.email_account_id, `message=${message.id}`);
       const result = await provider.sendEmail({
         to: recipient.recipient_email,
-        subject: recipient.subject,
-        html: sanitizeEmailHtml(draft.body_html),
-        text: draft.body_text,
+        subject: rendered.subject,
+        html: sanitizeEmailHtml(rendered.bodyHtml),
+        text: rendered.bodyText,
         attachments: [],
       });
       await admin.rpc("finalize_email_message", {
