@@ -340,10 +340,6 @@ textarea:focus-visible,
   box-shadow: var(--shadow-card);
 }
 
-.soft-shadow {
-  box-shadow: var(--shadow-float);
-}
-
 .card-shadow {
   box-shadow: var(--shadow-card);
 }
@@ -518,23 +514,6 @@ textarea:focus-visible,
 
 .anim-orb-breathe {
   animation: orb-breathe 3.4s ease-in-out infinite;
-}
-
-@keyframes gradient-pan {
-  0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0% 50%;
-  }
-}
-
-.anim-gradient {
-  background-size: 200% 200%;
-  animation: gradient-pan 9s ease infinite;
 }
 
 /* ---------------------------------------------------------------------------
