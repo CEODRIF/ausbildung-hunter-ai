@@ -11,6 +11,9 @@ const {
   STALE_SENDING_AFTER_MINUTES,
   STALE_QUEUED_AFTER_HOURS,
 } = await import("@/lib/email-campaigns");
+const { resetCampaignOwnedContentProbe } = await import(
+  "@/lib/contact-name-support"
+);
 
 const USER_ID = "33333333-3333-4333-8333-333333333333";
 const OTHER_USER_ID = "77777777-7777-4777-8777-777777777777";
@@ -55,12 +58,18 @@ function makeAdminMock(handlers: RecoveryHandlers) {
   }> = [];
   const from = (table: string) => {
     const filters: Record<string, unknown> = {};
+    let selectColumns = "";
     const chain: Record<string | symbol, unknown> = new Proxy(
       {},
       {
         get(_t, prop) {
           if (typeof prop !== "string") return undefined;
-          if (prop === "select" || prop === "order") return () => chain;
+          if (prop === "select")
+            return (columns?: string) => {
+              selectColumns = String(columns ?? "");
+              return chain;
+            };
+          if (prop === "order" || prop === "limit") return () => chain;
           if (prop === "eq" || prop === "lt")
             return (col: string, val: unknown) => {
               filters[col] = val;
@@ -74,9 +83,23 @@ function makeAdminMock(handlers: RecoveryHandlers) {
           if (prop === "then")
             return (onF?: unknown) => {
               listCalls.push({ table, filters: { ...filters } });
+              // Pre-migration simulation (Drafts feature removal): the
+              // campaign-owned content columns and the attachments table
+              // only exist after 20261110000000 — querying them fails
+              // exactly like PostgREST would, so the cached probe resolves
+              // to the legacy (draft-based) world these tests assert.
+              const schemaError =
+                table === "email_campaign_attachments"
+                  ? 'relation "public.email_campaign_attachments" does not exist'
+                  : table === "email_campaigns" &&
+                      /subject|body_html|goal/.test(selectColumns)
+                    ? 'column "subject" does not exist'
+                    : null;
               return Promise.resolve({
-                data: handlers.list?.(table, { ...filters }) ?? [],
-                error: null,
+                data: schemaError
+                  ? null
+                  : handlers.list?.(table, { ...filters }) ?? [],
+                error: schemaError ? { message: schemaError } : null,
               }).then(onF as never);
             };
           return () => chain;
@@ -118,6 +141,9 @@ const USAGE = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The migration probe is cached per process — drop it so every test
+  // re-probes the fresh (pre-migration) schema of this test's mock.
+  resetCampaignOwnedContentProbe();
 });
 
 describe("thresholds", () => {
@@ -142,7 +168,12 @@ describe("recoverStaleCampaigns", () => {
       status: "completed",
     });
     expect(mock.rpcCalls).toEqual([]);
-    expect(mock.listCalls).toEqual([]);
+    // The only list queries are the cached migration-probe reads (the
+    // terminal campaign triggers no recovery work of its own).
+    expect(mock.listCalls.map((c) => c.table)).toEqual([
+      "email_campaigns",
+      "email_campaign_attachments",
+    ]);
   });
 
   it("does nothing for a healthy in-flight campaign", async () => {

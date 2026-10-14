@@ -6,6 +6,8 @@ import {
   assertDraftOwnership,
   assertSenderOwnership,
   createStoragePath,
+  createStagingPath,
+  stagingPrefix,
   sanitizeEmailHtml,
   htmlToText,
   validateRecipientList,
@@ -206,4 +208,68 @@ export async function discardDraft(formData: FormData) {
         .catch(() => undefined);
   }
   revalidatePath("/applications/new");
+}
+
+/**
+ * Draft-free workflow (Drafts feature removal) — stage ONE attachment.
+ *
+ * The object is uploaded straight into the user's `staging/` prefix of the
+ * existing `application-attachments` bucket (kept: it is shared with the
+ * legacy draft attachments). NO database row is written — the composer keeps
+ * the metadata in client state, and only `createCampaign` persists a row
+ * (`email_campaign_attachments`) when the user actually sends. Opening or
+ * closing the composer therefore never creates a draft record of any kind.
+ */
+export async function stageAttachment(formData: FormData) {
+  const current = await getCurrentUserAndProfile();
+  if (
+    !current.user ||
+    !current.profile ||
+    current.profile.account_status !== "active"
+  )
+    throw new Error("Not authorized.");
+  const file = formData.get("file");
+  if (!(file instanceof File)) throw new Error("No attachment selected.");
+  if (file.size <= 0 || file.size > MAX_ATTACHMENT_SIZE)
+    throw new Error("Attachments must be 10 MB or smaller.");
+  if (!ALLOWED_ATTACHMENT_TYPES.has(file.type))
+    throw new Error("This file type is not supported.");
+  const storagePath = createStagingPath(current.user.id, file.name);
+  const admin = createAdminClient();
+  const { error: uploadError } = await admin.storage
+    .from("application-attachments")
+    .upload(storagePath, file, { contentType: file.type, upsert: false });
+  if (uploadError) throw new Error("Unable to upload attachment.");
+  return {
+    storage_path: storagePath,
+    filename: file.name.slice(0, 255),
+    mime_type: file.type,
+    size_bytes: file.size,
+  };
+}
+
+/**
+ * Draft-free workflow — discard a STAGED attachment (the user removed it
+ * from the composer before sending). The storage path is client-supplied,
+ * so ownership is enforced by prefix: only an object under THIS user's
+ * `staging/` folder can ever be removed. Nothing is written to the database
+ * (staged objects have no rows). An unknown path fails quietly — the
+ * composer simply drops the entry from its list.
+ */
+export async function discardStagedAttachment(formData: FormData) {
+  const current = await getCurrentUserAndProfile();
+  if (!current.user) throw new Error("Not authorized.");
+  const storagePath = String(formData.get("storagePath") ?? "");
+  const prefix = stagingPrefix(current.user.id);
+  if (
+    !storagePath.startsWith(prefix) ||
+    storagePath.length > 512 ||
+    storagePath.includes("\0")
+  )
+    throw new Error("Attachment not found.");
+  const admin = createAdminClient();
+  await admin.storage
+    .from("application-attachments")
+    .remove([storagePath])
+    .catch(() => undefined);
 }

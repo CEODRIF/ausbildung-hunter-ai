@@ -104,8 +104,13 @@ export default async function CampaignPage({
       .maybeSingle<{ subject: string; opportunity_title: string | null }>(),
   ]);
   const senderEmail = accountResult.data?.email_address ?? null;
+  // Drafts feature removal: campaigns that own their content (post
+  // migration 20261110000000) carry the subject themselves; the historical
+  // draft lookup stays as the fallback for legacy campaigns.
   const title =
-    draftResult.data?.subject?.trim() || draftResult.data?.opportunity_title ||
+    data.campaign.subject?.trim() ||
+    draftResult.data?.subject?.trim() ||
+    draftResult.data?.opportunity_title ||
     null;
   // Smart Sending — the REAL sender-slot state for this campaign, read from
   // Postgres (never a faked progress number): busy slot = waiting, free

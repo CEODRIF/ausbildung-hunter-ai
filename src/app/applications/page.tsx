@@ -6,6 +6,7 @@ import { listUserCampaigns } from "@/lib/email-campaigns";
 import { ApplicationsTable } from "@/components/applications-table";
 import { getRequestLang } from "@/lib/i18n/server";
 import { localeForLang } from "@/lib/i18n/core";
+import { hasCampaignOwnedContent } from "@/lib/contact-name-support";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,11 @@ export default async function ApplicationsPage() {
   const locale = localeForLang(await getRequestLang());
   const items = await listUserCampaigns(user.id);
 
+  // Drafts feature removal: post-migration the list is campaigns only, so
+  // the dashboard shows exactly Total / Sending / Sent / Failed. Pre-migration
+  // (legacy shape, code deployed first) the Drafts card is kept so the
+  // draft-only rows that still exist remain visible and countable.
+  const owned = await hasCampaignOwnedContent();
   const stats = {
     total: items.length,
     drafts: items.filter((item) => !item.campaign_id).length,
@@ -33,6 +39,20 @@ export default async function ApplicationsPage() {
       (item) => item.status === "failed" || item.status === "partially_failed",
     ).length,
   };
+  const statCards: Array<readonly [string, number]> = owned
+    ? [
+        ["Total", stats.total],
+        ["Sending", stats.sending],
+        ["Sent", stats.sent],
+        ["Failed", stats.failed],
+      ]
+    : [
+        ["Total", stats.total],
+        ["Drafts", stats.drafts],
+        ["Sending", stats.sending],
+        ["Sent", stats.sent],
+        ["Failed", stats.failed],
+      ];
 
   const STAT_TONES: Record<string, string> = {
     Total: "bg-accent-soft text-accent",
@@ -61,16 +81,12 @@ export default async function ApplicationsPage() {
         </Link>
       </div>
 
-      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        {(
-          [
-            ["Total", stats.total],
-            ["Drafts", stats.drafts],
-            ["Sending", stats.sending],
-            ["Sent", stats.sent],
-            ["Failed", stats.failed],
-          ] as const
-        ).map(([label, value]) => (
+      <div
+        className={`mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 ${
+          statCards.length === 5 ? "lg:grid-cols-5" : "lg:grid-cols-4"
+        }`}
+      >
+        {statCards.map(([label, value]) => (
           <div
             key={label}
             className="surface-elevated rounded-3xl p-4 transition-shadow duration-300 hover:shadow-[var(--shadow-float)] sm:p-5"

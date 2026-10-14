@@ -390,3 +390,20 @@ export function createStoragePath(
   const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120);
   return `${userId}/${draftId}/${randomUUID()}-${safeName}`;
 }
+
+/** Draft-free workflow (Drafts feature removal): uploads land in the user's
+ *  STAGING prefix — a path that is never referenced by any table until the
+ *  user actually sends, at which point the new campaign owns the metadata
+ *  row. An object abandoned in staging (the user left the composer without
+ *  sending) is unreferenced and is reclaimed by the storage orphan janitor
+ *  after its 24 h grace period. */
+export function createStagingPath(userId: string, filename: string) {
+  const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120);
+  return `${userId}/staging/${randomUUID()}-${safeName}`;
+}
+
+/** The ownership prefix for staging objects — the ONLY objects a user may
+ *  discard through `discardStagedAttachment` (the path is client-supplied). */
+export function stagingPrefix(userId: string) {
+  return `${userId}/staging/`;
+}

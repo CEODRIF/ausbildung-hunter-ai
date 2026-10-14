@@ -137,8 +137,8 @@ export interface NextActionInput {
   savedTotal: number;
   /** Saved opportunities whose stored snapshot is a complete match. */
   completeMatchCount: number;
-  /** A prepared application draft exists (has content, not just a stub). */
-  hasApplicationDraft: boolean;
+  /** A prepared application exists (has content, not just a stub). */
+  hasApplication: boolean;
   hasEmailAccount: boolean;
   /** Most relevant campaign for the user (server-read), or null. */
   campaign: { id: string; status: string } | null;
@@ -206,7 +206,7 @@ export function resolveNextAction(input: NextActionInput): NextAction {
       ctaLabel: "Search opportunities",
     };
   }
-  if (!input.hasApplicationDraft) {
+  if (!input.hasApplication) {
     if (input.completeMatchCount > 0) {
       return {
         id: "prepare_application",

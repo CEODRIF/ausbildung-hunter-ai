@@ -106,3 +106,55 @@ export function supportsPraktikumGoal(): Promise<boolean> {
 export function resetPraktikumProbe(): void {
   praktikumProbe = null;
 }
+
+/* ------------------------------------------------------------------ *\
+ * Campaign-owned content probe (Drafts feature removal)
+ * ------------------------------------------------------------------ */
+
+let ownedContentProbe: Promise<boolean> | null = null;
+
+/**
+ * Whether `email_campaigns` already carries its OWN content columns
+ * (subject, goal) and the `email_campaign_attachments` table exists —
+ * i.e. migration 20261110000000_campaign_owned_content.sql has been
+ * applied (MANUALLY, like every migration in this repo).
+ *
+ * When true, the draft-free workflow is active:
+ *   - the composer never creates, saves or resumes an application_draft;
+ *   - `createCampaign` receives the full payload (subject, body,
+ *     recipients, attachments) and stores it on the campaign itself;
+ *   - the sending worker renders from the campaign row (draft fallback
+ *     only for pre-migration campaigns);
+ *   - the Applications dashboard lists/count campaigns only (no Drafts
+ *     card, no draft-only rows).
+ *
+ * When false (code deployed before the migration), EVERY legacy
+ * draft-based path keeps working exactly as before — the same
+ * "deploy code first, migration second" safety contract as the
+ * contact_name and praktikum probes. Only a clean read of BOTH objects
+ * proves support; any error resolves to `false`.
+ */
+export function hasCampaignOwnedContent(): Promise<boolean> {
+  ownedContentProbe ??= (async () => {
+    try {
+      const admin = createAdminClient();
+      const [{ error: columnsError }, { error: attachmentsError }] =
+        await Promise.all([
+          admin
+            .from("email_campaigns")
+            .select("id, subject, goal")
+            .limit(1),
+          admin.from("email_campaign_attachments").select("id").limit(1),
+        ]);
+      return columnsError === null && attachmentsError === null;
+    } catch {
+      return false;
+    }
+  })();
+  return ownedContentProbe;
+}
+
+/** Test hook: drop the cached probe so a test can simulate a schema change. */
+export function resetCampaignOwnedContentProbe(): void {
+  ownedContentProbe = null;
+}

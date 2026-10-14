@@ -499,7 +499,7 @@ const de = {
     nextAction: "Empfohlener nächster Schritt",
     metrics: {
       applications: "Vorbereitete Bewerbungen",
-      applicationsDetail: "Entwürfe in Ihrem Arbeitsbereich",
+      applicationsDetail: "Bewerbungen in Ihrem Arbeitsbereich",
       applicationsCta: "Neue Bewerbung",
       saved: "Gespeicherte Stellen",
       savedDetail: "{count} vollständige Passungsnachweise",
@@ -593,6 +593,8 @@ const de = {
     saved: "Gespeichert",
     senderAccount: "Absenderkonto",
     draftNote: "Nur Entwurf — der Versand folgt in einem späteren Schritt.",
+    sendNote:
+      "Prüfen Sie alles, bevor Sie senden — nichts wird gespeichert, bis der Versand startet.",
     schedule: {
       mode: "Versandart",
       now: "Jetzt senden",
@@ -881,9 +883,9 @@ const de = {
     company: "Unternehmen",
     error: "Fehler",
     prefillInvalid:
-      "Der übergebene Stellenangebots-Link ist ungültig. Es wurde kein Entwurf vorbereitet.",
+      "Der übergebene Stellenangebots-Link ist ungültig. Es wurde keine Bewerbung vorbereitet.",
     prefillUnavailable:
-      "Das Stellenangebot konnte nicht mehr geladen werden. Es wurde kein Entwurf vorbereitet.",
+      "Das Stellenangebot konnte nicht mehr geladen werden. Es wurde keine Bewerbung vorbereitet.",
     bulkDeleted:
       "{count} Scan(s) gelöscht, einschließlich hochgeladener Dateien, die von keinem anderen Scan verwendet wurden.",
     bulkFailed:
@@ -1170,7 +1172,7 @@ const de = {
     aiTitle: "Der KI-Arbeitsbereich konnte nicht geladen werden",
     aiBody: "Bitte versuchen Sie es erneut. Ihre Gespräche bleiben geschützt.",
     appTitle: "Der Bewerbungsbereich konnte nicht geladen werden",
-    appBody: "Bitte versuchen Sie es erneut. Ihre gespeicherten Entwürfe bleiben geschützt.",
+    appBody: "Bitte versuchen Sie es erneut. Ihre Bewerbungsdaten bleiben geschützt.",
     dashTitle: "Ihr Dashboard konnte nicht geladen werden",
     dashBody: "Wir konnten Ihre Kontodaten nicht abrufen. Bitte versuchen Sie es erneut.",
   },
@@ -2787,7 +2789,7 @@ const en: Dict = {
     nextAction: "Recommended next step",
     metrics: {
       applications: "Applications prepared",
-      applicationsDetail: "Drafts in your workspace",
+      applicationsDetail: "Applications in your workspace",
       applicationsCta: "New application",
       saved: "Saved vacancies",
       savedDetail: "{count} complete match snapshots",
@@ -2877,6 +2879,8 @@ const en: Dict = {
     saved: "Saved",
     senderAccount: "Sender account",
     draftNote: "Draft only — sending will be added later.",
+    sendNote:
+      "Review everything before sending — nothing is stored until the send starts.",
     schedule: {
       mode: "Send mode",
       now: "Send now",
@@ -3153,9 +3157,9 @@ const en: Dict = {
     company: "Company",
     error: "Error",
     prefillInvalid:
-      "The provided vacancy link is invalid. No draft was prepared.",
+      "The provided vacancy link is invalid. No application was prepared.",
     prefillUnavailable:
-      "The vacancy could no longer be loaded. No draft was prepared.",
+      "The vacancy could no longer be loaded. No application was prepared.",
     bulkDeleted:
       "{count} scan(s) deleted, including uploaded files that were not used by another scan.",
     bulkFailed:
@@ -3441,7 +3445,7 @@ const en: Dict = {
     aiTitle: "The AI workspace could not load",
     aiBody: "Please try again. Your conversations remain protected.",
     appTitle: "The application workspace could not load",
-    appBody: "Please try again. Your saved drafts remain protected.",
+    appBody: "Please try again. Your application data remains protected.",
     dashTitle: "Your dashboard could not load",
     dashBody: "We could not retrieve your account data. Please try again.",
   },
@@ -5047,7 +5051,7 @@ const fr: Dict = {
     nextAction: "Prochaine étape recommandée",
     metrics: {
       applications: "Candidatures préparées",
-      applicationsDetail: "Brouillons dans votre espace",
+      applicationsDetail: "Candidatures dans votre espace",
       applicationsCta: "Nouvelle candidature",
       saved: "Offres enregistrées",
       savedDetail: "{count} correspondances complètes",
@@ -5137,6 +5141,8 @@ const fr: Dict = {
     saved: "Enregistré",
     senderAccount: "Compte expéditeur",
     draftNote: "Brouillon uniquement — l'envoi sera ajouté plus tard.",
+    sendNote:
+      "Vérifiez tout avant d'envoyer — rien n'est enregistré tant que l'envoi ne commence pas.",
     schedule: {
       mode: "Mode d'envoi",
       now: "Envoyer maintenant",
@@ -5413,9 +5419,9 @@ const fr: Dict = {
     company: "Entreprise",
     error: "Erreur",
     prefillInvalid:
-      "Le lien d'offre transmis est invalide. Aucun brouillon n'a été préparé.",
+      "Le lien d'offre transmis est invalide. Aucune candidature n'a été préparée.",
     prefillUnavailable:
-      "L'offre n'a plus pu être chargée. Aucun brouillon n'a été préparé.",
+      "L'offre n'a plus pu être chargée. Aucune candidature n'a été préparée.",
     bulkDeleted:
       "{count} scan(s) supprimé(s), y compris les fichiers téléversés non utilisés par un autre scan.",
     bulkFailed:
@@ -5702,7 +5708,7 @@ const fr: Dict = {
     aiTitle: "L'espace IA n'a pas pu se charger",
     aiBody: "Veuillez réessayer. Vos conversations restent protégées.",
     appTitle: "L'espace de candidature n'a pas pu se charger",
-    appBody: "Veuillez réessayer. Vos brouillons enregistrés restent protégés.",
+    appBody: "Veuillez réessayer. Vos données de candidature restent protégées.",
     dashTitle: "Votre tableau de bord n'a pas pu se charger",
     dashBody: "Impossible de récupérer les données de votre compte. Veuillez réessayer.",
   },
@@ -7304,7 +7310,7 @@ const ar: Dict = {
     nextAction: "الخطوة التالية المقترحة",
     metrics: {
       applications: "طلبات جاهزة",
-      applicationsDetail: "مسودات في مساحة عملك",
+      applicationsDetail: "طلبات في مساحة عملك",
       applicationsCta: "طلب جديد",
       saved: "وظائف محفوظة",
       savedDetail: "{count} ملاءمة كاملة",
@@ -7394,6 +7400,7 @@ const ar: Dict = {
     saved: "محفوظ",
     senderAccount: "حساب المرسل",
     draftNote: "مسودة فقط — سيُضاف الإرسال لاحقًا.",
+    sendNote: "راجع كل شيء قبل الإرسال — لن يُحفظ أي شيء حتى يبدأ الإرسال.",
     schedule: {
       mode: "طريقة الإرسال",
       now: "إرسال الآن",
@@ -7662,8 +7669,8 @@ const ar: Dict = {
     recipient: "المستلم",
     company: "الشركة",
     error: "خطأ",
-    prefillInvalid: "رابط عرض العمل المُمرَّر غير صالح. لم تُجهَّز أي مسودة.",
-    prefillUnavailable: "لم يعد بالإمكان تحميل عرض العمل. لم تُجهَّز أي مسودة.",
+    prefillInvalid: "رابط عرض العمل المُمرَّر غير صالح. لم يُجهَّز أي طلب.",
+    prefillUnavailable: "لم يعد بالإمكان تحميل عرض العمل. لم يُجهَّز أي طلب.",
     bulkDeleted:
       "حُذف {count} مسح، بما في ذلك الملفات المرفوعة التي لم يستخدمها مسح آخر.",
     bulkFailed: "تعذر حذف المسح المحدد. تحقق من القائمة أدناه وحاول مرة أخرى.",
@@ -7944,7 +7951,7 @@ const ar: Dict = {
     aiTitle: "تعذر تحميل مساحة الذكاء الاصطناعي",
     aiBody: "يرجى المحاولة مرة أخرى. تبقى محادثاتك محمية.",
     appTitle: "تعذر تحميل مساحة الطلبات",
-    appBody: "يرجى المحاولة مرة أخرى. تبقى مسوداتك المحفوظة محمية.",
+    appBody: "يرجى المحاولة مرة أخرى. تبقى بيانات طلباتك محمية.",
     dashTitle: "تعذر تحميل لوحة التحكم",
     dashBody: "تعذر استرداد بيانات حسابك. يرجى المحاولة مرة أخرى.",
   },
