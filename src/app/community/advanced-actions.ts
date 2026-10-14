@@ -15,7 +15,6 @@ import {
 } from "@/lib/community/pins";
 import {
   assignReport,
-  fetchModerationAudit,
   performModerationAction,
   setReportStatus,
   type ModerationAction,
@@ -230,17 +229,6 @@ export async function performModerationActionAction(input: {
   revalidatePath("/community/moderation");
   revalidatePath("/community", "layout");
   return { ok: true };
-}
-
-/** The audit trail for the moderation "Actions" tab (moderator+ page). */
-export async function loadModerationAudit(): Promise<
-  | { ok: true; rows: Awaited<ReturnType<typeof fetchModerationAudit>> }
-  | { ok: false; code: string }
-> {
-  const actor = await requireRole("moderator");
-  if (!actor) return { ok: false, code: "forbidden" };
-  const rows = await fetchModerationAudit(30);
-  return { ok: true, rows };
 }
 
 // ---------------------------------------------------------------------------

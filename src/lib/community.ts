@@ -21,8 +21,6 @@ export const COMMUNITY_AVATAR_IDS = [
   "avatar-4", // feminine
 ] as const;
 
-export type CommunityAvatarId = (typeof COMMUNITY_AVATAR_IDS)[number];
-
 /** Static URL for a predefined avatar; unknown ids fall back to avatar-1. */
 export function communityAvatarUrl(avatarId: string): string {
   const id = (COMMUNITY_AVATAR_IDS as readonly string[]).includes(avatarId)
@@ -94,8 +92,6 @@ export const communityProfileSchema = z.object({
     .regex(COMMUNITY_USERNAME_REGEX, "username_format"),
   avatarId: z.enum(COMMUNITY_AVATAR_IDS),
 });
-
-export type CommunityProfileInput = z.infer<typeof communityProfileSchema>;
 
 // ---------------------------------------------------------------------------
 // Rooms & categories (data-driven; seeded in the DB, never hard-coded in UI)
@@ -189,9 +185,6 @@ export const COMMUNITY_REACTION_EMOJIS = [
 ] as const;
 
 export type CommunityReactionEmoji = (typeof COMMUNITY_REACTION_EMOJIS)[number];
-
-/** The emoji that counts toward a member's reputation ("helpful"). */
-export const COMMUNITY_HELPFUL_EMOJI: CommunityReactionEmoji = "👍";
 
 /** Aggregated reaction for one emoji on one message (API/initial-fetch shape). */
 export interface CommunityMessageReactionAgg {

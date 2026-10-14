@@ -72,7 +72,6 @@ export const ANNOUNCEMENT_TYPES = [
   "maintenance",
   "improvement",
 ] as const;
-export type AnnouncementType = (typeof ANNOUNCEMENT_TYPES)[number];
 
 /**
  * The validated announcement payload (re-applied at the lib boundary —

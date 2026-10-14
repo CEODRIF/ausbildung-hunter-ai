@@ -40,25 +40,6 @@ export function GlassCard({
   );
 }
 
-/** A card that visibly floats above the page (stronger elevation). */
-export function FloatingCard({
-  children,
-  className = "",
-  as: Component = "div",
-}: {
-  children: ReactNode;
-  className?: string;
-  as?: "div" | "section" | "article";
-}) {
-  return (
-    <Component
-      className={`glass rounded-3xl shadow-[var(--shadow-float)] ${className}`}
-    >
-      {children}
-    </Component>
-  );
-}
-
 /**
  * The soft background glow field — render exactly once per screen, as the
  * first child of the page root. Fixed, non-interactive, gradient-only

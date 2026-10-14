@@ -574,7 +574,6 @@ export type EmailStatus = z.infer<typeof emailStatusSchema>;
  *  found: the company's own impressum = high; its own kontakt/career page =
  *  medium; any other public page (job posting, third party) = low. */
 export const dataConfidenceSchema = z.enum(["high", "medium", "low"]);
-export type DataConfidence = z.infer<typeof dataConfidenceSchema>;
 
 /**
  * Company enrichment (AI Search 2.0) — the result of the per-company
@@ -646,7 +645,6 @@ export const opportunitySourceTypeSchema = z.enum([
   "official_source",
   "other",
 ]);
-export type OpportunitySourceType = z.infer<typeof opportunitySourceTypeSchema>;
 
 export const opportunitySchema = z.object({
   /** Stable identity: `${provider}:${external_id}`. */
@@ -746,8 +744,6 @@ export const opportunitySchema = z.object({
    match: matchSchema.nullable(),
  });
 export type Opportunity = z.infer<typeof opportunitySchema>;
-export type OpportunitySalary = z.infer<typeof salarySchema>;
-export type OpportunityContact = z.infer<typeof contactSchema>;
 
 export type OpportunityWindowMode = "upstream" | "scan";
 

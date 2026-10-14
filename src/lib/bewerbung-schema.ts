@@ -198,5 +198,3 @@ export const generateFileRequestSchema = z
     prompt: z.string().trim().min(1).max(4000),
   })
   .strict();
-
-export type GenerateFileRequest = z.infer<typeof generateFileRequestSchema>;

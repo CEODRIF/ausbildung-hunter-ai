@@ -55,11 +55,4 @@ export interface VoiceParticipant {
   isSelf: boolean;
 }
 
-/**
- * Durable aggregate metadata (the DB row / page prefetch). Deliberately
- * carries NO participant identities — outsiders see a count, nothing else.
- */
-export interface VoiceConversationMeta {
-  active: boolean;
-  participantCount: number;
-}
+

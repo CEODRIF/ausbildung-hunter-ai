@@ -119,21 +119,6 @@ export type AdminAction =
   | "grant_admin"
   | "revoke_admin";
 
-const ADMIN_ACTIONS: readonly AdminAction[] = [
-  "set_plan",
-  "cancel_subscription",
-  "reactivate_subscription",
-  "grant_admin",
-  "revoke_admin",
-];
-
-export function isAdminAction(value: unknown): value is AdminAction {
-  return (
-    typeof value === "string" &&
-    (ADMIN_ACTIONS as readonly string[]).includes(value)
-  );
-}
-
 export type AdminActionResult =
   { ok: true; message: string } | { ok: false; reason: string };
 

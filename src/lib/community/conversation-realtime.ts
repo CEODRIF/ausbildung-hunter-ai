@@ -107,12 +107,6 @@ export function resolveCommunityRealtimeClient(): CommunityRealtimeClient | null
   }
 }
 
-/** Test seam: reset the memoized client between test cases. */
-export function _resetCommunityRealtimeClientForTests(): void {
-  memoizedClient = null;
-  clientResolutionFailed = false;
-}
-
 // ---------------------------------------------------------------------------
 // Hooks (what the surfaces call)
 // ---------------------------------------------------------------------------

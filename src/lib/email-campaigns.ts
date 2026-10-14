@@ -36,8 +36,6 @@ export type CampaignStatus =
   | "partially_failed"
   | "failed"
   | "cancelled";
-export type MessageStatus =
-  "queued" | "sending" | "sent" | "failed" | "cancelled";
 export type UsageSnapshot = {
   date: string;
   emails_sent: number;

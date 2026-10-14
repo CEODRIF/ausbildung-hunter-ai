@@ -13,8 +13,6 @@
  *   CommunityActionButton— labeled button with a STABLE width (idle /
  *                          pending / success labels are stacked, never a
  *                          layout jump) and a 150ms pressed transition.
- *   CommunityIconButton  — icon-only button: pressed feedback, tooltip,
- *                          aria-label, pending spinner in place of the icon.
  *   CommunityToastProvider / useCommunityToast — small non-blocking
  *                          confirmations (deduplicated, bounded, mobile-safe).
  *
@@ -29,7 +27,7 @@
  */
 
 import { useEffect, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { Icon, type IconName } from "@/components/icon";
+import { Icon } from "@/components/icon";
 import { buttonStyles } from "@/components/ui";
 import {
   communityToastStore,
@@ -187,72 +185,6 @@ export function CommunityActionButton({
           </span>
         )}
       </span>
-    </button>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// CommunityIconButton
-// ---------------------------------------------------------------------------
-
-export interface CommunityIconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  /** Icon name (rendered via the shared <Icon>). */
-  icon: IconName;
-  /** aria-label AND desktop tooltip — required for icon-only buttons. */
-  label: string;
-  iconSize?: number;
-  boxSize?: "sm" | "md" | "lg";
-  /** Shows the spinner in place of the icon (the pending state). */
-  pending?: boolean;
-  /** Toggled state (aria-pressed) for mute/active-style icons. */
-  active?: boolean;
-  danger?: boolean;
-}
-
-const ICON_BUTTON_BOXES = {
-  sm: "h-8 w-8 rounded-lg",
-  md: "h-9 w-9 rounded-xl",
-  lg: "h-10 w-10 rounded-xl",
-} as const;
-
-/**
- * The icon-only action button: immediate pressed feedback (scale+opacity,
- * 150ms), hover state on desktop, focus-visible ring, tooltip + aria-label
- * on desktop, and a pending spinner that REPLACES the icon inside the same
- * fixed-size box (no dimension change).
- */
-export function CommunityIconButton({
-  icon,
-  label,
-  iconSize = 16,
-  boxSize = "md",
-  pending = false,
-  active = false,
-  danger = false,
-  className = "",
-  disabled,
-  onClick,
-  ...rest
-}: CommunityIconButtonProps) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      aria-busy={pending || undefined}
-      aria-pressed={active || undefined}
-      disabled={disabled || pending}
-      onClick={onClick}
-      className={`inline-flex shrink-0 items-center justify-center ${ICON_BUTTON_BOXES[boxSize]} ${COMMUNITY_PRESS_CLASS} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-not-allowed ${
-        danger
-          ? "text-faint hover:bg-danger-soft/60 hover:text-danger"
-          : "text-faint hover:bg-surface-2 hover:text-ink"
-      } ${active ? "bg-accent-soft/70 text-accent" : ""} ${
-        pending ? "opacity-70" : ""
-      } ${className}`}
-      {...rest}
-    >
-      {pending ? <ActionSpinner className="h-4 w-4" /> : <Icon name={icon} size={iconSize} />}
     </button>
   );
 }
