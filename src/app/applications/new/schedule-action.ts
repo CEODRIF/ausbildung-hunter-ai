@@ -40,7 +40,7 @@ export async function scheduleApplications(formData: FormData) {
   } catch {
     throw new Error("Invalid recipient list.");
   }
-  if (goal !== "ausbildung" && goal !== "arbeit")
+  if (goal !== "ausbildung" && goal !== "arbeit" && goal !== "praktikum")
     throw new Error("Invalid application goal.");
 
   // The wall-clock fields arrive as form strings; numbers that are not

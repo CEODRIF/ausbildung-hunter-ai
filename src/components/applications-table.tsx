@@ -128,7 +128,11 @@ function formatScheduled(value: string, timeZone: string, locale: string) {
 }
 
 function typeLabel(goal: string) {
-  return goal === "arbeit" ? "Arbeit" : "Ausbildung";
+  return goal === "arbeit"
+    ? "Arbeit"
+    : goal === "praktikum"
+      ? "Praktikum"
+      : "Ausbildung";
 }
 
 /** What the confirmation modal is about. The destructive call only ever

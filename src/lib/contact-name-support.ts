@@ -3,6 +3,19 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
+ * Migration-state probes for OPTIONAL schema features. This repository
+ * applies Supabase migrations MANUALLY (no CI step), so code can run
+ * against a database that has not received a given migration yet. Every
+ * probe is cached per process and only a CLEAN READ proves support; any
+ * error means "not supported" — the safe default (feature hidden/off,
+ * core sending always available).
+ *
+ *  - contact_name column (migration 20261108000000)
+ *  - 'praktikum' enum value (migration 20261109000000)
+ *
+ * ------------------------------------------------------------------ */
+
+/**
  * Migration-state probe for the OPTIONAL `contact_name` column
  * (migration 20261108000000_personalization_contact_name.sql).
  *
@@ -52,4 +65,44 @@ export function hasContactNameColumn(): Promise<boolean> {
 /** Test hook: drop the cached probe so a test can simulate a schema change. */
 export function resetContactNameProbe(): void {
   probe = null;
+}
+
+/* ------------------------------------------------------------------ *
+ * 'praktikum' application-goal probe
+ * ------------------------------------------------------------------ */
+
+let praktikumProbe: Promise<boolean> | null = null;
+
+/**
+ * Whether the `application_goal` enum already carries 'praktikum'
+ * (migration 20261109000000). Probed by a read that is only VALID if the
+ * enum value exists: `goal = 'praktikum'` makes PostgREST reject the
+ * query pre-migration (invalid enum input) and succeed post-migration.
+ *
+ * Consumers gate the Praktikum OPTION on this result, so a database
+ * without the migration can never receive a goal it would reject —
+ * selecting Praktikum therefore can never break draft autosave or the
+ * "Send applications" button (the same failure mode as the original
+ * contact_name regression).
+ */
+export function supportsPraktikumGoal(): Promise<boolean> {
+  praktikumProbe ??= (async () => {
+    try {
+      const admin = createAdminClient();
+      const { error } = await admin
+        .from("application_drafts")
+        .select("id")
+        .eq("goal", "praktikum")
+        .limit(1);
+      return error === null;
+    } catch {
+      return false;
+    }
+  })();
+  return praktikumProbe;
+}
+
+/** Test hook: drop the cached probe so a test can simulate a schema change. */
+export function resetPraktikumProbe(): void {
+  praktikumProbe = null;
 }

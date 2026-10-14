@@ -25,7 +25,7 @@ export async function sendApplications(formData: FormData) {
   } catch {
     throw new Error("Invalid recipient list.");
   }
-  if (goal !== "ausbildung" && goal !== "arbeit")
+  if (goal !== "ausbildung" && goal !== "arbeit" && goal !== "praktikum")
     throw new Error("Invalid application goal.");
   const result = await createCampaign({
     draftId,

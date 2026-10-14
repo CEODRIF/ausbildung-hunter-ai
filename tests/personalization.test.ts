@@ -340,8 +340,8 @@ describe("per-recipient rendering", () => {
 });
 
 describe("templates", () => {
-  it("both templates carry the greeting + company variables", () => {
-    for (const goal of ["ausbildung", "arbeit"] as const) {
+  it("all three templates carry the greeting + company variables", () => {
+    for (const goal of ["ausbildung", "arbeit", "praktikum"] as const) {
       const template = applicationTemplates[goal];
       expect(template.body).toContain(GREETING);
       expect(template.body).toContain(COMPANY_TOKEN);
@@ -349,7 +349,11 @@ describe("templates", () => {
       // The static greeting is gone from the templates (it is now a variable).
       expect(template.body).not.toContain("Sehr geehrte Damen und Herren,");
     }
-    expect(Object.keys(applicationTemplates).sort()).toEqual(["arbeit", "ausbildung"]);
+    expect(Object.keys(applicationTemplates).sort()).toEqual([
+      "arbeit",
+      "ausbildung",
+      "praktikum",
+    ]);
     // All three tokens are part of the documented variable set.
     expect([COMPANY_TOKEN, CONTACT_TOKEN, GREETING_TOKEN]).toEqual([
       "{{company_name}}",
@@ -369,7 +373,7 @@ describe("templates", () => {
     );
     expect(rendered.subject).toBe("Bewerbung um einen Ausbildungsplatz bei Carrier");
     expect(rendered.bodyHtml).toBe(
-      "<p>Sehr geehrte Damen und Herren,</p><p>hiermit bewerbe ich mich mit großem Interesse um einen Ausbildungsplatz bei Carrier.</p><p>Über die Gelegenheit zu einem persönlichen Gespräch freue ich mich sehr.</p><p>Mit freundlichen Grüßen</p>",
+      "<p>Sehr geehrte Damen und Herren,</p><p>hiermit bewerbe ich mich um einen Ausbildungsplatz bei Carrier. Ich möchte meine Kenntnisse erweitern, praktische Erfahrungen sammeln und mich fachlich weiterentwickeln.</p><p>Ich bin motiviert, mich engagiert in Ihr Team einzubringen, neue Aufgaben zuverlässig zu übernehmen und von erfahrenen Fachkräften zu lernen.</p><p>Über die Gelegenheit, meine Motivation in einem persönlichen Gespräch näher vorzustellen, freue ich mich sehr.</p><p>Mit freundlichen Grüßen</p><p>Mustapha Drif</p>",
     );
     // Unknown company → still grammatical.
     const fallback = renderPersonalizedMessage(
@@ -395,10 +399,10 @@ describe("templates", () => {
       },
       { email: "jobs@bmw.de", contactName: "Frau Dr. Schmidt" },
     );
-    expect(rendered.subject).toBe("Bewerbung um eine Position bei BMW");
+    expect(rendered.subject).toBe("Bewerbung bei BMW");
     expect(rendered.bodyHtml).toContain("<p>Sehr geehrte Frau Dr. Schmidt,</p>");
     expect(rendered.bodyHtml).toContain(
-      "mit großem Interesse bewerbe ich mich um eine Position bei BMW.",
+      "um eine passende berufliche Möglichkeit bei BMW.",
     );
   });
 
