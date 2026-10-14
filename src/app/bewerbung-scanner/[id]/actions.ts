@@ -2,15 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { deleteScan, updateCandidateProfile } from "@/lib/bewerbung-scanner";
-import { candidateProfileSchema } from "@/lib/bewerbung-schema";
-
-export async function saveCandidateProfile(formData: FormData) {
-  const scanId = String(formData.get("scanId") ?? "");
-  const profileJson = String(formData.get("profileJson") ?? "");
-  const profile = candidateProfileSchema.parse(JSON.parse(profileJson));
-  await updateCandidateProfile(scanId, profile);
-}
+import { deleteScan } from "@/lib/bewerbung-scanner";
 
 /** Phase 16 — user-initiated scan deletion (server action; the UI
  *  button is only the trigger — ownership + cascades + storage sweep

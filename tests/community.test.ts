@@ -2665,12 +2665,9 @@ describe("community migration guards (v2)", () => {
 describe("community i18n parity", () => {
   const communityKeys = [
     // identity / onboarding
-    "onboardingTitle",
-    "onboardingHint",
     "identityTitle",
     "identitySubtitle",
     "nameLabel",
-    "namePlaceholder",
     "nameHelp",
     "generateAnother",
     "usernameRegenerating",
@@ -2679,8 +2676,6 @@ describe("community i18n parity", () => {
     "chooseAvatar",
     "complete",
     "avatarAlt",
-    "nameRequired",
-    "nameTooLong",
     "avatarInvalid",
     "onboardingFailed",
     "rateLimited",
@@ -2690,7 +2685,6 @@ describe("community i18n parity", () => {
     "homeRoomsTitle",
     "homeActivityTitle",
     "homeActivityEmpty",
-    "roomMessageCount",
     "roomCount",
     "roomNotFoundTitle",
     "roomNotFoundText",
@@ -2699,7 +2693,6 @@ describe("community i18n parity", () => {
     "membersEmpty",
     "openRoomList",
     "closeRoomList",
-    "roomIntro",
     // message view + actions
     "emptyTitle",
     "emptyText",
@@ -2733,7 +2726,6 @@ describe("community i18n parity", () => {
     "typingMany",
     "unreadBadge",
     "replyToLabel",
-    "replyToSelfLabel",
     "replyPlaceholder",
     "cancelReply",
     "editMessage",
@@ -2744,15 +2736,11 @@ describe("community i18n parity", () => {
     "addReaction",
     "reactionAria",
     "confirmDeleteTitle",
-    "confirmDeleteText",
     "confirmDeleteAction",
     "mentionNotFound",
     "editIdentity",
     // v2 errors
     "roomNotFound",
-    "reactionInvalid",
-    "messageNotFound",
-    "notAllowed",
   ];
 
   const roomSlugs = [

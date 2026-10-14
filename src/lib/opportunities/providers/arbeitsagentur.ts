@@ -603,14 +603,6 @@ const baFetchDefaults: ResolvedBaFetchOptions = {
   label: "search",
 };
 
-/** Test hook: temporarily override the production fetch defaults (e.g. tiny
- *  timeouts/backoffs) without faking timers. */
-export function configureBaFetchDefaults(
-  overrides: Partial<ResolvedBaFetchOptions>,
-) {
-  Object.assign(baFetchDefaults, overrides);
-}
-
 /** Provider failure carrying the internal classification. Extends
  *  OpportunityProviderError so every existing `instanceof` handler keeps
  *  working; `retryable` tells the UI whether "Erneut versuchen" makes sense

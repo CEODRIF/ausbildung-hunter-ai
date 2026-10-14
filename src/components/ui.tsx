@@ -279,8 +279,3 @@ export function ErrorState({
 export function CloseIcon() {
   return <Icon name="x" size={17} strokeWidth={2} />;
 }
-
-/** Compat export. */
-export function AlertIcon() {
-  return <Icon name="alert" size={16} strokeWidth={2} />;
-}

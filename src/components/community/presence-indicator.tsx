@@ -106,15 +106,3 @@ export function PresenceIndicator({
     </span>
   );
 }
-
-/** The localized "last seen …" line (or null = never shown). */
-export function formatLastSeen(
-  lastSeenAt: string | null,
-  t: (key: string) => string,
-): string | null {
-  const bucket = lastSeenBucket(lastSeenAt);
-  if (!bucket) return null;
-  if (bucket === "recent") return t("community.lastSeen.recent");
-  if (bucket === "today") return t("community.lastSeen.today");
-  return t("community.lastSeen.earlier");
-}

@@ -83,15 +83,6 @@ export function allowedActions(state: RelationshipState): SocialAction[] {
   }
 }
 
-/**
- * The GATE for direct messages (used by the UI AND re-checked server-side
- * for every DM write): only ACCEPTED friends, with no active block in
- * EITHER direction, may message each other.
- */
-export function canDirectMessage(state: RelationshipState): boolean {
-  return state === "friends";
-}
-
 /** The other member of the canonical pair (for "who is this row about"). */
 export function otherUserId(
   me: string,

@@ -4,7 +4,7 @@ import sanitizeHtml from "sanitize-html";
 import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { listEmailAccounts, type SafeEmailAccount } from "@/lib/email-oauth";
+import { listEmailAccounts } from "@/lib/email-oauth";
 import { normalizeRecipientEmail } from "@/lib/email-recipients";
 import { hasContactNameColumn } from "@/lib/contact-name-support";
 import type { Profile } from "@/lib/auth";
@@ -317,27 +317,7 @@ export async function listDraftsBySender(
   }>;
 }
 
-export function safeAccountList(accounts: SafeEmailAccount[]) {
-  return accounts.map(
-    ({
-      id,
-      provider,
-      email,
-      is_active,
-      created_at,
-      updated_at,
-      last_used_at,
-    }) => ({
-      id,
-      provider,
-      email,
-      is_active,
-      created_at,
-      updated_at,
-      last_used_at,
-    }),
-  );
-}
+
 /**
  * Server-side recipient validation — the single gate every path goes through
  * (draft save, opportunity prefill and the campaign sender).

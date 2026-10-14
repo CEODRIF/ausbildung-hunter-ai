@@ -93,9 +93,10 @@ describe("premium i18n: no raw keys reach the UI", () => {
 
   it("keeps all four dictionaries structurally complete for premium.*", () => {
     const paths = collectPremiumPaths(dictionaries.de.premium);
-    // Floor recalibrated after the Company Discovery removal: the premium
-    // namespace keeps nav/filterAll/hero/orb/error (13 leaf paths).
-    expect(paths.length).toBeGreaterThanOrEqual(13);
+    // Floor recalibrated after the dead-key cleanup: the premium namespace
+    // keeps nav/hero (5 leaf paths). The old orb/filterAll/error keys were
+    // never referenced by the search UI (verified by repo-wide audit).
+    expect(paths.length).toBeGreaterThanOrEqual(5);
     for (const lang of SUPPORTED_LANGUAGES) {
       for (const path of paths) {
         const value = lookup(dictionaries[lang], path);

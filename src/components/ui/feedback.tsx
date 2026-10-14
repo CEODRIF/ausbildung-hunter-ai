@@ -65,76 +65,9 @@ export function StatusPill({
   );
 }
 
-/** Filter chip (source categories, etc.). */
-export function Chip({
-  label,
-  active = false,
-  onClick,
-  count,
-  className = "",
-}: {
-  label: string;
-  active?: boolean;
-  onClick?: () => void;
-  count?: number;
-  className?: string;
-}) {
-  const content = (
-    <>
-      {label}
-      {typeof count === "number" && (
-        <span
-          className={`num ms-1 text-[10px] ${active ? "text-accent" : "text-faint"}`}
-        >
-          {count}
-        </span>
-      )}
-    </>
-  );
-  const base = `inline-flex h-9 items-center rounded-full border px-4 text-xs font-semibold transition-colors ${
-    active
-      ? "border-transparent bg-accent text-white shadow-[0_6px_16px_-6px_rgba(var(--glow-accent-rgb),0.5)]"
-      : "border-line-strong bg-surface text-muted hover:border-faint hover:text-ink"
-  } ${className}`;
-  if (!onClick) return <span className={base}>{content}</span>;
-  return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={base}>
-      {content}
-    </button>
-  );
-}
-
 /** Skeleton block (shimmer) — the loading contract for every page. */
 export function Skeleton({ className = "" }: { className?: string }) {
   return <div aria-hidden="true" className={`shimmer rounded-xl ${className}`} />;
-}
-
-/** Page-level skeleton grid: header line + N cards. */
-export function SkeletonPage({
-  cards = 3,
-  rows = 3,
-}: {
-  cards?: number;
-  rows?: number;
-}) {
-  return (
-    <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-8 sm:px-6 lg:px-10" aria-busy="true">
-      <div className="space-y-3">
-        <Skeleton className="h-10 w-64 max-w-full rounded-2xl" />
-        <Skeleton className="h-4 w-96 max-w-full" />
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {Array.from({ length: cards }).map((_, i) => (
-          <div key={i} className="space-y-3 rounded-3xl border border-line bg-surface p-5">
-            <Skeleton className="h-4 w-24" />
-            {Array.from({ length: rows }).map((__, j) => (
-              <Skeleton key={j} className="h-3 w-full" />
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 /** Empty state: soft illustration + title + body + CTA. */

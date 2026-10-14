@@ -17,7 +17,7 @@ const de = {
     nav: {
       more: "Mehr",
     },
-    filterAll: "Alle",
+    
     hero: {
       title: "Finden Sie Ihre nächste Ausbildung.",
       subtitle:
@@ -25,17 +25,8 @@ const de = {
       ctaStart: "Stellen durchsuchen",
       searchTitle: "Wonach suchen Sie?",
     },
-    orb: {
-      finding: "Suche nach Ausbildungsangeboten",
-      scanning: "Prüft öffentliche Quellen",
-      companies: "Entdeckt Firmenwebsites",
-      contacts: "Prüft veröffentlichte Kontaktdaten",
-      dedupe: "Entfernt Duplikate",
-      starting: "Startet die Suche…",
-    },
-    error: {
-      retry: "Erneut versuchen",
-    },
+    
+    
   },
   // ---- Shell: sidebar sections + navigation ------------------------------
   nav: {
@@ -54,7 +45,7 @@ const de = {
     savedOpportunities: "Gespeicherte Stellen",
     community: "Community",
     emailAssistant: "E-Mail-Assistent",
-    savedFiles: "Gespeicherte Dateien",
+    
     // Sidebar label only: the CV/templates feature is now shown as
     // "Lebenslauf". The key keeps its name (it is wired to the nav item) and
     // `pages.templates.*` (the on-page heading) is deliberately untouched.
@@ -65,8 +56,8 @@ const de = {
     soon: "Demnächst",
     collapse: "Seitenleiste einklappen",
     expand: "Seitenleiste ausklappen",
-    platform: "Plattform",
-    platformUpdates: "Plattform-Updates",
+    
+    
     help: "Hilfe",
     faq: "FAQ",
     admin: "Admin",
@@ -74,14 +65,13 @@ const de = {
 
   // ---- Shell: global header ----------------------------------------------
   header: {
-    notifications: "Benachrichtigungen",
-    noNotifications: "Keine Benachrichtigungen",
-    noNotificationsHint:
-      "Hier erscheinen Hinweise zu Ihren Bewerbungen und Kontovorgängen.",
+    
+    
+    
     profile: "Profil",
-    justNow: "Gerade eben",
-    minutesAgo: "vor {n} Min.",
-    hoursAgo: "vor {n} Std.",
+    
+    
+    
   },
 
   // ---- Page titles (global header, per route) ----------------------------
@@ -215,10 +205,10 @@ const de = {
   // ---- Language switcher --------------------------------------------------
   lang: {
     label: "Sprache",
-    de: "Deutsch",
-    en: "English",
-    fr: "Français",
-    ar: "العربية",
+    
+    
+    
+    
   },
 
   // ---- Theme switcher -----------------------------------------------------
@@ -232,7 +222,7 @@ const de = {
   // ---- Profile menu -------------------------------------------------------
   profile: {
     signOut: "Abmelden",
-    settings: "Einstellungen",
+    
     // ---- Settings profile page (/settings/profile) ----
     page: {
       memberSince: "Mitglied seit",
@@ -287,36 +277,7 @@ const de = {
     confirmDeleteScan:
       "Bestätigen — Scan, Profil & hochgeladene Dateien löschen",
   },
-  profileSettings: {
-    personalTitle: "Persönliche Angaben",
-    personalNote: "Ändern Sie Vor- und Nachnamen. E-Mail, Passwort und Kontostatus bleiben unverändert.",
-    firstName: "Vorname",
-    lastName: "Nachname",
-    save: "Änderungen speichern",
-    nameSaved: "Ihre Angaben wurden gespeichert.",
-    emailNote: "Ihre E-Mail-Adresse kann hier nicht geändert werden.",
-    photoTitle: "Profilbild",
-    photoNote: "Laden Sie ein Bild hoch, das in der Kopfzeile und neben Ihren Angaben erscheint.",
-    uploadPhoto: "Foto hochladen",
-    photoHint: "JPG, PNG oder WEBP · maximal 2 MB.",
-    avatarSaved: "Ihr Profilbild wurde aktualisiert.",
-    accountsTitle: "Verknüpfte Konten",
-    accountsNote: "Verknüpfen Sie Google oder Microsoft mit diesem Konto, um sich künftig schneller anzumelden. Es wird kein neues Konto erstellt.",
-    connected: "Verknüpft",
-    notConnected: "Nicht verknüpft",
-    connect: "Verbinden",
-    connecting: "Verbinden…",
-    linkSuccess: "Konto verknüpft.",
-    linkFailed: "Die Verknüpfung ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
-    errorNameRequired: "Bitte füllen Sie Vor- und Nachnamen aus.",
-    errorNameTooLong: "Der Name ist zu lang.",
-    errorSaveFailed: "Ihre Angaben konnten nicht gespeichert werden. Bitte versuchen Sie es erneut.",
-    errorAvatarType: "Nur JPG-, PNG- oder WEBP-Bilder sind erlaubt.",
-    errorAvatarSize: "Das Bild ist zu groß (maximal 2 MB).",
-    errorAvatarFailed: "Das Bild konnte nicht hochgeladen werden. Bitte versuchen Sie es erneut.",
-    errorNoFile: "Bitte wählen Sie zuerst eine Bilddatei aus.",
-    errorGeneric: "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
-  },
+  
 
   // ---- Generic actions / states ------------------------------------------
   common: {
@@ -324,18 +285,18 @@ const de = {
     retry: "Erneut versuchen",
     error: "Etwas ist schiefgelaufen",
     errorHint: "Bitte versuchen Sie es später noch einmal.",
-    save: "Speichern",
+    
     cancel: "Abbrechen",
     close: "Schließen",
     back: "Zurück",
-    viewAll: "Alle anzeigen",
-    learnMore: "Mehr erfahren",
-    continue: "Weiter",
-    open: "Öffnen",
-    search: "Suchen",
-    comingSoon: "Demnächst verfügbar",
+    
+    
+    
+    
+    
+    
     notDocumented: "Nicht dokumentiert",
-    none: "Keine",
+    
   },
 
   // ---- FAQ page -------------------------------------------------------------
@@ -418,9 +379,8 @@ const de = {
   // ---- Landing page -------------------------------------------------------
   landing: {
     heroBadge: "Ihr nächster Schritt beginnt hier",
-    heroTitle: "Finde deine Ausbildung. Mit KI.",
-    heroSubtitle:
-      "AusbildungsWeg analysiert dein Profil, findet passende Ausbildungsplätze und hilft dir bei deiner Bewerbung.",
+    
+    
     ctaStart: "Jetzt kostenlos starten",
     ctaExplore: "Dashboard ansehen",
     navHow: "So funktioniert es",
@@ -461,7 +421,7 @@ const de = {
 
   // ---- Dashboard ----------------------------------------------------------
   dash: {
-    workspace: "Ihr {goal}-Arbeitsbereich",
+    
     greeting: {
       morning: "Guten Morgen, {name}.",
       afternoon: "Guten Tag, {name}.",
@@ -510,23 +470,23 @@ const de = {
       aiCta: "Assistent öffnen",
       emailsSent: "E-Mails gesendet heute",
       profile: "Profil",
-      profileComplete: "Profil vollständig",
+      
       profileMissing: "Profil unvollständig",
-      emails: "E-Mails heute",
+      
       emailsDetail: "{remaining} von {limit} übrig",
     },
     sections: {
       recommended: { title: "Empfohlene Stellen", hint: "Aus der offiziellen Quelle, abgeglichen mit Ihrem Profil" },
       saved: { title: "Gespeicherte Stellen", hint: "Nachweise sind historisch – die aktuelle Passung steht auf der Detailseite" },
-      matching: { title: "Passungen", hint: "Wie gut Ihre gespeicherten Stellen zu Ihnen passen" },
-      recentApplications: { title: "Letzte Bewerbungen", hint: "Ihre neuesten Bewerbungen und deren Status" },
-      completeness: { title: "Profilvollständigkeit", hint: "Welche Angaben fehlen noch" },
+      
+      
+      
       account: { title: "Kontoübersicht", hint: "Ihre aktuellen Profildaten" },
-      activity: { title: "Letzte Aktivität", hint: "Die neuesten Vorgänge in Ihrem Arbeitsbereich" },
+      
     },
-    live: "Live-Daten",
+    
     status: {
-      complete: "Vollständige Passung",
+      
       incomplete: "Passung unvollständig",
       match: "Passung",
       stale: "veraltet",
@@ -554,40 +514,30 @@ const de = {
       emails: "{count} E-Mails",
     },
     empty: {
-      noActivity: { title: "Noch keine Aktivität", body: "Ihre Kontoaktivität erscheint hier, sobald Sie Ihren Arbeitsbereich nutzen." },
+      
       noMatches: { title: "Gerade keine passenden Stellen", body: "Die Quelle lieferte für Ihr dokumentiertes Ziel keine Ergebnisse. Versuchen Sie eine breitere Suche." },
       recsUnavailable: { title: "Empfehlungen nicht verfügbar", bodyNoProfile: "Scannen Sie Ihre Bewerbung, um Ihr Kandidatenprofil zu erstellen – Empfehlungen werden echte Stellen dagegen abgleichen.", bodyNoKeyword: "Fügen Sie Ihrem Profil zuerst ein Zielfeld hinzu – Empfehlungen werden nur mit dokumentierten Stichwörtern gesucht (nichts wird erfunden).", bodySource: "Die Stellenquelle ist gerade nicht verfügbar. Anstelle echter Ergebnisse wird nichts angezeigt." },
       nothingSaved: { title: "Noch nichts gespeichert", body: "Speichern Sie Stellen, auf die Sie sich bewerben – sie behalten einen serverseitig berechneten Passungsnachweis." },
-      noApplications: { title: "Noch keine Bewerbungen", body: "Erstellen Sie Ihre erste Bewerbung aus einer gespeicherten Stelle." },
-      profileMissing: { title: "Ihr Kandidatenprofil wurde noch nicht erstellt.", body: "Scannen Sie Ihre Bewerbung, um ein Profil zu erhalten, gegen das Stellen abgeglichen werden.", cta: "Lebenslauf analysieren" },
+      
+      
     },
   },
 
   // ---- Campaign status (shared with applications list) --------------------
-  campaign: {
-    status: {
-      draft: "Kampagne bereit",
-      queued: "Versand in Warteschlange",
-      sending: "Wird gesendet",
-      completed: "Gesendet",
-      partially_failed: "Teilweise gesendet",
-      failed: "Versand fehlgeschlagen",
-      cancelled: "Abgebrochen",
-    },
-  },
+  
 
   // ---- Applications list ----------------------------------------------------
   apps: {
-    untitled: "Bewerbung ohne Titel",
-    for: "für {title}",
-    created: "erstellt {date}",
-    sent: "gesendet {date}",
-    noDetails: "Keine Details dokumentiert",
-    emptyDraft: "Leerer Entwurf",
+    
+    
+    
+    
+    
+    
     openDraft: "Entwurf öffnen",
-    campaign: "Kampagne",
-    opportunity: "Stelle",
-    new: "Neue Bewerbung",
+    
+    
+    
     saveFailed: "Speichern fehlgeschlagen",
     saving: "Wird gespeichert …",
     saved: "Gespeichert",
@@ -634,8 +584,8 @@ const de = {
       submitSchedule: "Versand planen",
       scheduling: "Wird geplant …",
       subject: "Betreff",
-      from: "Von",
-      recipientsCount: "{count} Empfänger",
+      
+      
     },
   },
 
@@ -755,9 +705,9 @@ const de = {
 
   // ---- Empty states (shared) ---------------------------------------------
   empty: {
-    noCv: { title: "Ihr Kandidatenprofil wurde noch nicht erstellt.", body: "Scannen Sie Ihre Bewerbung, um ein Profil zu erhalten, gegen das Stellen abgeglichen werden.", cta: "Lebenslauf analysieren" },
-    noOpportunities: { title: "Noch keine passenden Ausbildungsplätze gefunden.", body: "Starten Sie eine Suche, um Stellen zu sehen, die zu Ihrem Profil passen.", cta: "Stellen durchsuchen" },
-    noApplications: { title: "Sie haben noch keine Bewerbung erstellt.", body: "Erstellen Sie aus einer gespeicherten Stelle Ihre erste Bewerbung.", cta: "Bewerbung erstellen" },
+    
+    
+    
     noEmail: { title: "Kein E-Mail-Konto verbunden", body: "Verbinden Sie vor der Vorbereitung einer Bewerbungsmail Gmail oder Outlook.", cta: "E-Mail-Konto verbinden" },
   },
 
@@ -1037,18 +987,17 @@ const de = {
     actionFailed: "Aktion fehlgeschlagen ({error}).",
     networkError: "Netzwerkfehler — bitte erneut versuchen.",
     // Platform Updates (owner-only in-app notifications)
-    platformUpdates: "Plattform-Updates",
-    platformUpdatesHint:
-      "In-App-Benachrichtigungen an alle Nutzer oder an einen einzelnen Nutzer senden.",
+    
+    
     newNotification: "+ Neue Benachrichtigung",
     sendTo: "Empfänger",
     allUsers: "Alle Nutzer",
-    specificUser: "Bestimmter Nutzer",
-    searchUser: "Nutzer suchen…",
-    searchingUsers: "Wird gesucht…",
-    noUserMatches: "Keine passenden Nutzer gefunden.",
-    selectedUser: "Ausgewählter Nutzer:",
-    changeUser: "Ändern",
+    
+    
+    
+    
+    
+    
     titleLabel: "Titel",
     typeLabel: "Typ",
     messageLabel: "Nachricht",
@@ -1059,22 +1008,22 @@ const de = {
     sendNotification: "Benachrichtigung senden",
     confirmTitle: "Benachrichtigung senden",
     confirmAll: "Diese Benachrichtigung wird an alle Nutzer gesendet.",
-    confirmUser: "Diese Benachrichtigung an {name} senden?",
+    
     cancel: "Abbrechen",
     send: "Senden",
     sending: "Wird gesendet…",
     sent: "Benachrichtigung gesendet.",
     duplicateSent: "Bereits gesendet — es wurde kein Duplikat erstellt.",
     sendFailed: "Senden fehlgeschlagen. Bitte erneut versuchen.",
-    selectUserFirst: "Bitte zuerst einen Empfänger auswählen.",
+    
     historyTitle: "Gesendete Benachrichtigungen",
     historyEmpty: "Noch keine Benachrichtigungen gesendet.",
     historyError: "Verlauf konnte nicht geladen werden.",
-    date: "Datum",
-    recipient: "Empfänger",
-    status: "Status",
-    sentBadge: "Gesendet",
-    loading: "Wird geladen…",
+    
+    
+    
+    
+    
     // ---- Platform-Admin (Phase 10) — Sektionennavigation ------------------
     navOverview: "Übersicht",
     navAnnouncements: "Ankündigungen",
@@ -1121,12 +1070,12 @@ const de = {
     fieldCommunityName: "Community-Name",
     fieldRole: "Community-Rolle",
     fieldMemberSince: "Mitglied seit",
-    statusLabel: "Status",
+    
     statusActive: "Aktiv",
     statusSuspended: "Community-Gesperrt",
     statusMuted: "Gestummt bis {date}",
     statusBanned: "Gebannt",
-    banSection: "Sperre (Ban)",
+    
     banAction: "Nutzer bannen",
     unbanAction: "Sperre aufheben",
     banConfirmTitle: "Nutzer bannen",
@@ -1140,12 +1089,12 @@ const de = {
     duration30d: "30 Tage",
     durationPermanent: "Dauerhaft",
     bannedLabel: "Derzeit gebannt",
-    bannedSince: "Seit {date}",
+    
     bannedUntil: "Bis {date}",
     permanent: "dauerhaft",
     banReasonShown: "Grund: {reason}",
     banDone: "Nutzer wurde gebannt.",
-    banDoneUntil: "Nutzer wurde gebannt bis {date}.",
+    
     unbanDone: "Sperre wurde aufgehoben.",
     alreadyBanned: "Dieser Nutzer ist bereits gebannt.",
     notBanned: "Dieser Nutzer ist nicht gebannt.",
@@ -1163,7 +1112,7 @@ const de = {
       "Die Nachricht wird für die gesamte Community ausgeblendet. Die Aktion wird im Moderations-Log protokolliert.",
     messageDeleted: "Nachricht gelöscht.",
     messageAlreadyHidden: "Diese Nachricht wurde bereits ausgeblendet.",
-    deleteFailed: "Die Nachricht konnte nicht gelöscht werden. Bitte erneut versuchen.",
+    
     noCommunityProfile: "Kein Community-Profil",
   },
 
@@ -1186,8 +1135,7 @@ const de = {
   // ---- CV Builder / Templates ------------------------------------------------
   templates: {
     builderTitle: "CV-Builder",
-    builderSubtitle:
-      "Erstellen Sie einen professionellen Lebenslauf für Ihre nächste Chance in Deutschland.",
+    
     back: "Zurück",
     templateLabel: "Template",
     stepNav: "Schritte",
@@ -1217,7 +1165,7 @@ const de = {
       "Entscheiden Sie sich für ein Design – Sie können es jederzeit wechseln.",
     continueCta: "Weiter",
     tabDesign: "Design",
-    templateName: "Professional Classic",
+    
     templateSelectorTitle: "CV-Templates",
     templateClassic: "Professional Classic",
     templateClassicDesc:
@@ -1236,11 +1184,10 @@ const de = {
     saved: "Gespeichert",
     tabEdit: "Bearbeiten",
     tabPreview: "Vorschau",
-    emptyTitle: "Erstellen Sie Ihren professionellen Lebenslauf",
-    emptyText:
-      "Beginnen Sie mit Ihren persönlichen Angaben oder importieren Sie Ihr vorhandenes Scan-Profil.",
-    startBuilding: "Lebenslauf erstellen",
-    importProfile: "Profil importieren",
+    
+    
+    
+    
     importing: "Profil wird importiert…",
     importNotFound:
       "Kein gescanntes Profil gefunden. Scannen Sie zuerst Ihren Lebenslauf im Bewerbungsscan.",
@@ -1532,7 +1479,7 @@ const de = {
       "Wir arbeiten gerade an unserer Community. Bald kannst du dich hier mit anderen Mitgliedern vernetzen.",
     comingSoonNote: "Der Community-Chat wird bald verfügbar sein.",
     comingSoonBackToDashboard: "Zurück zum Dashboard",
-    onboardingTitle: "Willkommen in der Community",
+    
     // ---- Platform-Admin (Phase 10) — Badge + gebannt -----------------------
     adminBadge: "Administrator",
     bannedTitle: "Community-Zugang gesperrt",
@@ -1591,7 +1538,7 @@ const de = {
     loading: "Wird geladen …",
     searchLoadMore: "Mehr laden",
     searchNoMore: "Das war alles.",
-    searchInRoom: "in {room}",
+    
     // ---- Phase 5: Q&A ----
     questionsTitle: "Fragen",
     questionsSubtitle: "Fragen und Antworten aus {room}.",
@@ -1629,16 +1576,16 @@ const de = {
     answerClosed: "Diese Frage ist geschlossen — keine neuen Antworten mehr.",
     noAnswers: "Noch keine Antworten — hilf als Erste/r aus!",
     acceptAnswer: "Als Lösung akzeptieren",
-    acceptedBadge: "Lösung",
+    
     acceptedAnswerNote: "Akzeptierte Antwort",
     unsolveCta: "Als offen markieren",
-    unsolveConfirmTitle: "Frage wieder öffnen?",
-    unsolveConfirmText: "Die akzeptierte Antwort verliert das „Lösung“-Kennzeichen.",
+    
+    
     closeQuestion: "Frage schließen",
     reopenQuestion: "Frage neu öffnen",
     questionActionError: "Die Aktion konnte nicht ausgeführt werden.",
-    acceptError: "Die Antwort konnte nicht akzeptiert werden.",
-    onlyAuthorOrMod: "Nur die Person, die die Frage gestellt hat, oder ein Moderator kann die Lösung festlegen.",
+    
+    
     // ---- Phase 5: pins ----
     pinsOpen: "Angeheftete Nachrichten anzeigen",
     pinsTitle: "Angeheftete Nachrichten",
@@ -1665,9 +1612,9 @@ const de = {
     reportSelfError: "Du kannst deine eigenen Inhalte nicht melden.",
     reportNotFound: "Dieser Inhalt existiert nicht (mehr).",
     reportDuplicate: "Du hast diesen Inhalt bereits gemeldet.",
-    myReportsTitle: "Meine Meldungen",
-    myReportsEmpty: "Du hast noch nichts gemeldet.",
-    myReportsLoadError: "Deine Meldungen konnten nicht geladen werden.",
+    
+    
+    
     reportStatusOpen: "offen",
     reportStatusReviewing: "in Prüfung",
     reportStatusResolved: "abgeschlossen",
@@ -1685,8 +1632,8 @@ const de = {
     reportReasonIllegal: "Rechtswidriger Inhalt",
     reportReasonImpersonation: "Identitätsdiebstahl",
     reportReasonOther: "Sonstiges",
-    mutedNote: "Du wurdest zeitweise von der Moderation stummgeschaltet. Nachrichten, Fragen und Antworten sind derzeit nicht möglich.",
-    suspendedNote: "Dein Community-Zugang ist gesperrt. Wende dich an den Support.",
+    
+    
     // ---- Phase 5: moderation ----
     navModeration: "Moderation",
     moderationTitle: "Moderation",
@@ -1704,22 +1651,22 @@ const de = {
     modQueueEmpty: "Keine Berichte in dieser Ansicht.",
     modQueueLoadError: "Die Berichte konnten nicht geladen werden.",
     modQueueLoadMore: "Mehr Berichte laden",
-    modQueueNew: "{count} neue Berichte",
-    modDetailTitle: "Berichtsdetails",
+    
+    
     modReporter: "Meldende Person",
-    modReason: "Grund",
+    
     modTarget: "Meldgegenstand",
-    modPreview: "Vorschau",
+    
     modAssigned: "Zugeordnet",
     modUnassigned: "Nicht zugewiesen",
-    modAssignedTo: "{name}",
+    
     modFiledAt: "Gemeldet am {date}",
     modResolvedAt: "Bearbeitet am {date}",
     modMarkReviewing: "In Prüfung nehmen",
     modResolve: "Abschließen",
     modDismiss: "Verwerfen",
     modAssign: "Mir zuordnen",
-    modActions: "Maßnahmen",
+    
     modActionDeleteMessage: "Nachricht löschen",
     modActionHideMessage: "Nachricht ausblenden",
     modActionUnpin: "Anheftung entfernen",
@@ -1727,24 +1674,24 @@ const de = {
     modActionCloseQuestion: "Frage schließen",
     modActionReopenQuestion: "Frage neu öffnen",
     modActionWarn: "Mitglied warnen",
-    modActionTimeout: "Stummschalten",
+    
     modActionSuspend: "Community-Zugang sperren",
     modActionReinstate: "Zugang wiederherstellen",
     modTimeoutLabel: "Dauer",
     modTimeout1h: "1 Stunde",
     modTimeout24h: "24 Stunden",
     modTimeout7d: "7 Tage",
-    modConfirm: "Aktion bestätigen",
+    
     modConfirmDeleteMessage: "Die Nachricht wird für alle endgültig gelöscht.",
     modConfirmHideMessage: "Die Nachricht wird für alle ausgeblendet.",
     modConfirmRemoveAnswer: "Die Antwort wird entfernt und ist für alle unsichtbar.",
     modConfirmSuspend: "{name} kann der Community nicht mehr schreiben, bis der Zugang wiederhergestellt wird.",
     modConfirmTimeout: "{name} kann für {duration} nicht schreiben.",
-    modConfirmWarn: "Eine Warnung wird an {name} gesendet.",
-    modCloseConfirm: "Die Frage wird für alle geschlossen (keine neuen Antworten).",
-    modReopenConfirm: "Die Frage wird wieder geöffnet.",
-    modActionSuccess: "Aktion ausgeführt.",
-    modActionError: "Die Aktion konnte nicht ausgeführt werden.",
+    
+    
+    
+    
+    
     modAuditEmpty: "Noch keine Moderationsaktionen.",
     modMembersTitle: "Mitglieder & Rollen",
     modMembersSubtitle: "Rollen sind nur für Admins änderbar.",
@@ -1754,10 +1701,10 @@ const de = {
     modModerator: "Moderator",
     modAdmin: "Admin",
     modOwner: "Inhaber",
-    modRoleChanged: "Rolle aktualisiert.",
-    modRoleError: "Die Rollenänderung war nicht möglich.",
-    modRoleSelfError: "Du kannst deine eigene Rolle nicht ändern.",
-    modRoleRankError: "Du kannst keine Rolle vergeben, die deiner gleichwertig oder höher ist.",
+    
+    
+    
+    
     modSuspendedBadge: "Gesperrt",
     modMutedBadge: "Stumm bis {date}",
     modRoomsTitle: "Raum-Einstellungen",
@@ -1772,13 +1719,13 @@ const de = {
     modRoomSaved: "Raum-Einstellungen gespeichert.",
     modRoomSaveError: "Die Einstellungen konnten nicht gespeichert werden.",
     // ---- Phase 5: reputation ----
-    reputationLabel: "Ruhm",
+    
     statsReputation: "Punkte",
     statsQuestionsLabel: "Fragen",
     statsAcceptedLabel: "Lösungen",
-    statsQuestions: "{count} Fragen",
-    statsAnswers: "{count} Antworten",
-    statsAccepted: "{count} Lösungen",
+    
+    
+    
     // ---- Phase 5: community home ----
     homeWelcome: "Willkommen, {name}!",
     homeSearchCta: "Nachricht, Frage oder Mitglied suchen…",
@@ -1789,21 +1736,21 @@ const de = {
     homeSolvedTitle: "Kürzlich gelöst",
     homeAnnouncementsTitle: "Mitteilungen",
     homeOnline: "{count} online",
-    homeViewQuestion: "Frage ansehen",
-    homeNoActivity: "Noch keine Aktivität.",
-    homeNoQuestions: "Noch keine Fragen — stell die erste!",
+    
+    
+    
     homeNoAnnouncements: "Keine Mitteilungen.",
     // ---- Phase 5: Q&A + moderation notifications ----
-    notifAnswer: "{name} hat auf deine Frage „{title}“ geantwortet.",
-    notifAnswerGeneric: "Du hast eine Antwort auf deine Frage erhalten.",
-    notifAccepted: "Deine Antwort auf „{title}“ wurde als Lösung akzeptiert.",
-    notifAcceptedGeneric: "Eine deiner Antworten wurde als Lösung akzeptiert.",
-    onboardingHint: "Ein paar Angaben und du kannst sofort mitmachen.",
+    
+    
+    
+    
+    
     identityTitle: "Wähle deine Community-Identität",
     identitySubtitle:
       "Du bist hier keine Privatperson: Wähle einen einzigartigen Spitznamen und einen Avatar — dein echter Name bleibt privat.",
     nameLabel: "Dein Spitzname",
-    namePlaceholder: "z. B. BlueFalcon",
+    
     nameHelp: "3–24 Zeichen, nur Buchstaben und Ziffern. Du kannst ihn später ändern.",
     generateAnother: "Neuen generieren",
     usernameRegenerating: "Generiere…",
@@ -1813,8 +1760,8 @@ const de = {
     chooseAvatar: "Wähle deinen Avatar",
     complete: "Community beitreten",
     avatarAlt: "Avatar",
-    nameRequired: "Bitte wähle einen Spitznamen.",
-    nameTooLong: "Der Name darf höchstens 40 Zeichen lang sein.",
+    
+    
     avatarInvalid: "Bitte wähle einen der verfügbaren Avatare aus.",
     onboardingFailed: "Das Profil konnte nicht gespeichert werden. Bitte versuche es erneut.",
     rateLimited: "Zu viele Anfragen. Bitte warte kurz und versuche es erneut.",
@@ -1856,7 +1803,7 @@ const de = {
     homeRoomsTitle: "Themenräume",
     homeActivityTitle: "Letzte Aktivität",
     homeActivityEmpty: "Noch keine Nachrichten. Starte die erste Diskussion!",
-    roomMessageCount: "{count} Nachrichten",
+    
     roomCount: "{count} Räume",
     roomNotFoundTitle: "Raum nicht gefunden",
     roomNotFoundText: "Dieser Raum existiert nicht oder wurde deaktiviert.",
@@ -1865,10 +1812,10 @@ const de = {
     membersEmpty: "Bisher keine Mitglieder geladen.",
     openRoomList: "Räume öffnen",
     closeRoomList: "Raumliste schließen",
-    roomIntro: "Lies kurz die Beschreibung und stell deine Frage.",
+    
     // ---- Message actions ----
     replyToLabel: "Antwortet an {name}",
-    replyToSelfLabel: "Antwortet an dich",
+    
     replyPlaceholder: "Antwort an {name}…",
     cancelReply: "Abbrechen",
     cancel: "Abbrechen",
@@ -1880,19 +1827,19 @@ const de = {
     addReaction: "Reaktion hinzufügen",
     reactionAria: "Reaktionen",
     confirmDeleteTitle: "Nachricht löschen?",
-    confirmDeleteText: "Diese Nachricht wird für alle endgültig entfernt.",
+    
     confirmDeleteAction: "Löschen",
     mentionNotFound: "Mitglied",
     editIdentity: "Identität bearbeiten",
     // ---- v2 errors ----
     roomNotFound: "Dieser Raum existiert nicht.",
-    reactionInvalid: "Diese Reaktion ist nicht verfügbar.",
-    messageNotFound: "Nachricht nicht gefunden.",
-    notAllowed: "Das ist nicht erlaubt.",
+    
+    
+    
     // ---- Phase 2: social layer (profile, friends, blocks, DMs, notifications) ----
     profileCardTitle: "Mitglied-Profil",
     online: "online",
-    offline: "offline",
+    
     joined: "Dabei seit {date}",
     bioEmpty: "Noch keine Beschreibung.",
     // ---- action feedback (pending / success labels — stable button width) ----
@@ -1927,7 +1874,7 @@ const de = {
     blockText:
       "{name} kann dir danach keine Anfragen und keine Nachrichten mehr senden. Du kannst das jederzeit rückgängig machen.",
     unblock: "Entblockieren",
-    blockedNote: "Du hast dieses Mitglied blockiert.",
+    
     blocksYouNote: "Dieses Mitglied hat dich blockiert.",
     message: "Nachricht",
     closeProfile: "Profil schließen",
@@ -1955,7 +1902,7 @@ const de = {
     messagesSubtitle: "Private Gespräche mit Freunden.",
     noConversations: "Noch keine Gespräche.",
     noConversationsCta: "Wähle einen Freund und schicke die erste Nachricht.",
-    selectConversation: "Wähle ein Gespräch aus.",
+    
     conversationNotFound: "Gespräch nicht gefunden.",
     dmImagePreview: "Bild",
     backToMessages: "Zurück zu den Nachrichten",
@@ -1963,7 +1910,7 @@ const de = {
     notificationsSubtitle: "Freundschaftsanfragen, Nachrichten und Erwähnungen.",
     noNotifications: "Noch keine Benachrichtigungen.",
     markAllRead: "Alle als gelesen markieren",
-    markRead: "Als gelesen markieren",
+    
     navFriends: "Freunde",
     navMessages: "Nachrichten",
     navNotifications: "Benachrichtigungen",
@@ -2032,7 +1979,7 @@ const de = {
       answer: "{name} hat auf deine Frage geantwortet.",
       answerGeneric: "Du hast eine Antwort auf deine Frage erhalten.",
       accepted: "Deine Antwort wurde als Lösung akzeptiert.",
-      acceptedGeneric: "Eine deiner Antworten wurde als Lösung akzeptiert.",
+      
       friendRequestSent: "Freundschaftsanfrage gesendet.",
       nowFriends: "Du und {name} seid jetzt Freunde.",
       requestDeclined: "Anfrage abgelehnt.",
@@ -2053,7 +2000,7 @@ const de = {
     groupYesterday: "Gestern",
     groupEarlier: "Früher",
     loadMore: "Mehr laden",
-    notificationOpen: "Benachrichtigung öffnen",
+    
     noUnread: "Keine ungelesenen Benachrichtigungen.",
     unreadAria: "ungelesen",
     noMore: "Das war alles.",
@@ -2302,7 +2249,7 @@ const de = {
       countryLabel: "Land Ihres gewöhnlichen Aufenthalts",
       searchCountry: "Land auswählen…",
       mission: "Zuständige Vertretung",
-      officialPage: "Offizielle Seite der Vertretung",
+      
       openOfficial: "Offizielle Seite öffnen",
       lastReviewed: "Zuletzt geprüft",
       docsTitle: "Offizielle Angaben der Vertretung",
@@ -2310,12 +2257,12 @@ const de = {
       notes: "Wesentliche Hinweise aus der offiziellen Quelle",
       fee: "Gebühr (laut Vertretung)",
       appointment: "Terminvereinbarung (laut Vertretung)",
-      translation: "Übersetzung",
-      legalization: "Legalisation / Beglaubigung",
-      originalCopy: "Vorlage Original + Kopie",
+      
+      
+      
       disclaimer:
         "Wichtig: Die Anforderungen unterscheiden sich von Vertretung zu Vertretung und können sich jederzeit ändern. Diese Übersicht ersetzt nicht die offizielle Seite der zuständigen Vertretung (direkt verlinkt) und ist keine Rechtsberatung. Alle Angaben wurden am 11.10.2026 mit den offiziellen Quellen abgeglichen.",
-      otherCountry: "Ihr Land ist nicht in der Liste?",
+      
       otherCountryDesc:
         "Nicht jede deutsche Vertretung veröffentlicht detaillierte Listen auf Deutsch. Finden Sie Ihre zuständige Vertretung in der offiziellen Übersicht des Auswärtigen Amts und öffnen Sie deren Visaseite – oder starten Sie direkt im offiziellen Auslandsportal.",
       allMissions: "Offizielle Liste aller deutschen Auslandsvertretungen",
@@ -2338,7 +2285,7 @@ const en: Dict = {
     nav: {
       more: "More",
     },
-    filterAll: "All",
+    
     hero: {
       title: "Find your next Ausbildung.",
       subtitle:
@@ -2346,17 +2293,8 @@ const en: Dict = {
       ctaStart: "Search jobs",
       searchTitle: "What Ausbildung are you looking for?",
     },
-    orb: {
-      finding: "Finding Ausbildung opportunities",
-      scanning: "Scanning public sources",
-      companies: "Discovering company websites",
-      contacts: "Checking published contact information",
-      dedupe: "Removing duplicates",
-      starting: "Starting the search…",
-    },
-    error: {
-      retry: "Retry",
-    },
+    
+    
   },
   nav: {
 
@@ -2374,7 +2312,7 @@ const en: Dict = {
     savedOpportunities: "Saved Opportunities",
     community: "Community",
     emailAssistant: "Email Assistant",
-    savedFiles: "Saved Files",
+    
     // Sidebar label only (see the de locale note).
     templates: "Resume",
     coverLetter: "Cover Letter",
@@ -2383,20 +2321,20 @@ const en: Dict = {
     soon: "Soon",
     collapse: "Collapse sidebar",
     expand: "Expand sidebar",
-    platform: "Platform",
-    platformUpdates: "Platform Updates",
+    
+    
     help: "Help",
     faq: "FAQ",
     admin: "Admin",
   },
   header: {
-    notifications: "Notifications",
-    noNotifications: "No notifications",
-    noNotificationsHint: "Updates about your applications and account will appear here.",
+    
+    
+    
     profile: "Profile",
-    justNow: "Just now",
-    minutesAgo: "{n} min ago",
-    hoursAgo: "{n} h ago",
+    
+    
+    
   },
   pages: {
     settingsProfile: { title: "Profile", subtitle: "Name, photo and connected accounts" },
@@ -2523,10 +2461,10 @@ const en: Dict = {
   },
   lang: {
     label: "Language",
-    de: "Deutsch",
-    en: "English",
-    fr: "Français",
-    ar: "العربية",
+    
+    
+    
+    
   },
   theme: {
     label: "Appearance",
@@ -2536,7 +2474,7 @@ const en: Dict = {
   },
   profile: {
     signOut: "Sign out",
-    settings: "Settings",
+    
     // ---- Settings profile page (/settings/profile) ----
     page: {
       memberSince: "Member since",
@@ -2589,53 +2527,24 @@ const en: Dict = {
     deleteScan: "Delete this scan",
     confirmDeleteScan: "Confirm — delete scan, profile & uploaded files",
   },
-  profileSettings: {
-    personalTitle: "Personal information",
-    personalNote: "Change your first and last name. Email, password and account status stay untouched.",
-    firstName: "First name",
-    lastName: "Last name",
-    save: "Save changes",
-    nameSaved: "Your details have been saved.",
-    emailNote: "Your email address cannot be changed here.",
-    photoTitle: "Profile picture",
-    photoNote: "Upload a picture that appears in the header and next to your details.",
-    uploadPhoto: "Upload photo",
-    photoHint: "JPG, PNG or WEBP · 2 MB maximum.",
-    avatarSaved: "Your profile picture has been updated.",
-    accountsTitle: "Connected accounts",
-    accountsNote: "Link Google or Microsoft to this account to sign in faster. No new account is created.",
-    connected: "Connected",
-    notConnected: "Not connected",
-    connect: "Connect",
-    connecting: "Connecting…",
-    linkSuccess: "Account connected.",
-    linkFailed: "Connecting failed. Please try again.",
-    errorNameRequired: "Please fill in both first and last name.",
-    errorNameTooLong: "That name is too long.",
-    errorSaveFailed: "We could not save your details. Please try again.",
-    errorAvatarType: "Only JPG, PNG or WEBP images are allowed.",
-    errorAvatarSize: "That image is too large (2 MB maximum).",
-    errorAvatarFailed: "We could not upload your picture. Please try again.",
-    errorNoFile: "Please choose an image file first.",
-    errorGeneric: "Something went wrong. Please try again.",
-  },
+  
   common: {
     loading: "Loading…",
     retry: "Try again",
     error: "Something went wrong",
     errorHint: "Please try again later.",
-    save: "Save",
+    
     cancel: "Cancel",
     close: "Close",
     back: "Back",
-    viewAll: "View all",
-    learnMore: "Learn more",
-    continue: "Continue",
-    open: "Open",
-    search: "Search",
-    comingSoon: "Coming soon",
+    
+    
+    
+    
+    
+    
     notDocumented: "Not documented",
-    none: "None",
+    
   },
   // ---- FAQ page -------------------------------------------------------------
   faq: {
@@ -2711,9 +2620,8 @@ const en: Dict = {
   },
   landing: {
     heroBadge: "Your next step starts here",
-    heroTitle: "Find your apprenticeship. With AI.",
-    heroSubtitle:
-      "AusbildungsWeg analyzes your profile, finds matching apprenticeship vacancies and helps you with your application.",
+    
+    
     ctaStart: "Get started for free",
     ctaExplore: "View the dashboard",
     navHow: "How it works",
@@ -2751,7 +2659,7 @@ const en: Dict = {
     footerNote: "Built for your next chapter in Germany.",
   },
   dash: {
-    workspace: "Your {goal} workspace",
+    
     greeting: {
       morning: "Good morning, {name}.",
       afternoon: "Good afternoon, {name}.",
@@ -2800,23 +2708,23 @@ const en: Dict = {
       aiCta: "Open assistant",
       emailsSent: "Emails sent today",
       profile: "Profile",
-      profileComplete: "Profile complete",
+      
       profileMissing: "Profile incomplete",
-      emails: "Emails today",
+      
       emailsDetail: "{remaining} of {limit} left",
     },
     sections: {
       recommended: { title: "Recommended vacancies", hint: "Resolved from the official source and matched against your profile" },
       saved: { title: "Saved vacancies", hint: "Snapshots are historical — the live match is on the detail page" },
-      matching: { title: "Matches", hint: "How well your saved vacancies fit you" },
-      recentApplications: { title: "Recent applications", hint: "Your newest applications and their status" },
-      completeness: { title: "Profile completeness", hint: "What is still missing" },
+      
+      
+      
       account: { title: "Account overview", hint: "Your current profile data" },
-      activity: { title: "Recent activity", hint: "The latest changes in your workspace" },
+      
     },
-    live: "Live data",
+    
     status: {
-      complete: "Complete match",
+      
       incomplete: "Match incomplete",
       match: "Match",
       stale: "stale",
@@ -2844,36 +2752,26 @@ const en: Dict = {
       emails: "{count} emails",
     },
     empty: {
-      noActivity: { title: "No activity yet", body: "Your account activity will appear here as you use your workspace." },
+      
       noMatches: { title: "No matching vacancies right now", body: "The source returned no results for your documented target. Try a broader search." },
       recsUnavailable: { title: "Recommendations unavailable", bodyNoProfile: "Scan your application to build your candidate profile — recommendations compare real vacancies against it.", bodyNoKeyword: "Add a target role to your profile first — recommendations are searched with documented keywords only (nothing is invented).", bodySource: "The vacancy source is unavailable right now. Nothing is shown instead of real results." },
       nothingSaved: { title: "Nothing saved yet", body: "Save vacancies you want to apply to — they keep a server-computed match snapshot." },
-      noApplications: { title: "No applications yet", body: "Create your first application from a saved vacancy." },
-      profileMissing: { title: "Your candidate profile has not been created yet.", body: "Scan your application to build a profile that vacancies are matched against.", cta: "Analyze your CV" },
+      
+      
     },
   },
-  campaign: {
-    status: {
-      draft: "Campaign ready",
-      queued: "Sending queued",
-      sending: "Sending",
-      completed: "Sent",
-      partially_failed: "Partially sent",
-      failed: "Sending failed",
-      cancelled: "Cancelled",
-    },
-  },
+  
   apps: {
-    untitled: "Untitled application",
-    for: "for {title}",
-    created: "created {date}",
-    sent: "sent {date}",
-    noDetails: "No details documented",
-    emptyDraft: "Empty draft",
+    
+    
+    
+    
+    
+    
     openDraft: "Open draft",
-    campaign: "Campaign",
-    opportunity: "Opportunity",
-    new: "New application",
+    
+    
+    
     saveFailed: "Save failed",
     saving: "Saving…",
     saved: "Saved",
@@ -2920,8 +2818,8 @@ const en: Dict = {
       submitSchedule: "Schedule send",
       scheduling: "Scheduling…",
       subject: "Subject",
-      from: "From",
-      recipientsCount: "{count} recipients",
+      
+      
     },
   },
   workflow: {
@@ -3029,9 +2927,9 @@ const en: Dict = {
     retry: "Retry",
   },
   empty: {
-    noCv: { title: "Your candidate profile has not been created yet.", body: "Scan your application to build a profile that vacancies are matched against.", cta: "Analyze your CV" },
-    noOpportunities: { title: "No matching apprenticeships found yet.", body: "Start a search to see vacancies that fit your profile.", cta: "Browse vacancies" },
-    noApplications: { title: "You have not created an application yet.", body: "Create your first application from a saved vacancy.", cta: "New application" },
+    
+    
+    
     noEmail: { title: "No email account connected", body: "Connect Gmail or Outlook before preparing an application email.", cta: "Connect email account" },
   },
 
@@ -3310,18 +3208,17 @@ const en: Dict = {
     actionFailed: "Action failed ({error}).",
     networkError: "Network error — please retry.",
     // Platform Updates (owner-only in-app notifications)
-    platformUpdates: "Platform Updates",
-    platformUpdatesHint:
-      "Send in-app notifications to all users or to a single user.",
+    
+    
     newNotification: "+ New Notification",
     sendTo: "Send to",
     allUsers: "All users",
-    specificUser: "Specific user",
-    searchUser: "Search user...",
-    searchingUsers: "Searching...",
-    noUserMatches: "No matching users found.",
-    selectedUser: "Selected user:",
-    changeUser: "Change",
+    
+    
+    
+    
+    
+    
     titleLabel: "Title",
     typeLabel: "Type",
     messageLabel: "Message",
@@ -3332,22 +3229,22 @@ const en: Dict = {
     sendNotification: "Send notification",
     confirmTitle: "Send notification",
     confirmAll: "This notification will be sent to all users.",
-    confirmUser: "Send this notification to {name}?",
+    
     cancel: "Cancel",
     send: "Send",
     sending: "Sending...",
     sent: "Notification sent.",
     duplicateSent: "Already sent — no duplicate was created.",
     sendFailed: "Sending failed. Please try again.",
-    selectUserFirst: "Please select a recipient first.",
+    
     historyTitle: "Sent notifications",
     historyEmpty: "No notifications sent yet.",
     historyError: "Could not load the history.",
-    date: "Date",
-    recipient: "Recipient",
-    status: "Status",
-    sentBadge: "Sent",
-    loading: "Loading...",
+    
+    
+    
+    
+    
     // ---- Platform-Admin (Phase 10) — section navigation --------------------
     navOverview: "Overview",
     navAnnouncements: "Announcements",
@@ -3394,12 +3291,12 @@ const en: Dict = {
     fieldCommunityName: "Community name",
     fieldRole: "Community role",
     fieldMemberSince: "Member since",
-    statusLabel: "Status",
+    
     statusActive: "Active",
     statusSuspended: "Suspended (Community)",
     statusMuted: "Muted until {date}",
     statusBanned: "Banned",
-    banSection: "Ban",
+    
     banAction: "Ban user",
     unbanAction: "Lift ban",
     banConfirmTitle: "Ban user",
@@ -3413,12 +3310,12 @@ const en: Dict = {
     duration30d: "30 days",
     durationPermanent: "Permanent",
     bannedLabel: "Currently banned",
-    bannedSince: "Since {date}",
+    
     bannedUntil: "Until {date}",
     permanent: "permanent",
     banReasonShown: "Reason: {reason}",
     banDone: "User has been banned.",
-    banDoneUntil: "User has been banned until {date}.",
+    
     unbanDone: "The ban has been lifted.",
     alreadyBanned: "This user is already banned.",
     notBanned: "This user is not banned.",
@@ -3436,7 +3333,7 @@ const en: Dict = {
       "The message is hidden from the entire Community. The action is recorded in the moderation log.",
     messageDeleted: "Message deleted.",
     messageAlreadyHidden: "This message was already hidden.",
-    deleteFailed: "The message could not be deleted. Please try again.",
+    
     noCommunityProfile: "No Community profile",
   },
 
@@ -3459,8 +3356,7 @@ const en: Dict = {
   // ---- CV Builder / Templates ------------------------------------------------
   templates: {
     builderTitle: "CV Builder",
-    builderSubtitle:
-      "Create a professional CV for your next opportunity in Germany.",
+    
     back: "Back",
     templateLabel: "Template",
     stepNav: "Steps",
@@ -3490,7 +3386,7 @@ const en: Dict = {
       "Pick the design for your CV — you can switch it at any time.",
     continueCta: "Continue",
     tabDesign: "Design",
-    templateName: "Professional Classic",
+    
     templateSelectorTitle: "CV Templates",
     templateClassic: "Classic",
     templateClassicDesc:
@@ -3509,11 +3405,10 @@ const en: Dict = {
     saved: "Saved",
     tabEdit: "Edit",
     tabPreview: "Preview",
-    emptyTitle: "Build your professional CV",
-    emptyText:
-      "Start with your personal details or import your existing scanned profile.",
-    startBuilding: "Start building",
-    importProfile: "Import profile",
+    
+    
+    
+    
     importing: "Importing profile…",
     importNotFound:
       "No scanned profile found. Scan your CV in the Application Scanner first.",
@@ -3797,7 +3692,7 @@ const en: Dict = {
       "We are currently building our Community. Soon you'll be able to connect with other members here.",
     comingSoonNote: "The community chat will be available soon.",
     comingSoonBackToDashboard: "Back to Dashboard",
-    onboardingTitle: "Welcome to the Community",
+    
     // ---- Platform-Admin (Phase 10) — badge + banned ------------------------
     adminBadge: "Administrator",
     bannedTitle: "Community access suspended",
@@ -3856,7 +3751,7 @@ const en: Dict = {
     loading: "Loading…",
     searchLoadMore: "Load more",
     searchNoMore: "That's all.",
-    searchInRoom: "in {room}",
+    
     // ---- Phase 5: Q&A ----
     questionsTitle: "Questions",
     questionsSubtitle: "Questions and answers from {room}.",
@@ -3894,16 +3789,16 @@ const en: Dict = {
     answerClosed: "This question is closed — no new answers.",
     noAnswers: "No answers yet — be the first to help!",
     acceptAnswer: "Accept as solution",
-    acceptedBadge: "Solution",
+    
     acceptedAnswerNote: "Accepted answer",
     unsolveCta: "Mark as open",
-    unsolveConfirmTitle: "Reopen the question?",
-    unsolveConfirmText: "The accepted answer will lose its “solution” badge.",
+    
+    
     closeQuestion: "Close question",
     reopenQuestion: "Reopen question",
     questionActionError: "The action could not be completed.",
-    acceptError: "The answer could not be accepted.",
-    onlyAuthorOrMod: "Only the person who asked the question or a moderator can set the solution.",
+    
+    
     // ---- Phase 5: pins ----
     pinsOpen: "Show pinned messages",
     pinsTitle: "Pinned messages",
@@ -3930,9 +3825,9 @@ const en: Dict = {
     reportSelfError: "You cannot report your own content.",
     reportNotFound: "This content does not exist (anymore).",
     reportDuplicate: "You have already reported this content.",
-    myReportsTitle: "My reports",
-    myReportsEmpty: "You have not reported anything yet.",
-    myReportsLoadError: "Your reports could not be loaded.",
+    
+    
+    
     reportStatusOpen: "open",
     reportStatusReviewing: "reviewing",
     reportStatusResolved: "resolved",
@@ -3950,8 +3845,8 @@ const en: Dict = {
     reportReasonIllegal: "Illegal content",
     reportReasonImpersonation: "Impersonation",
     reportReasonOther: "Other",
-    mutedNote: "You have been temporarily muted by the moderators. Messages, questions and answers are not possible right now.",
-    suspendedNote: "Your community access is suspended. Please contact support.",
+    
+    
     // ---- Phase 5: moderation ----
     navModeration: "Moderation",
     moderationTitle: "Moderation",
@@ -3969,22 +3864,22 @@ const en: Dict = {
     modQueueEmpty: "No reports in this view.",
     modQueueLoadError: "The reports could not be loaded.",
     modQueueLoadMore: "Load more reports",
-    modQueueNew: "{count} new reports",
-    modDetailTitle: "Report details",
+    
+    
     modReporter: "Reporter",
-    modReason: "Reason",
+    
     modTarget: "Reported content",
-    modPreview: "Preview",
+    
     modAssigned: "Assigned to",
     modUnassigned: "Unassigned",
-    modAssignedTo: "{name}",
+    
     modFiledAt: "Reported on {date}",
     modResolvedAt: "Processed on {date}",
     modMarkReviewing: "Mark reviewing",
     modResolve: "Resolve",
     modDismiss: "Dismiss",
     modAssign: "Assign to me",
-    modActions: "Actions",
+    
     modActionDeleteMessage: "Delete message",
     modActionHideMessage: "Hide message",
     modActionUnpin: "Remove pin",
@@ -3992,24 +3887,24 @@ const en: Dict = {
     modActionCloseQuestion: "Close question",
     modActionReopenQuestion: "Reopen question",
     modActionWarn: "Warn member",
-    modActionTimeout: "Mute",
+    
     modActionSuspend: "Suspend community access",
     modActionReinstate: "Restore access",
     modTimeoutLabel: "Duration",
     modTimeout1h: "1 hour",
     modTimeout24h: "24 hours",
     modTimeout7d: "7 days",
-    modConfirm: "Confirm action",
+    
     modConfirmDeleteMessage: "The message will be permanently deleted for everyone.",
     modConfirmHideMessage: "The message will be hidden for everyone.",
     modConfirmRemoveAnswer: "The answer will be removed and invisible to everyone.",
     modConfirmSuspend: "{name} will no longer be able to write in the community until access is restored.",
     modConfirmTimeout: "{name} will not be able to write for {duration}.",
-    modConfirmWarn: "A warning will be sent to {name}.",
-    modCloseConfirm: "The question will be closed for everyone (no new answers).",
-    modReopenConfirm: "The question will be reopened.",
-    modActionSuccess: "Action executed.",
-    modActionError: "The action could not be executed.",
+    
+    
+    
+    
+    
     modAuditEmpty: "No moderation actions yet.",
     modMembersTitle: "Members & roles",
     modMembersSubtitle: "Roles can only be changed by admins.",
@@ -4019,10 +3914,10 @@ const en: Dict = {
     modModerator: "Moderator",
     modAdmin: "Admin",
     modOwner: "Owner",
-    modRoleChanged: "Role updated.",
-    modRoleError: "The role change could not be completed.",
-    modRoleSelfError: "You cannot change your own role.",
-    modRoleRankError: "You cannot grant a role equal to or higher than yours.",
+    
+    
+    
+    
     modSuspendedBadge: "Suspended",
     modMutedBadge: "Muted until {date}",
     modRoomsTitle: "Room settings",
@@ -4037,13 +3932,13 @@ const en: Dict = {
     modRoomSaved: "Room settings saved.",
     modRoomSaveError: "The settings could not be saved.",
     // ---- Phase 5: reputation ----
-    reputationLabel: "Reputation",
+    
     statsReputation: "Points",
     statsQuestionsLabel: "Questions",
     statsAcceptedLabel: "Solutions",
-    statsQuestions: "{count} questions",
-    statsAnswers: "{count} answers",
-    statsAccepted: "{count} solutions",
+    
+    
+    
     // ---- Phase 5: community home ----
     homeWelcome: "Welcome, {name}!",
     homeSearchCta: "Search a message, question or member…",
@@ -4054,21 +3949,21 @@ const en: Dict = {
     homeSolvedTitle: "Recently solved",
     homeAnnouncementsTitle: "Announcements",
     homeOnline: "{count} online",
-    homeViewQuestion: "View question",
-    homeNoActivity: "No activity yet.",
-    homeNoQuestions: "No questions yet — ask the first one!",
+    
+    
+    
     homeNoAnnouncements: "No announcements.",
     // ---- Phase 5: Q&A + moderation notifications ----
-    notifAnswer: "{name} answered your question “{title}”.",
-    notifAnswerGeneric: "You received an answer to your question.",
-    notifAccepted: "Your answer to “{title}” was accepted as the solution.",
-    notifAcceptedGeneric: "One of your answers was accepted as the solution.",
-    onboardingHint: "A few details and you can jump right in.",
+    
+    
+    
+    
+    
     identityTitle: "Choose your Community identity",
     identitySubtitle:
       "You're not a private person here: pick a unique alias and an avatar — your real name stays private.",
     nameLabel: "Your alias",
-    namePlaceholder: "e.g. BlueFalcon",
+    
     nameHelp: "3–24 characters, letters and digits only. You can change it later.",
     generateAnother: "Generate another",
     usernameRegenerating: "Generating…",
@@ -4078,8 +3973,8 @@ const en: Dict = {
     chooseAvatar: "Choose your avatar",
     complete: "Join the Community",
     avatarAlt: "Avatar",
-    nameRequired: "Please choose an alias.",
-    nameTooLong: "The name can be at most 40 characters long.",
+    
+    
     avatarInvalid: "Please choose one of the available avatars.",
     onboardingFailed: "Your profile could not be saved. Please try again.",
     rateLimited: "Too many requests. Please wait a moment and try again.",
@@ -4121,7 +4016,7 @@ const en: Dict = {
     homeRoomsTitle: "Topic rooms",
     homeActivityTitle: "Recent activity",
     homeActivityEmpty: "No messages yet. Start the first discussion!",
-    roomMessageCount: "{count} messages",
+    
     roomCount: "{count} rooms",
     roomNotFoundTitle: "Room not found",
     roomNotFoundText: "This room does not exist or has been disabled.",
@@ -4130,10 +4025,10 @@ const en: Dict = {
     membersEmpty: "No members loaded yet.",
     openRoomList: "Open rooms",
     closeRoomList: "Close room list",
-    roomIntro: "Read the description and ask your question.",
+    
     // ---- Message actions ----
     replyToLabel: "Replying to {name}",
-    replyToSelfLabel: "Replying to yourself",
+    
     replyPlaceholder: "Reply to {name}…",
     cancelReply: "Cancel",
     cancel: "Cancel",
@@ -4145,19 +4040,19 @@ const en: Dict = {
     addReaction: "Add reaction",
     reactionAria: "Reactions",
     confirmDeleteTitle: "Delete message?",
-    confirmDeleteText: "This message will be removed for everyone.",
+    
     confirmDeleteAction: "Delete",
     mentionNotFound: "Member",
     editIdentity: "Edit identity",
     // ---- v2 errors ----
     roomNotFound: "This room does not exist.",
-    reactionInvalid: "This reaction is not available.",
-    messageNotFound: "Message not found.",
-    notAllowed: "This is not allowed.",
+    
+    
+    
     // ---- Phase 2: social layer (profile, friends, blocks, DMs, notifications) ----
     profileCardTitle: "Member profile",
     online: "online",
-    offline: "offline",
+    
     joined: "Member since {date}",
     bioEmpty: "No description yet.",
     // ---- action feedback (pending / success labels — stable button width) ----
@@ -4192,7 +4087,7 @@ const en: Dict = {
     blockText:
       "{name} will no longer be able to send you requests or messages. You can unblock at any time.",
     unblock: "Unblock",
-    blockedNote: "You have blocked this member.",
+    
     blocksYouNote: "This member has blocked you.",
     message: "Message",
     closeProfile: "Close profile",
@@ -4220,7 +4115,7 @@ const en: Dict = {
     messagesSubtitle: "Private conversations with friends.",
     noConversations: "No conversations yet.",
     noConversationsCta: "Choose a friend and send the first message.",
-    selectConversation: "Choose a conversation.",
+    
     conversationNotFound: "Conversation not found.",
     dmImagePreview: "Image",
     backToMessages: "Back to messages",
@@ -4228,7 +4123,7 @@ const en: Dict = {
     notificationsSubtitle: "Friend requests, messages and mentions.",
     noNotifications: "No notifications yet.",
     markAllRead: "Mark all as read",
-    markRead: "Mark as read",
+    
     navFriends: "Friends",
     navMessages: "Messages",
     navNotifications: "Notifications",
@@ -4297,7 +4192,7 @@ const en: Dict = {
       answer: "{name} answered your question.",
       answerGeneric: "You received an answer to your question.",
       accepted: "Your answer was accepted as the solution.",
-      acceptedGeneric: "One of your answers was accepted as the solution.",
+      
       friendRequestSent: "Friend request sent.",
       nowFriends: "You and {name} are now friends.",
       requestDeclined: "Request declined.",
@@ -4318,7 +4213,7 @@ const en: Dict = {
     groupYesterday: "Yesterday",
     groupEarlier: "Earlier",
     loadMore: "Load more",
-    notificationOpen: "Open notification",
+    
     noUnread: "No unread notifications.",
     unreadAria: "unread",
     noMore: "That's all.",
@@ -4568,7 +4463,7 @@ const en: Dict = {
       countryLabel: "Country of your usual residence",
       searchCountry: "Select country…",
       mission: "Responsible mission",
-      officialPage: "Official page of the mission",
+      
       openOfficial: "Open official page",
       lastReviewed: "Last reviewed",
       docsTitle: "Official information of the mission",
@@ -4576,12 +4471,12 @@ const en: Dict = {
       notes: "Key notes from the official source",
       fee: "Fee (per the mission)",
       appointment: "Appointment (per the mission)",
-      translation: "Translation",
-      legalization: "Legalization / authentication",
-      originalCopy: "Original + copy to submit",
+      
+      
+      
       disclaimer:
         "Important: Requirements differ from mission to mission and can change at any time. This overview does not replace the official page of the responsible mission (directly linked) and is not legal advice. All information was checked against the official sources on 11/10/2026.",
-      otherCountry: "Your country is not in the list?",
+      
       otherCountryDesc:
         "Not every German mission publishes detailed lists in German. Find your responsible mission in the official overview of the Foreign Office and open its visa page — or start directly in the official Auslandsportal.",
       allMissions: "Official list of all German missions",
@@ -4598,7 +4493,7 @@ const fr: Dict = {
     nav: {
       more: "Plus",
     },
-    filterAll: "Toutes",
+    
     hero: {
       title: "Trouvez votre prochaine formation.",
       subtitle:
@@ -4606,17 +4501,8 @@ const fr: Dict = {
       ctaStart: "Rechercher des formations",
       searchTitle: "Quelle formation recherchez-vous ?",
     },
-    orb: {
-      finding: "Recherche de formations",
-      scanning: "Analyse des sources publiques",
-      companies: "Découverte des sites d'entreprises",
-      contacts: "Vérification des contacts publiés",
-      dedupe: "Suppression des doublons",
-      starting: "Démarrage…",
-    },
-    error: {
-      retry: "Réessayer",
-    },
+    
+    
   },
   nav: {
 
@@ -4634,7 +4520,7 @@ const fr: Dict = {
     savedOpportunities: "Offres enregistrées",
     community: "Communauté",
     emailAssistant: "Assistant e-mail",
-    savedFiles: "Fichiers enregistrés",
+    
     // Sidebar label only (see the de locale note).
     templates: "CV",
     coverLetter: "Lettre de motivation",
@@ -4643,20 +4529,20 @@ const fr: Dict = {
     soon: "Bientôt",
     collapse: "Réduire la barre latérale",
     expand: "Déplier la barre latérale",
-    platform: "Plateforme",
-    platformUpdates: "Mises à jour de la plateforme",
+    
+    
     help: "Aide",
     faq: "FAQ",
     admin: "Admin",
   },
   header: {
-    notifications: "Notifications",
-    noNotifications: "Aucune notification",
-    noNotificationsHint: "Les mises à jour de vos candidatures et de votre compte apparaîtront ici.",
+    
+    
+    
     profile: "Profil",
-    justNow: "À l'instant",
-    minutesAgo: "il y a {n} min",
-    hoursAgo: "il y a {n} h",
+    
+    
+    
   },
   pages: {
     settingsProfile: { title: "Profil", subtitle: "Nom, photo et comptes liés" },
@@ -4785,10 +4671,10 @@ const fr: Dict = {
   },
   lang: {
     label: "Langue",
-    de: "Deutsch",
-    en: "English",
-    fr: "Français",
-    ar: "العربية",
+    
+    
+    
+    
   },
   theme: {
     label: "Apparence",
@@ -4798,7 +4684,7 @@ const fr: Dict = {
   },
   profile: {
     signOut: "Se déconnecter",
-    settings: "Réglages",
+    
     // ---- Settings profile page (/settings/profile) ----
     page: {
       memberSince: "Membre depuis",
@@ -4851,53 +4737,24 @@ const fr: Dict = {
     deleteScan: "Supprimer ce scan",
     confirmDeleteScan: "Confirmer — supprimer le scan, le profil et les fichiers",
   },
-  profileSettings: {
-    personalTitle: "Informations personnelles",
-    personalNote: "Modifiez votre prénom et votre nom. L'e-mail, le mot de passe et le statut du compte restent inchangés.",
-    firstName: "Prénom",
-    lastName: "Nom",
-    save: "Enregistrer les modifications",
-    nameSaved: "Vos informations ont été enregistrées.",
-    emailNote: "Votre adresse e-mail ne peut pas être modifiée ici.",
-    photoTitle: "Photo de profil",
-    photoNote: "Téléversez une image qui apparaît dans l'en-tête et à côté de vos informations.",
-    uploadPhoto: "Téléverser une photo",
-    photoHint: "JPG, PNG ou WEBP · 2 Mo maximum.",
-    avatarSaved: "Votre photo de profil a été mise à jour.",
-    accountsTitle: "Comptes liés",
-    accountsNote: "Liez Google ou Microsoft à ce compte pour vous connecter plus rapidement. Aucun nouveau compte n'est créé.",
-    connected: "Lié",
-    notConnected: "Non lié",
-    connect: "Lier",
-    connecting: "Liaison…",
-    linkSuccess: "Compte lié.",
-    linkFailed: "La liaison a échoué. Veuillez réessayer.",
-    errorNameRequired: "Veuillez renseigner le prénom et le nom.",
-    errorNameTooLong: "Ce nom est trop long.",
-    errorSaveFailed: "Nous n'avons pas pu enregistrer vos informations. Veuillez réessayer.",
-    errorAvatarType: "Seules les images JPG, PNG ou WEBP sont autorisées.",
-    errorAvatarSize: "Cette image est trop volumineuse (2 Mo maximum).",
-    errorAvatarFailed: "Nous n'avons pas pu téléverser votre image. Veuillez réessayer.",
-    errorNoFile: "Veuillez d'abord choisir un fichier image.",
-    errorGeneric: "Une erreur est survenue. Veuillez réessayer.",
-  },
+  
   common: {
     loading: "Chargement…",
     retry: "Réessayer",
     error: "Une erreur est survenue",
     errorHint: "Veuillez réessayer plus tard.",
-    save: "Enregistrer",
+    
     cancel: "Annuler",
     close: "Fermer",
     back: "Retour",
-    viewAll: "Voir tout",
-    learnMore: "En savoir plus",
-    continue: "Continuer",
-    open: "Ouvrir",
-    search: "Rechercher",
-    comingSoon: "Bientôt disponible",
+    
+    
+    
+    
+    
+    
     notDocumented: "Non documenté",
-    none: "Aucun",
+    
   },
   // ---- FAQ page -------------------------------------------------------------
   faq: {
@@ -4973,9 +4830,8 @@ const fr: Dict = {
   },
   landing: {
     heroBadge: "Votre prochaine étape commence ici",
-    heroTitle: "Trouvez votre alternance. Avec l'IA.",
-    heroSubtitle:
-      "AusbildungsWeg analyse votre profil, trouve des offres d'alternance correspondantes et vous aide dans votre candidature.",
+    
+    
     ctaStart: "Commencer gratuitement",
     ctaExplore: "Voir le tableau de bord",
     navHow: "Comment ça marche",
@@ -5013,7 +4869,7 @@ const fr: Dict = {
     footerNote: "Conçu pour votre prochain chapitre en Allemagne.",
   },
   dash: {
-    workspace: "Votre espace {goal}",
+    
     greeting: {
       morning: "Bonjour, {name}.",
       afternoon: "Bon après-midi, {name}.",
@@ -5062,23 +4918,23 @@ const fr: Dict = {
       aiCta: "Ouvrir l'assistant",
       emailsSent: "E-mails envoyés aujourd'hui",
       profile: "Profil",
-      profileComplete: "Profil complet",
+      
       profileMissing: "Profil incomplet",
-      emails: "E-mails aujourd'hui",
+      
       emailsDetail: "{remaining} sur {limit} restants",
     },
     sections: {
       recommended: { title: "Offres recommandées", hint: "Résolues depuis la source officielle et comparées à votre profil" },
       saved: { title: "Offres enregistrées", hint: "Les instantanés sont historiques — la correspondance en direct est sur la page de détail" },
-      matching: { title: "Correspondances", hint: "À quel point vos offres enregistrées vous correspondent" },
-      recentApplications: { title: "Candidatures récentes", hint: "Vos dernières candidatures et leur statut" },
-      completeness: { title: "Complétude du profil", hint: "Ce qui manque encore" },
+      
+      
+      
       account: { title: "Aperçu du compte", hint: "Vos données de profil actuelles" },
-      activity: { title: "Activité récente", hint: "Les derniers changements dans votre espace" },
+      
     },
-    live: "Données en direct",
+    
     status: {
-      complete: "Correspondance complète",
+      
       incomplete: "Correspondance incomplète",
       match: "Correspondance",
       stale: "périmé",
@@ -5106,36 +4962,26 @@ const fr: Dict = {
       emails: "{count} e-mails",
     },
     empty: {
-      noActivity: { title: "Pas encore d'activité", body: "L'activité de votre compte apparaîtra ici dès que vous utiliserez votre espace." },
+      
       noMatches: { title: "Aucune offre correspondante pour le moment", body: "La source n'a retourné aucun résultat pour votre cible documentée. Essayez une recherche plus large." },
       recsUnavailable: { title: "Recommandations indisponibles", bodyNoProfile: "Scannez votre candidature pour créer votre profil candidat — les recommandations comparent de vraies offres avec celui-ci.", bodyNoKeyword: "Ajoutez d'abord un poste cible à votre profil — les recommandations ne cherchent qu'avec des mots-clés documentés (rien n'est inventé).", bodySource: "La source d'offres est indisponible pour le moment. Rien n'est affiché à la place de vrais résultats." },
       nothingSaved: { title: "Rien d'enregistré pour le moment", body: "Enregistrez des offres sur lesquelles vous voulez candidater — elles conservent un instantané de correspondance calculé sur le serveur." },
-      noApplications: { title: "Pas encore de candidatures", body: "Créez votre première candidature depuis une offre enregistrée." },
-      profileMissing: { title: "Votre profil candidat n'a pas encore été créé.", body: "Scannez votre candidature pour créer un profil avec lequel comparer les offres.", cta: "Analyser votre CV" },
+      
+      
     },
   },
-  campaign: {
-    status: {
-      draft: "Campagne prête",
-      queued: "Envoi en attente",
-      sending: "Envoi en cours",
-      completed: "Envoyée",
-      partially_failed: "Envoi partiel",
-      failed: "Échec de l'envoi",
-      cancelled: "Annulée",
-    },
-  },
+  
   apps: {
-    untitled: "Candidature sans titre",
-    for: "pour {title}",
-    created: "créée {date}",
-    sent: "envoyée {date}",
-    noDetails: "Aucun détail documenté",
-    emptyDraft: "Brouillon vide",
+    
+    
+    
+    
+    
+    
     openDraft: "Ouvrir le brouillon",
-    campaign: "Campagne",
-    opportunity: "Offre",
-    new: "Nouvelle candidature",
+    
+    
+    
     saveFailed: "Échec de l'enregistrement",
     saving: "Enregistrement…",
     saved: "Enregistré",
@@ -5182,8 +5028,8 @@ const fr: Dict = {
       submitSchedule: "Planifier l'envoi",
       scheduling: "Planification…",
       subject: "Objet",
-      from: "De",
-      recipientsCount: "{count} destinataires",
+      
+      
     },
   },
   workflow: {
@@ -5291,9 +5137,9 @@ const fr: Dict = {
     retry: "Réessayer",
   },
   empty: {
-    noCv: { title: "Votre profil candidat n'a pas encore été créé.", body: "Scannez votre candidature pour créer un profil avec lequel comparer les offres.", cta: "Analyser votre CV" },
-    noOpportunities: { title: "Aucune alternance correspondante trouvée pour le moment.", body: "Lancez une recherche pour voir des offres correspondant à votre profil.", cta: "Parcourir les offres" },
-    noApplications: { title: "Vous n'avez pas encore créé de candidature.", body: "Créez votre première candidature depuis une offre enregistrée.", cta: "Nouvelle candidature" },
+    
+    
+    
     noEmail: { title: "Aucun compte e-mail connecté", body: "Connectez Gmail ou Outlook avant de préparer un e-mail de candidature.", cta: "Connecter un compte e-mail" },
   },
 
@@ -5573,18 +5419,17 @@ const fr: Dict = {
     actionFailed: "Action échouée ({error}).",
     networkError: "Erreur réseau — veuillez réessayer.",
     // Platform Updates (owner-only in-app notifications)
-    platformUpdates: "Mises à jour de la plateforme",
-    platformUpdatesHint:
-      "Envoyer des notifications in-app à tous les utilisateurs ou à un seul utilisateur.",
+    
+    
     newNotification: "+ Nouvelle notification",
     sendTo: "Destinataire",
     allUsers: "Tous les utilisateurs",
-    specificUser: "Utilisateur précis",
-    searchUser: "Rechercher un utilisateur...",
-    searchingUsers: "Recherche...",
-    noUserMatches: "Aucun utilisateur correspondant.",
-    selectedUser: "Utilisateur sélectionné :",
-    changeUser: "Changer",
+    
+    
+    
+    
+    
+    
     titleLabel: "Titre",
     typeLabel: "Type",
     messageLabel: "Message",
@@ -5595,22 +5440,22 @@ const fr: Dict = {
     sendNotification: "Envoyer la notification",
     confirmTitle: "Envoyer la notification",
     confirmAll: "Cette notification sera envoyée à tous les utilisateurs.",
-    confirmUser: "Envoyer cette notification à {name} ?",
+    
     cancel: "Annuler",
     send: "Envoyer",
     sending: "Envoi...",
     sent: "Notification envoyée.",
     duplicateSent: "Déjà envoyée — aucun doublon créé.",
     sendFailed: "Échec de l'envoi. Veuillez réessayer.",
-    selectUserFirst: "Veuillez d'abord sélectionner un destinataire.",
+    
     historyTitle: "Notifications envoyées",
     historyEmpty: "Aucune notification envoyée pour le moment.",
     historyError: "Impossible de charger l'historique.",
-    date: "Date",
-    recipient: "Destinataire",
-    status: "Statut",
-    sentBadge: "Envoyée",
-    loading: "Chargement...",
+    
+    
+    
+    
+    
     // ---- Platform-Admin (Phase 10) — navigation des sections ---------------
     navOverview: "Aperçu",
     navAnnouncements: "Annonces",
@@ -5657,12 +5502,12 @@ const fr: Dict = {
     fieldCommunityName: "Nom Community",
     fieldRole: "Rôle Community",
     fieldMemberSince: "Membre depuis",
-    statusLabel: "Statut",
+    
     statusActive: "Actif",
     statusSuspended: "Suspendu (Community)",
     statusMuted: "Muet jusqu'au {date}",
     statusBanned: "Banni",
-    banSection: "Ban",
+    
     banAction: "Bannir l'utilisateur",
     unbanAction: "Lever le ban",
     banConfirmTitle: "Bannir l'utilisateur",
@@ -5676,12 +5521,12 @@ const fr: Dict = {
     duration30d: "30 jours",
     durationPermanent: "Permanent",
     bannedLabel: "Actuellement banni",
-    bannedSince: "Depuis le {date}",
+    
     bannedUntil: "Jusqu'au {date}",
     permanent: "permanent",
     banReasonShown: "Motif : {reason}",
     banDone: "Utilisateur banni.",
-    banDoneUntil: "Utilisateur banni jusqu'au {date}.",
+    
     unbanDone: "Le ban a été levé.",
     alreadyBanned: "Cet utilisateur est déjà banni.",
     notBanned: "Cet utilisateur n'est pas banni.",
@@ -5699,7 +5544,7 @@ const fr: Dict = {
       "Le message est masqué pour toute la communauté. L'action est consignée dans le journal de modération.",
     messageDeleted: "Message supprimé.",
     messageAlreadyHidden: "Ce message était déjà masqué.",
-    deleteFailed: "Le message n'a pas pu être supprimé. Veuillez réessayer.",
+    
     noCommunityProfile: "Pas de profil Community",
   },
 
@@ -5722,8 +5567,7 @@ const fr: Dict = {
   // ---- CV Builder / Templates ------------------------------------------------
   templates: {
     builderTitle: "Créateur de CV",
-    builderSubtitle:
-      "Créez un CV professionnel pour votre prochaine opportunité en Allemagne.",
+    
     back: "Retour",
     templateLabel: "Modèle",
     stepNav: "Étapes",
@@ -5753,7 +5597,7 @@ const fr: Dict = {
       "Sélectionnez le design de votre CV — vous pouvez le changer à tout moment.",
     continueCta: "Continuer",
     tabDesign: "Design",
-    templateName: "Professional Classic",
+    
     templateSelectorTitle: "Modèles CV",
     templateClassic: "Classique",
     templateClassicDesc:
@@ -5772,11 +5616,10 @@ const fr: Dict = {
     saved: "Enregistré",
     tabEdit: "Modifier",
     tabPreview: "Aperçu",
-    emptyTitle: "Créez votre CV professionnel",
-    emptyText:
-      "Commencez par vos coordonnées personnelles ou importez votre profil scanné existant.",
-    startBuilding: "Commencer",
-    importProfile: "Importer le profil",
+    
+    
+    
+    
     importing: "Import du profil…",
     importNotFound:
       "Aucun profil scanné trouvé. Scannez d'abord votre CV dans le Scan de candidature.",
@@ -6064,7 +5907,7 @@ const fr: Dict = {
       "Nous travaillons actuellement sur notre communauté. Bientôt, vous pourrez vous connecter ici avec d'autres membres.",
     comingSoonNote: "Le chat de la communauté sera bientôt disponible.",
     comingSoonBackToDashboard: "Retour au tableau de bord",
-    onboardingTitle: "Bienvenue dans la communauté",
+    
     // ---- Platform-Admin (Phase 10) — badge + banni -------------------------
     adminBadge: "Administrateur",
     bannedTitle: "Accès à la communauté suspendu",
@@ -6123,7 +5966,7 @@ const fr: Dict = {
     loading: "Chargement…",
     searchLoadMore: "Charger plus",
     searchNoMore: "C'est tout.",
-    searchInRoom: "dans {room}",
+    
     // ---- Phase 5: Q&A ----
     questionsTitle: "Questions",
     questionsSubtitle: "Questions et réponses de {room}.",
@@ -6161,16 +6004,16 @@ const fr: Dict = {
     answerClosed: "Cette question est fermée — plus aucune nouvelle réponse.",
     noAnswers: "Pas encore de réponse — soyez le premier à aider !",
     acceptAnswer: "Accepter comme solution",
-    acceptedBadge: "Solution",
+    
     acceptedAnswerNote: "Réponse acceptée",
     unsolveCta: "Marquer comme ouverte",
-    unsolveConfirmTitle: "Rouvrir la question ?",
-    unsolveConfirmText: "La réponse acceptée perdra son badge « solution ».",
+    
+    
     closeQuestion: "Fermer la question",
     reopenQuestion: "Rouvrir la question",
     questionActionError: "L'action n'a pas pu être effectuée.",
-    acceptError: "La réponse n'a pas pu être acceptée.",
-    onlyAuthorOrMod: "Seule la personne qui a posé la question ou un modérateur peut définir la solution.",
+    
+    
     // ---- Phase 5: pins ----
     pinsOpen: "Voir les messages épinglés",
     pinsTitle: "Messages épinglés",
@@ -6197,9 +6040,9 @@ const fr: Dict = {
     reportSelfError: "Vous ne pouvez pas signaler vos propres contenus.",
     reportNotFound: "Ce contenu n'existe plus.",
     reportDuplicate: "Vous avez déjà signalé ce contenu.",
-    myReportsTitle: "Mes signalements",
-    myReportsEmpty: "Vous n'avez rien signalé pour l'instant.",
-    myReportsLoadError: "Vos signalements n'ont pas pu être chargés.",
+    
+    
+    
     reportStatusOpen: "ouvert",
     reportStatusReviewing: "en examen",
     reportStatusResolved: "résolu",
@@ -6217,8 +6060,8 @@ const fr: Dict = {
     reportReasonIllegal: "Contenu illégal",
     reportReasonImpersonation: "Usurpation d'identité",
     reportReasonOther: "Autre",
-    mutedNote: "Vous avez été mis en sourdine temporairement par la modération. Messages, questions et réponses ne sont pas possibles pour le moment.",
-    suspendedNote: "Votre accès à la communauté est suspendu. Contactez le support.",
+    
+    
     // ---- Phase 5: moderation ----
     navModeration: "Modération",
     moderationTitle: "Modération",
@@ -6236,22 +6079,22 @@ const fr: Dict = {
     modQueueEmpty: "Aucun signalement dans cette vue.",
     modQueueLoadError: "Les signalements n'ont pas pu être chargés.",
     modQueueLoadMore: "Charger plus de signalements",
-    modQueueNew: "{count} nouveaux signalements",
-    modDetailTitle: "Détails du signalement",
+    
+    
     modReporter: "Signalé par",
-    modReason: "Motif",
+    
     modTarget: "Contenu signalé",
-    modPreview: "Aperçu",
+    
     modAssigned: "Assigné à",
     modUnassigned: "Non assigné",
-    modAssignedTo: "{name}",
+    
     modFiledAt: "Signalé le {date}",
     modResolvedAt: "Traité le {date}",
     modMarkReviewing: "Passer en examen",
     modResolve: "Résoudre",
     modDismiss: "Rejeter",
     modAssign: "M'assigner",
-    modActions: "Mesures",
+    
     modActionDeleteMessage: "Supprimer le message",
     modActionHideMessage: "Masquer le message",
     modActionUnpin: "Retirer l'épingle",
@@ -6259,24 +6102,24 @@ const fr: Dict = {
     modActionCloseQuestion: "Fermer la question",
     modActionReopenQuestion: "Rouvrir la question",
     modActionWarn: "Avertir le membre",
-    modActionTimeout: "Mettre en sourdine",
+    
     modActionSuspend: "Suspendre l'accès à la communauté",
     modActionReinstate: "Restaurer l'accès",
     modTimeoutLabel: "Durée",
     modTimeout1h: "1 heure",
     modTimeout24h: "24 heures",
     modTimeout7d: "7 jours",
-    modConfirm: "Confirmer l'action",
+    
     modConfirmDeleteMessage: "Le message sera définitivement supprimé pour tout le monde.",
     modConfirmHideMessage: "Le message sera masqué pour tout le monde.",
     modConfirmRemoveAnswer: "La réponse sera supprimée et invisible pour tout le monde.",
     modConfirmSuspend: "{name} ne pourra plus écrire dans la communauté tant que l'accès n'est pas restauré.",
     modConfirmTimeout: "{name} ne pourra pas écrire pendant {duration}.",
-    modConfirmWarn: "Un avertissement sera envoyé à {name}.",
-    modCloseConfirm: "La question sera fermée pour tout le monde (plus aucune réponse).",
-    modReopenConfirm: "La question sera rouverte.",
-    modActionSuccess: "Action effectuée.",
-    modActionError: "L'action n'a pas pu être effectuée.",
+    
+    
+    
+    
+    
     modAuditEmpty: "Aucune action de modération pour l'instant.",
     modMembersTitle: "Membres & rôles",
     modMembersSubtitle: "Seuls les admins peuvent modifier les rôles.",
@@ -6286,10 +6129,10 @@ const fr: Dict = {
     modModerator: "Modérateur",
     modAdmin: "Admin",
     modOwner: "Propriétaire",
-    modRoleChanged: "Rôle mis à jour.",
-    modRoleError: "Le changement de rôle a échoué.",
-    modRoleSelfError: "Vous ne pouvez pas modifier votre propre rôle.",
-    modRoleRankError: "Vous ne pouvez pas attribuer un rôle égal ou supérieur au vôtre.",
+    
+    
+    
+    
     modSuspendedBadge: "Suspendu",
     modMutedBadge: "Sourdine jusqu'au {date}",
     modRoomsTitle: "Paramètres du salon",
@@ -6304,13 +6147,13 @@ const fr: Dict = {
     modRoomSaved: "Paramètres du salon enregistrés.",
     modRoomSaveError: "Les paramètres n'ont pas pu être enregistrés.",
     // ---- Phase 5: reputation ----
-    reputationLabel: "Réputation",
+    
     statsReputation: "Points",
     statsQuestionsLabel: "Questions",
     statsAcceptedLabel: "Solutions",
-    statsQuestions: "{count} questions",
-    statsAnswers: "{count} réponses",
-    statsAccepted: "{count} solutions",
+    
+    
+    
     // ---- Phase 5: community home ----
     homeWelcome: "Bienvenue, {name} !",
     homeSearchCta: "Rechercher un message, une question ou un membre…",
@@ -6321,21 +6164,21 @@ const fr: Dict = {
     homeSolvedTitle: "Résolues récemment",
     homeAnnouncementsTitle: "Annonces",
     homeOnline: "{count} en ligne",
-    homeViewQuestion: "Voir la question",
-    homeNoActivity: "Pas encore d'activité.",
-    homeNoQuestions: "Pas encore de questions — posez la première !",
+    
+    
+    
     homeNoAnnouncements: "Aucune annonce.",
     // ---- Phase 5: Q&A + moderation notifications ----
-    notifAnswer: "{name} a répondu à votre question « {title} ».",
-    notifAnswerGeneric: "Vous avez reçu une réponse à votre question.",
-    notifAccepted: "Votre réponse à « {title} » a été acceptée comme solution.",
-    notifAcceptedGeneric: "L'une de vos réponses a été acceptée comme solution.",
-    onboardingHint: "Quelques détails et vous pouvez directement participer.",
+    
+    
+    
+    
+    
     identityTitle: "Choisissez votre identité communautaire",
     identitySubtitle:
       "Vous n'êtes pas une personne privée ici : choisissez un alias unique et un avatar — votre vrai nom reste privé.",
     nameLabel: "Votre alias",
-    namePlaceholder: "ex. BlueFalcon",
+    
     nameHelp: "3 à 24 caractères, lettres et chiffres uniquement. Modifiable plus tard.",
     generateAnother: "En générer un autre",
     usernameRegenerating: "Génération…",
@@ -6345,8 +6188,8 @@ const fr: Dict = {
     chooseAvatar: "Choisissez votre avatar",
     complete: "Rejoindre la communauté",
     avatarAlt: "Avatar",
-    nameRequired: "Veuillez choisir un alias.",
-    nameTooLong: "Le nom peut contenir au maximum 40 caractères.",
+    
+    
     avatarInvalid: "Veuillez choisir l'un des avatars disponibles.",
     onboardingFailed: "Votre profil n'a pas pu être enregistré. Veuillez réessayer.",
     rateLimited: "Trop de requêtes. Veuillez patienter un instant puis réessayer.",
@@ -6388,7 +6231,7 @@ const fr: Dict = {
     homeRoomsTitle: "Salons par thème",
     homeActivityTitle: "Activité récente",
     homeActivityEmpty: "Aucun message pour l'instant. Lancez la première discussion !",
-    roomMessageCount: "{count} messages",
+    
     roomCount: "{count} salons",
     roomNotFoundTitle: "Salon introuvable",
     roomNotFoundText: "Ce salon n'existe pas ou a été désactivé.",
@@ -6397,10 +6240,10 @@ const fr: Dict = {
     membersEmpty: "Aucun membre chargé pour l'instant.",
     openRoomList: "Ouvrir les salons",
     closeRoomList: "Fermer la liste des salons",
-    roomIntro: "Lisez la description et posez votre question.",
+    
     // ---- Message actions ----
     replyToLabel: "Réponse à {name}",
-    replyToSelfLabel: "Réponse à vous-même",
+    
     replyPlaceholder: "Répondre à {name}…",
     cancelReply: "Annuler",
     cancel: "Annuler",
@@ -6412,19 +6255,19 @@ const fr: Dict = {
     addReaction: "Ajouter une réaction",
     reactionAria: "Réactions",
     confirmDeleteTitle: "Supprimer le message ?",
-    confirmDeleteText: "Ce message sera supprimé pour tout le monde.",
+    
     confirmDeleteAction: "Supprimer",
     mentionNotFound: "Membre",
     editIdentity: "Modifier l'identité",
     // ---- v2 errors ----
     roomNotFound: "Ce salon n'existe pas.",
-    reactionInvalid: "Cette réaction n'est pas disponible.",
-    messageNotFound: "Message introuvable.",
-    notAllowed: "Ceci n'est pas autorisé.",
+    
+    
+    
     // ---- Phase 2: social layer (profile, friends, blocks, DMs, notifications) ----
     profileCardTitle: "Profil du membre",
     online: "en ligne",
-    offline: "hors ligne",
+    
     joined: "Membre depuis {date}",
     bioEmpty: "Pas encore de description.",
     // ---- action feedback (pending / success labels — stable button width) ----
@@ -6459,7 +6302,7 @@ const fr: Dict = {
     blockText:
       "{name} ne pourra plus vous envoyer de demandes ni de messages. Vous pouvez débloquer à tout moment.",
     unblock: "Débloquer",
-    blockedNote: "Vous avez bloqué ce membre.",
+    
     blocksYouNote: "Ce membre vous a bloqué.",
     message: "Message",
     closeProfile: "Fermer le profil",
@@ -6487,7 +6330,7 @@ const fr: Dict = {
     messagesSubtitle: "Conversations privées avec vos amis.",
     noConversations: "Pas encore de conversations.",
     noConversationsCta: "Choisissez un ami et envoyez le premier message.",
-    selectConversation: "Choisissez une conversation.",
+    
     conversationNotFound: "Conversation introuvable.",
     dmImagePreview: "Image",
     backToMessages: "Retour aux messages",
@@ -6495,7 +6338,7 @@ const fr: Dict = {
     notificationsSubtitle: "Demandes d'ami, messages et mentions.",
     noNotifications: "Pas encore de notifications.",
     markAllRead: "Tout marquer comme lu",
-    markRead: "Marquer comme lu",
+    
     navFriends: "Amis",
     navMessages: "Messages",
     navNotifications: "Notifications",
@@ -6564,7 +6407,7 @@ const fr: Dict = {
       answer: "{name} a répondu à votre question.",
       answerGeneric: "Vous avez reçu une réponse à votre question.",
       accepted: "Votre réponse a été acceptée comme solution.",
-      acceptedGeneric: "L'une de vos réponses a été acceptée comme solution.",
+      
       friendRequestSent: "Demande d'ami envoyée.",
       nowFriends: "Vous et {name} êtes maintenant amis.",
       requestDeclined: "Demande refusée.",
@@ -6585,7 +6428,7 @@ const fr: Dict = {
     groupYesterday: "Hier",
     groupEarlier: "Plus tôt",
     loadMore: "Charger plus",
-    notificationOpen: "Ouvrir la notification",
+    
     noUnread: "Aucune notification non lue.",
     unreadAria: "non lu",
     noMore: "C'est tout.",
@@ -6835,7 +6678,7 @@ const fr: Dict = {
       countryLabel: "Pays de votre résidence habituelle",
       searchCountry: "Choisir le pays…",
       mission: "Représentation compétente",
-      officialPage: "Page officielle de la représentation",
+      
       openOfficial: "Ouvrir la page officielle",
       lastReviewed: "Dernière vérification",
       docsTitle: "Informations officielles de la représentation",
@@ -6843,12 +6686,12 @@ const fr: Dict = {
       notes: "Points clés de la source officielle",
       fee: "Frais (selon la représentation)",
       appointment: "Rendez-vous (selon la représentation)",
-      translation: "Traduction",
-      legalization: "Légalisation / authentification",
-      originalCopy: "Original + copie à présenter",
+      
+      
+      
       disclaimer:
         "Important : les exigences diffèrent d'une représentation à l'autre et peuvent changer à tout moment. Cette synthèse ne remplace pas la page officielle de la représentation compétente (lien direct) et n'est pas un conseil juridique. Toutes les informations ont été vérifiées le 11/10/2026 sur les sources officielles.",
-      otherCountry: "Votre pays n'est pas dans la liste ?",
+      
       otherCountryDesc:
         "Toutes les représentations allemandes ne publient pas de listes détaillées en allemand. Trouvez la vôtre dans la synthèse officielle du ministère des Affaires étrangères et ouvrez sa page visa — ou commencez directement sur l'Auslandsportal officiel.",
       allMissions: "Liste officielle de toutes les représentations allemandes",
@@ -6865,7 +6708,7 @@ const ar: Dict = {
     nav: {
       more: "المزيد",
     },
-    filterAll: "الكل",
+    
     hero: {
       title: "اعثر على تدريبك القادم.",
       subtitle:
@@ -6873,17 +6716,8 @@ const ar: Dict = {
       ctaStart: "ابحث عن الوظائف",
       searchTitle: "ما التدريب الذي تبحث عنه؟",
     },
-    orb: {
-      finding: "البحث عن فرص التدريب",
-      scanning: "فحص المصادر العامة",
-      companies: "اكتشاف مواقع الشركات",
-      contacts: "التحقق من معلومات التواصل المنشورة",
-      dedupe: "إزالة التكرارات",
-      starting: "جارٍ بدء البحث…",
-    },
-    error: {
-      retry: "إعادة المحاولة",
-    },
+    
+    
   },
   nav: {
 
@@ -6901,7 +6735,7 @@ const ar: Dict = {
     savedOpportunities: "الوظائف المحفوظة",
     community: "المجتمع",
     emailAssistant: "مساعد البريد",
-    savedFiles: "الملفات المحفوظة",
+    
     // Sidebar label only (see the de locale note).
     templates: "السيرة الذاتية",
     coverLetter: "خطاب تقديم الطلب",
@@ -6910,20 +6744,20 @@ const ar: Dict = {
     soon: "قريبًا",
     collapse: "طي الشريط الجانبي",
     expand: "توسيع الشريط الجانبي",
-    platform: "المنصة",
-    platformUpdates: "تحديثات المنصة",
+    
+    
     help: "مساعدة",
     faq: "الأسئلة الشائعة",
     admin: "الإدارة",
   },
   header: {
-    notifications: "الإشعارات",
-    noNotifications: "لا توجد إشعارات",
-    noNotificationsHint: "ستظهر هنا تحديثات طلباتك وحسابك.",
+    
+    
+    
     profile: "الملف الشخصي",
-    justNow: "الآن",
-    minutesAgo: "قبل {n} دقيقة",
-    hoursAgo: "قبل {n} ساعة",
+    
+    
+    
   },
   pages: {
     settingsProfile: { title: "الملف الشخصي", subtitle: "الاسم والصورة والحسابات المرتبطة" },
@@ -7044,10 +6878,10 @@ const ar: Dict = {
   },
   lang: {
     label: "اللغة",
-    de: "Deutsch",
-    en: "English",
-    fr: "Français",
-    ar: "العربية",
+    
+    
+    
+    
   },
   theme: {
     label: "المظهر",
@@ -7057,7 +6891,7 @@ const ar: Dict = {
   },
   profile: {
     signOut: "تسجيل الخروج",
-    settings: "الإعدادات",
+    
     // ---- Settings profile page (/settings/profile) ----
     page: {
       memberSince: "عضو منذ",
@@ -7110,53 +6944,24 @@ const ar: Dict = {
     deleteScan: "حذف هذا المسح",
     confirmDeleteScan: "تأكيد — حذف المسح والملف والمستندات المرفوعة",
   },
-  profileSettings: {
-    personalTitle: "المعلومات الشخصية",
-    personalNote: "عدّل الاسم الأول واسم العائلة. البريد الإلكتروني وكلمة المرور وحالة الحساب تبقى دون تغيير.",
-    firstName: "الاسم الأول",
-    lastName: "اسم العائلة",
-    save: "حفظ التغييرات",
-    nameSaved: "تم حفظ بياناتك.",
-    emailNote: "لا يمكن تغيير بريدك الإلكتروني من هنا.",
-    photoTitle: "الصورة الشخصية",
-    photoNote: "ارفع صورة تظهر في الرأس وبجانب بياناتك.",
-    uploadPhoto: "رفع صورة",
-    photoHint: "JPG أو PNG أو WEBP · 2 ميغابايت كحد أقصى.",
-    avatarSaved: "تم تحديث صورتك الشخصية.",
-    accountsTitle: "الحسابات المرتبطة",
-    accountsNote: "اربط Google أو Microsoft بهذا الحساب لتسجيل الدخول بشكل أسرع. لن يتم إنشاء حساب جديد.",
-    connected: "مرتبط",
-    notConnected: "غير مرتبط",
-    connect: "ربط",
-    connecting: "جارٍ الربط…",
-    linkSuccess: "تم ربط الحساب.",
-    linkFailed: "فشل الربط. يرجى المحاولة مرة أخرى.",
-    errorNameRequired: "يرجى إدخال الاسم الأول واسم العائلة.",
-    errorNameTooLong: "الاسم طويل جداً.",
-    errorSaveFailed: "تعذر حفظ بياناتك. يرجى المحاولة مرة أخرى.",
-    errorAvatarType: "يُسمح فقط بصور JPG أو PNG أو WEBP.",
-    errorAvatarSize: "الصورة كبيرة جداً (2 ميغابايت كحد أقصى).",
-    errorAvatarFailed: "تعذر رفع صورتك. يرجى المحاولة مرة أخرى.",
-    errorNoFile: "يرجى اختيار ملف صورة أولاً.",
-    errorGeneric: "حدث خطأ ما. يرجى المحاولة مرة أخرى.",
-  },
+  
   common: {
     loading: "جارٍ التحميل…",
     retry: "إعادة المحاولة",
     error: "حدث خطأ ما",
     errorHint: "يرجى المحاولة مرة أخرى لاحقًا.",
-    save: "حفظ",
+    
     cancel: "إلغاء",
     close: "إغلاق",
     back: "رجوع",
-    viewAll: "عرض الكل",
-    learnMore: "اعرف المزيد",
-    continue: "متابعة",
-    open: "فتح",
-    search: "بحث",
-    comingSoon: "قريبًا",
+    
+    
+    
+    
+    
+    
     notDocumented: "غير موثّق",
-    none: "لا شيء",
+    
   },
   // ---- FAQ page -------------------------------------------------------------
   faq: {
@@ -7232,9 +7037,8 @@ const ar: Dict = {
   },
   landing: {
     heroBadge: "خطوتك التالية تبدأ هنا",
-    heroTitle: "اعثر على تدريبك المهني. بالذكاء الاصطناعي.",
-    heroSubtitle:
-      "يحلّل AusbildungsWeg ملفك، ويجد أماكن تدريب مناسبة، ويساعدك في تقديم طلبك.",
+    
+    
     ctaStart: "ابدأ مجانًا الآن",
     ctaExplore: "عرض لوحة التحكم",
     navHow: "كيف يعمل",
@@ -7272,7 +7076,7 @@ const ar: Dict = {
     footerNote: "صُمم لخطوتك التالية في ألمانيا.",
   },
   dash: {
-    workspace: "مساحة عمل {goal}",
+    
     greeting: {
       morning: "صباح الخير، {name}.",
       afternoon: "مساء النور، {name}.",
@@ -7321,23 +7125,23 @@ const ar: Dict = {
       aiCta: "فتح المساعد",
       emailsSent: "الرسائل المرسلة اليوم",
       profile: "الملف",
-      profileComplete: "الملف مكتمل",
+      
       profileMissing: "الملف غير مكتمل",
-      emails: "البريد اليوم",
+      
       emailsDetail: "{remaining} من {limit} متبقية",
     },
     sections: {
       recommended: { title: "وظائف موصى بها", hint: "من المصدر الرسمي، مقابَلة مع ملفك" },
       saved: { title: "وظائف محفوظة", hint: "اللقطات تاريخية — الملاءمة الحية على صفحة التفاصيل" },
-      matching: { title: "الملاءمة", hint: "مدى ملاءمة الوظائف المحفوظة لك" },
-      recentApplications: { title: "أحدث الطلبات", hint: "أحدث طلباتك وحالتها" },
-      completeness: { title: "اكتمال الملف", hint: "ما ما يزال ناقصًا" },
+      
+      
+      
       account: { title: "نظرة على الحساب", hint: "بيانات ملفك الحالية" },
-      activity: { title: "أحدث النشاط", hint: "أحدث التغييرات في مساحة عملك" },
+      
     },
-    live: "بيانات حية",
+    
     status: {
-      complete: "ملاءمة كاملة",
+      
       incomplete: "ملاءمة غير مكتملة",
       match: "ملاءمة",
       stale: "قديمة",
@@ -7365,36 +7169,26 @@ const ar: Dict = {
       emails: "{count} رسائل",
     },
     empty: {
-      noActivity: { title: "لا يوجد نشاط بعد", body: "سيتظهر نشاط حسابك هنا مع استخدامك لمساحة العمل." },
+      
       noMatches: { title: "لا توجد وظائف مطابقة حاليًا", body: "لم يُرجع المصدر نتائج لهدفك الموثّق. جرّب بحثًا أوسع." },
       recsUnavailable: { title: "التوصيات غير متاحة", bodyNoProfile: "امسح طلبك لإنشاء ملف مرشح — المقابلات تقارن وظائف حقيقية معه.", bodyNoKeyword: "أضف مهنة مستهدفة إلى ملفك أولًا — التوصيات تُبحث بكلمات موثّقة فقط (لا يُختلق شيء).", bodySource: "مصدر الوظائف غير متاح حاليًا. لا يُعرض شيء بدلًا من النتائج الحقيقية." },
       nothingSaved: { title: "لا شيء محفوظ بعد", body: "احفظ الوظائف التي تريد التقديم عليها — تحتفظ بلقطة ملاءمة محسوبة على الخادم." },
-      noApplications: { title: "لا توجد طلبات بعد", body: "أنشئ طلبك الأول من وظيفة محفوظة." },
-      profileMissing: { title: "لم يُنشأ ملف مرشحك بعد.", body: "امسح طلبك لبناء ملف تُقابَل عليه الوظائف.", cta: "حلّل سيرتك الذاتية" },
+      
+      
     },
   },
-  campaign: {
-    status: {
-      draft: "الحملة جاهزة",
-      queued: "الإرسال في قائمة الانتظار",
-      sending: "جارٍ الإرسال",
-      completed: "تم الإرسال",
-      partially_failed: "تم الإرسال جزئيًا",
-      failed: "فشل الإرسال",
-      cancelled: "تم الإلغاء",
-    },
-  },
+  
   apps: {
-    untitled: "طلب بدون عنوان",
-    for: "لـ {title}",
-    created: "أُنشئ {date}",
-    sent: "أُرسل {date}",
-    noDetails: "لا توجد تفاصيل موثّقة",
-    emptyDraft: "مسودة فارغة",
+    
+    
+    
+    
+    
+    
     openDraft: "فتح المسودة",
-    campaign: "الحملة",
-    opportunity: "الوظيفة",
-    new: "طلب جديد",
+    
+    
+    
     saveFailed: "فشل الحفظ",
     saving: "جارٍ الحفظ…",
     saved: "محفوظ",
@@ -7440,8 +7234,8 @@ const ar: Dict = {
       submitSchedule: "جدولة الإرسال",
       scheduling: "جارٍ الجدولة…",
       subject: "الموضوع",
-      from: "من",
-      recipientsCount: "{count} مستلم",
+      
+      
     },
   },
   workflow: {
@@ -7549,9 +7343,9 @@ const ar: Dict = {
     retry: "إعادة المحاولة",
   },
   empty: {
-    noCv: { title: "لم يُنشأ ملف مرشحك بعد.", body: "امسح طلبك لبناء ملف تُقابَل عليه الوظائف.", cta: "حلّل سيرتك الذاتية" },
-    noOpportunities: { title: "لم تُعثر على تدريب مهني مطابق بعد.", body: "ابدأ بحثًا لرؤية وظائف تناسب ملفك.", cta: "تصفّح الوظائف" },
-    noApplications: { title: "لم تُنشئ طلبًا بعد.", body: "أنشئ طلبك الأول من وظيفة محفوظة.", cta: "طلب جديد" },
+    
+    
+    
     noEmail: { title: "لا يوجد حساب بريد مرتبط", body: "اربط Gmail أو Outlook قبل تجهيز بريد التوظيف.", cta: "ربط حساب البريد" },
   },
 
@@ -7816,18 +7610,17 @@ const ar: Dict = {
     actionFailed: "فشل الإجراء ({error}).",
     networkError: "خطأ في الشبكة — يرجى إعادة المحاولة.",
     // Platform Updates (owner-only in-app notifications)
-    platformUpdates: "تحديثات المنصة",
-    platformUpdatesHint:
-      "إرسال إشعارات داخل التطبيق إلى جميع المستخدمين أو إلى مستخدم واحد.",
+    
+    
     newNotification: "+ إشعار جديد",
     sendTo: "إرسال إلى",
     allUsers: "جميع المستخدمين",
-    specificUser: "مستخدم محدد",
-    searchUser: "البحث عن مستخدم...",
-    searchingUsers: "جارٍ البحث...",
-    noUserMatches: "لم يُعثر على مستخدمين مطابقين.",
-    selectedUser: "المستخدم المحدد:",
-    changeUser: "تغيير",
+    
+    
+    
+    
+    
+    
     titleLabel: "العنوان",
     typeLabel: "النوع",
     messageLabel: "الرسالة",
@@ -7838,22 +7631,22 @@ const ar: Dict = {
     sendNotification: "إرسال الإشعار",
     confirmTitle: "إرسال الإشعار",
     confirmAll: "سيتم إرسال هذا الإشعار إلى جميع المستخدمين.",
-    confirmUser: "هل تريد إرسال هذا الإشعار إلى {name}؟",
+    
     cancel: "إلغاء",
     send: "إرسال",
     sending: "جارٍ الإرسال...",
     sent: "تم إرسال الإشعار.",
     duplicateSent: "تم إرساله مسبقًا — لم يُنشأ إشعار مكرر.",
     sendFailed: "فشل الإرسال. يرجى المحاولة مرة أخرى.",
-    selectUserFirst: "يرجى اختيار المرسل إليه أولًا.",
+    
     historyTitle: "الإشعارات المرسلة",
     historyEmpty: "لم تُرسل إشعارات بعد.",
     historyError: "تعذر تحميل السجل.",
-    date: "التاريخ",
-    recipient: "المرسل إليه",
-    status: "الحالة",
-    sentBadge: "تم الإرسال",
-    loading: "جارٍ التحميل...",
+    
+    
+    
+    
+    
     // ---- Platform-Admin (Phase 10) — تنقل الأقسام -------------------------
     navOverview: "نظرة عامة",
     navAnnouncements: "الإعلانات",
@@ -7900,12 +7693,12 @@ const ar: Dict = {
     fieldCommunityName: "اسم المجتمع",
     fieldRole: "دور المجتمع",
     fieldMemberSince: "عضو منذ",
-    statusLabel: "الحالة",
+    
     statusActive: "نشط",
     statusSuspended: "موقوف (المجتمع)",
     statusMuted: "مكتوم حتى {date}",
     statusBanned: "محظور",
-    banSection: "الحظر",
+    
     banAction: "حظر المستخدم",
     unbanAction: "رفع الحظر",
     banConfirmTitle: "حظر المستخدم",
@@ -7919,12 +7712,12 @@ const ar: Dict = {
     duration30d: "30 يومًا",
     durationPermanent: "دائم",
     bannedLabel: "محظور حاليًا",
-    bannedSince: "منذ {date}",
+    
     bannedUntil: "حتى {date}",
     permanent: "دائم",
     banReasonShown: "السبب: {reason}",
     banDone: "تم حظر المستخدم.",
-    banDoneUntil: "تم حظر المستخدم حتى {date}.",
+    
     unbanDone: "تم رفع الحظر.",
     alreadyBanned: "هذا المستخدم محظور بالفعل.",
     notBanned: "هذا المستخدم غير محظور.",
@@ -7942,7 +7735,7 @@ const ar: Dict = {
       "ستُخفى الرسالة عن المجتمع بأكمله. تُسجَّل العملية في سجل الإدارة.",
     messageDeleted: "تم حذف الرسالة.",
     messageAlreadyHidden: "كانت هذه الرسالة مخفية بالفعل.",
-    deleteFailed: "تعذر حذف الرسالة. يرجى المحاولة مرة أخرى.",
+    
     noCommunityProfile: "لا يوجد ملف مجتمعي",
   },
 
@@ -7965,8 +7758,7 @@ const ar: Dict = {
   // ---- CV Builder / Templates ------------------------------------------------
   templates: {
     builderTitle: "منشئ السيرة الذاتية",
-    builderSubtitle:
-      "أنشئ سيرة ذاتية احترافية لفرصتك القادمة في ألمانيا.",
+    
     back: "رجوع",
     templateLabel: "القالب",
     stepNav: "الخطوات",
@@ -7993,7 +7785,7 @@ const ar: Dict = {
     chooseTemplateText: "اختر تصميم سيرتك الذاتية — يمكنك تغييره في أي وقت.",
     continueCta: "متابعة",
     tabDesign: "التصميم",
-    templateName: "Professional Classic",
+    
     templateSelectorTitle: "قوالب السيرة الذاتية",
     templateClassic: "كلاسيكي",
     templateClassicDesc: "تصميم Serif تقليدي أنيق مع قوائم نقطية.",
@@ -8008,11 +7800,10 @@ const ar: Dict = {
     saved: "تم الحفظ",
     tabEdit: "تعديل",
     tabPreview: "معاينة",
-    emptyTitle: "أنشئ سيرتك الذاتية الاحترافية",
-    emptyText:
-      "ابدأ ببياناتك الشخصية أو استورد ملفك الماسح الموجود.",
-    startBuilding: "ابدأ الإنشاء",
-    importProfile: "استيراد الملف",
+    
+    
+    
+    
     importing: "جارٍ استيراد الملف…",
     importNotFound:
       "لم يتم العثور على ملف ماسح. قمْ بمسح سيرتك الذاتية في ماسح الطلبات أولاً.",
@@ -8287,7 +8078,7 @@ const ar: Dict = {
       "نعمل حاليًا على تطوير المجتمع. قريبًا ستتمكن من التواصل هنا مع الأعضاء الآخرين.",
     comingSoonNote: "ستكون دردشة المجتمع متاحة قريبًا.",
     comingSoonBackToDashboard: "العودة إلى لوحة التحكم",
-    onboardingTitle: "مرحبًا بك في المجتمع",
+    
     // ---- Platform-Admin (Phase 10) — الشارة + المحظور ---------------------
     adminBadge: "مدير",
     bannedTitle: "تم تعليق الوصول إلى المجتمع",
@@ -8345,7 +8136,7 @@ const ar: Dict = {
     loading: "جارٍ التحميل…",
     searchLoadMore: "تحميل المزيد",
     searchNoMore: "هذا كل شيء.",
-    searchInRoom: "في {room}",
+    
     // ---- Phase 5: Q&A ----
     questionsTitle: "الأسئلة",
     questionsSubtitle: "أسئلة وأجوبة من {room}.",
@@ -8383,16 +8174,16 @@ const ar: Dict = {
     answerClosed: "هذا السؤال مغلق — لا إجابات جديدة.",
     noAnswers: "لا إجابات بعد — كن أول من يساعد!",
     acceptAnswer: "قبول كحل",
-    acceptedBadge: "الحل",
+    
     acceptedAnswerNote: "إجابة مقبولة",
     unsolveCta: "وضع كمفتوح",
-    unsolveConfirmTitle: "إعادة فتح السؤال؟",
-    unsolveConfirmText: "ستفقد الإجابة المقبولة شارة «الحل».",
+    
+    
     closeQuestion: "إغلاق السؤال",
     reopenQuestion: "إعادة فتح السؤال",
     questionActionError: "تعذّر تنفيذ الإجراء.",
-    acceptError: "تعذّر قبول الإجابة.",
-    onlyAuthorOrMod: "يمكن فقط من طرح السؤال أو مشرف وضع الحل.",
+    
+    
     // ---- Phase 5: pins ----
     pinsOpen: "عرض الرسائل المثبتة",
     pinsTitle: "الرسائل المثبتة",
@@ -8419,9 +8210,9 @@ const ar: Dict = {
     reportSelfError: "لا يمكنك الإبلاغ عن محتواك الخاص.",
     reportNotFound: "هذا المحتوى غير موجود (بعد).",
     reportDuplicate: "لقد أبلغت عن هذا المحتوى مسبقاً.",
-    myReportsTitle: "بلاغاتي",
-    myReportsEmpty: "لم تبنُ بلاغاً بعد.",
-    myReportsLoadError: "تعذّر تحميل بلاغاتك.",
+    
+    
+    
     reportStatusOpen: "مفتوح",
     reportStatusReviewing: "قيد المراجعة",
     reportStatusResolved: "محلول",
@@ -8439,8 +8230,8 @@ const ar: Dict = {
     reportReasonIllegal: "محتوى غير قانوني",
     reportReasonImpersonation: "انتحال هوية",
     reportReasonOther: "أخرى",
-    mutedNote: "تم كتمك مؤقتاً من قبل الإشراف. لا يمكن إرسال رسائل أو أسئلة أو إجابات حالياً.",
-    suspendedNote: "تم تعليق وصولك إلى المجتمع. تواصل مع الدعم.",
+    
+    
     // ---- Phase 5: moderation ----
     navModeration: "الإشراف",
     moderationTitle: "الإشراف",
@@ -8458,22 +8249,22 @@ const ar: Dict = {
     modQueueEmpty: "لا توجد بلاغات في هذا العرض.",
     modQueueLoadError: "تعذّر تحميل البلاغات.",
     modQueueLoadMore: "تحميل المزيد من البلاغات",
-    modQueueNew: "{count} بلاغات جديدة",
-    modDetailTitle: "تفاصيل البلاغ",
+    
+    
     modReporter: "مقدّم البلاغ",
-    modReason: "السبب",
+    
     modTarget: "المحتوى المبلغ عنه",
-    modPreview: "معاينة",
+    
     modAssigned: "مُسند إلى",
     modUnassigned: "غير مسند",
-    modAssignedTo: "{name}",
+    
     modFiledAt: "بُلغ في {date}",
     modResolvedAt: "عولج في {date}",
     modMarkReviewing: "وضع قيد المراجعة",
     modResolve: "إغلاق كمحلول",
     modDismiss: "رفض",
     modAssign: "تسديد إلي",
-    modActions: "الإجراءات المتاحة",
+    
     modActionDeleteMessage: "حذف الرسالة",
     modActionHideMessage: "إخفاء الرسالة",
     modActionUnpin: "إزالة التثبيت",
@@ -8481,24 +8272,24 @@ const ar: Dict = {
     modActionCloseQuestion: "إغلاق السؤال",
     modActionReopenQuestion: "إعادة فتح السؤال",
     modActionWarn: "توجيه تنبيه للعضو",
-    modActionTimeout: "كتم مؤقت",
+    
     modActionSuspend: "تعليق وصول المجتمع",
     modActionReinstate: "استعادة الوصول",
     modTimeoutLabel: "المدة",
     modTimeout1h: "ساعة واحدة",
     modTimeout24h: "24 ساعة",
     modTimeout7d: "7 أيام",
-    modConfirm: "تأكيد الإجراء",
+    
     modConfirmDeleteMessage: "سيتم حذف الرسالة نهائياً للجميع.",
     modConfirmHideMessage: "سيتم إخفاء الرسالة عن الجميع.",
     modConfirmRemoveAnswer: "ستتم إزالة الإجابة ولن يراها أحد.",
     modConfirmSuspend: "لن يستطيع {name} الكتابة في المجتمع حتى استعادة الوصول.",
     modConfirmTimeout: "لن يستطيع {name} الكتابة لمدة {duration}.",
-    modConfirmWarn: "سيتم إرسال تنبيه إلى {name}.",
-    modCloseConfirm: "سيتم إغلاق السؤال للجميع (لا إجابات جديدة).",
-    modReopenConfirm: "سيتم إعادة فتح السؤال.",
-    modActionSuccess: "تم تنفيذ الإجراء.",
-    modActionError: "تعذّر تنفيذ الإجراء.",
+    
+    
+    
+    
+    
     modAuditEmpty: "لا توجد إجراءات إشرافية بعد.",
     modMembersTitle: "الأعضاء والأدوار",
     modMembersSubtitle: "الأدوار قابلة للتغيير من الإداريين فقط.",
@@ -8508,10 +8299,10 @@ const ar: Dict = {
     modModerator: "مشرف",
     modAdmin: "مدير",
     modOwner: "المالك",
-    modRoleChanged: "تم تحديث الدور.",
-    modRoleError: "تعذّر تغيير الدور.",
-    modRoleSelfError: "لا يمكنك تغيير دورك الخاص.",
-    modRoleRankError: "لا يمكنك منح دور يساوي دورك أو أعلى منه.",
+    
+    
+    
+    
     modSuspendedBadge: "معلّق",
     modMutedBadge: "مكتوم حتى {date}",
     modRoomsTitle: "إعدادات الغرفة",
@@ -8526,13 +8317,13 @@ const ar: Dict = {
     modRoomSaved: "تم حفظ إعدادات الغرفة.",
     modRoomSaveError: "تعذّر حفظ الإعدادات.",
     // ---- Phase 5: reputation ----
-    reputationLabel: "المصداقية",
+    
     statsReputation: "نقاط",
     statsQuestionsLabel: "أسئلة",
     statsAcceptedLabel: "حلول",
-    statsQuestions: "{count} أسئلة",
-    statsAnswers: "{count} إجابات",
-    statsAccepted: "{count} حلول",
+    
+    
+    
     // ---- Phase 5: community home ----
     homeWelcome: "مرحباً، {name}!",
     homeSearchCta: "ابحث عن رسالة أو سؤال أو عضو…",
@@ -8543,21 +8334,21 @@ const ar: Dict = {
     homeSolvedTitle: "حُلّت مؤخراً",
     homeAnnouncementsTitle: "إعلانات",
     homeOnline: "{count} متصل",
-    homeViewQuestion: "عرض السؤال",
-    homeNoActivity: "لا يوجد نشاط بعد.",
-    homeNoQuestions: "لا أسئلة بعد — اطرح الأول!",
+    
+    
+    
     homeNoAnnouncements: "لا إعلانات.",
     // ---- Phase 5: Q&A + moderation notifications ----
-    notifAnswer: "أجاب {name} على سؤالك «{title}».",
-    notifAnswerGeneric: "وصلتك إجابة على سؤالك.",
-    notifAccepted: "تم قبول إجابتك على «{title}» كحل.",
-    notifAcceptedGeneric: "تم قبول إحدى إجاباتك كحل.",
-    onboardingHint: "بضع تفاصيل بسيطة وستتمكن من المشاركة مباشرة.",
+    
+    
+    
+    
+    
     identityTitle: "اختر هويتك في المجتمع",
     identitySubtitle:
       "أنت هنا لست شخصًا خاصًا: اختر اسمًا مستعارًا فريدًا وصورة رمزية — اسمك الحقيقي يبقى خاصًا.",
     nameLabel: "اسمك المستعار",
-    namePlaceholder: "مثال: BlueFalcon",
+    
     nameHelp: "3–24 حرفًا، أحرف وأرقام فقط. يمكنك تغييره لاحقًا.",
     generateAnother: "توليد اسم آخر",
     usernameRegenerating: "جارٍ التوليد…",
@@ -8567,8 +8358,8 @@ const ar: Dict = {
     chooseAvatar: "اختر صورتك الرمزية",
     complete: "انضم إلى المجتمع",
     avatarAlt: "الصورة الرمزية",
-    nameRequired: "يرجى اختيار اسم مستعار.",
-    nameTooLong: "يجب ألا يتجاوز الاسم 40 حرفا.",
+    
+    
     avatarInvalid: "يرجى اختيار إحدى الصور الرمزية المتاحة.",
     onboardingFailed: "تعذر حفظ ملفك الشخصي. يرجى المحاولة مرة أخرى.",
     rateLimited: "عدد كبير من الطلبات. يرجى الانتظار لحظة ثم المحاولة مرة أخرى.",
@@ -8610,7 +8401,7 @@ const ar: Dict = {
     homeRoomsTitle: "غرف المواضيع",
     homeActivityTitle: "آخر النشاطات",
     homeActivityEmpty: "لا توجد رسائل بعد. ابدأ أول نقاش!",
-    roomMessageCount: "{count} رسالة",
+    
     roomCount: "{count} غرفة",
     roomNotFoundTitle: "لم يتم العثور على الغرفة",
     roomNotFoundText: "هذه الغرفة غير موجودة أو تم تعطيلها.",
@@ -8619,10 +8410,10 @@ const ar: Dict = {
     membersEmpty: "لم يتم تحميل أعضاء بعد.",
     openRoomList: "فتح الغرف",
     closeRoomList: "إغلاق قائمة الغرف",
-    roomIntro: "اقرأ الوصف بسرعة واطرح سؤالك.",
+    
     // ---- Message actions ----
     replyToLabel: "رد على {name}",
-    replyToSelfLabel: "رد على نفسك",
+    
     replyPlaceholder: "الرد على {name}…",
     cancelReply: "إلغاء",
     cancel: "إلغاء",
@@ -8634,19 +8425,19 @@ const ar: Dict = {
     addReaction: "إضافة تفاعل",
     reactionAria: "التفاعلات",
     confirmDeleteTitle: "حذف الرسالة؟",
-    confirmDeleteText: "سيتم حذف هذه الرسالة من الجميع نهائيًا.",
+    
     confirmDeleteAction: "حذف",
     mentionNotFound: "عضو",
     editIdentity: "تحرير الهوية",
     // ---- v2 errors ----
     roomNotFound: "هذه الغرفة غير موجودة.",
-    reactionInvalid: "هذا التفاعل غير متاح.",
-    messageNotFound: "لم يتم العثور على الرسالة.",
-    notAllowed: "هذا غير مسموح به.",
+    
+    
+    
     // ---- Phase 2: social layer (profile, friends, blocks, DMs, notifications) ----
     profileCardTitle: "ملف العضو",
     online: "متصل",
-    offline: "غير متصل",
+    
     joined: "عضو منذ {date}",
     bioEmpty: "لا يوجد وصف بعد.",
     // ---- action feedback (pending / success labels — stable button width) ----
@@ -8681,7 +8472,7 @@ const ar: Dict = {
     blockText:
       "لن يتمكن {name} بعد الآن من إرسال طلبات أو رسائل إليك. يمكنك إلغاء الحظر في أي وقت.",
     unblock: "إلغاء الحظر",
-    blockedNote: "لقد حظرت هذا العضو.",
+    
     blocksYouNote: "هذا العضو قام بحظرك.",
     message: "رسالة",
     closeProfile: "إغلاق الملف",
@@ -8709,7 +8500,7 @@ const ar: Dict = {
     messagesSubtitle: "محادثات خاصة مع الأصدقاء.",
     noConversations: "لا توجد محادثات بعد.",
     noConversationsCta: "اختر صديقًا وأرسل أول رسالة.",
-    selectConversation: "اختر محادثة.",
+    
     conversationNotFound: "لم يتم العثور على المحادثة.",
     dmImagePreview: "صورة",
     backToMessages: "العودة إلى الرسائل",
@@ -8717,7 +8508,7 @@ const ar: Dict = {
     notificationsSubtitle: "طلبات الصداقة والرسائل والإشارات.",
     noNotifications: "لا توجد إشعارات بعد.",
     markAllRead: "تحديد الكل كمقروء",
-    markRead: "تحديد كمقروء",
+    
     navFriends: "الأصدقاء",
     navMessages: "الرسائل",
     navNotifications: "الإشعارات",
@@ -8786,7 +8577,7 @@ const ar: Dict = {
       answer: "ردّ {name} على سؤالك.",
       answerGeneric: "وصلك رد جديد على سؤالك.",
       accepted: "تم قبول ردّك كحل.",
-      acceptedGeneric: "تم قبول أحد ردودك كحل.",
+      
       friendRequestSent: "تم إرسال طلب الصداقة.",
       nowFriends: "أنت و{name} أصدقاء الآن.",
       requestDeclined: "تم رفض الطلب.",
@@ -8807,7 +8598,7 @@ const ar: Dict = {
     groupYesterday: "أمس",
     groupEarlier: "في وقت سابق",
     loadMore: "تحميل المزيد",
-    notificationOpen: "فتح الإشعار",
+    
     noUnread: "لا توجد إشعارات غير مقروءة.",
     unreadAria: "غير مقروء",
     noMore: "هذا كل شيء.",
@@ -9055,7 +8846,7 @@ const ar: Dict = {
       countryLabel: "بلد إقامتك المعتادة",
       searchCountry: "اختر البلد…",
       mission: "البعثة المختصة",
-      officialPage: "الصفحة الرسمية للبعثة",
+      
       openOfficial: "فتح الصفحة الرسمية",
       lastReviewed: "آخر مراجعة",
       docsTitle: "المعلومات الرسمية للبعثة",
@@ -9063,12 +8854,12 @@ const ar: Dict = {
       notes: "أهم المعلومات من المصدر الرسمي",
       fee: "الرسوم (حسب البعثة)",
       appointment: "الموعد (حسب البعثة)",
-      translation: "الترجمة",
-      legalization: "التصديق (التوثيق)",
-      originalCopy: "تقديم الأصل + نسخة",
+      
+      
+      
       disclaimer:
         "مهم: المتطلبات تختلف من بعثة إلى أخرى وقد تتغير في أي وقت. هذا الملخص لا يغني عن الصفحة الرسمية للبعثة المختصة (مرفق بها الرابط مباشرة) وليس استشارة قانونية. تمت مطابقة جميع المعلومات مع المصادر الرسمية بتاريخ 11.10.2026.",
-      otherCountry: "بلدك غير موجود في القائمة؟",
+      
       otherCountryDesc:
         "ليس كل بعثة ألمانية تنشر قوائم تفصيلية بالألمانية. اجد بعثتك المختصة في قائمة الخارجية الألمانية الرسمية وافتح صفحة التأشيرات فيها — أو ابدأ مباشرة عبر بوابة Auslandsportal الرسمية.",
       allMissions: "القائمة الرسمية لجميع البعثات الألمانية",
