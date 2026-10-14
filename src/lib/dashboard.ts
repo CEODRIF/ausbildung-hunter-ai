@@ -24,6 +24,7 @@ import {
   formatSnapshotDate,
   listSavedOpportunities,
 } from "@/lib/opportunities/saved";
+import { hasCampaignOwnedContent } from "@/lib/contact-name-support";
 import {
   candidateProfileSchema,
   type CandidateProfile,
@@ -126,7 +127,7 @@ export type DashboardData = {
   usage: DailyUsage;
   usageSnapshot: UsageSnapshot;
   aiLimit: number;
-  /** Count of prepared application drafts (the real data source). */
+  /** Count of application campaigns (the real data source). */
   applicationsCount: number;
   activities: ActivityLog[];
   emailAccount: SafeEmailAccount | null;
@@ -191,6 +192,10 @@ function scrub(message: string): string {
 export async function getDashboardData(userId: string): Promise<DashboardData> {
   const supabase = await createClient();
   const admin = createAdminClient();
+  // Drafts feature removal: "Applications" counts CAMPAIGNS (the records
+  // that survive the draft-free workflow) once the migration is applied;
+  // pre-migration the legacy count over composer drafts is kept.
+  const owned = await hasCampaignOwnedContent();
   const [
     profileResult,
     usageResult,
@@ -204,12 +209,17 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
   ] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", userId).single<Profile>(),
     supabase.rpc("get_or_create_daily_usage").single<DailyUsage>(),
-    // "Applications prepared" counts real composer drafts (the legacy
-    // `applications` table is never written by the product).
-    supabase
-      .from("application_drafts")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId),
+    // "Applications prepared" — campaigns are the real data source (the
+    // legacy `applications` table is never written by the product).
+    owned
+      ? supabase
+          .from("email_campaigns")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", userId)
+      : supabase
+          .from("application_drafts")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", userId),
     supabase
       .from("activity_logs")
       .select("id, activity_type, title, description, metadata, created_at")
@@ -262,7 +272,7 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
   }
   if (applicationsResult.error) {
     console.error(
-      `[dashboard] query failed target="application_drafts" error="${scrub(applicationsResult.error.message)}"`,
+      `[dashboard] query failed target="${owned ? "email_campaigns" : "application_drafts"}" error="${scrub(applicationsResult.error.message)}"`,
     );
     throw new Error("Unable to load applications.");
   }
@@ -318,13 +328,12 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     remaining: 0,
   };
 
-  // Recent applications: drafts + their persisted campaign/message state.
+  // Recent applications: campaigns (post-migration) or, pre-migration,
+  // the historical draft + campaign/message join.
   const recentApplications = await loadRecentApplications(admin, userId);
-  const hasApplicationDraft = recentApplications.some(
-    (draft) => draft.has_content,
-  );
+  const hasApplication = recentApplications.some((item) => item.has_content);
   const campaign = recentApplications
-    .filter((draft) => draft.campaign_id && draft.campaign_status)
+    .filter((item) => item.campaign_id && item.campaign_status)
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
 
   // Saved preview with Phase 7 staleness semantics (never silently current).
@@ -360,7 +369,7 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     completeness,
     savedTotal: saved.length,
     completeMatchCount: matching.completeCount,
-    hasApplicationDraft,
+    hasApplication,
     hasEmailAccount: Boolean(emailAccountResult.data),
     campaign:
       campaign?.campaign_id && campaign?.campaign_status
@@ -390,9 +399,124 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
   };
 }
 
-/** Last 5 application drafts (newest first) joined with their recipients,
- *  campaigns, and sent-message timestamps. All reads are user-scoped. */
+/**
+ * Last `limit` applications (newest first). Post-migration these are the
+ * user's OWN campaigns — self-contained, no draft involvement. Pre-migration
+ * (legacy) they are the historical draft + campaign/message join. All reads
+ * are user-scoped; nothing is synthesized.
+ */
 export async function loadRecentApplications(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+  limit = 5,
+): Promise<RecentApplication[]> {
+  const owned = await hasCampaignOwnedContent();
+  if (owned) return loadRecentCampaigns(admin, userId, limit);
+  return loadRecentApplicationsLegacy(admin, userId, limit);
+}
+
+/** Draft-free recent applications: the user's five newest campaigns with
+ *  their live engine counters and the latest sent-message timestamp. */
+async function loadRecentCampaigns(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+  limit = 5,
+): Promise<RecentApplication[]> {
+  const { data: campaigns, error } = await admin
+    .from("email_campaigns")
+    .select(
+      "id, status, created_at, updated_at, email_account_id, subject, goal, total_recipients, queued_count, sending_count, sent_count, failed_count, cancelled_count",
+    )
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error || !campaigns) return [];
+  const rows = campaigns as Array<{
+    id: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+    email_account_id: string | null;
+    subject: string;
+    goal: string;
+    total_recipients: number | null;
+    queued_count: number | null;
+    sending_count: number | null;
+    sent_count: number | null;
+    failed_count: number | null;
+    cancelled_count: number | null;
+  }>;
+  if (rows.length === 0) return [];
+
+  const senderByAccount = new Map<string, string>();
+  const accountIds = [
+    ...new Set(
+      rows
+        .map((row) => row.email_account_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (accountIds.length > 0) {
+    const { data: accounts } = await admin
+      .from("email_accounts")
+      .select("id, email_address")
+      .in("id", accountIds);
+    for (const account of (accounts ?? []) as Array<{
+      id: string;
+      email_address: string;
+    }>)
+      senderByAccount.set(account.id, account.email_address);
+  }
+  const sentAtByCampaign = new Map<string, string | null>();
+  const { data: messages } = await admin
+    .from("email_messages")
+    .select("campaign_id, sent_at")
+    .in("campaign_id", rows.map((row) => row.id))
+    .not("sent_at", "is", null);
+  for (const message of (messages ?? []) as Array<{
+    campaign_id: string;
+    sent_at: string;
+  }>) {
+    const current = sentAtByCampaign.get(message.campaign_id) ?? null;
+    if (!current || message.sent_at > current) {
+      sentAtByCampaign.set(message.campaign_id, message.sent_at);
+    }
+  }
+
+  return rows.map((row) => ({
+    id: row.id,
+    subject: row.subject,
+    // Opportunity context lives on historical drafts only; campaigns never
+    // synthesize one.
+    company: null,
+    goal: row.goal,
+    opportunity_key: null,
+    opportunity_title: null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    // A campaign can only exist with content (subject + body are required
+    // at creation), so every row counts as "prepared".
+    has_content: true,
+    campaign_id: row.id,
+    campaign_status: row.status,
+    sent_at: sentAtByCampaign.get(row.id) ?? null,
+    total_recipients: row.total_recipients,
+    queued_count: row.queued_count,
+    sending_count: row.sending_count,
+    sent_count: row.sent_count,
+    failed_count: row.failed_count,
+    cancelled_count: row.cancelled_count,
+    sender_email: row.email_account_id
+      ? (senderByAccount.get(row.email_account_id) ?? null)
+      : null,
+    campaign_updated_at: row.updated_at,
+  }));
+}
+
+/** Legacy (pre-migration) recent applications: the last `limit` drafts
+ *  (newest first) joined with their recipients, campaigns, and
+ *  sent-message timestamps. Kept unchanged for the deploy window. */
+async function loadRecentApplicationsLegacy(
   admin: ReturnType<typeof createAdminClient>,
   userId: string,
   limit = 5,

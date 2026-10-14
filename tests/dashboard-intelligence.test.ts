@@ -21,12 +21,33 @@ interface MockHandlers {
   /** PostgREST error simulation: returns the error message for a
    *  (target, op) pair, or null for a successful call. */
   error?: (target: string, op: "list" | "single" | "rpc") => string | null;
+  /** Post-migration (20261110000000) simulation: when true, the
+   *  campaign-owned content columns and the attachments table are readable.
+   *  Default false = pre-migration (the legacy draft-based world). */
+  ownedContent?: boolean;
 }
 
 /** Chainable supabase-builder mock supporting select/eq/in/not/order/limit
  *  and the terminals single/maybeSingle/await, recording calls. */
 function makeClientMock(handlers: MockHandlers) {
   const calls: Array<{ table: string; op: string; filters: Filters }> = [];
+  // Pre-migration simulation (Drafts feature removal): the owned content
+  // columns on email_campaigns and the email_campaign_attachments table
+  // only exist after 20261110000000. A select naming them fails exactly
+  // like PostgREST would, so the cached probe resolves to the legacy
+  // (draft-based) world these tests assert.
+  const migrated = handlers.ownedContent === true;
+  const schemaError = (table: string, select: unknown): string | null => {
+    if (migrated) return null;
+    if (table === "email_campaign_attachments")
+      return 'relation "public.email_campaign_attachments" does not exist';
+    if (
+      table === "email_campaigns" &&
+      /subject|body_html|goal/.test(String(select ?? ""))
+    )
+      return 'column "subject" does not exist';
+    return null;
+  };
   function chain(table: string) {
     const filters: Filters = {};
     const make: Record<string | symbol, unknown> = new Proxy(
@@ -35,7 +56,9 @@ function makeClientMock(handlers: MockHandlers) {
         get(_target, prop) {
           if (typeof prop !== "string") return undefined;
           if (prop === "then") {
-            const listError = handlers.error?.(table, "list") ?? null;
+            const listError =
+              handlers.error?.(table, "list") ??
+              schemaError(table, filters["select"]);
             return (onFulfilled?: unknown, onRejected?: unknown) =>
               Promise.resolve({
                 data: listError
@@ -50,7 +73,9 @@ function makeClientMock(handlers: MockHandlers) {
               }).then(onFulfilled as never, onRejected as never);
           }
           if (prop === "maybeSingle" || prop === "single") {
-            const singleError = handlers.error?.(table, "single") ?? null;
+            const singleError =
+              handlers.error?.(table, "single") ??
+              schemaError(table, filters["select"]);
             return async () => ({
               data: singleError
                 ? null
@@ -362,7 +387,7 @@ describe("next action", () => {
       completeness: null,
       savedTotal: 0,
       completeMatchCount: 0,
-      hasApplicationDraft: false,
+      hasApplication: false,
       hasEmailAccount: false,
       campaign: null,
     });
@@ -377,7 +402,7 @@ describe("next action", () => {
       completeness: sparse,
       savedTotal: 0,
       completeMatchCount: 0,
-      hasApplicationDraft: false,
+      hasApplication: false,
       hasEmailAccount: false,
       campaign: null,
     });
@@ -391,7 +416,7 @@ describe("next action", () => {
       completeness: complete,
       savedTotal: 0,
       completeMatchCount: 0,
-      hasApplicationDraft: false,
+      hasApplication: false,
       hasEmailAccount: true,
       campaign: null,
     });
@@ -405,7 +430,7 @@ describe("next action", () => {
       completeness: complete,
       savedTotal: 2,
       completeMatchCount: 0,
-      hasApplicationDraft: false,
+      hasApplication: false,
       hasEmailAccount: true,
       campaign: null,
     });
@@ -418,7 +443,7 @@ describe("next action", () => {
       completeness: complete,
       savedTotal: 2,
       completeMatchCount: 1,
-      hasApplicationDraft: false,
+      hasApplication: false,
       hasEmailAccount: true,
       campaign: null,
     });
@@ -432,7 +457,7 @@ describe("next action", () => {
       completeness: complete,
       savedTotal: 2,
       completeMatchCount: 1,
-      hasApplicationDraft: true,
+      hasApplication: true,
       hasEmailAccount: false,
       campaign: null,
     });
@@ -454,7 +479,7 @@ describe("next action", () => {
       completeness: complete,
       savedTotal: 2,
       completeMatchCount: 1,
-      hasApplicationDraft: true,
+      hasApplication: true,
       hasEmailAccount: true,
       campaign: { id: "campaign-1", status },
     });
@@ -470,7 +495,7 @@ describe("next action", () => {
       completeness: complete,
       savedTotal: 3,
       completeMatchCount: 2,
-      hasApplicationDraft: true,
+      hasApplication: true,
       hasEmailAccount: true,
       campaign: { id: "c1", status: "completed" } as const,
     };

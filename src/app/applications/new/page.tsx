@@ -3,12 +3,21 @@ import {
   createBlankDraft,
   getApplicationComposerData,
   loadOwnedDraft,
+  sanitizeEmailHtml,
+  type ApplicationGoal,
 } from "@/lib/application-drafts";
 import { ApplicationComposer } from "@/components/application-composer";
+import { ApplicationSendComposer } from "@/components/application-send-composer";
 import { Card } from "@/components/ui";
-import { applyOpportunityPrefill } from "@/lib/opportunity-prefill";
+import {
+  applyOpportunityPrefill,
+  resolveOpportunityPrefill,
+} from "@/lib/opportunity-prefill";
 import { getServerT } from "@/lib/i18n/server";
-import { supportsPraktikumGoal } from "@/lib/contact-name-support";
+import {
+  hasCampaignOwnedContent,
+  supportsPraktikumGoal,
+} from "@/lib/contact-name-support";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +61,95 @@ export default async function NewApplicationPage({
   const uuidPattern =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+  // Cached probes (per process).
+  //  - praktikum: the third application type is offered only when the
+  //    `application_goal` enum already supports it (safe default: hidden).
+  //  - owned content: whether the draft-free workflow (migration
+  //    20261110000000) is available on this database.
+  const praktikumSupported = await supportsPraktikumGoal();
+  const owned = await hasCampaignOwnedContent();
+
+  if (owned) {
+    // ------------------------------------------------------------------
+    // DRAFT-FREE COMPOSER (Drafts feature removal)
+    //
+    // Nothing on this path touches application_draft rows: no default
+    // draft is created on page open, nothing is resumed, ?draft=<id> and
+    // ?new=1 are deliberate no-ops, and the opportunity prefill is
+    // resolved into in-memory initial state only (server-derived,
+    // validated key — nothing trusted from the URL beyond the key).
+    // The ONLY persistence happens when the user sends: the campaign
+    // owns subject/body/recipients/attachments.
+    // ------------------------------------------------------------------
+    const initial: {
+      goal: ApplicationGoal;
+      sender: string;
+      subject: string;
+      bodyHtml: string;
+      recipient: { email: string; companyName?: string | null } | null;
+      context: {
+        title: string;
+        company: string | null;
+        href: string;
+      } | null;
+    } = {
+      goal: (data.profile.selected_goal ?? "ausbildung") as ApplicationGoal,
+      sender: data.accounts[0].id,
+      subject: "",
+      bodyHtml: "",
+      recipient: null,
+      context: null,
+    };
+    const prefillNotice: string | null = null;
+    let prefillError: string | null = null;
+    if (rawOpp) {
+      const outcome = await resolveOpportunityPrefill(rawOpp);
+      if (outcome.ok) {
+        initial.goal = outcome.prefill.goal;
+        initial.subject = outcome.prefill.subject;
+        // The prefill is built from escaped, documented fields; sanitize
+        // again before it is mounted with innerHTML (same contract as the
+        // stored HTML read path).
+        initial.bodyHtml = sanitizeEmailHtml(outcome.prefill.bodyHtml);
+        initial.recipient = outcome.prefill.recipient;
+        initial.context = {
+          title: outcome.context.title,
+          company: outcome.context.company,
+          href: outcome.context.detailHref,
+        };
+      } else {
+        prefillError =
+          outcome.error === "invalid_key"
+            ? t("account.prefillInvalid")
+            : t("account.prefillUnavailable");
+      }
+    }
+    return (
+      <div className="px-4 py-6 sm:px-6 lg:px-10">
+        <div className="mx-auto max-w-7xl">
+          <div className="mt-2">
+            <ApplicationSendComposer
+              accounts={data.accounts}
+              initialGoal={initial.goal}
+              initialSenderAccountId={initial.sender}
+              initialSubject={initial.subject}
+              initialBodyHtml={initial.bodyHtml}
+              initialRecipient={initial.recipient}
+              prefillContext={initial.context}
+              prefillNotice={prefillNotice}
+              prefillError={prefillError}
+              praktikumSupported={praktikumSupported}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --------------------------------------------------------------------
+  // LEGACY (pre-migration) draft-based composer — kept UNCHANGED so a
+  // code-first deploy (migration applied later) behaves exactly as before.
+  // --------------------------------------------------------------------
   // Draft resolution (multi-campaign management):
   //  - ?draft=<id> opens THAT specific draft (linked from the Applications
   //    list); ownership is enforced server-side — a stale or foreign id
@@ -99,11 +197,6 @@ export default async function NewApplicationPage({
           : t("account.prefillUnavailable");
     }
   }
-
-  // Cached probe (per process): offer the Praktikum type only when the
-  // `application_goal` enum already supports it — otherwise selecting it
-  // would fail every draft autosave and lock the send button.
-  const praktikumSupported = await supportsPraktikumGoal();
 
   return (
     <div className="px-4 py-6 sm:px-6 lg:px-10">

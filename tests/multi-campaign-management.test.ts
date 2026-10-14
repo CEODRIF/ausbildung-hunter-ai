@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetCampaignOwnedContentProbe } from "@/lib/contact-name-support";
 
 /**
  * Multi-campaign management (Phase 22 + 23).
@@ -36,8 +37,24 @@ vi.mock("@/lib/supabase/admin", () => {
     const filters: Array<(row: Row) => boolean> = [];
     let countMode = false;
     let deleteMode = false;
+    let selectColumns = "";
     const all = () =>
       (store[table] ?? []).filter((row) => filters.every((f) => f(row)));
+    // Pre-migration simulation (Drafts feature removal): the owned content
+    // columns on email_campaigns and the email_campaign_attachments table
+    // only exist after 20261110000000. Querying them fails exactly like
+    // PostgREST would, so the cached probe resolves to the legacy
+    // (draft-based) world these tests assert.
+    const schemaError = (): { message: string } | null =>
+      table === "email_campaign_attachments"
+        ? {
+            message:
+              'relation "public.email_campaign_attachments" does not exist',
+          }
+        : table === "email_campaigns" &&
+            /subject|body_html|goal/.test(selectColumns)
+          ? { message: 'column "subject" does not exist' }
+          : null;
     const runDelete = () => {
       const matched = all();
       // A database failure deletes nothing (mirror the real behaviour).
@@ -107,12 +124,15 @@ vi.mock("@/lib/supabase/admin", () => {
           case "limit":
             return () => chain;
           case "select":
-            return (_columns: string, opts?: { count?: string; head?: boolean }) => {
+            return (columns: string, opts?: { count?: string; head?: boolean }) => {
+              selectColumns = String(columns ?? "");
               countMode = Boolean(opts?.count);
               return chain;
             };
           case "single":
             return async () => {
+              const err = schemaError();
+              if (err) return { data: null, error: err };
               const matched = all();
               return {
                 data: matched[0] ?? null,
@@ -120,7 +140,11 @@ vi.mock("@/lib/supabase/admin", () => {
               };
             };
           case "maybeSingle":
-            return async () => ({ data: all()[0] ?? null, error: null });
+            return async () => {
+              const err = schemaError();
+              if (err) return { data: null, error: err };
+              return { data: all()[0] ?? null, error: null };
+            };
           case "insert":
             return (payload: Row | Row[]) => {
               const rowsToInsert = Array.isArray(payload) ? payload : [payload];
@@ -149,11 +173,14 @@ vi.mock("@/lib/supabase/admin", () => {
             };
           case "then":
             return (onFulfilled?: unknown, onRejected?: unknown) => {
-              const result = deleteMode
-                ? runDelete()
-                : countMode
-                  ? { data: null, count: all().length, error: null }
-                  : { data: all(), error: null };
+              const err = schemaError();
+              const result = err
+                ? { data: null, error: err }
+                : deleteMode
+                  ? runDelete()
+                  : countMode
+                    ? { data: null, count: all().length, error: null }
+                    : { data: all(), error: null };
               return Promise.resolve(result).then(
                 onFulfilled as never,
                 onRejected as never,
@@ -344,6 +371,9 @@ beforeEach(() => {
   deletedFrom.length = 0;
   deleteError = null;
   insertCounter = 0;
+  // The migration probe is cached per process — drop it so every test
+  // re-probes the fresh (pre-migration) schema of this test's store.
+  resetCampaignOwnedContentProbe();
   rpc.mockReset();
   rpc.mockResolvedValue({ data: null, error: null });
   vi.mocked(revalidatePath).mockClear();

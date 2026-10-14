@@ -3,11 +3,12 @@
 import { redirect } from "next/navigation";
 import { createCampaign, processCampaignBatch } from "@/lib/email-campaigns";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import { hasCampaignOwnedContent } from "@/lib/contact-name-support";
+import type { CampaignAttachmentInput } from "@/lib/email-campaigns";
 
 export async function sendApplications(formData: FormData) {
   const { user } = await getCurrentUserAndProfile();
   if (!user) redirect("/login");
-  const draftId = String(formData.get("draftId") ?? "");
   const senderAccountId = String(formData.get("senderAccountId") ?? "");
   const goal = String(formData.get("goal") ?? "");
   const rawRecipients = String(formData.get("recipients") ?? "[]");
@@ -27,12 +28,34 @@ export async function sendApplications(formData: FormData) {
   }
   if (goal !== "ausbildung" && goal !== "arbeit" && goal !== "praktikum")
     throw new Error("Invalid application goal.");
-  const result = await createCampaign({
-    draftId,
-    senderAccountId,
-    goal,
-    recipientEmails: recipients,
-  });
+  // Drafts feature removal: post-migration the FULL application travels in
+  // the form (subject, body, staged attachments) and the campaign owns it —
+  // no application_draft row is created, read or updated anywhere on this
+  // path. Pre-migration (code deployed before the manual migration) the
+  // legacy draft-based payload is sent instead — same engine, same guards.
+  const owned = await hasCampaignOwnedContent();
+  const result = owned
+    ? await createCampaign({
+        senderAccountId,
+        goal,
+        subject: String(formData.get("subject") ?? ""),
+        bodyHtml: String(formData.get("bodyHtml") ?? ""),
+        recipients,
+        attachments: (() => {
+          const raw = String(formData.get("attachments") ?? "[]");
+          try {
+            return JSON.parse(raw) as CampaignAttachmentInput[];
+          } catch {
+            throw new Error("Invalid attachment list.");
+          }
+        })(),
+      })
+    : await createCampaign({
+        draftId: String(formData.get("draftId") ?? ""),
+        senderAccountId,
+        goal,
+        recipientEmails: recipients,
+      });
 
   // Consume the queue right away: the campaign is created with queued
   // messages, and the bounded, idempotent batch runner is what actually

@@ -74,7 +74,14 @@ export const BUCKETS: BucketSpec[] = [
   {
     bucket: "application-attachments",
     referenceTables: [
+      // Legacy draft attachments (kept — historical drafts remain in the
+      // database) and campaign-owned attachments (Drafts feature removal:
+      // the new table keeps sent-campaign objects alive). Objects staged in
+      // the composer but never sent are deliberately NOT referenced — they
+      // are abandoned uploads and are reclaimed by this janitor after the
+      // age grace period.
       { table: "application_draft_attachments", column: "storage_path" },
+      { table: "email_campaign_attachments", column: "storage_path" },
     ],
   },
   // Phase 6A — Community images. Reference set = every live Community image

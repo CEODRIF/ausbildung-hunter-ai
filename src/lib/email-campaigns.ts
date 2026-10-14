@@ -7,6 +7,7 @@ import {
   sanitizeEmailHtml,
   htmlToText,
   validateRecipientList,
+  MAX_ATTACHMENT_SIZE,
   type ApplicationGoal,
 } from "@/lib/application-drafts";
 import {
@@ -22,7 +23,10 @@ import {
   PersonalizationError,
   renderPersonalizedMessage,
 } from "@/lib/personalization";
-import { hasContactNameColumn } from "@/lib/contact-name-support";
+import {
+  hasCampaignOwnedContent,
+  hasContactNameColumn,
+} from "@/lib/contact-name-support";
 
 export type CampaignStatus =
   | "draft"
@@ -91,14 +95,240 @@ export interface CampaignScheduling {
   usageDate: string;
 }
 
-export async function createCampaign(input: {
+export type CampaignRecipientInput = {
+  email: string;
+  companyName?: string | null;
+  /** Explicit user-provided contact person (trusted source only). */
+  contactName?: string | null;
+};
+export type CampaignAttachmentInput = {
+  storage_path: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+};
+
+/**
+ * Two payload shapes, one engine (Drafts feature removal):
+ *
+ *  - OWNED (migration 20261110000000 applied): the client submits the FULL
+ *    application — subject, body HTML, recipients, staged attachments — and
+ *    the campaign stores it self-contained. NO application_draft row is
+ *    created, read, updated or referenced (draft_id is written as NULL).
+ *  - LEGACY (migration not yet applied): `draftId` + persisted recipients;
+ *    the draft stays the content source exactly as before. This path exists
+ *    ONLY so deploying the code before the manual migration cannot break
+ *    sending (same contract as the contact_name / praktikum probes).
+ *
+ * The send/schedule server actions pick the shape from the cached probe.
+ */
+export type CreateCampaignInput =
+  | {
+      senderAccountId: string;
+      goal: ApplicationGoal;
+      subject: string;
+      bodyHtml: string;
+      recipients: CampaignRecipientInput[];
+      attachments?: CampaignAttachmentInput[];
+      /** When set, the campaign is queued but gated until `utcIso` — it flows
+       *  through the same durable worker at the scheduled instant. Omit for
+       *  the unchanged immediate-send path. */
+      scheduling?: CampaignScheduling;
+    }
+  | {
+      draftId: string;
+      senderAccountId: string;
+      goal: ApplicationGoal;
+      recipientEmails: Array<{ email: string; companyName?: string | null }>;
+      scheduling?: CampaignScheduling;
+    };
+
+export async function createCampaign(input: CreateCampaignInput) {
+  return "draftId" in input
+    ? createLegacyCampaign(input)
+    : createOwnedCampaign(input);
+}
+
+async function createOwnedCampaign(input: {
+  senderAccountId: string;
+  goal: ApplicationGoal;
+  subject: string;
+  bodyHtml: string;
+  recipients: CampaignRecipientInput[];
+  attachments?: CampaignAttachmentInput[];
+  scheduling?: CampaignScheduling;
+}) {
+  const current = await getCurrentUserAndProfile();
+  if (
+    !current.user ||
+    !current.profile ||
+    current.profile.account_status !== "active"
+  )
+    throw new Error("Not authorized.");
+  await assertSenderOwnership(current.user.id, input.senderAccountId);
+  const admin = createAdminClient();
+  // Sanitize with the SAME whitelist every other write path uses; the
+  // renderer re-sanitizes before the provider, but the stored template must
+  // already be clean (no scripts, no handlers, no foreign schemes).
+  const subject = input.subject.trim().slice(0, 500);
+  const bodyHtml = sanitizeEmailHtml(input.bodyHtml);
+  const bodyText = htmlToText(bodyHtml);
+  // Recipients arrive from the client and are re-validated server-side —
+  // the single normalization gate (dedupe, invalid marking, length caps).
+  // Only `valid` recipients are queued, exactly like the legacy path.
+  const recipients = validateRecipientList(input.recipients);
+  const validRecipients = recipients.filter(
+    (recipient) => recipient.validation_status === "valid",
+  );
+  if (!subject || !bodyText || validRecipients.length === 0)
+    throw new Error(
+      "Add a subject, message, and at least one valid recipient before sending.",
+    );
+  if (validRecipients.length > 1000)
+    throw new Error("A campaign cannot contain more than 1,000 recipients.");
+  // Attachments are the objects the composer already uploaded to the
+  // user's staging prefix; only their metadata is persisted here. Hostile
+  // input is dropped field-by-field (never an error for a bad file).
+  const attachments = (input.attachments ?? [])
+    .filter(
+      (item): item is CampaignAttachmentInput =>
+        Boolean(item) &&
+        typeof item.storage_path === "string" &&
+        item.storage_path.length > 0 &&
+        item.storage_path.length <= 512 &&
+        !item.storage_path.includes("\0") &&
+        !item.storage_path.includes(".."),
+    )
+    .map((item) => ({
+      storage_path: item.storage_path,
+      filename: String(item.filename ?? "attachment").slice(0, 255),
+      mime_type: String(item.mime_type ?? "application/octet-stream").slice(
+        0,
+        100,
+      ),
+      size_bytes: Math.trunc(Number(item.size_bytes) || 0),
+    }))
+    .filter((item) => item.size_bytes > 0 && item.size_bytes <= MAX_ATTACHMENT_SIZE)
+    .slice(0, 20);
+  const { data: capacity, error: capacityError } = await admin.rpc(
+    input.scheduling ? "reserve_email_capacity_on" : "reserve_email_capacity",
+    input.scheduling
+      ? {
+          target_user_id: current.user.id,
+          requested: validRecipients.length,
+          on_date: input.scheduling.usageDate,
+        }
+      : { target_user_id: current.user.id, requested: validRecipients.length },
+  );
+  if (capacityError)
+    throw new Error(
+      capacityError.message.includes("daily_quota_exceeded")
+        ? "Daily email quota exceeded."
+        : "Unable to reserve daily email capacity.",
+    );
+  const usage = capacity as UsageSnapshot;
+  const supportsContactName = await hasContactNameColumn();
+  const { data: campaign, error: campaignError } = await admin
+    .from("email_campaigns")
+    .insert({
+      user_id: current.user.id,
+      // Draft-free: the campaign owns its content; it references NO draft.
+      draft_id: null,
+      email_account_id: input.senderAccountId,
+      usage_date: usage.date,
+      status: "queued",
+      total_recipients: validRecipients.length,
+      queued_count: validRecipients.length,
+      reserved_count: validRecipients.length,
+      subject,
+      body_html: bodyHtml,
+      goal: input.goal,
+      ...(input.scheduling
+        ? {
+            scheduled_at: input.scheduling.utcIso,
+            timezone: input.scheduling.timeZone,
+          }
+        : {}),
+    })
+    .select("id")
+    .single<{ id: string }>();
+  if (campaignError || !campaign) {
+    await admin.rpc("release_email_capacity", {
+      target_user_id: current.user.id,
+      reservation_date: usage.date,
+      released: validRecipients.length,
+    });
+    throw new Error("Unable to create campaign.");
+  }
+  const { error: messagesError } = await admin.from("email_messages").insert(
+    validRecipients.map((recipient) => ({
+      campaign_id: campaign.id,
+      user_id: current.user.id,
+      recipient_email: recipient.email,
+      company_name: recipient.company_name,
+      // Per-recipient personalization data: the worker renders each message
+      // from THIS row's values only (see processCampaignBatch).
+      ...(supportsContactName
+        ? { contact_name: recipient.contact_name }
+        : {}),
+      subject,
+      status: "queued",
+      next_attempt_at: input.scheduling ? input.scheduling.utcIso : null,
+    })),
+  );
+  if (messagesError) {
+    await admin.from("email_campaigns").delete().eq("id", campaign.id);
+    await admin.rpc("release_email_capacity", {
+      target_user_id: current.user.id,
+      reservation_date: usage.date,
+      released: validRecipients.length,
+    });
+    throw new Error("Unable to queue campaign messages.");
+  }
+  if (attachments.length > 0) {
+    const { error: attachmentsError } = await admin
+      .from("email_campaign_attachments")
+      .insert(
+        attachments.map((attachment) => ({
+          campaign_id: campaign.id,
+          user_id: current.user.id,
+          storage_path: attachment.storage_path,
+          filename: attachment.filename,
+          mime_type: attachment.mime_type,
+          size_bytes: attachment.size_bytes,
+        })),
+      );
+    if (attachmentsError) {
+      await admin.from("email_campaigns").delete().eq("id", campaign.id);
+      await admin.rpc("release_email_capacity", {
+        target_user_id: current.user.id,
+        reservation_date: usage.date,
+        released: validRecipients.length,
+      });
+      throw new Error("Unable to save attachments.");
+    }
+  }
+  await admin.from("activity_logs").insert({
+    user_id: current.user.id,
+    activity_type: "campaign_created",
+    title: "Application campaign created",
+    description: `${validRecipients.length} application${validRecipients.length === 1 ? "" : "s"} queued for review and sending.`,
+    metadata: {
+      campaign_id: campaign.id,
+      recipient_count: validRecipients.length,
+    },
+  });
+  return { campaignId: campaign.id, usage };
+}
+
+/** Legacy (pre-migration) path: the application draft remains the content
+ *  source. Kept verbatim so the product behaves EXACTLY as before until the
+ *  manual migration 20261110000000 is applied. */
+async function createLegacyCampaign(input: {
   draftId: string;
   senderAccountId: string;
   goal: ApplicationGoal;
   recipientEmails: Array<{ email: string; companyName?: string | null }>;
-  /** When set, the campaign is queued but gated until `utcIso` — it flows
-   *  through the same durable worker at the scheduled instant. Omit for
-   *  the unchanged immediate-send path. */
   scheduling?: CampaignScheduling;
 }) {
   const current = await getCurrentUserAndProfile();
@@ -265,35 +495,61 @@ export async function createCampaign(input: {
   return { campaignId: campaign.id, usage };
 }
 
-async function getCampaignContext(userId: string, campaignId: string) {
+export interface CampaignContext {
+  id: string;
+  user_id: string;
+  /** Legacy campaigns reference their content draft; draft-free campaigns
+   *  (post migration 20261110000000) have NULL here. */
+  draft_id: string | null;
+  // Phase 15: nullable — historical campaigns may outlive their
+  // sender (ON DELETE SET NULL). Active campaigns always keep a
+  // sender (disconnect is blocked while active); the guard in
+  // processCampaignBatch makes that invariant explicit.
+  email_account_id: string | null;
+  usage_date: string;
+  status: CampaignStatus;
+  started_at: string | null;
+  created_at: string;
+  /** Canonical UTC instant for scheduled campaigns; null = immediate. */
+  scheduled_at: string | null;
+  /** IANA zone the user chose (display/audit); null = immediate. */
+  timezone: string | null;
+  /** OWNED content (migration 20261110000000): the campaign's subject
+   *  template, body template and goal. Absent (undefined) on pre-migration
+   *  databases and unused for legacy campaigns. */
+  subject?: string | null;
+  body_html?: string | null;
+  goal?: string | null;
+}
+
+async function getCampaignContext(
+  userId: string,
+  campaignId: string,
+): Promise<CampaignContext> {
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("email_campaigns")
-    .select(
-      "id, user_id, draft_id, email_account_id, usage_date, status, started_at, created_at, scheduled_at, timezone",
-    )
-    .eq("id", campaignId)
-    .eq("user_id", userId)
-    .single<{
-      id: string;
-      user_id: string;
-      draft_id: string;
-      // Phase 15: nullable — historical campaigns may outlive their
-      // sender (ON DELETE SET NULL). Active campaigns always keep a
-      // sender (disconnect is blocked while active); the guard in
-      // processCampaignBatch makes that invariant explicit.
-      email_account_id: string | null;
-      usage_date: string;
-      status: CampaignStatus;
-      started_at: string | null;
-      created_at: string;
-      /** Canonical UTC instant for scheduled campaigns; null = immediate. */
-      scheduled_at: string | null;
-      /** IANA zone the user chose (display/audit); null = immediate. */
-      timezone: string | null;
-    }>();
+  // Two literal selects (supabase-js types the select string): the owned
+  // columns only exist after the manual migration, so they are named in a
+  // query only when the cached probe proves them.
+  const owned = await hasCampaignOwnedContent();
+  const { data, error } = owned
+    ? await admin
+        .from("email_campaigns")
+        .select(
+          "id, user_id, draft_id, email_account_id, usage_date, status, started_at, created_at, scheduled_at, timezone, subject, body_html, goal",
+        )
+        .eq("id", campaignId)
+        .eq("user_id", userId)
+        .single<CampaignContext>()
+    : await admin
+        .from("email_campaigns")
+        .select(
+          "id, user_id, draft_id, email_account_id, usage_date, status, started_at, created_at, scheduled_at, timezone",
+        )
+        .eq("id", campaignId)
+        .eq("user_id", userId)
+        .single<Omit<CampaignContext, "subject" | "body_html" | "goal">>();
   if (error || !data) throw new Error("Campaign not found.");
-  return data;
+  return data as CampaignContext;
 }
 
 /** A message claimed as `sending` without any DB progress for this long is
@@ -490,16 +746,56 @@ export async function processCampaignBatch(
   // deterministically instead of deep in provider code.
   if (!campaign.email_account_id)
     throw new Error("Campaign has no sender account; nothing to send.");
-  const { data: draft, error: draftError } = await admin
-    .from("application_drafts")
-    .select("body_html, body_text")
-    .eq("id", campaign.draft_id)
-    .single<{ body_html: string; body_text: string }>();
-  if (draftError || !draft) throw new Error("Draft not found.");
-  const { data: attachments } = await admin
-    .from("application_draft_attachments")
-    .select("filename, mime_type, storage_path")
-    .eq("draft_id", campaign.draft_id);
+  // Content resolution (Drafts feature removal): a campaign that carries its
+  // body on the campaign row (migration 20261110000000, backfilled for
+  // historical campaigns) renders from ITSELF and never touches a draft —
+  // draft-free campaigns have draft_id NULL and no draft can exist. Only a
+  // campaign row with an EMPTY owned body falls back to its historical
+  // draft (a pre-migration row that was never backfilled). Personalization
+  // below is identical in both cases: the template is read-only.
+  let bodyHtml: string;
+  let bodyText: string;
+  let attachments: Array<{
+    filename: string;
+    mime_type: string;
+    storage_path: string;
+  }>;
+  if (
+    typeof campaign.body_html === "string" &&
+    campaign.body_html.trim() !== ""
+  ) {
+    bodyHtml = campaign.body_html;
+    bodyText = htmlToText(bodyHtml);
+    const { data: campaignAttachments } = await admin
+      .from("email_campaign_attachments")
+      .select("filename, mime_type, storage_path")
+      .eq("campaign_id", campaign.id);
+    attachments = (campaignAttachments ?? []) as Array<{
+      filename: string;
+      mime_type: string;
+      storage_path: string;
+    }>;
+  } else {
+    if (!campaign.draft_id)
+      throw new Error("Campaign content is missing.");
+    const { data: draft, error: draftError } = await admin
+      .from("application_drafts")
+      .select("body_html, body_text")
+      .eq("id", campaign.draft_id)
+      .single<{ body_html: string; body_text: string }>();
+    if (draftError || !draft) throw new Error("Draft not found.");
+    bodyHtml = draft.body_html;
+    bodyText = draft.body_text;
+    const { data: draftAttachments } = await admin
+      .from("application_draft_attachments")
+      .select("filename, mime_type, storage_path")
+      .eq("draft_id", campaign.draft_id);
+    attachments = (draftAttachments ?? []) as Array<{
+      filename: string;
+      mime_type: string;
+      storage_path: string;
+    }>;
+  }
   let processed = 0;
   for (let index = 0; index < Math.min(batchSize, 5); index += 1) {
     // Smart Sending — reserve the sender's atomic slot BEFORE claiming a
@@ -536,9 +832,9 @@ export async function processCampaignBatch(
           reconnect: false,
         } satisfies ProviderFailure;
       // Smart personalization: render THIS recipient's independent copy
-      // from the draft template using only this row's data. The draft
-      // (with its tokens) is never modified, nothing is memoized across
-      // recipients, and no rendered output ever leaks into another
+      // from the campaign template using only this row's data. The
+      // template (with its tokens) is never modified, nothing is memoized
+      // across recipients, and no rendered output ever leaks into another
       // recipient's message. Rendering BEFORE the provider is created so
       // an unresolvable variable can never burn a send slot or reach the
       // provider. A render failure is deterministic → the existing
@@ -555,8 +851,8 @@ export async function processCampaignBatch(
         rendered = renderPersonalizedMessage(
           {
             subject: recipient.subject,
-            bodyHtml: draft.body_html,
-            bodyText: draft.body_text,
+            bodyHtml,
+            bodyText,
           },
           {
             email: recipient.recipient_email,
@@ -712,12 +1008,37 @@ export async function deleteCampaign(userId: string, campaignId: string) {
     });
   }
 
+  // Campaign-owned attachments (post migration 20261110000000): collect the
+  // storage paths BEFORE the cascade removes the rows, then sweep the
+  // objects best-effort AFTER the delete (row-first, same contract as every
+  // other erasure path — a surviving object is reclaimed by the storage
+  // orphan janitor, never the other way around).
+  let attachmentPaths: string[] = [];
+  const owned = await hasCampaignOwnedContent();
+  if (owned) {
+    const { data: campaignAttachments } = await admin
+      .from("email_campaign_attachments")
+      .select("storage_path")
+      .eq("campaign_id", campaignId)
+      .eq("user_id", userId);
+    attachmentPaths = (campaignAttachments ?? [])
+      .map((item: { storage_path: string }) => item.storage_path)
+      .filter(Boolean);
+  }
+
   const { error } = await admin
     .from("email_campaigns")
     .delete()
     .eq("id", campaignId)
     .eq("user_id", userId);
   if (error) throw new Error("Unable to delete campaign.");
+
+  if (attachmentPaths.length > 0) {
+    await admin.storage
+      .from("application-attachments")
+      .remove(attachmentPaths)
+      .catch(() => undefined);
+  }
 
   await admin.from("activity_logs").insert({
     user_id: userId,
@@ -825,37 +1146,54 @@ function applicationTitle(
 
 /**
  * The user's complete Applications list: every campaign as its own row
- * (independent ids, recipients, counters and errors per campaign) plus
- * each draft that has no campaign yet. A draft with several campaigns
- * appears once PER campaign — the list never collapses rows, so nothing
- * from one campaign can leak into another.
+ * (independent ids, recipients, counters and errors per campaign).
+ *
+ * Drafts feature removal: once migration 20261110000000 is applied the list
+ * contains CAMPAIGNS ONLY — no draft-only rows, no Drafts counter. Campaign
+ * rows read their title/goal from the campaign's own columns (with the
+ * historical draft still consulted for the opportunity title/company of
+ * legacy campaigns). Before the migration is applied the legacy shape —
+ * campaigns joined with their drafts plus draft-only rows — is returned
+ * unchanged, so a code-first deploy can never break the list.
  */
 export async function listUserCampaigns(
   userId: string,
 ): Promise<ApplicationListItem[]> {
   const admin = createAdminClient();
-  const [campaignsResult, draftsResult] = await Promise.all([
-    admin
-      .from("email_campaigns")
-      .select(
-        "id, draft_id, email_account_id, status, total_recipients, sent_count, failed_count, created_at, scheduled_at, timezone",
-      )
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false }),
-    admin
-      .from("application_drafts")
-      .select(
-        "id, goal, subject, created_at, opportunity_title, opportunity_company, sender_email_account_id",
-      )
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false }),
-  ]);
+  const owned = await hasCampaignOwnedContent();
+  // Two literal selects (supabase-js types the select string): the owned
+  // columns only exist after the manual migration.
+  const campaignsResult = owned
+    ? await admin
+        .from("email_campaigns")
+        .select(
+          "id, draft_id, email_account_id, status, total_recipients, sent_count, failed_count, created_at, scheduled_at, timezone, subject, goal",
+        )
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+    : await admin
+        .from("email_campaigns")
+        .select(
+          "id, draft_id, email_account_id, status, total_recipients, sent_count, failed_count, created_at, scheduled_at, timezone",
+        )
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+  const draftsResult = await admin
+    .from("application_drafts")
+    .select(
+      "id, goal, subject, created_at, opportunity_title, opportunity_company, sender_email_account_id",
+    )
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
   if (campaignsResult.error) throw new Error("Unable to load campaigns.");
   if (draftsResult.error) throw new Error("Unable to load applications.");
 
   const campaigns = (campaignsResult.data ?? []) as Array<{
     id: string;
-    draft_id: string;
+    draft_id: string | null;
+    /** OWNED columns (post migration 20261110000000). */
+    subject?: string | null;
+    goal?: string | null;
     email_account_id: string | null;
     status: string;
     total_recipients: number | null;
@@ -875,7 +1213,11 @@ export async function listUserCampaigns(
     sender_email_account_id: string;
   }>;
   const draftById = new Map(drafts.map((draft) => [draft.id, draft]));
-  const draftedIds = new Set(campaigns.map((campaign) => campaign.draft_id));
+  const draftedIds = new Set(
+    campaigns
+      .map((campaign) => campaign.draft_id)
+      .filter((id): id is string => Boolean(id)),
+  );
 
   // Sender addresses for the accounts referenced by campaigns and drafts
   // (address only — safe to display; tokens never leave the server).
@@ -896,8 +1238,12 @@ export async function listUserCampaigns(
       senderByAccount.set(account.id, account.email_address);
   }
 
-  // Recipient counts, only for the drafts that still have no campaign.
-  const pendingDrafts = drafts.filter((draft) => !draftedIds.has(draft.id));
+  // Draft-only rows are part of the list ONLY in the pre-migration legacy
+  // shape. Post-migration the Drafts feature is gone: the dashboard shows
+  // campaigns (Total/Sending/Sent/Failed) and nothing else.
+  const pendingDrafts = owned
+    ? []
+    : drafts.filter((draft) => !draftedIds.has(draft.id));
   const recipientCountByDraft = new Map<string, number>();
   if (pendingDrafts.length > 0) {
     const { data: recipients } = await admin
@@ -915,20 +1261,29 @@ export async function listUserCampaigns(
 
   const items: ApplicationListItem[] = [];
   for (const campaign of campaigns) {
-    // The campaign's draft always exists (draft_id is ON DELETE RESTRICT),
-    // so the lookup can only miss for corrupt historical data — in which
-    // case the row still renders with its own real counters.
-    const draft = draftById.get(campaign.draft_id);
+    // The campaign's draft (legacy campaigns only — draft_id is ON DELETE
+    // RESTRICT, so it still exists when referenced) is consulted for the
+    // opportunity title/company and, pre-migration, for title/goal.
+    // Draft-free campaigns carry their own title/goal columns.
+    const draft = campaign.draft_id
+      ? (draftById.get(campaign.draft_id) ?? undefined)
+      : undefined;
+    const ownedSubject =
+      typeof campaign.subject === "string" ? campaign.subject : "";
+    const ownedGoal = typeof campaign.goal === "string" ? campaign.goal : "";
     items.push({
       kind: "campaign",
       id: campaign.id,
       campaign_id: campaign.id,
       draft_id: campaign.draft_id,
-      title: draft
-        ? applicationTitle(draft.subject, draft.opportunity_title)
-        : "Untitled application",
+      title:
+        ownedSubject.trim() !== ""
+          ? applicationTitle(ownedSubject, draft?.opportunity_title ?? null)
+          : draft
+            ? applicationTitle(draft.subject, draft.opportunity_title)
+            : "Untitled application",
       company: draft?.opportunity_company ?? null,
-      goal: draft?.goal ?? "",
+      goal: ownedGoal || draft?.goal || "",
       status: campaign.status,
       total_recipients: campaign.total_recipients,
       sent_count: campaign.sent_count,

@@ -143,7 +143,48 @@ export function buildOpportunityPrefill(
 }
 
 // ---------------------------------------------------------------------------
-// Server-side application to a draft
+// Draft-free resolution (Drafts feature removal)
+// ---------------------------------------------------------------------------
+
+export type ResolvePrefillOutcome =
+  | {
+      ok: true;
+      prefill: OpportunityPrefill;
+      context: OpportunityPrefill["context"];
+    }
+  | { ok: false; error: "invalid_key" | "unavailable" };
+
+/**
+ * Draft-free opportunity prefill: a validated key is resolved from the
+ * authoritative source and turned into a prefill payload — WITHOUT touching
+ * the database at all. The composer page hands the result to the client as
+ * INITIAL STATE (in-memory only); nothing is persisted until the user sends
+ * (the campaign then owns the content). Same guarantees as the legacy path:
+ * documented fields only, HTML-escaped, recipient validated, nothing invented.
+ */
+export async function resolveOpportunityPrefill(
+  opportunityKey: string,
+): Promise<ResolvePrefillOutcome> {
+  try {
+    parseOpportunityKey(opportunityKey);
+  } catch {
+    return { ok: false, error: "invalid_key" };
+  }
+  // Always re-resolve from the authoritative source (never browser data) —
+  // via the short-lived details cache, so prefilling an opportunity the user
+  // just viewed does not re-hit BA.
+  let opportunity: Opportunity;
+  try {
+    opportunity = await resolveOpportunityCached(opportunityKey);
+  } catch {
+    return { ok: false, error: "unavailable" };
+  }
+  const prefill = buildOpportunityPrefill(opportunity);
+  return { ok: true, prefill, context: prefill.context };
+}
+
+// ---------------------------------------------------------------------------
+// Server-side application to a draft (legacy — pre-migration fallback)
 // ---------------------------------------------------------------------------
 
 export interface PrefillComposerData {

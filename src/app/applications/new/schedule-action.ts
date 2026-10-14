@@ -2,7 +2,9 @@
 
 import { redirect } from "next/navigation";
 import { createCampaign } from "@/lib/email-campaigns";
+import type { CampaignAttachmentInput } from "@/lib/email-campaigns";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import { hasCampaignOwnedContent } from "@/lib/contact-name-support";
 import {
   isSupportedTimezone,
   wallClockToUtc,
@@ -22,7 +24,6 @@ const MIN_FUTURE_MS = 60_000;
 export async function scheduleApplications(formData: FormData) {
   const { user } = await getCurrentUserAndProfile();
   if (!user) redirect("/login");
-  const draftId = String(formData.get("draftId") ?? "");
   const senderAccountId = String(formData.get("senderAccountId") ?? "");
   const goal = String(formData.get("goal") ?? "");
   const rawRecipients = String(formData.get("recipients") ?? "[]");
@@ -82,23 +83,44 @@ export async function scheduleApplications(formData: FormData) {
       "The selected time is not in the future. Choose a later time, or send now.",
     );
 
-  // The quota belongs to the scheduled UTC date; finalize/cancel release it
-  // from the same date (existing engine behaviour).
-  const result2 = await createCampaign({
-    draftId,
-    senderAccountId,
-    goal,
-    recipientEmails: recipients,
-    scheduling: {
-      utcIso: result.utcIso,
-      timeZone,
-      usageDate: result.utcIso.slice(0, 10),
-    },
-  });
+  const scheduling = {
+    utcIso: result.utcIso,
+    timeZone,
+    usageDate: result.utcIso.slice(0, 10),
+  };
+
+  // Drafts feature removal: same dual payload as sendApplications — the
+  // owned (draft-free) shape post-migration, the legacy draft shape until
+  // the manual migration is applied.
+  const owned = await hasCampaignOwnedContent();
+  const created = owned
+    ? await createCampaign({
+        senderAccountId,
+        goal,
+        subject: String(formData.get("subject") ?? ""),
+        bodyHtml: String(formData.get("bodyHtml") ?? ""),
+        recipients,
+        attachments: (() => {
+          const raw = String(formData.get("attachments") ?? "[]");
+          try {
+            return JSON.parse(raw) as CampaignAttachmentInput[];
+          } catch {
+            throw new Error("Invalid attachment list.");
+          }
+        })(),
+        scheduling,
+      })
+    : await createCampaign({
+        draftId: String(formData.get("draftId") ?? ""),
+        senderAccountId,
+        goal,
+        recipientEmails: recipients,
+        scheduling,
+      });
 
   // Deliberately NO processCampaignBatch here: the instant is in the
   // future, so the durable scheduler (GitHub Actions tick →
   // /api/cron/email-scheduler → claim loop) picks the campaign up at
   // `scheduled_at`. The browser is not needed for sending.
-  redirect(`/applications/campaign/${result2.campaignId}?scheduled=1`);
+  redirect(`/applications/campaign/${created.campaignId}?scheduled=1`);
 }
