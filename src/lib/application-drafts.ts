@@ -9,7 +9,7 @@ import { normalizeRecipientEmail } from "@/lib/email-recipients";
 import { hasContactNameColumn } from "@/lib/contact-name-support";
 import type { Profile } from "@/lib/auth";
 
-export type ApplicationGoal = "ausbildung" | "arbeit";
+export type ApplicationGoal = "ausbildung" | "arbeit" | "praktikum";
 export type RecipientStatus = "valid" | "invalid" | "duplicate";
 export type DraftRecipient = {
   id: string;

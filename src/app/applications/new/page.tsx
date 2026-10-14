@@ -8,6 +8,7 @@ import { ApplicationComposer } from "@/components/application-composer";
 import { Card } from "@/components/ui";
 import { applyOpportunityPrefill } from "@/lib/opportunity-prefill";
 import { getServerT } from "@/lib/i18n/server";
+import { supportsPraktikumGoal } from "@/lib/contact-name-support";
 
 export const dynamic = "force-dynamic";
 
@@ -99,6 +100,11 @@ export default async function NewApplicationPage({
     }
   }
 
+  // Cached probe (per process): offer the Praktikum type only when the
+  // `application_goal` enum already supports it — otherwise selecting it
+  // would fail every draft autosave and lock the send button.
+  const praktikumSupported = await supportsPraktikumGoal();
+
   return (
     <div className="px-4 py-6 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-7xl">
@@ -108,6 +114,7 @@ export default async function NewApplicationPage({
             accounts={data.accounts}
             prefillNotice={prefillNotice}
             prefillError={prefillError}
+            praktikumSupported={praktikumSupported}
           />
         </div>
       </div>

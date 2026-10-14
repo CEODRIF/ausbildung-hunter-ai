@@ -43,16 +43,34 @@ export function ApplicationComposer({
   accounts,
   prefillNotice,
   prefillError,
+  praktikumSupported,
 }: {
   draft: ApplicationDraft;
   accounts: SafeEmailAccount[];
   /** One-time notice for the most recent prefill action (in-memory only). */
    prefillNotice?: string | null;
    prefillError?: string | null;
- }) {
+  /**
+   * Server-probed: does the `application_goal` enum already carry
+   * 'praktikum' (manual migration 20261109000000)? When false the third
+   * option is HIDDEN instead of offered and broken — selecting an
+   * unsupported type would otherwise fail every draft autosave and
+   * disable the "Send applications" button (same failure mode as the
+   * contact_name regression). Safe default: hidden.
+   */
+  praktikumSupported?: boolean;
+  }) {
   const { t } = useI18n();
   const [draft] = useState(initialDraft);
   const [goal, setGoal] = useState<ApplicationGoal>(initialDraft.goal);
+  const praktikumOn = Boolean(praktikumSupported);
+  const goalOptions: Array<{ value: ApplicationGoal; label: string }> = [
+    { value: "ausbildung", label: "Ausbildung" },
+    { value: "arbeit", label: "Arbeit" },
+    ...(praktikumOn
+      ? [{ value: "praktikum" as const, label: "Praktikum" }]
+      : []),
+  ];
   const [senderId, setSenderId] = useState(
     initialDraft.sender_email_account_id,
   );
@@ -133,6 +151,10 @@ export function ApplicationComposer({
   }
 
   const applyTemplate = (templateGoal: ApplicationGoal) => {
+    // Defensive: the Praktikum button is hidden while the enum lacks the
+    // value, but never set an unsupported goal (draft autosave would fail
+    // and the send button would lock).
+    if (templateGoal === "praktikum" && !praktikumOn) return;
     setGoal(templateGoal);
     setSubject(applicationTemplates[templateGoal].subject);
     setBody(applicationTemplates[templateGoal].body);
@@ -371,21 +393,19 @@ export function ApplicationComposer({
             <p className="text-xs font-bold uppercase tracking-[0.12em] text-faint">
               Application type
             </p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setGoal("ausbildung")}
-                className={`rounded-2xl border p-3 text-left text-xs font-bold transition-colors ${goal === "ausbildung" ? "border-accent bg-accent-soft text-accent shadow-[var(--shadow-card)]" : "border-line text-muted hover:border-line-strong hover:text-ink-soft"}`}
-              >
-                Ausbildung
-              </button>
-              <button
-                type="button"
-                onClick={() => setGoal("arbeit")}
-                className={`rounded-2xl border p-3 text-left text-xs font-bold transition-colors ${goal === "arbeit" ? "border-accent bg-accent-soft text-accent shadow-[var(--shadow-card)]" : "border-line text-muted hover:border-line-strong hover:text-ink-soft"}`}
-              >
-                Arbeit
-              </button>
+            <div
+              className={`mt-3 grid gap-2 ${goalOptions.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}
+            >
+              {goalOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setGoal(option.value)}
+                  className={`rounded-2xl border p-3 text-left text-xs font-bold transition-colors ${goal === option.value ? "border-accent bg-accent-soft text-accent shadow-[var(--shadow-card)]" : "border-line text-muted hover:border-line-strong hover:text-ink-soft"}`}
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
           </Card>
           <Card className="p-5">
@@ -444,6 +464,15 @@ export function ApplicationComposer({
               >
                 Arbeit Bewerbung
               </button>
+              {praktikumOn && (
+                <button
+                  type="button"
+                  onClick={() => applyTemplate("praktikum")}
+                  className="w-full rounded-2xl border border-line bg-surface px-3.5 py-3 text-left text-xs font-bold text-ink-soft shadow-[var(--shadow-card)] transition-colors hover:border-accent hover:text-accent"
+                >
+                  Praktikum Bewerbung
+                </button>
+              )}
             </div>
           </Card>
         </aside>
