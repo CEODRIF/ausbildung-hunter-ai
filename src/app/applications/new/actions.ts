@@ -25,6 +25,7 @@ export async function saveDraft(input: {
   recipients: Array<{
     email: string;
     companyName?: string | null;
+    contactName?: string | null;
     status: RecipientStatus;
   }>;
 }) {

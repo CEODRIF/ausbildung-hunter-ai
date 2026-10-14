@@ -349,6 +349,7 @@ describe("applyOpportunityPrefill", () => {
           id: "r-1",
           email: "other@example.com",
           company_name: null,
+          contact_name: null,
           validation_status: "valid",
         },
       ],

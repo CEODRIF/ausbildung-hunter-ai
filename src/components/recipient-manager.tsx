@@ -10,6 +10,7 @@ import {
 type Recipient = {
   email: string;
   companyName?: string;
+  contactName?: string;
   status: RecipientStatus;
 };
 

@@ -240,6 +240,7 @@ describe("server-side gate: the password never reaches storage", () => {
     expect(recipient).toEqual({
       email: "melvin.loinette@windstream.net",
       company_name: null,
+      contact_name: null,
       validation_status: "valid",
     });
   });

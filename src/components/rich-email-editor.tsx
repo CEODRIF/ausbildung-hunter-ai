@@ -14,6 +14,30 @@ const tools = [
   { label: "Redo", command: "redo", icon: "↷" },
 ];
 
+/**
+ * Smart personalization variables. The displayed labels follow the
+ * product's Arabic copy; the stored tokens are the stable, unambiguous
+ * ones from lib/personalization (rendered per recipient on the server
+ * before sending — the editor itself only ever stores the token).
+ */
+const variables = [
+  {
+    token: "{{company_name}}",
+    label: "اسم الشركة",
+    title: "Company name — personalized per recipient ({{company_name}})",
+  },
+  {
+    token: "{{contact_name}}",
+    label: "اسم المشغّل",
+    title: "Contact person — personalized per recipient ({{contact_name}})",
+  },
+  {
+    token: "{{greeting}}",
+    label: "الافتتاحية",
+    title: "Formal German greeting — personalized per recipient ({{greeting}})",
+  },
+];
+
 export function RichEmailEditor({
   value,
   onChange,
@@ -85,6 +109,25 @@ export function RichEmailEditor({
         >
           Link
         </button>
+        {/* Smart personalization variables — inserted at the cursor with
+            the same exec("insertText") path as the other tools, so the
+            current selection/formatting is preserved exactly like a text
+            insert. onMouseDown preventDefault (as on every toolbar button)
+            keeps the editor selection from collapsing on click. */}
+        <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 bg-line-strong" />
+        {variables.map((variable) => (
+          <button
+            key={variable.token}
+            type="button"
+            title={variable.title}
+            aria-label={variable.title}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => exec("insertText", variable.token)}
+            className="flex h-8 items-center justify-center rounded-lg px-2 text-xs text-muted hover:bg-accent-soft hover:text-accent"
+          >
+            {variable.label}
+          </button>
+        ))}
       </div>
       <div
         ref={editorRef}

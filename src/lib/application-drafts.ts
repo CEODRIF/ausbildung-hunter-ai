@@ -14,6 +14,9 @@ export type DraftRecipient = {
   id: string;
   email: string;
   company_name: string | null;
+  /** Explicitly provided contact person name (trusted source for the
+   *  personalized greeting); null when the user did not provide one. */
+  contact_name: string | null;
   validation_status: RecipientStatus;
 };
 export type DraftAttachment = {
@@ -140,7 +143,7 @@ export async function getApplicationComposerData() {
   const [{ data: recipients }, { data: attachments }] = await Promise.all([
     supabase
       .from("application_draft_recipients")
-      .select("id, email, company_name, validation_status")
+      .select("id, email, company_name, contact_name, validation_status")
       .eq("draft_id", existing.id)
       .order("created_at"),
     supabase
@@ -200,7 +203,7 @@ export async function loadOwnedDraft(
   const [{ data: recipients }, { data: attachments }] = await Promise.all([
     admin
       .from("application_draft_recipients")
-      .select("id, email, company_name, validation_status")
+      .select("id, email, company_name, contact_name, validation_status")
       .eq("draft_id", data.id)
       .order("created_at"),
     admin
@@ -301,7 +304,11 @@ export function safeAccountList(accounts: SafeEmailAccount[]) {
  * with a short echo so the user can see what failed.
  */
 export function validateRecipientList(
-  recipients: Array<{ email: string; companyName?: string | null }>,
+  recipients: Array<{
+    email: string;
+    companyName?: string | null;
+    contactName?: string | null;
+  }>,
 ) {
   const seen = new Set<string>();
   return recipients
@@ -318,6 +325,11 @@ export function validateRecipientList(
       return {
         email: email ?? recipient.email.trim().slice(0, 64),
         company_name: recipient.companyName?.trim().slice(0, 160) || null,
+        // The contact name is an EXPLICIT user-provided value (trusted
+        // source for the personalized greeting). It is stored as-is
+        // (trimmed, length-capped); the personalization renderer is what
+        // decides what may be used, so nothing name-like is invented here.
+        contact_name: recipient.contactName?.trim().slice(0, 120) || null,
         validation_status: status,
       };
     });

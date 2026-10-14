@@ -139,6 +139,7 @@ const draft: ApplicationDraft = {
       id: "r-1",
       email: "job@firma.de",
       company_name: "Firma GmbH",
+      contact_name: null,
       validation_status: "valid",
     },
   ],

@@ -30,21 +30,12 @@ import type {
 } from "@/lib/application-drafts";
 import type { SafeEmailAccount } from "@/lib/email-oauth";
 import { useI18n } from "@/lib/i18n";
-
-const templates = {
-  ausbildung: {
-    subject: "Bewerbung um einen Ausbildungsplatz",
-    body: "<p>Sehr geehrte Damen und Herren,</p><p>hiermit bewerbe ich mich mit großem Interesse um einen Ausbildungsplatz in Ihrem Unternehmen.</p><p>Über die Gelegenheit zu einem persönlichen Gespräch freue ich mich sehr.</p><p>Mit freundlichen Grüßen</p>",
-  },
-  arbeit: {
-    subject: "Bewerbung um eine Position in Ihrem Unternehmen",
-    body: "<p>Sehr geehrte Damen und Herren,</p><p>mit großem Interesse bewerbe ich mich um eine Position in Ihrem Unternehmen.</p><p>Über die Gelegenheit zu einem persönlichen Gespräch freue ich mich sehr.</p><p>Mit freundlichen Grüßen</p>",
-  },
-};
+import { applicationTemplates } from "@/lib/application-templates";
 
 type Recipient = {
   email: string;
   companyName?: string;
+  contactName?: string;
   status: "valid" | "invalid" | "duplicate";
 };
 export function ApplicationComposer({
@@ -71,6 +62,7 @@ export function ApplicationComposer({
     initialDraft.recipients.map((item) => ({
       email: item.email,
       companyName: item.company_name ?? undefined,
+      contactName: item.contact_name ?? undefined,
       status: item.validation_status,
     })),
   );
@@ -142,8 +134,8 @@ export function ApplicationComposer({
 
   const applyTemplate = (templateGoal: ApplicationGoal) => {
     setGoal(templateGoal);
-    setSubject(templates[templateGoal].subject);
-    setBody(templates[templateGoal].body);
+    setSubject(applicationTemplates[templateGoal].subject);
+    setBody(applicationTemplates[templateGoal].body);
   };
   const handleUpload = async (file: File) => {
     setUploading(true);
@@ -245,11 +237,13 @@ export function ApplicationComposer({
               />
             </div>
             <div className="mt-5">
-              <div className="mb-2 flex items-center justify-between">
+              <div className="mb-2 flex items-center justify-between gap-3">
                 <label className="text-sm font-semibold text-ink-soft">
                   Message
                 </label>
-                <span className="text-xs text-faint">Clean HTML email</span>
+                <span className="truncate text-xs text-faint">
+                  Clean HTML email · variables personalize per recipient
+                </span>
               </div>
               <RichEmailEditor value={body} onChange={setBody} />
             </div>
