@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { listEmailAccounts, type SafeEmailAccount } from "@/lib/email-oauth";
 import { normalizeRecipientEmail } from "@/lib/email-recipients";
+import { hasContactNameColumn } from "@/lib/contact-name-support";
 import type { Profile } from "@/lib/auth";
 
 export type ApplicationGoal = "ausbildung" | "arbeit";
@@ -140,10 +141,21 @@ export async function getApplicationComposerData() {
         accounts[0].id,
       ),
     };
-  const [{ data: recipients }, { data: attachments }] = await Promise.all([
+  // The contact_name column is OPTIONAL (migration 20261108000000 is
+  // applied manually) — querying it on a pre-migration database would
+  // error and silently drop ALL recipients (disabling "Send
+  // applications"). The base select only names columns that always
+  // exist; the optional contact select runs (cached probe) only when the
+  // column is there.
+  const supportsContactName = await hasContactNameColumn();
+  const [
+    { data: recipients },
+    { data: attachments },
+    { data: contactRows },
+  ] = await Promise.all([
     supabase
       .from("application_draft_recipients")
-      .select("id, email, company_name, contact_name, validation_status")
+      .select("id, email, company_name, validation_status")
       .eq("draft_id", existing.id)
       .order("created_at"),
     supabase
@@ -151,14 +163,29 @@ export async function getApplicationComposerData() {
       .select("id, filename, mime_type, size_bytes, storage_path")
       .eq("draft_id", existing.id)
       .order("created_at"),
+    supportsContactName
+      ? supabase
+          .from("application_draft_recipients")
+          .select("email, contact_name")
+          .eq("draft_id", existing.id)
+      : Promise.resolve({
+          data: [] as Array<{ email: string; contact_name: string | null }>,
+          error: null,
+        }),
   ]);
+  const contactByEmail = new Map(
+    (contactRows ?? []).map((row) => [row.email, row.contact_name ?? null]),
+  );
   return {
     userId: user.id,
     profile,
     accounts,
     draft: {
       ...existing,
-      recipients: (recipients ?? []) as DraftRecipient[],
+      recipients: (recipients ?? []).map((recipient) => ({
+        ...recipient,
+        contact_name: contactByEmail.get(recipient.email) ?? null,
+      })) as DraftRecipient[],
       attachments: (attachments ?? []) as DraftAttachment[],
     },
   };
@@ -200,10 +227,15 @@ export async function loadOwnedDraft(
     .eq("user_id", userId)
     .maybeSingle<ApplicationDraft>();
   if (error || !data) return null;
-  const [{ data: recipients }, { data: attachments }] = await Promise.all([
+  const supportsContactName = await hasContactNameColumn();
+  const [
+    { data: recipients },
+    { data: attachments },
+    { data: contactRows },
+  ] = await Promise.all([
     admin
       .from("application_draft_recipients")
-      .select("id, email, company_name, contact_name, validation_status")
+      .select("id, email, company_name, validation_status")
       .eq("draft_id", data.id)
       .order("created_at"),
     admin
@@ -211,7 +243,19 @@ export async function loadOwnedDraft(
       .select("id, filename, mime_type, size_bytes, storage_path")
       .eq("draft_id", data.id)
       .order("created_at"),
+    supportsContactName
+      ? admin
+          .from("application_draft_recipients")
+          .select("email, contact_name")
+          .eq("draft_id", data.id)
+      : Promise.resolve({
+          data: [] as Array<{ email: string; contact_name: string | null }>,
+          error: null,
+        }),
   ]);
+  const contactByEmail = new Map(
+    (contactRows ?? []).map((row) => [row.email, row.contact_name ?? null]),
+  );
   return {
     ...data,
     // Defence in depth for the ONE place stored HTML is handed back to the
@@ -220,7 +264,10 @@ export async function loadOwnedDraft(
     // future write that forgets to cannot become stored XSS — and rows written
     // before the sanitizer existed are covered too.
     body_html: sanitizeEmailHtml(data.body_html ?? ""),
-    recipients: (recipients ?? []) as DraftRecipient[],
+    recipients: (recipients ?? []).map((recipient) => ({
+      ...recipient,
+      contact_name: contactByEmail.get(recipient.email) ?? null,
+    })) as DraftRecipient[],
     attachments: (attachments ?? []) as DraftAttachment[],
   };
 }

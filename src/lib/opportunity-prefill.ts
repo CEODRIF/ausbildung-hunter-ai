@@ -9,6 +9,7 @@ import {
   type ApplicationGoal,
 } from "@/lib/application-drafts";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { hasContactNameColumn } from "@/lib/contact-name-support";
 import { parseOpportunityKey } from "@/lib/opportunities/providers/arbeitsagentur";
 import { resolveOpportunityCached } from "@/lib/opportunities/search";
 import type { Opportunity } from "@/lib/opportunities/types";
@@ -184,9 +185,22 @@ async function replaceDraftRecipient(
     .from("application_draft_recipients")
     .delete()
     .eq("draft_id", draftId);
+  // contact_name is OPTIONAL in the schema (manual migration) — only write
+  // it when the column exists, so prefill never fails pre-migration.
+  const supportsContactName = await hasContactNameColumn();
   await admin
     .from("application_draft_recipients")
-    .insert([{ draft_id: draftId, ...validated }]);
+    .insert([
+      {
+        draft_id: draftId,
+        email: validated.email,
+        company_name: validated.company_name,
+        validation_status: validated.validation_status,
+        ...(supportsContactName
+          ? { contact_name: validated.contact_name }
+          : {}),
+      },
+    ]);
 }
 
 /**
