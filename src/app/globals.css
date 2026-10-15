@@ -63,6 +63,13 @@
   --glow-navy-rgb: 23, 24, 58;
   --gradient-neon: linear-gradient(120deg, #7b6cf6 0%, #5a8df8 55%, #9b7bf7 100%);
   --gradient-headline: linear-gradient(120deg, #4f3ee0 0%, #6d5df6 48%, #9b7bf7 100%);
+  /* AI chat: the site-wide --gradient-neon stops sit at 3.2–3.9:1 against
+   * white, which fails WCAG AA for the white text on user bubbles. The
+   * chat-scoped gradient deepens every stop to ≥4.5:1 on white while
+   * keeping the same violet→blue→violet hue walk, so light mode stays on
+   * brand. (Dark mode pins this variable to --gradient-neon below —
+   * unchanged.) */
+  --gradient-ai-chat: linear-gradient(120deg, #5f4de8 0%, #4a63e0 55%, #7a52ea 100%);
   --blur-glass: 18px;
   --radius-2xl: 1.5rem;
   --radius-3xl: 2rem;
@@ -122,6 +129,9 @@
   --glow-navy-rgb: 0, 0, 0;
   /* CTA gradient: tight two-stop violet (no blue/violet spread). */
   --gradient-neon: linear-gradient(120deg, #7567f5 0%, #8b7cff 100%);
+  /* Dark mode: the AI chat gradient is the site gradient — dark stays
+   * visually identical to the pre-fix rendering. */
+  --gradient-ai-chat: var(--gradient-neon);
   /* Headlines: white-dominant with a faint lavender tail — brand whisper,
    * not a purple headline. */
   --gradient-headline: linear-gradient(120deg, #f5f5f5 0%, #e7e5ff 55%, #b9aeff 100%);

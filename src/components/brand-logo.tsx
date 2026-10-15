@@ -45,9 +45,11 @@ export interface BrandLogoProps {
 }
 
 function Mark({ size }: { size: number }) {
-  // The official mark artwork carries a white background; the rounded tile
-  // makes that read as an intentional badge on dark surfaces and blends
-  // invisibly into light ones.
+  // The official mark artwork carries a white background. On dark surfaces
+  // the white tile reads as an intentional badge (near-invisible dark ring,
+  // unchanged); on light surfaces the tile sits on a white/near-white panel
+  // and needs a visible hairline boundary — the system border token
+  // (theme-aware, so it stays subtle in both themes).
   return (
     // eslint-disable-next-line @next/next/no-img-element -- brand asset, fixed dimensions
     <img
@@ -56,7 +58,7 @@ function Mark({ size }: { size: number }) {
       width={size}
       height={size}
       style={{ width: size, height: size }}
-      className="shrink-0 rounded-xl bg-white object-contain ring-1 ring-black/5"
+      className="shrink-0 rounded-xl bg-white object-contain ring-1 ring-line-strong dark:ring-black/5"
     />
   );
 }
