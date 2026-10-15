@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AusbildungsWeg — Profil-Avatar-Galerie (Contact Sheet)</title>
+<style>
+  :root {
+    --bg: #0b0910;
+    --surface: #151122;
+    --line: #2a2338;
+    --ink: #f2effa;
+    --muted: #9d94b5;
+    --accent: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px 48px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 24px; max-width: 640px; line-height: 1.5; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 16px;
+    max-width: 1080px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 16px;
+    text-align: center;
+  }
+  .card img {
+    width: 96px;
+    height: 96px;
+    border-radius: 14px;
+    margin: 0 auto;
+    display: block;
+  }
+  .id { font-weight: 700; font-size: 13px; margin-top: 10px; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .label { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.4; min-height: 34px; }
+  .size { font-size: 11px; color: var(--muted); margin-top: 8px; opacity: 0.8; font-variant-numeric: tabular-nums; }
+  .note {
+    margin-top: 28px; padding: 14px 16px; border: 1px dashed var(--line);
+    border-radius: 12px; color: var(--muted); font-size: 12px; line-height: 1.6; max-width: 640px;
+  }
+</style>
+</head>
+<body>
+  <h1>Profil-Avatar-Galerie — Contact Sheet</h1>
+  <p class="sub">
+    10 originale, im Repository handgebaute Vektor-Avatar (SVG, 256×256 viewBox).
+    Identifikatoren <code>avatar-01</code> … <code>avatar-10</code> — die einzige
+    gültige Auswahl im Profil-Editor (<code>src/lib/profile-avatars.ts</code>).
+  </p>
+  <div class="grid">
+    <div class="card"><img src="../public/profile-avatars/avatar-01.svg" width="256" height="256" alt="Lila geometrisches Monogramm"><div class="id">avatar-01</div><div class="label">Lila geometrisches Monogramm<br><span style="opacity:.7">Purple geometric monogram</span></div><div class="size">953 Bytes</div></div>
+    <div class="card"><img src="../public/profile-avatars/avatar-02.svg" width="256" height="256" alt="Minimales abstraktes Porträt"><div class="id">avatar-02</div><div class="label">Minimales abstraktes Porträt<br><span style="opacity:.7">Minimal abstract portrait</span></div><div class="size">760 Bytes</div></div>
+    <div class="card"><img src="../public/profile-avatars/avatar-03.svg" width="256" height="256" alt="Blaues geometrisches Identitätssymbol"><div class="id">avatar-03</div><div class="label">Blaues geometrisches Identitätssymbol<br><span style="opacity:.7">Blue geometric identity symbol</span></div><div class="size">1.098 Bytes</div></div>
+    <div class="card"><img src="../public/profile-avatars/avatar-04.svg" width="256" height="256" alt="Violett-cyan abstraktes Emblem"><div class="id">avatar-04</div><div class="label">Violett-cyan abstraktes Emblem<br><span style="opacity:.7">Purple &amp; cyan abstract emblem</span></div><div class="size">1.188 Bytes</div></div>
+    <div class="card"><img src="../public/profile-avatars/avatar-05.svg" width="256" height="256" alt="Minimaler Roboter-Avatar"><div class="id">avatar-05</div><div class="label">Minimaler Roboter-Avatar<br><span style="opacity:.7">Minimal robot avatar</span></div><div class="size">1.297 Bytes</div></div>
+    <div class="card"><img src="../public/profile-avatars/avatar-06.svg" width="256" height="256" alt="Geometrische menschliche Silhouette"><div class="id">avatar-06</div><div class="label">Geometrische menschliche Silhouette<br><span style="opacity:.7">Geometric human silhouette</span></div><div class="size">955 Bytes</div></div>
+    <div class="card"><img src="../public/profile-avatars/avatar-07.svg" width="256" height="256" alt="Smaragdgrünes Profilsymbol"><div class="id">avatar-07</div><div class="label">Smaragdgrünes Profilsymbol<br><span style="opacity:.7">Emerald professional emblem</span></div><div class="size">1.103 Bytes</div></div>
+    <div class="card"><img src="../public/profile-avatars/avatar-08.svg" width="256" height="256" alt="Orange-violette abstrakte Form"><div class="id">avatar-08</div><div class="label">Orange-violette abstrakte Form<br><span style="opacity:.7">Orange &amp; purple abstract shape</span></div><div class="size">855 Bytes</div></div>
+    <div class="card"><img src="../public/profile-avatars/avatar-09.svg" width="256" height="256" alt="Akademisches Studienkappen-Symbol"><div class="id">avatar-09</div><div class="label">Akademisches Studienkappen-Symbol<br><span style="opacity:.7">Academic mortarboard symbol</span></div><div class="size">1.102 Bytes</div></div>
+    <div class="card"><img src="../public/profile-avatars/avatar-10.svg" width="256" height="256" alt="Eleganter monochromer Avatar"><div class="id">avatar-10</div><div class="label">Eleganter monochromer Avatar<br><span style="opacity:.7">Elegant monochrome avatar</span></div><div class="size">907 Bytes</div></div>
+  </div>
+  <p class="note">
+    Hinweis: Dieses Kontaktblatt ist eine Review-Hilfe und wird NIE als
+    Benutzer-Avatar verwendet — es liegt unter <code>/docs</code> außerhalb von
+    <code>/public</code> und ist von der App nicht als Avatar-Asset referenzierbar.
+    Alle Assets sind lokale, originale SVGs ohne externe Abhängigkeiten,
+    Skripte, Metadaten oder Text.
+  </p>
+</body>
+</html>

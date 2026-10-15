@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="30%" r="95%">
+      <stop offset="0%" stop-color="#1C1530"/>
+      <stop offset="100%" stop-color="#100C19"/>
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg)"/>
+  <!-- subtle dot grid -->
+  <g fill="#A78BFA" fill-opacity="0.18">
+    <circle cx="40" cy="52" r="3"/><circle cx="64" cy="40" r="3"/><circle cx="196" cy="44" r="3"/>
+    <circle cx="216" cy="72" r="3"/><circle cx="44" cy="208" r="3"/><circle cx="212" cy="200" r="3"/>
+  </g>
+  <!-- antenna -->
+  <path d="M128 62 V40" stroke="#A78BFA" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="128" cy="32" r="9" fill="#C4B5FD"/>
+  <!-- head -->
+  <rect x="58" y="62" width="140" height="118" rx="30" fill="#241B3A" stroke="#8B5CF6" stroke-width="6"/>
+  <!-- eyes -->
+  <circle cx="104" cy="118" r="14" fill="#A78BFA"/>
+  <circle cx="152" cy="118" r="14" fill="#A78BFA"/>
+  <circle cx="108" cy="114" r="4" fill="#F5F3FF"/>
+  <circle cx="156" cy="114" r="4" fill="#F5F3FF"/>
+  <!-- mouth -->
+  <path d="M108 152 h40" stroke="#7C6CF0" stroke-width="8" stroke-linecap="round"/>
+  <!-- base -->
+  <rect x="88" y="192" width="80" height="14" rx="7" fill="#372A57"/>
+</svg>

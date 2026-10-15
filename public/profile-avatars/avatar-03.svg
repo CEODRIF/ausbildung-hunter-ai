@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="bg" cx="30%" cy="80%" r="95%">
+      <stop offset="0%" stop-color="#16203A"/>
+      <stop offset="100%" stop-color="#0E1322"/>
+    </radialGradient>
+    <linearGradient id="h" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#93C5FD"/>
+      <stop offset="100%" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg)"/>
+  <circle cx="128" cy="128" r="102" fill="none" stroke="#3B82F6" stroke-opacity="0.3" stroke-width="2" stroke-dasharray="4 10" stroke-linecap="round"/>
+  <!-- hexagon identity mark -->
+  <path d="M128 52 L194 90 V166 L128 204 L62 166 V90 Z" fill="none" stroke="url(#h)" stroke-width="14" stroke-linejoin="round"/>
+  <path d="M128 88 L162 108 V148 L128 168 L94 148 V108 Z" fill="#3B82F6" fill-opacity="0.28"/>
+  <circle cx="128" cy="128" r="14" fill="url(#h)"/>
+  <!-- orbit accents -->
+  <circle cx="206" cy="64" r="8" fill="#60A5FA"/>
+  <circle cx="52" cy="196" r="6" fill="#93C5FD"/>
+</svg>

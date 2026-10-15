@@ -158,3 +158,45 @@ export function hasCampaignOwnedContent(): Promise<boolean> {
 export function resetCampaignOwnedContentProbe(): void {
   ownedContentProbe = null;
 }
+
+/* ------------------------------------------------------------------ *
+ * Profile avatar-gallery probe
+ * ------------------------------------------------------------------ */
+
+let profileAvatarProbe: Promise<boolean> | null = null;
+
+/**
+ * Whether `profiles.avatar` exists — i.e. migration
+ * 20261111000000_profile_avatar_gallery.sql has been applied (MANUALLY,
+ * like every migration in this repo).
+ *
+ * When true, the profile page renders the full identity editor
+ * (display name + 10-avatar gallery) and the server action may persist
+ * an avatar identifier. When false (code deployed before the migration),
+ * the page falls back to display-name-only editing — the name lives in
+ * the long-existing `full_name` column, so it works on ANY schema — and
+ * the avatar picker is not rendered at all.
+ *
+ * Same contract as the other probes: cached per process, only a CLEAN
+ * READ proves the column; any error resolves to `false`.
+ */
+export function hasProfileAvatarColumn(): Promise<boolean> {
+  profileAvatarProbe ??= (async () => {
+    try {
+      const admin = createAdminClient();
+      const { error } = await admin
+        .from("profiles")
+        .select("avatar")
+        .limit(1);
+      return error === null;
+    } catch {
+      return false;
+    }
+  })();
+  return profileAvatarProbe;
+}
+
+/** Test hook: drop the cached probe so a test can simulate a schema change. */
+export function resetProfileAvatarColumnProbe(): void {
+  profileAvatarProbe = null;
+}

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="15%" r="100%">
+      <stop offset="0%" stop-color="#201A33"/>
+      <stop offset="100%" stop-color="#110E1B"/>
+    </radialGradient>
+    <linearGradient id="cap" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#C4B5FD"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg)"/>
+  <circle cx="128" cy="128" r="96" fill="none" stroke="#8B5CF6" stroke-opacity="0.22" stroke-width="2"/>
+  <!-- mortarboard (flat geometry) -->
+  <path d="M128 76 L208 116 L128 156 L48 116 Z" fill="url(#cap)"/>
+  <path d="M128 76 L208 116 L128 156 L48 116 Z" fill="#F5F3FF" fill-opacity="0.1"/>
+  <!-- cap base -->
+  <path d="M88 132 v34 a40 22 0 0 0 80 0 v-34" fill="none" stroke="#A78BFA" stroke-width="10" stroke-linecap="round"/>
+  <!-- tassel -->
+  <path d="M196 118 v44" stroke="#F5F3FF" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="196" cy="172" r="8" fill="#F5F3FF"/>
+</svg>
