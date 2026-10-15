@@ -25,7 +25,10 @@ describe("iOS zoom prevention", () => {
     // landscape) and iPad — Safari never triggers focus auto-zoom.
     // Desktop (>= 1024px) keeps the original text-sm: zero desktop change.
     expect(chat).toContain(
-      "max-h-48 min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-base leading-6 text-ink-soft outline-none placeholder:text-faint lg:text-sm",
+      // placeholder: muted in light (AA), faint kept in dark — see
+      // tests/ai-chat-contrast.test.ts. The zoom-relevant sizes
+      // (text-base / lg:text-sm) are unchanged.
+      "max-h-48 min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-base leading-6 text-ink-soft outline-none placeholder:text-muted dark:placeholder:text-faint lg:text-sm",
     );
     // No sub-16px font may remain on the focused textarea itself.
     // The opening tag ends at the first `/>`; attribute arrows contain a

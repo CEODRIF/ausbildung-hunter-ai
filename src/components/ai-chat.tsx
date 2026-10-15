@@ -20,6 +20,7 @@ import {
   formatFileSize,
   isImageMime,
 } from "@/lib/ai-chat-files";
+import { BrandLogo } from "@/components/brand-logo";
 
 /**
  * AI Assistant — chat workspace.
@@ -54,6 +55,15 @@ type ComposerFile = {
   id?: string;
   error?: string;
 };
+
+/**
+ * WCAG-AA error red for LIGHT mode: the light `--danger` token (#d9535d)
+ * sits at ~3.9:1 on white — below the 4.5:1 AA minimum for normal text.
+ * #b93a44 clears 4.5:1 on white and on --danger-soft while staying the
+ * same red family. The dark `--danger` token already passes AA on the
+ * dark surfaces, so dark mode keeps the system token (unchanged).
+ */
+const DANGER_TEXT = "text-[#b93a44] dark:text-danger";
 
 const QUICK_ACTIONS = [
   "Analysiere meinen Lebenslauf",
@@ -160,16 +170,18 @@ function formatDate(iso: string): string {
   });
 }
 
-function ThinkingDots() {
+/** Exported for the contrast tests (renders only while awaiting the first
+ *  streaming token, which SSR of committed history never reaches). */
+export function ThinkingDots() {
   return (
     <span
       className="inline-flex items-center gap-1 py-2"
       role="status"
       aria-label="Die KI denkt nach"
     >
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent/55 [animation-delay:0ms]" />
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent/55 [animation-delay:150ms]" />
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent/55 [animation-delay:300ms]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent dark:bg-accent/55 [animation-delay:0ms]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent dark:bg-accent/55 [animation-delay:150ms]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent dark:bg-accent/55 [animation-delay:300ms]" />
     </span>
   );
 }
@@ -234,7 +246,7 @@ function Markdown({ content }: { content: string }) {
           className ? (
             <code className={className}>{children}</code>
           ) : (
-            <code className="rounded-md bg-surface-2 px-1.5 py-0.5 text-[13px] font-semibold text-danger">
+            <code className={`rounded-md bg-surface-2 px-1.5 py-0.5 text-[13px] font-semibold ${DANGER_TEXT}`}>
               {children}
             </code>
           ),
@@ -302,17 +314,17 @@ const MessageBubble = memo(function MessageBubble({
                 <span className="max-w-[160px] truncate text-[11px] font-semibold text-ink-soft">
                   {file.filename}
                 </span>
-                <span className="text-[10px] text-faint">
+                <span className="text-[10px] text-muted dark:text-faint">
                   {formatFileSize(file.size_bytes)}
                 </span>
               </span>
             ))}
           </div>
         )}
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[var(--gradient-neon)] px-4 py-2.5 text-sm leading-6 text-white shadow-[0_8px_20px_-6px_rgba(var(--glow-accent-rgb),0.45)]">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[var(--gradient-ai-chat)] px-4 py-2.5 text-sm leading-6 text-white shadow-[0_8px_20px_-6px_rgba(var(--glow-accent-rgb),0.45)]">
           {message.content}
         </div>
-        <span className="mt-1 pr-1 text-[10px] text-faint">
+        <span className="mt-1 pe-1 text-[10px] text-muted dark:text-faint">
           {formatTime(message.created_at)}
         </span>
       </div>
@@ -320,7 +332,7 @@ const MessageBubble = memo(function MessageBubble({
   }
   return (
     <div className="flex gap-2.5">
-      <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-[var(--gradient-neon)] text-white shadow-[0_4px_12px_-2px_rgba(var(--glow-accent-rgb),0.4)]">
+      <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-[var(--gradient-ai-chat)] text-white shadow-[0_4px_12px_-2px_rgba(var(--glow-accent-rgb),0.4)]">
         <Icon name="spark" size={14} />
       </span>
       <div className="min-w-0 max-w-[88%] flex-1">
@@ -328,7 +340,7 @@ const MessageBubble = memo(function MessageBubble({
           <span className="text-[11px] font-bold text-ink-soft">
             AusbildungsWeg
           </span>
-          <span className="text-[10px] text-faint">
+          <span className="text-[10px] text-muted dark:text-faint">
             {formatTime(message.created_at)}
           </span>
         </div>
@@ -744,24 +756,9 @@ export function AIChat({
   const sidebar = (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between">
-        <Link
-          href="/"
-          className="flex items-center gap-2.5"
-          aria-label="AusbildungsWeg – Startseite"
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element -- brand asset, fixed dimensions */}
-          <img
-            src="/logo-mark.jpg"
-            alt=""
-            width={36}
-            height={36}
-            className="h-9 w-9 rounded-xl bg-white object-contain ring-1 ring-black/5"
-          />
-          <span className="text-sm font-bold tracking-[-0.02em] text-ink">
-            Ausbildungs
-            <span className="text-[#0B63E5] dark:text-[#168CFF]">Weg</span>
-          </span>
-        </Link>
+        {/* Single identity source — the mark chip stays visible on the
+            light sidebar via its theme-aware ring (see BrandLogo). */}
+        <BrandLogo size={36} label="AusbildungsWeg – Startseite" />
         <button
           className="rounded-lg p-1.5 text-muted hover:bg-surface-2 lg:hidden"
           onClick={() => setDrawer(false)}
@@ -782,9 +779,9 @@ export function AIChat({
         aria-label="Unterhaltungen"
       >
         {conversations.length === 0 && (
-          <p className="px-3 py-2 text-xs text-faint">
-            Noch keine Unterhaltungen.
-          </p>
+            <p className="px-3 py-2 text-xs text-muted dark:text-faint">
+              Noch keine Unterhaltungen.
+            </p>
         )}
         {conversations.map((conversation) => {
           const active = conversation.id === selectedConversation.id;
@@ -802,14 +799,14 @@ export function AIChat({
                 >
                   {conversation.title || "Neue Unterhaltung"}
                 </span>
-                <span className="block text-[10px] text-faint">
+                <span className="block text-[10px] text-muted dark:text-faint">
                   {formatDate(conversation.updated_at)}
                 </span>
               </button>
               <button
                 aria-label={`Unterhaltung „${conversation.title}“ löschen`}
                 onClick={() => void removeConversation(conversation.id)}
-                className="absolute right-2 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-faint transition hover:bg-surface hover:text-danger group-hover:flex"
+                className="absolute right-2 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-muted dark:text-faint transition hover:bg-surface hover:text-danger group-hover:flex"
               >
                 <Icon name="x" size={12} />
               </button>
@@ -865,9 +862,9 @@ export function AIChat({
               <h1 className="truncate text-sm font-bold text-ink">
                 AI Assistant
               </h1>
-              <p className="hidden truncate text-[11px] text-faint sm:block">
-                Dein Karriere-Assistent für Ausbildung &amp; Bewerbung
-              </p>
+                <p className="hidden truncate text-[11px] text-muted dark:text-faint sm:block">
+                  Dein Karriere-Assistent für Ausbildung &amp; Bewerbung
+                </p>
             </div>
           </div>
           <Link
@@ -891,7 +888,7 @@ export function AIChat({
                      aria-hidden="true"
                      className="orb-ring absolute inset-0 rounded-full border-2 border-accent/25"
                    />
-                   <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-[var(--gradient-neon)] shadow-[0_18px_40px_-10px_rgba(var(--glow-accent-rgb),0.55)]">
+                   <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-[var(--gradient-ai-chat)] shadow-[0_18px_40px_-10px_rgba(var(--glow-accent-rgb),0.55)]">
                      <Icon name="spark" size={34} className="text-white" />
                    </div>
                  </div>
@@ -924,7 +921,7 @@ export function AIChat({
                 ))}
                  {pendingAssistant && (
                    <div className="flex gap-2.5">
-                     <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-[var(--gradient-neon)] text-white shadow-[0_4px_12px_-2px_rgba(var(--glow-accent-rgb),0.4)]">
+                     <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-[var(--gradient-ai-chat)] text-white shadow-[0_4px_12px_-2px_rgba(var(--glow-accent-rgb),0.4)]">
                        <Icon name="spark" size={14} />
                      </span>
                     <div className="min-w-0 flex-1">
@@ -947,13 +944,13 @@ export function AIChat({
                 )}
                 {failedSend && (
                   <div className="flex flex-wrap items-center gap-3 rounded-xl border border-danger/25 bg-danger-soft px-4 py-3">
-                    <Icon name="alert" size={17} className="shrink-0 text-danger" />
-                    <span className="min-w-[180px] flex-1 text-sm leading-5 text-danger">
+                      <Icon name="alert" size={17} className={`shrink-0 ${DANGER_TEXT}`} />
+                      <span className={`min-w-[180px] flex-1 text-sm leading-5 ${DANGER_TEXT}`}>
                       {failedSend.message}
                     </span>
                     <button
                       onClick={retry}
-                      className="rounded-lg border border-danger/25 bg-surface px-3 py-1.5 text-xs font-bold text-danger transition hover:bg-danger-soft"
+                      className={`rounded-lg border border-danger/25 bg-surface px-3 py-1.5 text-xs font-bold ${DANGER_TEXT} transition hover:bg-danger-soft`}
                     >
                       Nochmal versuchen
                     </button>
@@ -974,7 +971,7 @@ export function AIChat({
         <div className="shrink-0 border-t border-line bg-surface px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-6">
           <div className="mx-auto w-full max-w-3xl">
             {notice && (
-              <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-danger/25 bg-danger-soft px-3 py-2 text-xs text-danger">
+                <div className={`mb-2 flex items-center justify-between gap-3 rounded-lg border border-danger/25 bg-danger-soft px-3 py-2 text-xs ${DANGER_TEXT}`}>
                 <span className="min-w-0 truncate">{notice}</span>
                 <button
                   onClick={() => setNotice("")}
@@ -1004,7 +1001,7 @@ export function AIChat({
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-line-strong border-t-accent" />
                       </span>
                     ) : (
-                      <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${file.status === "error" ? "bg-danger-soft text-danger" : "bg-accent-soft text-accent"}`}>
+                      <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${file.status === "error" ? `bg-danger-soft ${DANGER_TEXT}` : "bg-accent-soft text-accent"}`}>
                         <Icon
                           name={isImageMime(file.mimeType) ? "image" : "file"}
                           size={15}
@@ -1012,10 +1009,10 @@ export function AIChat({
                       </span>
                     )}
                     <span className="min-w-0">
-                      <span className={`block max-w-[150px] truncate text-xs font-semibold ${file.status === "error" ? "text-danger" : "text-ink-soft"}`}>
+                      <span className={`block max-w-[150px] truncate text-xs font-semibold ${file.status === "error" ? DANGER_TEXT : "text-ink-soft"}`}>
                         {file.filename}
                       </span>
-                      <span className="block text-[10px] text-faint">
+                      <span className="block text-[10px] text-muted dark:text-faint">
                         {file.status === "uploading"
                           ? "Wird hochgeladen…"
                           : file.status === "error"
@@ -1026,7 +1023,7 @@ export function AIChat({
                     <button
                       aria-label={`Anhang „${file.filename}“ entfernen`}
                       onClick={() => removeComposerFile(file.key)}
-                      className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-faint transition hover:bg-surface-2 hover:text-danger"
+                      className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted dark:text-faint transition hover:bg-surface-2 hover:text-danger"
                     >
                       <Icon name="x" size={12} />
                     </button>
@@ -1090,7 +1087,7 @@ export function AIChat({
                  placeholder="Nachricht senden …"
                  rows={1}
                  aria-label="Nachricht"
-                 className="max-h-48 min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-base leading-6 text-ink-soft outline-none placeholder:text-faint lg:text-sm"
+                 className="max-h-48 min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-base leading-6 text-ink-soft outline-none placeholder:text-muted dark:placeholder:text-faint lg:text-sm"
               />
               {streaming ? (
                 <button
@@ -1116,13 +1113,13 @@ export function AIChat({
                       streaming,
                     )
                   }
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--gradient-neon)] text-white shadow-[0_8px_18px_-4px_rgba(var(--glow-accent-rgb),0.5)] transition hover:brightness-105 active:scale-95 disabled:cursor-not-allowed disabled:from-surface-2 disabled:to-surface-2 disabled:text-faint disabled:shadow-none"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--gradient-ai-chat)] text-white shadow-[0_8px_18px_-4px_rgba(var(--glow-accent-rgb),0.5)] transition hover:brightness-105 active:scale-95 disabled:cursor-not-allowed disabled:from-surface-2 disabled:to-surface-2 disabled:border disabled:border-line-strong dark:disabled:border-0 disabled:text-muted dark:disabled:text-faint disabled:shadow-none"
                 >
                   <Icon name="arrowUp" size={18} />
                 </button>
               )}
             </div>
-            <p className="mt-2 text-center text-[10px] leading-4 text-faint">
+            <p className="mt-2 text-center text-[10px] leading-4 text-muted dark:text-faint">
               {t("chat.fileHint")}
             </p>
           </div>
