@@ -7,18 +7,13 @@ import { logout } from "@/app/login/actions";
 import { useI18n } from "@/lib/i18n";
 import { useDismiss } from "@/lib/use-dismiss";
 import { Icon } from "@/components/icon";
+import { UserAvatar } from "@/components/user-avatar";
 
 export function ProfileMenu({ profile }: { profile: Profile }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const rootRef = useDismiss<HTMLDivElement>(open, () => setOpen(false));
   const displayName = profile.full_name || "Guest user";
-  const initials = displayName
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
 
   return (
     <div ref={rootRef} className="relative">
@@ -30,18 +25,15 @@ export function ProfileMenu({ profile }: { profile: Profile }) {
         aria-label={t("header.profile")}
         className="flex items-center gap-2 rounded-xl p-1 pe-2 transition-colors hover:bg-surface-2"
       >
-        <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-accent-soft text-xs font-bold text-accent">
-          {profile.avatar_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={profile.avatar_url}
-              alt=""
-              className="h-8 w-8 object-cover"
-            />
-          ) : (
-            initials
-          )}
-        </span>
+        <UserAvatar
+          avatar={profile.avatar}
+          avatarUrl={profile.avatar_url}
+          fullName={displayName}
+          className="h-8 w-8 bg-accent-soft"
+          imgClassName="h-8 w-8 object-cover"
+          initialsClassName="text-xs font-bold text-accent"
+          label={displayName}
+        />
         <span className="hidden max-w-32 truncate text-sm font-semibold text-ink-soft sm:block">
           {displayName}
         </span>

@@ -14,6 +14,11 @@ export type Profile = {
   last_name?: string | null;
   /** Public URL of the avatar stored in the `avatars` bucket, or null. */
   avatar_url?: string | null;
+  /** Built-in avatar-gallery identifier (20261111000000_profile_avatar_gallery,
+   *  e.g. "avatar-03"); null until the user picks one, undefined while the
+   *  manual migration is pending — full_name + initials stay the fallback.
+   *  Canonical id → asset mapping: src/lib/profile-avatars.ts. */
+  avatar?: string | null;
   email: string;
   account_status: "pending" | "active" | "suspended";
   selected_goal: "ausbildung" | "arbeit" | null;

@@ -110,9 +110,16 @@ describe("settings profile page — premium visual redesign", () => {
   });
 
   it("hero shows the real avatar when set, initials fallback when missing", () => {
-    expect(PAGE).toContain("profile.avatar_url ?");
-    expect(PAGE).toContain("object-cover");
-    expect(PAGE).toContain("initials");
+    // The hero renders the shared resolver (UserAvatar) fed with the
+    // profile's gallery id, avatar_url and full name. The "real avatar
+    // when set, initials when missing" contract now lives in
+    // resolveUserAvatar (unit-tested in tests/profile-identity.test.ts)
+    // instead of inline markup — this pins the wiring that keeps the
+    // hero consistent with the platform-wide avatar display.
+    expect(PAGE).toContain("<UserAvatar");
+    expect(PAGE).toContain("avatarUrl={profile.avatar_url}");
+    expect(PAGE).toContain("fullName={profile.full_name}");
+    expect(PAGE).toContain("initialsClassName");
     // Gradient ring + atmospheric orbs from the existing token system:
     expect(PAGE).toContain("var(--gradient-neon)");
     expect(PAGE).toContain("hero-orb");

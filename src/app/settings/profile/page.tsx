@@ -9,6 +9,10 @@ import {
 } from "@/lib/i18n/core";
 import { GlassCard } from "@/components/ui/surfaces";
 import { Icon, type IconName } from "@/components/icon";
+import { ProfileIdentityForm } from "@/components/profile-identity-form";
+import { UserAvatar } from "@/components/user-avatar";
+import { hasProfileAvatarColumn } from "@/lib/contact-name-support";
+import { isProfileAvatarId } from "@/lib/profile-avatars";
 
 export const dynamic = "force-dynamic";
 
@@ -50,10 +54,14 @@ const SOCIALS = [
  * Settings — Profile. A premium identity dashboard over the EXISTING
  * profile data (no new backend, no new fields, no new endpoints):
  *
- *   1. Hero identity card — avatar (real `avatar_url` when set, initials
- *      fallback otherwise), name, email, status / goal / member-since pills.
- *   2. Personal information — read-only rows from `profiles`.
- *   3. Connected accounts — links to the existing settings pages
+ *   1. Hero identity card — avatar (gallery avatar → uploaded `avatar_url`
+ *      → initials, resolved by UserAvatar), name, email, status / goal /
+ *      member-since pills.
+ *   2. Identity editor — display name + 10-avatar gallery (the avatar
+ *      picker is gated on the hasProfileAvatarColumn() probe; display
+ *      name works on every schema).
+ *   3. Personal information — read-only rows from `profiles`.
+ *   4. Connected accounts — links to the existing settings pages
  *      (email / usage / billing / data), reusing their own titles.
  *
  * All visuals come from the design tokens in globals.css, so light and
@@ -69,6 +77,16 @@ export default async function ProfileSettingsPage() {
   const lang = (await getRequestLang()) as Language;
   const locale = localeForLang(lang);
 
+  // Avatar gallery: only offered once the MANUAL migration
+  // (20261111000000_profile_avatar_gallery) has been applied — code may
+  // deploy first. The display name works on every schema (full_name has
+  // existed since the auth foundation).
+  const avatarSupported = await hasProfileAvatarColumn();
+  const avatarId =
+    avatarSupported && isProfileAvatarId(profile.avatar)
+      ? profile.avatar
+      : null;
+
   const created = new Date(profile.created_at);
   const memberSinceLabel = Number.isNaN(created.getTime())
     ? ""
@@ -76,15 +94,6 @@ export default async function ProfileSettingsPage() {
         month: "long",
         year: "numeric",
       }).format(created);
-
-  const initials =
-    profile.full_name
-      .split(" ")
-      .filter(Boolean)
-      .map((part) => part[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase() || "?";
 
   const goalLabel =
     profile.selected_goal === "ausbildung"
@@ -148,25 +157,21 @@ export default async function ProfileSettingsPage() {
             <div className="hero-orb pointer-events-none absolute -end-20 -top-24 h-72 w-72 rounded-full" />
             <div className="hero-orb pointer-events-none absolute -bottom-28 -start-24 h-72 w-72 rounded-full opacity-70" />
             <div className="relative flex flex-col items-center text-center">
-              {/* Avatar — gradient ring + inner ring, real photo when set */}
+              {/* Avatar — gradient ring; gallery avatar / uploaded URL /
+                  initials resolved in ONE place (UserAvatar) */}
               <div
                 className="rounded-full p-[3px]"
                 style={{ backgroundImage: "var(--gradient-neon)" }}
               >
-                <div className="flex h-26 w-26 items-center justify-center overflow-hidden rounded-full bg-surface-2 ring-4 ring-[var(--background)] sm:h-32 sm:w-32">
-                  {profile.avatar_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- avatar: remote bucket URL, fixed circle
-                    <img
-                      src={profile.avatar_url}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <span className="text-4xl font-extrabold text-accent">
-                      {initials}
-                    </span>
-                  )}
-                </div>
+                <UserAvatar
+                  avatar={avatarId}
+                  avatarUrl={profile.avatar_url}
+                  fullName={profile.full_name}
+                  className="h-26 w-26 bg-surface-2 ring-4 ring-[var(--background)] sm:h-32 sm:w-32"
+                  imgClassName="h-full w-full object-cover"
+                  initialsClassName="text-4xl font-extrabold text-accent"
+                  label={profile.full_name}
+                />
               </div>
 
               <p className="mt-5 max-w-full break-words text-2xl font-extrabold tracking-tight text-ink sm:text-3xl">
@@ -192,6 +197,35 @@ export default async function ProfileSettingsPage() {
                   </span>
                 )}
               </div>
+            </div>
+          </GlassCard>
+
+          {/* ------------------------------------------------ identity editor */}
+          <GlassCard
+            variant="surface"
+            as="section"
+            className="mt-5 overflow-hidden"
+            aria-label={t("profile.page.edit.title")}
+          >
+            <div className="flex items-center gap-3.5 border-b border-line px-5 py-5 sm:px-6">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+                <Icon name="edit" size={19} />
+              </span>
+              <div className="min-w-0">
+                <h2 className="font-bold tracking-tight text-ink">
+                  {t("profile.page.edit.title")}
+                </h2>
+                <p className="mt-0.5 text-xs text-muted">
+                  {t("profile.page.edit.hint")}
+                </p>
+              </div>
+            </div>
+            <div className="px-5 py-5 sm:px-6">
+              <ProfileIdentityForm
+                initialName={profile.full_name}
+                initialAvatar={avatarId}
+                avatarEnabled={avatarSupported}
+              />
             </div>
           </GlassCard>
         </div>
