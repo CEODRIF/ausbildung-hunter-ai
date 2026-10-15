@@ -216,7 +216,11 @@ export default async function ProfileSettingsPage() {
                   {t("profile.page.edit.title")}
                 </h2>
                 <p className="mt-0.5 text-xs text-muted">
-                  {t("profile.page.edit.hint")}
+                  {t(
+                    avatarSupported
+                      ? "profile.page.edit.hint"
+                      : "profile.page.edit.hintNameOnly",
+                  )}
                 </p>
               </div>
             </div>

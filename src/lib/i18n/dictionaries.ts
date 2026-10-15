@@ -240,6 +240,7 @@ const de = {
       edit: {
         title: "Profil bearbeiten",
         hint: "Ändere deinen Anzeigenamen und wähle ein Avatar.",
+        hintNameOnly: "Ändere deinen Anzeigenamen.",
         displayName: "Anzeigename",
         displayNamePlaceholder: "z. B. Yassine Salmi",
         previewHint: "So erscheint dein Profil auf der Plattform.",
@@ -2520,6 +2521,7 @@ const en: Dict = {
       edit: {
         title: "Edit profile",
         hint: "Change your display name and choose an avatar.",
+        hintNameOnly: "Change your display name.",
         displayName: "Display name",
         displayNamePlaceholder: "e.g. Yassine Salmi",
         previewHint: "This is how your profile appears on the platform.",
@@ -4758,6 +4760,7 @@ const fr: Dict = {
       edit: {
         title: "Modifier le profil",
         hint: "Modifiez votre nom d'affichage et choisissez un avatar.",
+        hintNameOnly: "Modifiez votre nom d'affichage.",
         displayName: "Nom d'affichage",
         displayNamePlaceholder: "ex. Yassine Salmi",
         previewHint: "Ainsi votre profil apparaît sur la plateforme.",
@@ -6993,6 +6996,7 @@ const ar: Dict = {
       edit: {
         title: "تعديل الملف الشخصي",
         hint: "غيّر اسم العرض واختر صورة رمزية.",
+        hintNameOnly: "غيّر اسم العرض.",
         displayName: "اسم العرض",
         displayNamePlaceholder: "مثال: Yassine Salmi",
         previewHint: "هكذا يظهر ملفك الشخصي على المنصة.",
