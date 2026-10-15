@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="100%">
+      <stop offset="0%" stop-color="#241A2E"/>
+      <stop offset="100%" stop-color="#140F1C"/>
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg)"/>
+  <!-- large orange quarter form -->
+  <path d="M128 28 a100 100 0 0 1 100 100 H128 Z" fill="#FB923C" fill-opacity="0.9"/>
+  <!-- purple circle overlap -->
+  <circle cx="96" cy="156" r="62" fill="#8B5CF6" fill-opacity="0.92"/>
+  <!-- light arc + dot accents -->
+  <path d="M40 96 a88 88 0 0 1 60 -44" fill="none" stroke="#F5F3FF" stroke-opacity="0.5" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="178" cy="186" r="12" fill="#F5F3FF" fill-opacity="0.85"/>
+  <circle cx="128" cy="128" r="7" fill="#140F1C"/>
+</svg>

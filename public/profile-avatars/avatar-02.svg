@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="bg" cx="70%" cy="20%" r="95%">
+      <stop offset="0%" stop-color="#1E1830"/>
+      <stop offset="100%" stop-color="#110D19"/>
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg)"/>
+  <circle cx="128" cy="128" r="96" fill="none" stroke="#A78BFA" stroke-opacity="0.35" stroke-width="3"/>
+  <!-- head -->
+  <circle cx="128" cy="100" r="34" fill="#A78BFA"/>
+  <!-- shoulders (abstract, no facial features) -->
+  <path d="M64 196 a64 64 0 0 1 128 0 Z" fill="#7C3AED"/>
+  <path d="M84 196 a44 44 0 0 1 88 0" fill="#171222"/>
+  <circle cx="128" cy="128" r="120" fill="none" stroke="#312A4A" stroke-width="2"/>
+</svg>
