@@ -65,6 +65,23 @@ type ComposerFile = {
  */
 const DANGER_TEXT = "text-[#b93a44] dark:text-danger";
 
+/**
+ * Gradient paint for the five brand surfaces in this file (user bubble,
+ * both assistant avatars, empty-state icon, send button).
+ *
+ * CRITICAL — this is an arbitrary PROPERTY, never `bg-[var(--…)]`:
+ * Tailwind maps `bg-[var(--x)]` to `background-color: var(--x)`, and a
+ * `linear-gradient()` value is NOT a valid `<color>`. The browser then
+ * drops the whole declaration as "invalid at computed-value time" and
+ * the surface renders TRANSPARENT — exactly the production incident in
+ * which white message text sat on invisible bubbles. Gradients are
+ * `<image>` values and belong in `background-image` (the codebase's
+ * other gradient surfaces use `style={{ backgroundImage: … }}` for the
+ * same reason). The compiled-CSS contract test in
+ * tests/ai-chat-contrast.test.ts guards this regression.
+ */
+const CHAT_GRADIENT_BG = "[background-image:var(--gradient-ai-chat)]";
+
 const QUICK_ACTIONS = [
   "Analysiere meinen Lebenslauf",
   "Verbessere meine Bewerbung",
@@ -321,7 +338,9 @@ const MessageBubble = memo(function MessageBubble({
             ))}
           </div>
         )}
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[var(--gradient-ai-chat)] px-4 py-2.5 text-sm leading-6 text-white shadow-[0_8px_20px_-6px_rgba(var(--glow-accent-rgb),0.45)]">
+        <div
+          className={`max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md ${CHAT_GRADIENT_BG} px-4 py-2.5 text-sm leading-6 text-white shadow-[0_8px_20px_-6px_rgba(var(--glow-accent-rgb),0.45)]`}
+        >
           {message.content}
         </div>
         <span className="mt-1 pe-1 text-[10px] text-muted dark:text-faint">
@@ -332,7 +351,9 @@ const MessageBubble = memo(function MessageBubble({
   }
   return (
     <div className="flex gap-2.5">
-      <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-[var(--gradient-ai-chat)] text-white shadow-[0_4px_12px_-2px_rgba(var(--glow-accent-rgb),0.4)]">
+      <span
+        className={`mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl ${CHAT_GRADIENT_BG} text-white shadow-[0_4px_12px_-2px_rgba(var(--glow-accent-rgb),0.4)]`}
+      >
         <Icon name="spark" size={14} />
       </span>
       <div className="min-w-0 max-w-[88%] flex-1">
@@ -888,9 +909,11 @@ export function AIChat({
                      aria-hidden="true"
                      className="orb-ring absolute inset-0 rounded-full border-2 border-accent/25"
                    />
-                   <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-[var(--gradient-ai-chat)] shadow-[0_18px_40px_-10px_rgba(var(--glow-accent-rgb),0.55)]">
-                     <Icon name="spark" size={34} className="text-white" />
-                   </div>
+                    <div
+                      className={`flex h-20 w-20 items-center justify-center rounded-3xl ${CHAT_GRADIENT_BG} shadow-[0_18px_40px_-10px_rgba(var(--glow-accent-rgb),0.55)]`}
+                    >
+                      <Icon name="spark" size={34} className="text-white" />
+                    </div>
                  </div>
                  <h2 className="display-title mt-7 text-3xl text-ink">
                    Dein persönlicher KI-Assistent
@@ -920,10 +943,12 @@ export function AIChat({
                   <MessageBubble key={message.id} message={message} />
                 ))}
                  {pendingAssistant && (
-                   <div className="flex gap-2.5">
-                     <span className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-[var(--gradient-ai-chat)] text-white shadow-[0_4px_12px_-2px_rgba(var(--glow-accent-rgb),0.4)]">
-                       <Icon name="spark" size={14} />
-                     </span>
+                    <div className="flex gap-2.5">
+                      <span
+                        className={`mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl ${CHAT_GRADIENT_BG} text-white shadow-[0_4px_12px_-2px_rgba(var(--glow-accent-rgb),0.4)]`}
+                      >
+                        <Icon name="spark" size={14} />
+                      </span>
                     <div className="min-w-0 flex-1">
                       <div className="mb-1 text-[11px] font-bold text-ink-soft">
                         AusbildungsWeg
@@ -1113,7 +1138,7 @@ export function AIChat({
                       streaming,
                     )
                   }
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--gradient-ai-chat)] text-white shadow-[0_8px_18px_-4px_rgba(var(--glow-accent-rgb),0.5)] transition hover:brightness-105 active:scale-95 disabled:cursor-not-allowed disabled:from-surface-2 disabled:to-surface-2 disabled:border disabled:border-line-strong dark:disabled:border-0 disabled:text-muted dark:disabled:text-faint disabled:shadow-none"
+                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${CHAT_GRADIENT_BG} text-white shadow-[0_8px_18px_-4px_rgba(var(--glow-accent-rgb),0.5)] transition hover:brightness-105 active:scale-95 disabled:cursor-not-allowed disabled:bg-none disabled:bg-surface-2 disabled:border disabled:border-line-strong dark:disabled:border-0 disabled:text-muted dark:disabled:text-faint disabled:shadow-none`}
                 >
                   <Icon name="arrowUp" size={18} />
                 </button>

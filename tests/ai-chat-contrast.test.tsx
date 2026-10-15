@@ -1,5 +1,15 @@
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import postcss from "postcss";
 import { renderToString } from "react-dom/server";
+import tailwindcss from "@tailwindcss/postcss";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import { AIChat, ThinkingDots } from "@/components/ai-chat";
@@ -21,17 +31,32 @@ import type {
  *      error text.
  *   4. The brand mark is a white tile with a near-invisible ring
  *      (ring-black/5) on the white light sidebar.
+ *   5. THE INCIDENT THAT SURVIVED FIX #30 (production 2026-10-15): the
+ *      gradient surfaces used a `bg-[…]` class on a gradient variable,
+ *      which Tailwind compiles to `background-color: var(…)`.
+ *      A `linear-gradient()` value is NOT a valid `<color>` for
+ *      `background-color`, so the browser drops the declaration as
+ *      "invalid at computed-value time" and the surface renders
+ *      TRANSPARENT — white message text on invisible bubbles. This
+ *      affects both themes equally (the pre-fix `--gradient-neon`
+ *      version had the identical defect). Only the COMPILED declaration,
+ *      not the token values or the class string, could catch it.
  *
  * Fix under test: a chat-scoped `--gradient-ai-chat` (deeper in light,
  * pinned to `var(--gradient-neon)` in dark → dark pixel-unchanged),
  * `text-muted dark:text-faint` pairs (light readable, dark unchanged),
  * a light-only AA red (`#b93a44 dark:text-danger`), solid light thinking
- * dots, a theme-aware brand ring, and a visible light-only border for the
- * disabled send button.
+ * dots, a theme-aware brand ring, a visible light-only border for the
+ * disabled send button, and — the incident fix — every gradient surface
+ * painted through the arbitrary property `[background-image:…]`
+ * (shared CHAT_GRADIENT_BG constant) with a valid `disabled:bg-none
+ * disabled:bg-surface-2` fallback on the send button.
  *
  * These tests compute REAL WCAG contrast ratios from the shipped CSS
- * values and render the ACTUAL component (renderToString) to pin the
- * corrected class strings — not hand-written expectations.
+ * values, render the ACTUAL component (renderToString) to pin the
+ * corrected class strings, AND compile those exact class strings
+ * through the project's real Tailwind v4 pipeline to assert the shipped
+ * declarations are valid — not hand-written expectations.
  */
 
 vi.mock("next/navigation", () => ({
@@ -203,23 +228,39 @@ const messages: ChatMessageWithFiles[] = [
   },
 ];
 
-const renderChat = (): string =>
+const renderChat = (initialMessages: ChatMessageWithFiles[]): string =>
   renderToString(
     <I18nProvider>
       <AIChat
         conversations={[conversation]}
         selectedConversation={conversation}
-        initialMessages={messages}
+        initialMessages={initialMessages}
       />
     </I18nProvider>,
   );
 
 describe("AIChat rendered markup (light + dark class pairs)", () => {
-  const html = renderChat();
+  const html = renderChat(messages);
+  // Zero-message render — surfaces the empty-state icon (the fifth
+  // gradient surface) and nothing else of the five.
+  const htmlEmpty = renderChat([]);
 
   it("uses the chat gradient on bubble, avatars and send — never the site gradient", () => {
-    expect(html).toContain("var(--gradient-ai-chat)");
+    // The gradient must be painted through background-image — an <image>
+    // property. Four of the five surfaces render with committed
+    // messages (user bubble, committed avatar, send button); the
+    // pending avatar renders only while awaiting the first token.
+    expect(
+      html.match(/\[background-image:var\(--gradient-ai-chat\)\]/g),
+    ).toHaveLength(3);
+    expect(
+      htmlEmpty.match(/\[background-image:var\(--gradient-ai-chat\)\]/g),
+    ).toHaveLength(2); // empty-state icon + send button
     expect(html).not.toContain("var(--gradient-neon)");
+    // The broken mapping (compiles to background-color → invalid for a
+    // gradient → transparent surface) must never be reintroduced.
+    expect(html).not.toContain(BROKEN_CHAT_BG);
+    expect(html).not.toContain(BROKEN_SITE_BG);
     // White text rides the gradient (AA guaranteed by the token test above).
     expect(html).toContain("text-white");
   });
@@ -259,6 +300,13 @@ describe("AIChat rendered markup (light + dark class pairs)", () => {
     expect(html).toContain("disabled:border disabled:border-line-strong");
     expect(html).toContain("dark:disabled:border-0");
     expect(html).toContain("disabled:text-muted dark:disabled:text-faint");
+    // The disabled state must remove the gradient with a VALID property
+    // (background-image: none) and fall back to a solid color. The old
+    // `disabled:from-surface-2 disabled:to-surface-2` classes are dead
+    // (no bg-gradient-* base utility sets any background-image).
+    expect(html).toContain("disabled:bg-none disabled:bg-surface-2");
+    expect(html).not.toContain("from-surface-2");
+    expect(html).not.toContain("to-surface-2");
   });
 
   it("error surfaces use the AA red in light, the system token in dark", () => {
@@ -288,9 +336,19 @@ describe("ai-chat.tsx source contract", () => {
     }
   });
 
-  it("no site-gradient usage remains in the chat (all five surfaces are chat-scoped)", () => {
+  it("all five gradient surfaces paint via the shared background-image constant", () => {
     expect(src).not.toContain("--gradient-neon");
-    expect(src.match(/--gradient-ai-chat/g)).toHaveLength(5);
+    expect(src).toContain(
+      'const CHAT_GRADIENT_BG = "[background-image:var(--gradient-ai-chat)]";',
+    );
+    // Exactly five surfaces: user bubble, committed avatar, empty-state
+    // icon, pending avatar, send button.
+    expect(src.match(/\$\{CHAT_GRADIENT_BG\}/g)).toHaveLength(5);
+    // The broken bg-[var(…)] mapping (→ background-color, invalid for
+    // gradients → transparent surface) must not exist anywhere, comments
+    // included.
+    expect(src).not.toContain(BROKEN_CHAT_BG);
+    expect(src).not.toContain(BROKEN_SITE_BG);
   });
 
   it("the sidebar uses the centralized BrandLogo (single identity source)", () => {
@@ -299,4 +357,111 @@ describe("ai-chat.tsx source contract", () => {
     // The duplicated inline wordmark markup is gone.
     expect(src).not.toContain('src="/logo-mark.jpg"');
   });
+});
+
+/* ---------------- compiled CSS contract (the incident guard) ----------
+ *
+ * The 2026-10-15 production incident passed every test above its class
+ * because token values and pinned class strings say nothing about what
+ * Tailwind EMITS. Here the real component's class strings are compiled
+ * through the project's actual Tailwind v4 pipeline (same plugin, same
+ * @theme block from globals.css) and the shipped declarations are
+ * asserted — this is as close to a computed-style check as the node
+ * test environment allows.
+ */
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// The broken class literals are assembled from parts on purpose:
+// Tailwind's source scanner also scans test files, and a contiguous
+// `bg-[var(--…)]` token here would recompile the known-broken
+// `background-color` rule into the production CSS as a dead rule.
+const BROKEN_CHAT_BG = "bg-[var(--" + "gradient-ai-chat)]";
+const BROKEN_SITE_BG = "bg-[var(--" + "gradient-neon)]";
+
+function extractThemeBlock(css: string): string {
+  const start = css.indexOf("@theme inline {");
+  expect(start, "globals.css must keep its @theme inline block").toBeGreaterThanOrEqual(0);
+  let depth = 0;
+  let i = css.indexOf("{", start);
+  for (; i < css.length; i++) {
+    if (css[i] === "{") depth++;
+    else if (css[i] === "}") {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+  return css.slice(start, i + 1);
+}
+
+/** Every class string the real component ships (template literals
+ *  resolved by rendering both the committed-history and the empty state). */
+function collectShippedClasses(): Set<string> {
+  const classSet = new Set<string>();
+  for (const html of [renderChat(messages), renderChat([])]) {
+    for (const m of html.matchAll(/class="([^"]*)"/g)) classSet.add(m[1]);
+  }
+  return classSet;
+}
+
+describe("compiled CSS contract (real Tailwind v4 pipeline)", () => {
+  it("paints the chat gradient via background-image and never assigns an image to background-color", async () => {
+    const classSet = collectShippedClasses();
+    const joined = [...classSet].join(" ");
+    // Premise: the component actually ships the arbitrary-property class.
+    expect(joined).toContain("[background-image:var(--gradient-ai-chat)]");
+
+    // Isolated probe dir inside node_modules (gitignored): module
+    // resolution for `@import "tailwindcss"` requires a project path,
+    // and node_modules is excluded from Tailwind's auto-detection, so
+    // `source(none)` + an explicit `@source` keeps the probe hermetic.
+    const cacheRoot = path.join(repoRoot, "node_modules", ".cache");
+    mkdirSync(cacheRoot, { recursive: true });
+    const probeDir = mkdtempSync(path.join(cacheRoot, "tw-contract-"));
+    try {
+      writeFileSync(
+        path.join(probeDir, "probe.html"),
+        [...classSet].map((c) => `<div class="${c}"></div>`).join("\n"),
+      );
+      const globals = readFileSync(path.join(repoRoot, "src/app/globals.css"), "utf8");
+      writeFileSync(
+        path.join(probeDir, "probe.css"),
+        `@import "tailwindcss" source(none);\n@source "./probe.html";\n${extractThemeBlock(globals)}\n`,
+      );
+      const cssPath = path.join(probeDir, "probe.css");
+      const out = await postcss([tailwindcss()]).process(
+        readFileSync(cssPath, "utf8"),
+        { from: cssPath },
+      );
+      const css = out.css;
+
+      // 1. The gradient is painted through a VALID property.
+      expect(css).toContain("background-image: var(--gradient-ai-chat)");
+
+      // 2. THE REGRESSION GUARD: no shipped rule may assign an image
+      //    value (gradient function or gradient variable) to the
+      //    color-only property background-color — such a declaration is
+      //    invalid at computed-value time and the browser drops it,
+      //    leaving the surface transparent.
+      const invalidDecls =
+        css.match(
+          /background-color\s*:\s*(?:var\(--gradient-[^)]*\)|(?:linear|radial|conic)-gradient\([^)]*\))/g,
+        ) ?? [];
+      expect(invalidDecls, `image value assigned to background-color: ${invalidDecls.join(" | ")}`).toHaveLength(0);
+
+      // 3. The disabled send button: gradient removed with a valid
+      //    `background-image: none`, solid-color fallback present.
+      const blocks = css.split("}");
+      const noneBlock = blocks.find((b) => b.includes("disabled\\:bg-none:disabled"));
+      expect(noneBlock, "disabled:bg-none rule must compile").toMatch(/background-image:\s*none/);
+      const surfaceBlock = blocks.find((b) => b.includes("disabled\\:bg-surface-2:disabled"));
+      expect(surfaceBlock, "disabled:bg-surface-2 rule must compile").toMatch(
+        /background-color:\s*var\(--surface-2\)/,
+      );
+      // The dead from-/to- stop classes must be gone from the shipped set.
+      expect(css).not.toContain("from-surface-2");
+    } finally {
+      rmSync(probeDir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
