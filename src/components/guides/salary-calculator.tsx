@@ -100,9 +100,17 @@ export function SalaryCalculator() {
       ]
     : [];
 
-  const selectCls =
-    "w-full rounded-xl border border-line-strong bg-surface px-3 py-2 text-sm font-semibold text-ink outline-none transition-colors focus:border-accent";
+  // Shared control styling: one 38px control height for inputs, selects and
+  // segmented options (consistent radius, borders and focus states).
+  const controlCls =
+    "w-full min-h-[38px] rounded-xl border border-line-strong bg-surface px-3 py-2 text-sm font-semibold text-ink outline-none transition-colors focus:border-accent";
   const labelCls = "mb-1 block text-[11px] font-bold uppercase tracking-[0.08em] text-faint";
+  // Segmented option (toggle): centered, accessible pressed state, keyboard
+  // focus ring inset so it never spills outside the rounded group border.
+  const segCls =
+    "flex min-h-[38px] w-full items-center justify-center px-3 py-1.5 text-[11px] font-bold leading-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/70";
+  const segOn = "bg-accent text-white";
+  const segOff = "bg-surface text-muted hover:text-ink";
 
   return (
     <div className="space-y-5">
@@ -110,32 +118,37 @@ export function SalaryCalculator() {
 
       <div className="surface-elevated rounded-3xl p-5 sm:p-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {/* Gross */}
-          <div>
+          {/* Gross — spans two columns so the amount input keeps a comfortable
+              width next to the per-month/per-year control at every size
+              (before, the fixed-width control squeezed the input to a
+              single digit and pushed the card past the viewport). */}
+          <div className="sm:col-span-2">
             <label className={labelCls} htmlFor="sal-gross">
               {t("guides.gehalt.bruttoLabel")}
             </label>
-            <div className="flex gap-2">
+            <div className="flex items-stretch gap-2">
               <input
                 id="sal-gross"
                 inputMode="decimal"
                 value={grossText}
                 onChange={(e) => setGrossText(e.target.value)}
-                className={`${selectCls} num`}
+                className={`${controlCls} num min-w-[5rem] flex-1`}
                 placeholder="4000"
               />
-              <div className="flex shrink-0 overflow-hidden rounded-xl border border-line-strong">
+              <div className="grid shrink-0 grid-cols-2 overflow-hidden rounded-xl border border-line-strong">
                 <button
                   type="button"
+                  aria-pressed={!annualMode}
                   onClick={() => setAnnualMode(false)}
-                  className={`px-2.5 text-[11px] font-bold transition-colors ${!annualMode ? "bg-accent text-white" : "bg-surface text-muted hover:text-ink"}`}
+                  className={`${segCls} ${!annualMode ? segOn : segOff}`}
                 >
                   {t("guides.gehalt.modeMonthly")}
                 </button>
                 <button
                   type="button"
+                  aria-pressed={annualMode}
                   onClick={() => setAnnualMode(true)}
-                  className={`px-2.5 text-[11px] font-bold transition-colors ${annualMode ? "bg-accent text-white" : "bg-surface text-muted hover:text-ink"}`}
+                  className={`${segCls} ${annualMode ? segOn : segOff}`}
                 >
                   {t("guides.gehalt.modeAnnual")}
                 </button>
@@ -148,7 +161,7 @@ export function SalaryCalculator() {
             <label className={labelCls} htmlFor="sal-year">
               {t("guides.gehalt.yearLabel")}
             </label>
-            <select id="sal-year" className={selectCls} value={String(SALARY_YEAR)} disabled>
+            <select id="sal-year" className={controlCls} value={String(SALARY_YEAR)} disabled>
               <option value="2026">2026</option>
               <option value="2025" disabled>
                 {t("guides.gehalt.year2025")}
@@ -166,7 +179,7 @@ export function SalaryCalculator() {
             </label>
             <select
               id="sal-sk"
-              className={selectCls}
+              className={controlCls}
               value={sk}
               onChange={(e) => setSk(Number(e.target.value) as Steuerklasse)}
             >
@@ -184,7 +197,7 @@ export function SalaryCalculator() {
             <label className={labelCls} htmlFor="sal-pl">
               {t("guides.gehalt.plLabel")}
             </label>
-            <select id="sal-pl" className={selectCls} value={pl} onChange={(e) => setPl(e.target.value)}>
+            <select id="sal-pl" className={controlCls} value={pl} onChange={(e) => setPl(e.target.value)}>
               {BUNDESLAENDER.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.nameDe}
@@ -193,21 +206,25 @@ export function SalaryCalculator() {
             </select>
           </div>
 
-          {/* Health insurance */}
+          {/* Health insurance — stacked equal-height options: the labels are
+              long ("Statutory (GKV)"), so a full-width row per option keeps
+              the text on one line and both options the same size. */}
           <div>
             <label className={labelCls}>{t("guides.gehalt.kvLabel")}</label>
-            <div className="flex overflow-hidden rounded-xl border border-line-strong">
+            <div className="grid grid-rows-2 divide-y divide-line-strong overflow-hidden rounded-xl border border-line-strong">
               <button
                 type="button"
+                aria-pressed={kv === "gkv"}
                 onClick={() => setKv("gkv")}
-                className={`flex-1 px-3 py-2 text-[11px] font-bold transition-colors ${kv === "gkv" ? "bg-accent text-white" : "bg-surface text-muted hover:text-ink"}`}
+                className={`${segCls} ${kv === "gkv" ? segOn : segOff}`}
               >
                 {t("guides.gehalt.kvGkv")}
               </button>
               <button
                 type="button"
+                aria-pressed={kv === "pkv"}
                 onClick={() => setKv("pkv")}
-                className={`flex-1 px-3 py-2 text-[11px] font-bold transition-colors ${kv === "pkv" ? "bg-accent text-white" : "bg-surface text-muted hover:text-ink"}`}
+                className={`${segCls} ${kv === "pkv" ? segOn : segOff}`}
               >
                 {t("guides.gehalt.kvPkv")}
               </button>
@@ -217,28 +234,33 @@ export function SalaryCalculator() {
                 inputMode="decimal"
                 value={pkvText}
                 onChange={(e) => setPkvText(e.target.value)}
-                className={`${selectCls} num mt-2`}
+                className={`${controlCls} num mt-2`}
                 placeholder="500"
                 aria-label={t("guides.gehalt.pkvPremium")}
               />
             )}
           </div>
 
-          {/* Church tax */}
+          {/* Church tax — same stacked pattern as health insurance (the
+              explanatory "Yes" label is the longest control text on the
+              form; a full-width row prevents the 5-line wrap and the
+              unbalanced selected block). */}
           <div>
             <label className={labelCls}>{t("guides.gehalt.kistLabel")}</label>
-            <div className="flex overflow-hidden rounded-xl border border-line-strong">
+            <div className="grid grid-rows-2 divide-y divide-line-strong overflow-hidden rounded-xl border border-line-strong">
               <button
                 type="button"
+                aria-pressed={church}
                 onClick={() => setChurch(true)}
-                className={`flex-1 px-3 py-2 text-[11px] font-bold transition-colors ${church ? "bg-accent text-white" : "bg-surface text-muted hover:text-ink"}`}
+                className={`${segCls} ${church ? segOn : segOff}`}
               >
                 {t("guides.gehalt.kistYes")}
               </button>
               <button
                 type="button"
+                aria-pressed={!church}
                 onClick={() => setChurch(false)}
-                className={`flex-1 px-3 py-2 text-[11px] font-bold transition-colors ${!church ? "bg-accent text-white" : "bg-surface text-muted hover:text-ink"}`}
+                className={`${segCls} ${!church ? segOn : segOff}`}
               >
                 {t("guides.gehalt.kistNo")}
               </button>
@@ -252,7 +274,7 @@ export function SalaryCalculator() {
             </label>
             <select
               id="sal-kinder"
-              className={selectCls}
+              className={controlCls}
               value={children}
               onChange={(e) => setChildren(Number(e.target.value))}
             >
