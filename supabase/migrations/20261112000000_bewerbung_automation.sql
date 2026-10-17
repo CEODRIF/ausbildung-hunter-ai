@@ -14,13 +14,16 @@
 --   `release_email_capacity`) and the shared `daily_usage` quota counter.
 --
 -- SAFETY CONTRACT (manual migration — this file is applied by hand):
---   * purely ADDITIVE: new enums, four new tables, indexes, two new RPCs.
+--   * purely ADDITIVE: two new enums, four new tables, indexes, and three RPCs.
 --   * NO shared table, column, enum value, RPC or storage bucket is altered
 --     or dropped. The existing send engine, Email Verification and the
 --     standard application feature are untouched by this file.
 --   * every `bew_*` row is owner-scoped (`user_id`) and RLS-locked to
 --     SELECT-only for the owner; all writes run with the service role.
---   * idempotent: `if not exists` / `create or replace` throughout.
+--   * safe to re-run: guarded enum/policy creation, `if not exists`
+--     tables/indexes, replaceable functions, and drop-guarded triggers —
+--     EXCEPT the broken `updated_at` trigger on bew_campaigns, which is
+--     dropped and NOT recreated (42703 regression, see below).
 --
 -- DEPLOY ORDER: apply this migration BEFORE deploying code that references
 -- `bew_documents` in src/lib/storage-reconcile.ts (the storage janitor keeps
@@ -28,8 +31,8 @@
 -- first degrades gracefully via the hasBewAutomationSchema() probe (the
 -- feature shows a "schema pending" state instead of crashing).
 --
--- REVERSIBILITY: drop the four `bew_*` tables, the two enums and the two
--- functions. No other object is affected.
+-- REVERSIBILITY: drop the three RPCs, four `bew_*` tables, and two enums.
+-- No shared table, function, or storage bucket is dropped.
 
 -- PostgreSQL has NO `CREATE TYPE IF NOT EXISTS` (unlike CREATE TABLE — it is
 -- a syntax error, 42601). Guard with pg_type instead: idempotent, and the
