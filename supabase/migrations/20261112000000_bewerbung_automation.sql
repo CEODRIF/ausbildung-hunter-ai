@@ -20,8 +20,10 @@
 --     standard application feature are untouched by this file.
 --   * every `bew_*` row is owner-scoped (`user_id`) and RLS-locked to
 --     SELECT-only for the owner; all writes run with the service role.
---   * safe to re-run: guarded enum/policy creation, `if not exists` tables/indexes,
---     replaceable functions, and triggers recreated explicitly.
+--   * safe to re-run: guarded enum/policy creation, `if not exists`
+--     tables/indexes, replaceable functions, and drop-guarded triggers —
+--     EXCEPT the broken `updated_at` trigger on bew_campaigns, which is
+--     dropped and NOT recreated (42703 regression, see below).
 --
 -- DEPLOY ORDER: apply this migration BEFORE deploying code that references
 -- `bew_documents` in src/lib/storage-reconcile.ts (the storage janitor keeps
@@ -32,34 +34,36 @@
 -- REVERSIBILITY: drop the three RPCs, four `bew_*` tables, and two enums.
 -- No shared table, function, or storage bucket is dropped.
 
--- PostgreSQL does not support `CREATE TYPE IF NOT EXISTS`. Guard creation in
--- a DO block instead. If either type already exists, its existing definition
--- is preserved; verify its labels match these definitions before re-running.
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_type t
-    JOIN pg_namespace n ON n.oid = t.typnamespace
-    WHERE n.nspname = 'public' AND t.typname = 'bew_campaign_status'
-  ) THEN
-    CREATE TYPE public.bew_campaign_status AS ENUM
-      ('draft', 'generating', 'sending', 'completed', 'partially_failed', 'cancelled');
-  END IF;
-END
+-- PostgreSQL has NO `CREATE TYPE IF NOT EXISTS` (unlike CREATE TABLE — it is
+-- a syntax error, 42601). Guard with pg_type instead: idempotent, and the
+-- enum values below are the fixed contract used by the engine.
+do $$
+begin
+  if not exists (
+    select 1 from pg_type
+    where typname = 'bew_campaign_status'
+      and typnamespace = 'public'::regnamespace
+  ) then
+    create type public.bew_campaign_status as enum (
+      'draft', 'generating', 'sending', 'completed', 'partially_failed', 'cancelled'
+    );
+  end if;
+end
 $$;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_type t
-    JOIN pg_namespace n ON n.oid = t.typnamespace
-    WHERE n.nspname = 'public' AND t.typname = 'bew_app_status'
-  ) THEN
-    CREATE TYPE public.bew_app_status AS ENUM
-      ('pending', 'generating', 'generated', 'excluded',
-       'queued', 'sending', 'sent', 'failed', 'needs_attention', 'cancelled');
-  END IF;
-END
+do $$
+begin
+  if not exists (
+    select 1 from pg_type
+    where typname = 'bew_app_status'
+      and typnamespace = 'public'::regnamespace
+  ) then
+    create type public.bew_app_status as enum (
+      'pending', 'generating', 'generated', 'excluded',
+      'queued', 'sending', 'sent', 'failed', 'needs_attention', 'cancelled'
+    );
+  end if;
+end
 $$;
 
 -- One automation run ("campaign"): the user's batch of 1..100 applications
@@ -96,10 +100,18 @@ create index if not exists bew_campaigns_user_id_idx on public.bew_campaigns(use
 create index if not exists bew_campaigns_status_idx on public.bew_campaigns(status);
 create index if not exists bew_campaigns_created_at_idx on public.bew_campaigns(created_at desc);
 
+-- REGRESSION (42703): a previous revision of this migration attached the
+-- shared set_updated_at() trigger to bew_campaigns — but this table has NO
+-- updated_at column (only created_at / started_at / completed_at), so the
+-- trigger made EVERY UPDATE fail with
+--   column "updated_at" of relation "bew_campaigns" does not exist.
+-- The application layer did not check the update errors, so the failure was
+-- silent: most visibly the valid_count written after a company import never
+-- landed, the wizard's step-2 gate stayed locked, and the user saw no way to
+-- leave the Companies step. The trigger is therefore dropped (idempotently —
+-- a rerun heals an already-broken database) and must NOT be recreated here.
+-- bew_applications keeps its trigger (that table DOES have updated_at).
 drop trigger if exists bew_campaigns_set_updated_at on public.bew_campaigns;
-create trigger bew_campaigns_set_updated_at
-  before update on public.bew_campaigns
-  for each row execute function public.set_updated_at();
 
 -- One row PER company = the work item. Carries its OWN Anschreiben
 -- (body_html/body_text) — this is what makes "one distinct letter per
@@ -184,26 +196,21 @@ alter table public.bew_applications enable row level security;
 alter table public.bew_documents enable row level security;
 alter table public.bew_campaign_documents enable row level security;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bew_campaigns' AND policyname = 'Users can read their own automation campaigns') THEN
-    CREATE POLICY "Users can read their own automation campaigns"
-      ON public.bew_campaigns FOR SELECT TO authenticated USING (auth.uid() = user_id);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bew_applications' AND policyname = 'Users can read their own automation applications') THEN
-    CREATE POLICY "Users can read their own automation applications"
-      ON public.bew_applications FOR SELECT TO authenticated USING (auth.uid() = user_id);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bew_documents' AND policyname = 'Users can read their own automation documents') THEN
-    CREATE POLICY "Users can read their own automation documents"
-      ON public.bew_documents FOR SELECT TO authenticated USING (auth.uid() = user_id);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bew_campaign_documents' AND policyname = 'Users can read their own automation campaign documents') THEN
-    CREATE POLICY "Users can read their own automation campaign documents"
-      ON public.bew_campaign_documents FOR SELECT TO authenticated USING (auth.uid() = user_id);
-  END IF;
-END
-$$;
+-- CREATE POLICY has no IF NOT EXISTS in PostgreSQL; the drop-then-create
+-- pair keeps a rerun of this migration idempotent (drop only ever targets
+-- the four policies declared in this file — no shared object is touched).
+drop policy if exists "Users can read their own automation campaigns" on public.bew_campaigns;
+create policy "Users can read their own automation campaigns"
+  on public.bew_campaigns for select to authenticated using (auth.uid() = user_id);
+drop policy if exists "Users can read their own automation applications" on public.bew_applications;
+create policy "Users can read their own automation applications"
+  on public.bew_applications for select to authenticated using (auth.uid() = user_id);
+drop policy if exists "Users can read their own automation documents" on public.bew_documents;
+create policy "Users can read their own automation documents"
+  on public.bew_documents for select to authenticated using (auth.uid() = user_id);
+drop policy if exists "Users can read their own automation campaign documents" on public.bew_campaign_documents;
+create policy "Users can read their own automation campaign documents"
+  on public.bew_campaign_documents for select to authenticated using (auth.uid() = user_id);
 
 revoke all on public.bew_campaigns from anon, authenticated;
 revoke all on public.bew_applications from anon, authenticated;

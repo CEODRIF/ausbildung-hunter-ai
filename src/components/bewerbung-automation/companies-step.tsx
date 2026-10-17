@@ -37,6 +37,10 @@ import type { BewViewDTO, CompanyRecord } from "./types";
 interface Props {
   view: BewViewDTO;
   refresh: () => Promise<void>;
+  /** Wizard navigation: advance from Companies to Documents (step 2). */
+  onNext: () => void;
+  /** Exact reason advancing is blocked right now (null = ready to go). */
+  nextBlockedReason: string | null;
 }
 
 type ImportPhase = "idle" | "preview";
@@ -65,7 +69,7 @@ const IDLE_IMPORT: ImportState = {
   error: null,
 };
 
-export function CompaniesStep({ view, refresh }: Props) {
+export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Props) {
   const { t } = useI18n();
   const apps = view.applications;
   const [importState, setImportState] = useState<ImportState>(IDLE_IMPORT);
@@ -251,6 +255,13 @@ export function CompaniesStep({ view, refresh }: Props) {
 
   const lockApp = view.campaign.status === "sending";
 
+  /* The wizard footer button is disabled ONLY when a required operation is
+     still in flight (busy) or the company data is genuinely incomplete
+     (nextBlockedReason, computed from the stored rows by the wizard). The
+     exact reason is rendered next to the button — never a silent disable. */
+  const advanceBlocked = busy || nextBlockedReason !== null;
+  const advanceReason = busy ? t("bewauto.continueDocsSaving") : nextBlockedReason;
+
   return (
     <div className="grid gap-6">
       <Card className="p-6">
@@ -415,6 +426,31 @@ export function CompaniesStep({ view, refresh }: Props) {
               </tbody>
             </table>
           </div>
+        </div>
+
+        {/* Wizard footer — the explicit, always-visible way forward.
+            (Previously the ONLY navigation was the small stepper chip at the
+            top; when its counter gate had not caught up it rendered disabled
+            and unexplained, so users saw no way to reach Documents.) */}
+        <div className="mt-6 flex flex-col-reverse gap-2 border-t border-line pt-5 sm:flex-row sm:items-center sm:justify-between">
+          {advanceBlocked && (
+            <p
+              id="bew-continue-blocked"
+              role="status"
+              className="text-xs font-medium leading-5 text-muted"
+            >
+              {advanceReason}
+            </p>
+          )}
+          <Button
+            size="lg"
+            disabled={advanceBlocked}
+            onClick={onNext}
+            aria-describedby={advanceBlocked ? "bew-continue-blocked" : undefined}
+          >
+            {t("bewauto.continueDocs")}
+            <Icon name="arrowRight" size={18} />
+          </Button>
         </div>
       </Card>
     </div>

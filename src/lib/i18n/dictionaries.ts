@@ -2383,6 +2383,11 @@ const de = {
     removeRow: "Zeile entfernen",
     select: "Auswählen",
     selectRow: "Bewerbung {n} auswählen",
+    continueDocs: "Zu den Dokumenten",
+    continueDocsNoValid:
+      "{valid} von {total} Einträgen gültig — jeder Eintrag braucht einen Firmennamen und eine gültige E-Mail-Adresse.",
+    continueDocsSaving: "Speichern läuft …",
+    continueDocsLocked: "Der Versand läuft — die Einträge sind gesperrt.",
     /* Schritt 2 — Dokumente */
     step2Title: "Deine Dokumente",
     step2Body:
@@ -2503,6 +2508,8 @@ const de = {
       QUOTA_EXHAUSTED: "Das heutige Sendekontingent ist aufgebraucht.",
       QUEUE_FAILED: "Die Warteschlange konnte nicht erstellt werden – bitte erneut versuchen.",
       INVALID_PAYLOAD: "Ungültige Daten.",
+      SAVE_FAILED:
+        "Speichern fehlgeschlagen — deine Daten sind möglicherweise unvollständig. Bitte erneut versuchen.",
       UNKNOWN: "Etwas ist schiefgelaufen. Bitte erneut versuchen.",
     },
   },
@@ -4830,6 +4837,11 @@ const en: Dict = {
     removeRow: "Remove row",
     select: "Select",
     selectRow: "Select application {n}",
+    continueDocs: "Continue to Documents",
+    continueDocsNoValid:
+      "{valid} of {total} entries valid — each entry needs a company name and a valid e-mail address.",
+    continueDocsSaving: "Saving in progress…",
+    continueDocsLocked: "Sending is in progress — entries are locked.",
     /* Step 2 — documents */
     step2Title: "Your documents",
     step2Body:
@@ -4949,6 +4961,8 @@ const en: Dict = {
       QUOTA_EXHAUSTED: "Today's sending quota is exhausted.",
       QUEUE_FAILED: "The queue could not be created — please try again.",
       INVALID_PAYLOAD: "Invalid data.",
+      SAVE_FAILED:
+        "Saving failed — your data may be incomplete. Please try again.",
       UNKNOWN: "Something went wrong. Please try again.",
     },
   },
@@ -7277,6 +7291,11 @@ const fr: Dict = {
     removeRow: "Supprimer la ligne",
     select: "Sélectionner",
     selectRow: "Sélectionner la candidature {n}",
+    continueDocs: "Continuer vers les documents",
+    continueDocsNoValid:
+      "{valid} entrée(s) valide(s) sur {total} — chaque entrée a besoin d'un nom d'entreprise et d'une adresse e-mail valide.",
+    continueDocsSaving: "Enregistrement en cours…",
+    continueDocsLocked: "L'envoi est en cours — les entrées sont verrouillées.",
     /* Étape 2 — documents */
     step2Title: "Vos documents",
     step2Body:
@@ -7396,6 +7415,8 @@ const fr: Dict = {
       QUOTA_EXHAUSTED: "Le quota d'envoi d'aujourd'hui est épuisé.",
       QUEUE_FAILED: "La file d'attente n'a pas pu être créée — veuillez réessayer.",
       INVALID_PAYLOAD: "Données invalides.",
+      SAVE_FAILED:
+        "Échec de l'enregistrement — vos données peuvent être incomplètes. Veuillez réessayer.",
       UNKNOWN: "Une erreur est survenue. Veuillez réessayer.",
     },
   },
@@ -9675,6 +9696,11 @@ const ar: Dict = {
     removeRow: "إزالة السطر",
     select: "تحديد",
     selectRow: "تحديد الطلب {n}",
+    continueDocs: "المتابعة إلى المستندات",
+    continueDocsNoValid:
+      "{valid} من {total} إدخالات صالحة — يتطلب كل إدخال اسم شركة وبريدًا إلكترونيًا صالحًا.",
+    continueDocsSaving: "جارٍ الحفظ…",
+    continueDocsLocked: "جارٍ الإرسال — الإدخالات مقفلة.",
     /* الخطوة 2 — المستندات */
     step2Title: "مستنداتك",
     step2Body:
@@ -9792,6 +9818,8 @@ const ar: Dict = {
       QUOTA_EXHAUSTED: "نفد حد الإرسال اليومي.",
       QUEUE_FAILED: "تعذر إنشاء قائمة الانتظار — يرجى المحاولة مجددًا.",
       INVALID_PAYLOAD: "بيانات غير صالحة.",
+      SAVE_FAILED:
+        "فشل الحفظ — قد تكون بياناتك غير مكتملة. يرجى المحاولة مرة أخرى.",
       UNKNOWN: "حدث خطأ ما. يرجى المحاولة مجددًا.",
     },
   },

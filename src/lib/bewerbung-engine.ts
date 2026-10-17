@@ -272,12 +272,50 @@ async function countByStatus(
  * `generated` / `pending` applications are all still changeable (regenerate,
  * exclude, retry), so they never close the campaign.
  */
+/**
+ * The documented `valid_count` contract (bew_campaigns column comment): how
+ * many applications actually carry a company + a recipient (a non-empty name
+ * and a structurally valid e-mail). Excluded/cancelled rows do not count —
+ * they were deliberately removed from the campaign.
+ *
+ * IMPORTANT: this is derived from the ROW VALUES, never from generation
+ * status. The previous implementation stored `generated+queued+sending+sent`
+ * here, which silently re-locked the wizard's step-1→2 gate to 0 the moment
+ * any counter refresh ran while rows were still `pending`.
+ */
+function countValidCompanies(
+  rows: Array<Pick<BewApplicationRow, "status" | "company_name" | "company_email">>,
+): number {
+  return rows.filter(
+    (r) =>
+      r.status !== "excluded" &&
+      r.status !== "cancelled" &&
+      (r.company_name ?? "").trim().length > 0 &&
+      isValidEmail(r.company_email ?? ""),
+  ).length;
+}
+
 async function refreshCampaignCounters(
   admin: Admin,
   campaignId: string,
 ): Promise<void> {
-  const by = await countByStatus(admin, campaignId);
-  const total = BEW_APP_STATUSES.reduce((sum, s) => sum + (by[s] ?? 0), 0);
+  const { data: appData, error: appError } = await admin
+    .from("bew_applications")
+    .select("*")
+    .eq("campaign_id", campaignId);
+  if (appError || !appData) {
+    // Never clobber the counters with zeros when the read itself failed.
+    console.error(
+      "[bew] refreshCampaignCounters: cannot read applications; counters left as-is",
+      appError?.message ?? "no rows returned",
+    );
+    return;
+  }
+  const apps = appData as unknown as BewApplicationRow[];
+  const by: Record<string, number> = {};
+  for (const s of BEW_APP_STATUSES) by[s] = 0;
+  for (const row of apps) by[row.status] = (by[row.status] ?? 0) + 1;
+  const total = apps.length;
   const inFlight = (by["queued"] ?? 0) + (by["sending"] ?? 0);
   const success = by["sent"] ?? 0;
   const problem = (by["failed"] ?? 0) + (by["needs_attention"] ?? 0);
@@ -311,7 +349,7 @@ async function refreshCampaignCounters(
     ? (currentCompletedAt ?? nowIso())
     : null;
 
-  await admin
+  const { error: updateError } = await admin
     .from("bew_campaigns")
     .update({
       total_count: total,
@@ -319,15 +357,20 @@ async function refreshCampaignCounters(
       failed_count: problem,
       excluded_count: by["excluded"] ?? 0,
       generated_count: by["generated"] ?? 0,
-      valid_count:
-        (by["generated"] ?? 0) +
-        (by["queued"] ?? 0) +
-        (by["sending"] ?? 0) +
-        success,
+      valid_count: countValidCompanies(apps),
       status,
       completed_at: completedAt,
     })
     .eq("id", campaignId);
+  if (updateError) {
+    // Non-fatal mid-flow (the next operation/tick retries), but it must never
+    // be silent again: a failed counter write previously froze the wizard's
+    // step-1→2 gate with no error shown anywhere (42703 trigger regression).
+    console.error(
+      "[bew] refreshCampaignCounters: campaign counter update failed",
+      updateError.message,
+    );
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -450,14 +493,25 @@ export async function saveBewCompanies(
     const { error } = await admin.from("bew_applications").insert(rows);
     if (error) throw new Error("Unable to save the company list.");
   }
-  await admin
+  // The campaign counters must land together with the rows: the wizard's
+  // step-1→2 gate is derived from this state. A failed write here is a
+  // FAILED save — throwing the stable SAVE_FAILED code turns the old silent
+  // success (the 42703 trigger regression) into a visible error.
+  const { error: counterError } = await admin
     .from("bew_campaigns")
     .update({
-      total_count: result.rows.length,
-      valid_count: result.validCount,
+      total_count: rows.length,
+      valid_count: countValidCompanies(rows),
       status: "draft",
     })
     .eq("id", campaignId);
+  if (counterError) {
+    console.error(
+      "[bew] saveBewCompanies: campaign counter update failed",
+      counterError.message,
+    );
+    throw new Error("SAVE_FAILED");
+  }
 
   const fresh = await getBewCampaignOwned(admin, userId, campaignId);
   return { campaign: fresh ?? campaign, result };
@@ -553,6 +607,10 @@ export async function updateBewApplicationFields(
     .eq("user_id", userId)
     .select("*")
     .maybeSingle();
+  // The row's validity changed → the campaign counters must follow
+  // (otherwise valid_count drifts from the rows, e.g. a fixed row is not
+  // counted, a broken one still is).
+  await refreshCampaignCounters(admin, app.campaign_id);
   return (updated as BewApplicationRow | null) ?? null;
 }
 
@@ -878,11 +936,16 @@ export async function generateBewLetters(
     }
   }
 
-  await admin
+  const { error: statusError } = await admin
     .from("bew_campaigns")
     .update({ status: "generating" })
     .eq("id", campaignId)
     .eq("status", "draft");
+  if (statusError)
+    console.error(
+      "[bew] generateBewLetters: campaign status update failed",
+      statusError.message,
+    );
   const by = await countByStatus(admin, campaignId);
   const remaining = (by["pending"] ?? 0) + (by["failed"] ?? 0);
   return { generated, failed, remaining, aiQuotaHit };
@@ -1172,10 +1235,21 @@ export async function startBewSend(
     return { ok: false, error: "QUEUE_FAILED" };
   }
 
-  await admin
+  const { error: statusError } = await admin
     .from("bew_campaigns")
     .update({ status: "sending", started_at: campaign.started_at ?? nowIso() })
     .eq("id", campaignId);
+  if (statusError) {
+    // The claim RPC only drains campaigns with status 'sending' — if this
+    // flip fails, the queued batch could never be consumed and the reserved
+    // quota would leak. Roll back cleanly instead.
+    console.error(
+      "[bew] startBewSend: campaign status update failed",
+      statusError.message,
+    );
+    await releaseCapacity(admin, userId, campaign.usage_date, reserved);
+    return { ok: false, error: "QUEUE_FAILED" };
+  }
 
   // Consume the queue right away (bounded); the rest continues via the
   // worker / cron / monitor. A failure here is never fatal.
@@ -1397,13 +1471,21 @@ export async function setCampaignSender(
     .eq("is_active", true)
     .maybeSingle();
   if (!data) throw new Error("SENDER_NOT_READY");
-  const { data: updated } = await admin
+  const { data: updated, error: updateError } = await admin
     .from("bew_campaigns")
     .update({ email_account_id: accountId })
     .eq("id", campaignId)
     .eq("user_id", userId)
     .select("*")
     .maybeSingle();
+  if (updateError) {
+    console.error(
+      "[bew] setCampaignSender: campaign update failed",
+      updateError.message,
+    );
+    throw new Error("SAVE_FAILED");
+  }
+  if (!updated) throw new Error("NOT_FOUND");
   return updated as unknown as BewCampaignRow;
 }
 
