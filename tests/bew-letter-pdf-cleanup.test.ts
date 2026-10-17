@@ -424,6 +424,12 @@ function seedCampaign(over: Partial<Row> = {}) {
     created_at: new Date().toISOString(),
     started_at: new Date().toISOString(),
     completed_at: null,
+    // Campaign e-mail (independent from the per-company Anschreiben).
+    // The subject template resolves per recipient; the body deliberately
+    // carries NO {{candidate_name}} token (the fake profile name is empty).
+    email_subject: "Bewerbung um einen Ausbildungsplatz bei {{company_name}}",
+    email_body_html:
+      "<p>Guten Tag,</p><p>anbei meine Bewerbung.</p><p>Mit freundlichen Grüssen</p>",
     ...over,
   });
 }

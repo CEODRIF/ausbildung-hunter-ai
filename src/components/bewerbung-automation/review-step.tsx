@@ -27,9 +27,15 @@ import {
   splitAddressLines,
   splitLetterParagraphs,
 } from "@/lib/bewerbung-automation";
+import { isBewEmailComplete } from "@/lib/bewerbung-automation";
+import {
+  renderPersonalizedMessage,
+  type RenderedMessage,
+} from "@/lib/personalization";
 import { Button, Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { StatusPill } from "@/components/ui/feedback";
+import { EmailMessageCard } from "./email-message";
 import {
   appSendFlags,
   hasRequiredDocuments,
@@ -124,6 +130,12 @@ export function ReviewStep({
 
   return (
     <div>
+      {/* The campaign e-mail message — written once, personalized per
+          recipient at send time. A DISTINCT artifact from the per-company
+          Anschreiben, which stays the PDF attachment. */}
+      <EmailMessageCard view={view} refresh={refresh} applicantName={applicantName} />
+
+      <div className="mt-6">
       <Card className="p-6">
         <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -267,6 +279,7 @@ export function ReviewStep({
           </table>
         </div>
       </Card>
+      </div>
 
       {modal && (
         <LetterModal
@@ -394,12 +407,18 @@ export function LetterModal({
               <ReadonlyField label={t("bewauto.letterSignatureLabel")} value={letter.signature} />
             </div>
           ) : (
-            <LetterA4Preview
-              app={app}
-              letter={letter}
-              applicantName={applicantName}
-              applicantEmail={applicantEmail}
-            />
+            <div className="space-y-4">
+              {/* The outgoing e-mail message for THIS recipient — a distinct
+                  item from the cover letter below (the PDF is listed again in
+                  the attachments block). */}
+              <EmailForRecipient view={view} app={app} applicantName={applicantName} t={t} />
+              <LetterA4Preview
+                app={app}
+                letter={letter}
+                applicantName={applicantName}
+                applicantEmail={applicantEmail}
+              />
+            </div>
           )}
 
           <div className="mt-4 rounded-2xl border border-line bg-surface-2/40 p-3">
@@ -521,6 +540,60 @@ function LetterA4Preview({
       <div className="h-14" />
       {letter.signature && (
         <p className="text-[13px] text-ink">{letter.signature}</p>
+      )}
+    </div>
+  );
+}
+
+/** The campaign e-mail message rendered for ONE recipient (the same pure
+ *  resolver the send pipeline uses) — shown in the review so the email
+ *  body and the cover letter are clearly separate items. */
+function EmailForRecipient({
+  view,
+  app,
+  applicantName,
+  t,
+}: {
+  view: BewViewDTO;
+  app: BewApplicationDTO;
+  applicantName: string;
+  t: (k: string, v?: Record<string, string | number>) => string;
+}) {
+  const { email_subject: subject, email_body_html: bodyHtml } = view.campaign;
+  const complete = isBewEmailComplete(subject, bodyHtml);
+  let rendered: RenderedMessage | null = null;
+  if (complete) {
+    try {
+      rendered = renderPersonalizedMessage(
+        { subject: subject ?? "", bodyHtml: bodyHtml ?? "", bodyText: "" },
+        {
+          email: app.company_email,
+          companyName: app.company_name,
+          contactName: app.contact_name,
+        },
+        { candidateName: applicantName },
+      );
+    } catch {
+      rendered = null; // a variable cannot be resolved for this recipient
+    }
+  }
+  return (
+    <div className="rounded-2xl border border-line bg-surface-2/40 p-4">
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+        {t("bewauto.emailInReviewTitle")}
+      </p>
+      {!complete ? (
+        <p className="text-xs leading-5 text-warning">{t("bewauto.emailEmptyHint")}</p>
+      ) : rendered ? (
+        <div>
+          <p className="text-sm font-semibold text-ink">{rendered.subject}</p>
+          <div
+            className="mt-2 max-h-52 overflow-y-auto text-sm leading-6 text-ink-soft"
+            dangerouslySetInnerHTML={{ __html: rendered.bodyHtml }}
+          />
+        </div>
+      ) : (
+        <p className="text-xs leading-5 text-danger">{t("bewauto.emailPreviewUnresolved")}</p>
       )}
     </div>
   );

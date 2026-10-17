@@ -1,0 +1,46 @@
+-- Bewerbung Automation — the CAMPAIGN-LEVEL e-mail message.
+--
+-- WHY THIS MIGRATION:
+--   The application currently sends the per-company Anschreiben text as the
+--   e-mail body (bew_applications.body_html). The product requires an
+--   INDEPENDENT, user-authored e-mail message:
+--
+--     email subject  — editable separately (campaign-wide, with variables)
+--     email body     — a clean HTML message written once, personalized per
+--                      recipient at send time via the existing
+--                      lib/personalization tokens
+--     attachments    — CV + certificates + the recipient-specific
+--                      Anschreiben_<Company>.pdf (the letter stays a FILE,
+--                      never the e-mail body)
+--
+--   The e-mail message belongs to the CAMPAIGN (one message, N recipients),
+--   not to an application row. It is therefore stored on `bew_campaigns` as
+--   two isolated columns — the per-company letter columns
+--   (bew_applications.subject / body_html / body_text) are NOT touched and
+--   keep their exact meaning (cover letter content + PDF source).
+--
+-- SAFETY CONTRACT (manual migration — this file is applied by hand):
+--   * purely ADDITIVE: two new TEXT columns with NOT NULL DEFAULT ''.
+--     Existing campaigns read as "no e-mail yet" (the send gate blocks with
+--     EMAIL_INCOMPLETE until the user composes one) — no data is lost and no
+--     existing behaviour changes for campaigns that already sent.
+--   * NO trigger is attached to bew_campaigns: this table has NO updated_at
+--     column, and the set_updated_at() trigger previously attached here made
+--     EVERY campaign UPDATE fail with 42703 (the regression fixed in
+--     20261112000000). Do NOT re-create it.
+--   * no other table, column, enum, RPC, policy or bucket is altered.
+--   * safe to re-run: `add column if not exists` is idempotent.
+--
+-- DEPLOY ORDER: apply this migration BEFORE deploying code that saves the
+-- e-mail message (updateBewCampaignEmail writes the two columns; without the
+-- migration that write fails and the UI shows SAVE_FAILED). Reading the view
+-- degrades gracefully (columns absent → treated as empty strings), so the
+-- feature can be shipped with a "compose the e-mail before sending" gate
+-- even on a not-yet-migrated database.
+--
+-- REVERSIBILITY: drop the two columns (they are denormalized e-mail content
+-- only; no other object references them).
+
+alter table public.bew_campaigns
+  add column if not exists email_subject text not null default '',
+  add column if not exists email_body_html text not null default '';

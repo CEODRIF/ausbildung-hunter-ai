@@ -41,12 +41,20 @@ import {
 } from "@/lib/bew-letter-pdf";
 
 import {
+  renderPersonalizedMessage,
+  type PersonalizationTemplate,
+  type RenderedMessage,
+} from "@/lib/personalization";
+import {
   assembleLetter,
+  BEW_EMAIL_BODY_MAX,
+  BEW_EMAIL_SUBJECT_MAX,
   buildImportResult,
   buildLetterPrompt,
   buildSubject,
   classifySendError,
   computeSendPlan,
+  isBewEmailComplete,
   isBewPurpose,
   isDocumentKind,
   isValidEmail,
@@ -81,6 +89,14 @@ export type BewCampaignRow = {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  /**
+   * The campaign-level e-mail message (independent from the per-company
+   * Anschreiben, which stays an ATTACHMENT). Optional in the type: rows read
+   * before the 20261113000000 migration simply lack the columns — the code
+   * treats absence as "no e-mail yet" (empty strings).
+   */
+  email_subject?: string;
+  email_body_html?: string;
 };
 
 export type BewApplicationRow = {
@@ -1155,13 +1171,55 @@ export async function restoreBewApplication(
       error_code: null,
       error_message: null,
     })
-    .eq("id", applicationId)
-    .eq("user_id", userId)
-    .eq("status", "excluded")
-    .select("*")
-    .maybeSingle();
-  await refreshCampaignCounters(admin, app.campaign_id);
-  return (data as BewApplicationRow | null) ?? null;
+      .eq("id", applicationId)
+      .eq("user_id", userId)
+      .eq("status", "excluded")
+      .select("*")
+      .maybeSingle();
+    await refreshCampaignCounters(admin, app.campaign_id);
+    return (data as BewApplicationRow | null) ?? null;
+  }
+
+/**
+ * Save the campaign-level e-mail message (subject + HTML body).
+ *
+ * This is INDEPENDENT from the per-company Anschreiben: it never touches
+ * an application row, a letter or a letter PDF. The body is sanitized with
+ * the shared safe-email HTML utility on the way in (the send path
+ * re-sanitizes as defence in depth). Variables stay as tokens — they are
+ * resolved per recipient at send time only.
+ *
+ * Locked once a send is in flight (changing the message mid-campaign
+ * would diverge queued rows from what was gated) and in terminal states.
+ * Empty values are allowed to be stored (the send gate `EMAIL_INCOMPLETE`
+ * blocks the actual send until the message is whole).
+ */
+export async function updateBewCampaignEmail(
+  userId: string,
+  campaignId: string,
+  payload: { subject: string; bodyHtml: string },
+): Promise<void> {
+  const { admin, campaign } = await requireOwnedCampaign(userId, campaignId);
+  if (BEW_TERMINAL_CAMPAIGN.has(campaign.status))
+    throw new Error("CAMPAIGN_CLOSED");
+  if (campaign.status === "sending") throw new Error("EMAIL_LOCKED");
+
+  const subject = (payload.subject ?? "").trim();
+  if (subject.length > BEW_EMAIL_SUBJECT_MAX) throw new Error("INVALID_PAYLOAD");
+  const bodyHtml = (payload.bodyHtml ?? "").slice(0, BEW_EMAIL_BODY_MAX);
+
+  const { error } = await admin
+    .from("bew_campaigns")
+    .update({
+      email_subject: subject,
+      email_body_html: sanitizeEmailHtml(bodyHtml),
+    })
+    .eq("id", campaignId)
+    .eq("user_id", userId);
+  if (error) {
+    console.error("[bew] updateBewCampaignEmail: update failed", error.message);
+    throw new Error("SAVE_FAILED");
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1264,6 +1322,34 @@ export async function startBewSend(
       hasCv,
       hasCertificates,
     };
+
+  // The CAMPAIGN e-mail message (subject + body) is the outgoing e-mail —
+  // the per-company Anschreiben is an attachment, never the body. Block the
+  // send — and say exactly what is missing — until the message is whole.
+  const emailSubject = (campaign.email_subject ?? "").trim();
+  const emailBodyHtml = campaign.email_body_html ?? "";
+  if (!isBewEmailComplete(emailSubject, emailBodyHtml))
+    return {
+      ok: false,
+      error: "EMAIL_INCOMPLETE",
+      senderEmail: sender.email,
+      hasCv,
+      hasCertificates,
+    };
+
+  // {{candidate_name}} resolves from the profile — a message that uses it
+  // cannot be sent when the profile name is missing (no empty signatures).
+  if (/\{\{\s*candidate_name\s*\}\}/.test(emailSubject + emailBodyHtml)) {
+    const applicant = await getApplicantFacts(admin, userId);
+    if (!(applicant.name ?? "").trim())
+      return {
+        ok: false,
+        error: "CANDIDATE_NAME_MISSING",
+        senderEmail: sender.email,
+        hasCv,
+        hasCertificates,
+      };
+  }
 
   const { data: all } = await admin
     .from("bew_applications")
@@ -1421,6 +1507,22 @@ export async function processBewSendBatch(
 
   let stop: SendBatchResult["stop"] = "done";
 
+  // The campaign e-mail message — the outgoing subject/body for EVERY
+  // recipient (personalized per recipient below). The per-company
+  // Anschreiben is a separate artifact: it travels as its own PDF
+  // attachment and is NEVER used as the e-mail body.
+  const emailTemplate: PersonalizationTemplate = {
+    subject: (campaign.email_subject ?? "").trim(),
+    bodyHtml: sanitizeEmailHtml(campaign.email_body_html ?? ""),
+    bodyText: htmlToText(campaign.email_body_html ?? ""),
+  };
+  // Defensive re-gate: startBewSend already blocks an empty message, and
+  // the message is locked while sending — but a drain must never ship an
+  // empty e-mail. Stop WITHOUT claiming or sending: rows stay queued, no
+  // quota moves, nothing is mutated.
+  if (!isBewEmailComplete(emailTemplate.subject, emailTemplate.bodyHtml))
+    return { processed: 0, sent: 0, failed: 0, uncertain: 0, slotBusy: false, stop: "email-incomplete" };
+
   try {
     for (let i = 0; i < max; i += 1) {
       const slot = await reserveSenderSlot(admin, campaign.email_account_id);
@@ -1441,38 +1543,75 @@ export async function processBewSendBatch(
       }
       processed += 1;
 
-    const html = sanitizeEmailHtml(app.body_html);
-    const text = htmlToText(app.body_html) || app.body_text;
+      // Resolve the campaign e-mail for THIS recipient — independently, from
+      // this row's own company/contact data plus the profile name. The
+      // letter's body_html is NOT involved in the e-mail body at all.
+      let email: RenderedMessage;
+      try {
+        email = renderPersonalizedMessage(
+          emailTemplate,
+          {
+            email: app.company_email,
+            companyName: app.company_name,
+            contactName: app.contact_name,
+          },
+          { candidateName: applicant.name },
+        );
+      } catch (personalizationError) {
+        // A token could not be resolved safely for this recipient (hand-typed
+        // spaced variant, missing candidate name, …): fail THIS row with a
+        // stable code — nothing is sent, the quota slot is released, the rest
+        // of the batch continues.
+        console.error(
+          "[bew] send batch: personalization failed",
+          personalizationError,
+        );
+        await markBewApp(
+          admin,
+          app.id,
+          "failed",
+          "personalization_failed",
+          left(
+            personalizationError instanceof Error
+              ? personalizationError.message
+              : "personalization failed",
+            500,
+          ),
+        );
+        await releaseCapacity(admin, userId, campaign.usage_date, 1);
+        failed += 1;
+        continue;
+      }
 
-    // The recipient gets the PDF file, not raw HTML: ensure THIS company's
-    // Anschreiben PDF exists (generates on first send / after edits, heals
-    // orphans). If it cannot be produced, this application is BLOCKED with a
-    // stable, localized error — never sent without its letter.
-    let pdfRef: LetterAttachmentRef | null = null;
-    try {
-      pdfRef = await ensureLetterPdf({ userId, app, applicant });
-    } catch (pdfError) {
-      console.error("[bew] send batch: letter PDF ensure failed", pdfError);
-    }
-    if (!pdfRef) {
-      await markBewApp(
-        admin,
-        app.id,
-        "failed",
-        "pdf_generation_failed",
-        "The cover letter PDF could not be generated for this application.",
-      );
-      await releaseCapacity(admin, userId, campaign.usage_date, 1);
-      failed += 1;
-      continue;
-    }
-    // Campaign documents (CV + certificates) + this company's PDF — no
-    // duplicate attachment names in one e-mail.
-    const appAttachments = dedupeAttachmentsByName([...attachments, pdfRef]);
+      // The recipient gets the PDF file, not raw HTML: ensure THIS company's
+      // Anschreiben PDF exists (generates on first send / after edits, heals
+      // orphans). If it cannot be produced, this application is BLOCKED with a
+      // stable, localized error — never sent without its letter.
+      let pdfRef: LetterAttachmentRef | null = null;
+      try {
+        pdfRef = await ensureLetterPdf({ userId, app, applicant });
+      } catch (pdfError) {
+        console.error("[bew] send batch: letter PDF ensure failed", pdfError);
+      }
+      if (!pdfRef) {
+        await markBewApp(
+          admin,
+          app.id,
+          "failed",
+          "pdf_generation_failed",
+          "The cover letter PDF could not be generated for this application.",
+        );
+        await releaseCapacity(admin, userId, campaign.usage_date, 1);
+        failed += 1;
+        continue;
+      }
+      // Campaign documents (CV + certificates) + this company's PDF — no
+      // duplicate attachment names in one e-mail.
+      const appAttachments = dedupeAttachmentsByName([...attachments, pdfRef]);
 
-    let provider: Awaited<ReturnType<typeof createEmailProvider>>;
-    try {
-      provider = await createEmailProvider(userId, campaign.email_account_id, appAttachments);
+      let provider: Awaited<ReturnType<typeof createEmailProvider>>;
+      try {
+        provider = await createEmailProvider(userId, campaign.email_account_id, appAttachments);
       } catch (error) {
         const c = classifySendError(error);
         if (c.kind === "reconnect") {
@@ -1483,77 +1622,77 @@ export async function processBewSendBatch(
           break;
         }
         await markBewApp(admin, app.id, "failed", c.code, c.message);
-      await releaseCapacity(admin, userId, campaign.usage_date, 1);
-      failed += 1;
-      continue;
-    }
+        await releaseCapacity(admin, userId, campaign.usage_date, 1);
+        failed += 1;
+        continue;
+      }
 
-    try {
-      const result = await provider.sendEmail({
-        to: app.company_email,
-        subject: app.subject,
-        html,
-        text,
-        attachments: [],
-      });
-      // The provider confirmed delivery (2xx + id). Count as sent.
-      await admin.rpc("bew_record_email_sent", {
-        target_user_id: userId,
-        reservation_date: campaign.usage_date,
-      });
-      await admin
-         .from("bew_applications")
-         .update({
-           status: "sent",
-           provider_message_id: result.providerMessageId,
-           sent_at: nowIso(),
-           error_code: null,
-           error_message: null,
-         })
-         .eq("id", app.id);
-       // Post-send CLEANUP (best-effort, idempotent): the provider
-       // authoritatively confirmed the send, so this app's generated
-       // Anschreiben PDF is no longer needed. Only the deterministic,
-       // owner-scoped letter path is deleted — NEVER the CV, the
-       // certificates, or another user's objects. deleteLetterPdf is
-       // non-throwing and non-fatal by design: the row stays "sent", the
-       // quota stays consumed, the e-mail is never re-triggered, and the
-       // post-drain sweep retries a failed delete safely.
-       await deleteLetterPdf(userId, app.id, admin);
-       sent += 1;
-     } catch (error) {
-      const c = classifySendError(error);
-      if (c.kind === "retry" && app.attempt_count < BEW_MAX_SEND_ATTEMPTS) {
-        await admin
-          .from("bew_applications")
-          .update({
-            status: "queued",
-            error_code: c.code,
-            error_message: left(c.message, 500),
-            next_attempt_at: inSecondsIso(BEW_RETRY_AFTER_SECONDS),
-          })
-          .eq("id", app.id);
-        // Quota stays reserved for the retry.
-       } else if (c.kind === "reconnect") {
-         await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
-         await releaseCapacity(admin, userId, campaign.usage_date, 1);
-         failed += 1;
-         stop = "reconnect";
-         break;
-       } else if (c.kind === "uncertain") {
-        // May already be delivered — consume quota (safe) but NEVER retry.
+      try {
+        const result = await provider.sendEmail({
+          to: app.company_email,
+          subject: email.subject,
+          html: email.bodyHtml,
+          text: email.bodyText,
+          attachments: [],
+        });
+        // The provider confirmed delivery (2xx + id). Count as sent.
         await admin.rpc("bew_record_email_sent", {
           target_user_id: userId,
           reservation_date: campaign.usage_date,
         });
-        await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
-        uncertain += 1;
-       } else {
-         await markBewApp(admin, app.id, "failed", c.code, c.message);
-         await releaseCapacity(admin, userId, campaign.usage_date, 1);
-         failed += 1;
-       }
-     }
+        await admin
+          .from("bew_applications")
+          .update({
+            status: "sent",
+            provider_message_id: result.providerMessageId,
+            sent_at: nowIso(),
+            error_code: null,
+            error_message: null,
+          })
+          .eq("id", app.id);
+        // Post-send CLEANUP (best-effort, idempotent): the provider
+        // authoritatively confirmed the send, so this app's generated
+        // Anschreiben PDF is no longer needed. Only the deterministic,
+        // owner-scoped letter path is deleted — NEVER the CV, the
+        // certificates, or another user's objects. deleteLetterPdf is
+        // non-throwing and non-fatal by design: the row stays "sent", the
+        // quota stays consumed, the e-mail is never re-triggered, and the
+        // post-drain sweep retries a failed delete safely.
+        await deleteLetterPdf(userId, app.id, admin);
+        sent += 1;
+      } catch (error) {
+        const c = classifySendError(error);
+        if (c.kind === "retry" && app.attempt_count < BEW_MAX_SEND_ATTEMPTS) {
+          await admin
+            .from("bew_applications")
+            .update({
+              status: "queued",
+              error_code: c.code,
+              error_message: left(c.message, 500),
+              next_attempt_at: inSecondsIso(BEW_RETRY_AFTER_SECONDS),
+            })
+            .eq("id", app.id);
+          // Quota stays reserved for the retry.
+        } else if (c.kind === "reconnect") {
+          await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
+          await releaseCapacity(admin, userId, campaign.usage_date, 1);
+          failed += 1;
+          stop = "reconnect";
+          break;
+        } else if (c.kind === "uncertain") {
+          // May already be delivered — consume quota (safe) but NEVER retry.
+          await admin.rpc("bew_record_email_sent", {
+            target_user_id: userId,
+            reservation_date: campaign.usage_date,
+          });
+          await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
+          uncertain += 1;
+        } else {
+          await markBewApp(admin, app.id, "failed", c.code, c.message);
+          await releaseCapacity(admin, userId, campaign.usage_date, 1);
+          failed += 1;
+        }
+      }
     }
   } finally {
     /* Idempotent RETRY of any cleanup the per-app delete could not finish

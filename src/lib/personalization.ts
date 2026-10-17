@@ -44,15 +44,40 @@
 export const COMPANY_TOKEN = "{{company_name}}";
 export const CONTACT_TOKEN = "{{contact_name}}";
 export const GREETING_TOKEN = "{{greeting}}";
+/**
+ * The SENDER's name (constant across a campaign, sourced from the user's
+ * profile — e.g. the signature block "Mit freundlichen Grüßen
+ * {{candidate_name}}"). Resolved from the render CONTEXT, not the recipient.
+ * Added for the Bewerbung Automation e-mail message; the standard campaign
+ * flow simply never uses it (its context carries no candidate name).
+ */
+export const CANDIDATE_TOKEN = "{{candidate_name}}";
 
+/**
+ * The CORE tokens of the standard campaign editor (its toolbar contract —
+ * a static guard asserts the editor source carries exactly this set, so
+ * the standard flow never drifts). The candidate token is NOT part of it:
+ * the standard flow has no "sender name" concept.
+ */
 export const PERSONALIZATION_TOKENS: readonly string[] = [
   COMPANY_TOKEN,
   CONTACT_TOKEN,
   GREETING_TOKEN,
 ];
 
-/** Matches exactly the three known tokens (no whitespace variants). */
-const TOKEN_RE = /\{\{(company_name|contact_name|greeting)\}\}/g;
+/**
+ * Every token the render pipeline RECOGNIZES (core + the candidate name
+ * used by the Bewerbung Automation e-mail message). Validation treats any
+ * of these — in any spacing variant — as an unresolvable variable when it
+ * survives rendering.
+ */
+export const ALL_PERSONALIZATION_TOKENS: readonly string[] = [
+  ...PERSONALIZATION_TOKENS,
+  CANDIDATE_TOKEN,
+];
+
+/** Matches exactly the known tokens (no whitespace variants). */
+const TOKEN_RE = /\{\{(company_name|contact_name|greeting|candidate_name)\}\}/g;
 
 /**
  * Validation pattern: the known tokens WITH optional inner whitespace.
@@ -61,7 +86,10 @@ const TOKEN_RE = /\{\{(company_name|contact_name|greeting)\}\}/g;
  * unresolved variable — something that looks like our token never leaves
  * the building.
  */
-const UNRESOLVED_TOKEN_RE = /\{\{\s*(company_name|contact_name|greeting)\s*\}\}/;
+const UNRESOLVED_TOKEN_RE = /\{\{\s*(company_name|contact_name|greeting|candidate_name)\s*\}\}/;
+
+/** True when the template (subject or body) carries the candidate token. */
+const CANDIDATE_TOKEN_RE = /\{\{\s*candidate_name\s*\}\}/;
 
 /** True when the string contains at least one exact known token. */
 export function hasPersonalizationTokens(value: string): boolean {
@@ -570,26 +598,50 @@ export function renderTextTemplate(
   return (text ?? "").replace(TOKEN_RE, (token) => values[token.slice(2, -2)] ?? "");
 }
 
+/** Campaign/sender-level facts that personalize a message (constant for
+ *  every recipient of the campaign — the candidate's profile name). */
+export interface PersonalizationContext {
+  /** The sender's full name (profile). REQUIRED whenever the template uses
+   *  {{candidate_name}} — an empty signature would be a defect, so it
+   *  surfaces as PersonalizationError instead of being sent. */
+  candidateName?: string | null;
+}
+
 /**
  * Render ONE recipient's outgoing message from the shared draft template.
  *
  *  - The template (with tokens) is never modified.
- *  - Every value is resolved from THIS recipient's data only.
- *  - All three values are guaranteed non-empty (safe fallbacks).
- *  - Throws PersonalizationError when a known token survives rendering —
- *    the caller must route the message through the per-recipient failure
- *    path, never send it.
+ *  - Every value is resolved from THIS recipient's data only (plus the
+ *    campaign-level context for the candidate name).
+ *  - All per-recipient values are guaranteed non-empty (safe fallbacks).
+ *  - Throws PersonalizationError when a known token survives rendering OR
+ *    when {{candidate_name}} is used without a candidate name — the caller
+ *    must route the message through the per-recipient failure path, never
+ *    send it.
  */
 export function renderPersonalizedMessage(
   template: PersonalizationTemplate,
   recipient: PersonalizedRecipient,
+  context: PersonalizationContext = {},
 ): RenderedMessage {
+  const candidateName = (context.candidateName ?? "").trim();
+  if (
+    !candidateName &&
+    (CANDIDATE_TOKEN_RE.test(template.subject ?? "") ||
+      CANDIDATE_TOKEN_RE.test(template.bodyHtml ?? "") ||
+      CANDIDATE_TOKEN_RE.test(template.bodyText ?? ""))
+  ) {
+    throw new PersonalizationError(
+      "The candidate name is missing but the message uses {{candidate_name}}.",
+    );
+  }
   const values: Record<string, string> = {
     company_name:
       resolveCompanyName(recipient.email, recipient.companyName).value ??
       COMPANY_FALLBACK,
     contact_name: renderContactName(recipient.contactName),
     greeting: renderGreeting(recipient.contactName),
+    candidate_name: candidateName,
   };
   const subject = renderTextTemplate(template.subject, values);
   const bodyHtml = renderHtmlTemplate(template.bodyHtml, values);

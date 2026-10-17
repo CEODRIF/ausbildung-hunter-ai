@@ -472,6 +472,12 @@ function seedCampaign(over: Partial<Row> = {}) {
     created_at: new Date().toISOString(),
     started_at: null,
     completed_at: null,
+    // Campaign e-mail (independent from the per-company Anschreiben).
+    // The subject template resolves per recipient; the body deliberately
+    // carries NO {{candidate_name}} token (the fake profile name is empty).
+    email_subject: "Bewerbung um einen Ausbildungsplatz bei {{company_name}}",
+    email_body_html:
+      "<p>Guten Tag,</p><p>anbei meine Bewerbung.</p><p>Mit freundlichen Grüssen</p>",
     ...over,
   });
 }
@@ -1102,12 +1108,17 @@ describe("review UI — readable A4 preview, structured edit, no raw HTML", () =
     expect(html).not.toContain("font-mono"); // the old raw-HTML textarea is gone
   });
 
-  it("guard: the review step source never renders unsanitized HTML", () => {
+  it("guard: only the SANITIZED campaign e-mail may render as HTML in the review step", () => {
     const src = readFileSync(
       path.join(process.cwd(), "src/components/bewerbung-automation/review-step.tsx"),
       "utf8",
     );
-    expect(src).not.toContain("dangerouslySetInnerHTML");
+    // The e-mail preview is the single raw-HTML surface — and it must render
+    // the renderPersonalizedMessage output (body sanitized at save time,
+    // re-sanitized at send). The LETTER is never raw HTML.
+    const htmlSurfaces =
+      src.match(/dangerouslySetInnerHTML=\{\{ __html: [^}]+ \}\}/g) ?? [];
+    for (const surface of htmlSurfaces) expect(surface).toContain("rendered.bodyHtml");
     expect(src).not.toContain("font-mono");
     // The letter is parsed through the shared pure helpers (one rule for
     // preview, edit and PDF).

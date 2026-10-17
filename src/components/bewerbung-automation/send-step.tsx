@@ -16,6 +16,7 @@ import { useI18n } from "@/lib/i18n";
 import {
   BEW_PLATFORM_DAILY_CAP,
   computeSendPlan,
+  isBewEmailComplete,
 } from "@/lib/bewerbung-automation";
 import { Button, Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
@@ -44,6 +45,12 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
   const certCount = view.documents.filter(
     (d) => d.kind === "certificate" || d.kind === "supporting",
   ).length;
+  /* The campaign e-mail message (subject + body) must be complete — the
+     server re-enforces this in startBewSend (EMAIL_INCOMPLETE). */
+  const emailComplete = isBewEmailComplete(
+    view.campaign.email_subject,
+    view.campaign.email_body_html,
+  );
 
   const eligibleSelected = useMemo(
     () =>
@@ -116,6 +123,12 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
       {view.senderEmail && docs.cv && !docs.certs && (
         <p role="alert" className="mb-4 text-sm font-medium text-danger">{t("bewauto.flagMissingCerts")}</p>
       )}
+      {view.senderEmail && !emailComplete && (
+        <div role="alert" className="mb-4 flex items-start gap-2.5 rounded-2xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
+          <Icon name="alert" size={16} className="mt-0.5 shrink-0" />
+          <span>{t("bewauto.flagEmailIncomplete")}</span>
+        </div>
+      )}
 
       {/* Live progress while draining */}
       {sending && (
@@ -157,7 +170,7 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
         <div className="flex flex-col items-start gap-3 rounded-2xl border border-accent/30 bg-accent-soft/40 p-5">
           <Button
             size="lg"
-            disabled={busy || n === 0 || !view.senderEmail || !(docs.cv && docs.certs)}
+            disabled={busy || n === 0 || !view.senderEmail || !(docs.cv && docs.certs) || !emailComplete}
             onClick={() => setConfirmOpen(true)}
           >
             <Icon name="send" size={18} />
@@ -165,6 +178,9 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
           </Button>
           {n === 0 && (
             <p className="text-xs text-muted">{t("bewauto.nothingToSend")}</p>
+          )}
+          {n > 0 && !emailComplete && (
+            <p className="text-xs text-muted">{t("bewauto.flagEmailIncomplete")}</p>
           )}
         </div>
       )}
