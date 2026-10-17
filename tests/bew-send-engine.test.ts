@@ -35,7 +35,14 @@ interface DB {
   aiScripts: Array<string | (() => Error)>;
   pdfText: string;
   /** Every message actually handed to the provider (the "out the door" log). */
-  sendLog: Array<{ to: string; subject: string; html: string; attachments: number }>;
+  sendLog: Array<{
+    to: string;
+    subject: string;
+    html: string;
+    attachments: number;
+    /** The attachment file names pre-fetched for this exact message. */
+    attachmentFiles: string[];
+  }>;
   /** Storage upload paths captured by the fake (owner-scoping proofs). */
   uploads: string[];
   /** Storage removal paths captured by the fake (compensation proofs). */
@@ -318,13 +325,19 @@ function installMocks() {
     createEmailProvider: async (
       _userId: string,
       _accountId: string,
-      paths: Array<{ storagePath: string }> = [],
+      paths: Array<{ filename: string; storagePath: string }> = [],
     ) => ({
       sendEmail: async (input: any) => {
         const script = db.sendScripts.shift();
         if (!script) throw Object.assign(new Error("no provider script"), { code: "provider_rejected", temporary: false });
         const attached = input.attachments?.length || paths.length || 0;
-        db.sendLog.push({ to: input.to, subject: input.subject, html: input.html, attachments: attached });
+        db.sendLog.push({
+          to: input.to,
+          subject: input.subject,
+          html: input.html,
+          attachments: attached,
+          attachmentFiles: paths.map((p) => p.filename),
+        });
         const result = script();
         if (result && (result as { ok?: boolean }).ok) return { providerMessageId: (result as { id: string }).id };
         throw new Error("script should be handled");
@@ -466,9 +479,16 @@ describe("processBewSendBatch — safe sending", () => {
     expect(result.failed).toBe(0);
     expect(db.sendLog).toHaveLength(3);
     // One-to-one: recipient + subject + attachment set preserved per app.
-    expect(db.sendLog[0]).toMatchObject({ to: "jobs1@firma1.de", subject: "Bewerbung um einen Ausbildungsplatz bei Firma 1", attachments: 2 });
-    expect(db.sendLog[1]).toMatchObject({ to: "jobs2@firma2.de" });
-    expect(db.sendLog[2]).toMatchObject({ to: "jobs3@firma3.de" });
+    // Every outgoing e-mail carries the CV, the certificate AND the
+    // generated Anschreiben PDF for THAT company (sorted: kind, filename).
+    expect(db.sendLog[0]).toMatchObject({
+      to: "jobs1@firma1.de",
+      subject: "Bewerbung um einen Ausbildungsplatz bei Firma 1",
+      attachments: 3,
+      attachmentFiles: ["cert.pdf", "cv.pdf", "Anschreiben_Firma_1.pdf"],
+    });
+    expect(db.sendLog[1].attachmentFiles).toEqual(["cert.pdf", "cv.pdf", "Anschreiben_Firma_2.pdf"]);
+    expect(db.sendLog[2].attachmentFiles).toEqual(["cert.pdf", "cv.pdf", "Anschreiben_Firma_3.pdf"]);
     // provider_message_id captured (idempotency/audit).
     const sent = db.bew_applications.filter((a) => a.status === "sent");
     expect(sent.map((a) => a.provider_message_id).sort()).toEqual(["m1", "m2", "m3"]);

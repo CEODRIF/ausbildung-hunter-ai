@@ -2441,7 +2441,16 @@ const de = {
     letterPreviewTitle: "Anschreiben · {company}",
     recipient: "Empfänger",
     subjectLabel: "Betreff",
-    editBodyLabel: "Anschreiben (HTML)",
+    letterGreetingLabel: "Anrede",
+    letterBodyLabel: "Anschreiben-Text",
+    letterBodyHint: "Eine Leerzeile trennt Absätze — HTML-Tags sind nicht nötig.",
+    letterClosingLabel: "Grußformel",
+    letterSignatureLabel: "Name",
+    letterPdf: "Anschreiben (PDF)",
+    letterPdfNote:
+      "Wird automatisch generiert und jeder Bewerbung als Anhang beigefügt.",
+    errPdfGeneration:
+      "Das Anschreiben-PDF konnte nicht erstellt werden — der Versand dieser Bewerbung ist blockiert.",
     saveLetter: "Speichern",
     attachments: "Anhänge",
     flagEmptyLetter: "Anschreiben fehlt",
@@ -4901,7 +4910,17 @@ const en: Dict = {
     letterPreviewTitle: "Cover letter · {company}",
     recipient: "Recipient",
     subjectLabel: "Subject",
-    editBodyLabel: "Cover letter (HTML)",
+    letterGreetingLabel: "Greeting",
+    letterBodyLabel: "Letter text",
+    letterBodyHint:
+      "A blank line separates paragraphs — no HTML tags needed.",
+    letterClosingLabel: "Closing",
+    letterSignatureLabel: "Name",
+    letterPdf: "Cover letter (PDF)",
+    letterPdfNote:
+      "Generated automatically and attached to every application.",
+    errPdfGeneration:
+      "The cover letter PDF could not be generated — sending this application is blocked.",
     saveLetter: "Save",
     attachments: "Attachments",
     flagEmptyLetter: "Cover letter missing",
@@ -7361,7 +7380,17 @@ const fr: Dict = {
     letterPreviewTitle: "Lettre de motivation · {company}",
     recipient: "Destinataire",
     subjectLabel: "Objet",
-    editBodyLabel: "Lettre de motivation (HTML)",
+    letterGreetingLabel: "Formule d'appel",
+    letterBodyLabel: "Texte de la lettre",
+    letterBodyHint:
+      "Une ligne vide sépare les paragraphes — aucune balise HTML nécessaire.",
+    letterClosingLabel: "Formule de politesse",
+    letterSignatureLabel: "Nom",
+    letterPdf: "Lettre de motivation (PDF)",
+    letterPdfNote:
+      "Générée automatiquement et jointe à chaque candidature.",
+    errPdfGeneration:
+      "La lettre PDF n'a pas pu être générée — l'envoi de cette candidature est bloqué.",
     saveLetter: "Enregistrer",
     attachments: "Pièces jointes",
     flagEmptyLetter: "Lettre manquante",
@@ -9771,7 +9800,16 @@ const ar: Dict = {
     letterPreviewTitle: "خطاب التقديم · {company}",
     recipient: "المتلقي",
     subjectLabel: "الموضوع",
-    editBodyLabel: "خطاب التقديم (HTML)",
+    letterGreetingLabel: "التحية",
+    letterBodyLabel: "نص الخطاب",
+    letterBodyHint:
+      "سطر فارغ يفصل بين الفقرات — لا حاجة إلى وسوم HTML.",
+    letterClosingLabel: "الصيغة الختامية",
+    letterSignatureLabel: "الاسم",
+    letterPdf: "خطاب التقديم (PDF)",
+    letterPdfNote: "يُنشأ تلقائيًا ويُرسل كملف مرفق مع كل طلب.",
+    errPdfGeneration:
+      "تعذر إنشاء ملف PDF لخطاب التقديم — إرسال هذا الطلب محظور.",
     saveLetter: "حفظ",
     attachments: "المرفقات",
     flagEmptyLetter: "خطاب التقديم مفقود",

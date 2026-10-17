@@ -471,6 +471,7 @@ function renderWizard(
       schemaOk: true,
       initialView: view,
       userName: "Max",
+      userEmail: "max@example.com",
     }),
   );
   return renderToString(tree);

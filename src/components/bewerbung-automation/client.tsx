@@ -48,6 +48,7 @@ interface Props {
   schemaOk: boolean;
   initialView: BewViewDTO | null;
   userName: string;
+  userEmail: string;
 }
 
 /** Step 2 gate: a CV + at least one certificate/supporting document. */
@@ -108,7 +109,7 @@ function lettersReady(view: BewViewDTO | null): boolean {
   );
 }
 
-export function BewerbungAutomation({ schemaOk, initialView, userName }: Props) {
+export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail }: Props) {
   const { t } = useI18n();
   const [view, setView] = useState<BewViewDTO | null>(initialView);
   const [step, setStep] = useState<Step>(1);
@@ -398,6 +399,8 @@ export function BewerbungAutomation({ schemaOk, initialView, userName }: Props) 
             refresh={refresh}
             selectedIds={selectedIds}
             onToggle={toggleSelect}
+            applicantName={userName}
+            applicantEmail={userEmail}
           />
         )}
         {step === 5 && (
