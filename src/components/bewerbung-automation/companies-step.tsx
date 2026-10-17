@@ -34,12 +34,20 @@ import {
 } from "./import-parse";
 import {
   applyDraftPatch,
+  beginRowDelete,
+  confirmRowDelete,
+  deleteCompanyRow,
+  EMPTY_ROW_DELETE_STATE,
+  failRowDelete,
   filterActiveRows,
   findDuplicateEmails,
+  pruneRowDeleteState,
+  retireRowDelete,
   rowDirty,
   rowValues,
   type CompanyRowView,
   type Drafts,
+  type RowDeleteState,
 } from "./row-state";
 import type { BewViewDTO, CompanyRecord } from "./types";
 
@@ -132,17 +140,36 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
   const [drafts, setDrafts] = useState<Drafts>({});
   const fileRef = useRef<HTMLInputElement>(null);
 
-  /* Live duplicate check over the CURRENT (draft-aware) active rows —
+  /* Optimistic deletion: rows hidden on the first click, before the
+     ownership-checked server exclusion answers. */
+  const [deleteState, setDeleteState] = useState<RowDeleteState>(EMPTY_ROW_DELETE_STATE);
+  /** Synchronous double-click guard (state updates are batched — only a
+      ref claim is race-free between two rapid clicks of the same row). */
+  const inFlightDeletes = useRef<Set<string>>(new Set());
+
+  /* Reconcile hidden rows with the fresh view after every refresh: a row
+     the view reports active again (restored from the review step) re-
+     appears; nothing the user entered is ever clobbered by stale data. */
+  const deleteView = useMemo(() => pruneRowDeleteState(deleteState, rows), [deleteState, rows]);
+  /* What the user actually sees: active rows minus the optimistically
+     hidden ones. Entry count, validation flags and duplicate detection
+     ALL derive from this — so every one of them updates on the click. */
+  const visibleRows = useMemo(
+    () => activeRows.filter((a) => !deleteView.hidden.has(a.id)),
+    [activeRows, deleteView.hidden],
+  );
+
+  /* Live duplicate check over the CURRENT (draft-aware) visible rows —
      recomputed on every edit, so it updates immediately after a change
      or a deletion. */
   const dupEmails = useMemo(() => {
     const recs: Array<{ companyEmail: string }> = [];
-    for (const a of activeRows) {
+    for (const a of visibleRows) {
       const v = rowValues(drafts, rows, a.id);
       if (v) recs.push({ companyEmail: v.companyEmail });
     }
     return findDuplicateEmails(recs);
-  }, [activeRows, drafts, rows]);
+  }, [visibleRows, drafts, rows]);
 
   const preview = useMemo(
     () =>
@@ -193,36 +220,61 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
   }
 
   /**
-   * Delete ONE company row (the red X). Removes only `app` by its stable id:
-   *   - the server row is EXCLUDED (restorable, ownership-checked, never
-   *     in-flight — the engine blocks queued/sending/sent rows),
-   *   - this row's unsaved draft edits are dropped (the latest version goes
-   *     away WITH the row, as expected for a delete),
-   *   - the other rows, their values and their drafts are untouched.
+   * Delete ONE company row (the red X) — OPTIMISTICALLY. Removes only
+   * `app`, addressed by its stable id:
+   *   - the row disappears from the table IMMEDIATELY on the click (the
+   *     entry count, validation flags and duplicate check all update at
+   *     once) — the ownership-checked server exclusion runs in the
+   *     background and NEVER gates the visual update,
+   *   - on success the row's unsaved draft edits are dropped (the latest
+   *     version goes away WITH the row) and one authoritative view refresh
+   *     syncs the wizard gates/counters,
+   *   - on failure the row is restored in its original position with all
+   *     its latest field values and a localized error is shown,
+   *   - the other rows, their values and their drafts are untouched; the
+   *     whole list is never replaced with stale server data,
+   *   - a second click for the same row while the request is in flight is
+   *     a no-op (synchronous ref claim — no duplicate requests), and
+   *     in-flight rows (queued/sending/sent) stay locked: the engine
+   *     rejects the exclusion and the row is restored with an error.
    * No confirmation dialog: a single unsent draft row should not be
    * interrupted for, and the action is restorable from step 4.
    */
-  async function deleteRow(app: { id: string; seq: number }) {
-    setBusy(true);
+  function handleDeleteClick(app: CompanyRowView) {
+    if (lockApp) return; // a send is in progress — every row input is locked
     setError(null);
     setNotice(null);
-    try {
-      const fd = new FormData();
-      fd.set("applicationId", app.id);
-      await bewExcludeApplication(fd);
-      setDrafts((d) => {
-        if (!(app.id in d)) return d;
-        const next = { ...d };
-        delete next[app.id];
-        return next;
-      });
-      await refresh();
-      setNotice(t("bewauto.rowDeleted", { n: app.seq }));
-    } catch (e) {
-      setError(errMessage(e, t));
-    } finally {
-      setBusy(false);
-    }
+    void deleteCompanyRow({
+      appId: app.id,
+      seq: app.seq,
+      claim: (id) => {
+        if (inFlightDeletes.current.has(id)) return false;
+        inFlightDeletes.current.add(id);
+        return true;
+      },
+      release: (id) => {
+        inFlightDeletes.current.delete(id);
+      },
+      begin: (id) => setDeleteState((s) => beginRowDelete(s, id)),
+      confirm: (id) => setDeleteState((s) => confirmRowDelete(s, id)),
+      retire: (id) => setDeleteState((s) => retireRowDelete(s, id)),
+      fail: (id) => setDeleteState((s) => failRowDelete(s, id)),
+      dropDraft: (id) =>
+        setDrafts((d) => {
+          if (!(id in d)) return d;
+          const next = { ...d };
+          delete next[id];
+          return next;
+        }),
+      exclude: async (id) => {
+        const fd = new FormData();
+        fd.set("applicationId", id);
+        await bewExcludeApplication(fd);
+      },
+      refresh,
+      onSuccess: (seq) => setNotice(t("bewauto.rowDeleted", { n: seq })),
+      onError: (error) => setError(errMessage(error, t)),
+    });
   }
 
   async function handleFile(file: File) {
@@ -417,9 +469,9 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
         {/* Manual table */}
         <div className="mt-6">
           <p className="mb-2 text-sm font-semibold text-ink-soft">
-            {t("bewauto.manageTitle")} ({activeRows.length})
+            {t("bewauto.manageTitle")} ({visibleRows.length})
           </p>
-          {activeRows.length === 0 ? (
+          {visibleRows.length === 0 ? (
             /* Every row was deleted — the user can still continue: import
                companies above (or restore a row later from the review step). */
             <div className="rounded-2xl border border-dashed border-line-strong bg-surface-2/40 px-4 py-8 text-center">
@@ -443,7 +495,7 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
                 </tr>
               </thead>
               <tbody>
-                {activeRows.map((app) => {
+                {visibleRows.map((app) => {
                   const values = rowValues(drafts, rows, app.id);
                   if (!values) return null;
                   const dirty = rowDirty(drafts, rows, app.id);
@@ -508,8 +560,8 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
                             dialog for a single unsent draft row. */}
                         <button
                           type="button"
-                          onClick={() => void deleteRow(app)}
-                          disabled={lockApp || busy}
+                          onClick={() => handleDeleteClick(app)}
+                          disabled={lockApp || deleteView.pending.has(app.id)}
                           aria-label={t("bewauto.deleteRow", { n: app.seq })}
                           className="rounded-lg p-1.5 text-danger transition hover:bg-danger-soft disabled:cursor-not-allowed disabled:opacity-40"
                         >

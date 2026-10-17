@@ -457,10 +457,10 @@ describe("CompaniesStep render: red X delete per row (Bug 2)", () => {
       join(process.cwd(), "src/components/bewerbung-automation/companies-step.tsx"),
       "utf8",
     );
-    // The active-rows table body keys by the stable id…
-    expect(src).toMatch(/activeRows\.map\(\(app\)[\s\S]{0,800}?key=\{app\.id\}/);
+    // The visible-rows table body keys by the stable id…
+    expect(src).toMatch(/visibleRows\.map\(\(app\)[\s\S]{0,800}?key=\{app\.id\}/);
     // …and the draft/delete handlers are addressed by id, never by index.
-    expect(src).toContain('delete next[app.id]');
+    expect(src).toContain("delete next[id]");
     expect(src).not.toMatch(/setDraft\(\s*i\b/);
   });
 });

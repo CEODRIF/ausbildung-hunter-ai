@@ -88,6 +88,11 @@ export function rowDirty(
   );
 }
 
+/** A row is still part of the campaign's company list. */
+export function isRowActiveStatus(status: string): boolean {
+  return status !== "excluded" && status !== "cancelled";
+}
+
 /**
  * Rows that are still part of the campaign's company list. Deleting a row
  * EXCLUDES it on the server (restorable, ownership-checked), so the manual
@@ -98,7 +103,7 @@ export function rowDirty(
  * from the (unchanged) server rows, so nothing the user entered is lost.
  */
 export function filterActiveRows(rows: CompanyRowView[]): CompanyRowView[] {
-  return rows.filter((r) => r.status !== "excluded" && r.status !== "cancelled");
+  return rows.filter((r) => isRowActiveStatus(r.status));
 }
 
 /**
@@ -127,4 +132,167 @@ export function isRowComplete(
   record: Pick<CompanyRecord, "companyName" | "companyEmail">,
 ): boolean {
   return record.companyName.trim().length > 0 && isValidEmail(record.companyEmail);
+}
+
+/* ------------------------------------------------------------------ *
+ * Optimistic per-row deletion (instant UI response)
+ * ------------------------------------------------------------------ *
+ *
+ * The red X must hide the row on the FIRST click — waiting for the
+ * ownership-checked server exclusion (and a view refresh) made deletion
+ * feel broken. So the UI state transitions are pure here: the component
+ * only wires them to its state setters and the server action. The exact
+ * ordering (hide → network → confirm/restore) is what the tests verify.
+ */
+
+export interface RowDeleteState {
+  /** Rows whose server exclusion is still in flight (duplicate-click guard). */
+  pending: Set<string>;
+  /** Rows hidden from the table — pending ∪ server-confirmed — until a
+   *  fresh view reflects the exclusion (or the row is restored). */
+  hidden: Set<string>;
+}
+
+export const EMPTY_ROW_DELETE_STATE: RowDeleteState = {
+  pending: new Set<string>(),
+  hidden: new Set<string>(),
+};
+
+/**
+ * Hide the row IMMEDIATELY (no network round trip). A second begin for a
+ * row that is already pending returns the SAME reference (no-op) — the
+ * state-level duplicate guard on top of the component's synchronous claim.
+ */
+export function beginRowDelete(state: RowDeleteState, id: string): RowDeleteState {
+  if (state.pending.has(id)) return state;
+  return {
+    pending: new Set(state.pending).add(id),
+    hidden: new Set(state.hidden).add(id),
+  };
+}
+
+/**
+ * Server confirmed the exclusion: the row stays hidden. The entry is
+ * retired only after the orchestrator's own post-confirmation view sync
+ * (see `retireRowDelete`) — a stale view landing in between must never
+ * un-hide the row.
+ */
+export function confirmRowDelete(state: RowDeleteState, id: string): RowDeleteState {
+  if (!state.pending.has(id)) return state;
+  const pending = new Set(state.pending);
+  pending.delete(id);
+  return { ...state, pending };
+}
+
+/**
+ * Retire the optimistic entry for a row whose exclusion is committed AND
+ * whose post-confirmation view sync has landed: from now on the VIEW owns
+ * the row's visibility (excluded → hidden by the row filter; restored later
+ * → active → reappears on its own). This is deliberately the ONLY path that
+ * un-hides a confirmed row — a stale refresh fetched before the commit can
+ * never flicker the row back.
+ */
+export function retireRowDelete(state: RowDeleteState, id: string): RowDeleteState {
+  if (!state.hidden.has(id)) return state;
+  const hidden = new Set(state.hidden);
+  hidden.delete(id);
+  return { ...state, hidden };
+}
+
+/**
+ * Server rejected the exclusion: restore the row. Its original position
+ * comes for free (list order is derived from the stable server rows), and
+ * its latest field values survive because the row's draft is dropped only
+ * AFTER confirmation.
+ */
+export function failRowDelete(state: RowDeleteState, id: string): RowDeleteState {
+  if (!state.pending.has(id)) return state;
+  const pending = new Set(state.pending);
+  const hidden = new Set(state.hidden);
+  pending.delete(id);
+  hidden.delete(id);
+  return { pending, hidden };
+}
+
+/**
+ * Defensive reconciliation with the current view: retire hidden entries
+ * whose row is gone from the view entirely (e.g. the campaign row list
+ * shrank elsewhere). Entries whose row is still present are NEVER touched
+ * here — un-hiding is `retireRowDelete`'s job only (see its docs). Returns
+ * the SAME reference when nothing changed (no render loop).
+ */
+export function pruneRowDeleteState(
+  state: RowDeleteState,
+  view: CompanyRowView[],
+): RowDeleteState {
+  if (state.hidden.size === 0) return state;
+  const idsInView = new Set(view.map((r) => r.id));
+  const hidden = new Set([...state.hidden].filter((id) => idsInView.has(id)));
+  if (hidden.size === state.hidden.size) return state;
+  return { ...state, hidden };
+}
+
+export interface RowDeleteDeps {
+  appId: string;
+  seq: number;
+  /** Synchronously claim this row for an in-flight delete; returns false
+   *  when one is already running. React state updates are batched, so a
+   *  ref-based claim (not a state check) is the race-free double-click
+   *  guard — two rapid clicks can never start two requests. */
+  claim: (id: string) => boolean;
+  release: (id: string) => void;
+  begin: (id: string) => void;
+  confirm: (id: string) => void;
+  retire: (id: string) => void;
+  fail: (id: string) => void;
+  /** Drop this row's unsaved draft edits — only after the server confirmed
+   *  the exclusion (on failure the latest values are restored). */
+  dropDraft: (id: string) => void;
+  /** The ownership-checked, restorable server-side exclusion. */
+  exclude: (id: string) => Promise<void>;
+  /** ONE authoritative view sync AFTER confirmation — never on the
+   *  click→visual path, so no artificial delay or polling. Best-effort: a
+   *  failure here must not undo the committed exclusion. */
+  refresh: () => Promise<void>;
+  onSuccess: (seq: number) => void;
+  onError: (error: unknown) => void;
+}
+
+/**
+ * The optimistic delete flow (see section header for the ordering):
+ *
+ *   claim → begin (UI hides the row NOW) → exclude (background network)
+ *     ├─ committed: confirm → dropDraft → refresh (best-effort)
+ *     │             → retire (the view owns visibility now) → onSuccess
+ *     └─ rejected:  fail (UI restores the row, latest values intact)
+ *                   → onError
+ *
+ * `release` runs on every exit. No status mutation, no re-send, no other
+ * row is touched.
+ */
+export async function deleteCompanyRow(deps: RowDeleteDeps): Promise<void> {
+  if (!deps.claim(deps.appId)) return; // a delete for this row is already in flight
+  deps.begin(deps.appId);
+  try {
+    await deps.exclude(deps.appId);
+  } catch (error) {
+    // The server rejected it (e.g. the row is in flight, ownership check):
+    // restore the row with its latest values and surface the error.
+    deps.fail(deps.appId);
+    deps.onError(error);
+    deps.release(deps.appId);
+    return;
+  }
+  // The exclusion is committed — the row is gone, for real.
+  deps.confirm(deps.appId);
+  deps.dropDraft(deps.appId);
+  try {
+    await deps.refresh();
+  } catch {
+    // A view-sync failure must not undo the committed exclusion; the next
+    // poll or navigation reconciles the view. The row stays hidden.
+  }
+  deps.retire(deps.appId);
+  deps.onSuccess(deps.seq);
+  deps.release(deps.appId);
 }
