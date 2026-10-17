@@ -750,6 +750,140 @@ export function assembleLetter(opts: {
 export const BEW_NEUTRAL_GREETING = GREETING_FALLBACK;
 
 /* ------------------------------------------------------------------ *
+ * Letter text ↔ HTML (shared by the server PDF generator and the client
+ * preview/editor — ONE parsing rule, so what the user reads is exactly
+ * what the PDF contains.
+ * ------------------------------------------------------------------ */
+
+/** Decode the entities that survive sanitizeEmailHtml (and raw input). */
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => {
+      const n = Number(code);
+      return Number.isFinite(n) && n > 0 && n < 0x110000
+        ? String.fromCodePoint(n)
+        : "";
+    });
+}
+
+/**
+ * Parse a letter body into PLAIN-TEXT paragraphs (one per <p>/<div>/<br>
+ * boundary). Tags are removed, entities decoded, whitespace normalized —
+ * the result is what gets RENDERED (never HTML) in the preview, the editor
+ * and the generated PDF. Never throws on malformed input.
+ */
+export function htmlToParagraphs(html: string): string[] {
+  const raw = (html ?? "").replace(/<\s*(style|script)[\s\S]*?<\s*\/\s*\1\s*>/gi, " ");
+  const lineified = raw
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\s*\/\s*(p|div|li|h[1-6])\s*>/gi, "\n")
+    .replace(/<[^>]*>/g, " ");
+  const text = decodeHtmlEntities(lineified).replace(/\r/g, "");
+  return text
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+/**
+ * The structural view of a stored letter: [greeting, …body, closing,
+ * signature]. Defensive for short/edited bodies — the canonical shape is
+ * what `assembleLetter` produces (≥ 4 paragraphs).
+ */
+export function splitLetterParagraphs(
+  paragraphs: string[],
+  fallbackSignature = "",
+): { greeting: string; body: string[]; closing: string; signature: string } {
+  if (paragraphs.length === 0)
+    return { greeting: BEW_NEUTRAL_GREETING, body: [], closing: "Mit freundlichen Grüßen", signature: fallbackSignature };
+  if (paragraphs.length === 1)
+    return { greeting: paragraphs[0], body: [], closing: "Mit freundlichen Grüßen", signature: fallbackSignature };
+  if (paragraphs.length === 2)
+    return { greeting: paragraphs[0], body: [], closing: paragraphs[1], signature: fallbackSignature };
+  return {
+    greeting: paragraphs[0],
+    body: paragraphs.slice(1, -2),
+    closing: paragraphs[paragraphs.length - 2],
+    signature: paragraphs[paragraphs.length - 1],
+  };
+}
+
+function htmlEscapePart(text: string): string {
+  return (text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Rebuild the sanitized-HTML shape from structured parts (escaping input). */
+export function letterParagraphsToHtml(
+  greeting: string,
+  body: string[],
+  closing: string,
+  signature: string,
+): string {
+  const parts = [greeting, ...body, closing, signature]
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => `<p>${htmlEscapePart(p)}</p>`);
+  return parts.join("");
+}
+
+/** "17. Oktober 2026" — the German letter date style (pure, client-safe:
+ *  the A4 preview and the generated PDF show the same date format). */
+export function formatGermanDate(date: Date): string {
+  const MONTHS = [
+    "Januar", "Februar", "März", "April", "Mai", "Juni",
+    "Juli", "August", "September", "Oktober", "November", "Dezember",
+  ];
+  return `${date.getUTCDate()}. ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+}
+
+/** Split a free-text company address into letter lines (no invention). */
+export function splitAddressLines(address: string | null | undefined): string[] {
+  return (address ?? "")
+    .split(/[\n;,]+/)
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+/**
+ * The generated Anschreiben attachment name — deterministic per company,
+ * ASCII-safe for raw MIME headers: `Anschreiben_Muster-Tech_GmbH.pdf`.
+ */
+export function letterPdfFilename(companyName: string | null | undefined): string {
+  return `Anschreiben_${sanitizeAttachmentNamePart(companyName)}.pdf`;
+}
+
+/**
+ * A safe file-name part: ASCII-safe for raw MIME headers (the project's
+ * attachment paths/filenames are ASCII-only by convention), no path
+ * separators, no control characters. "Muster-Tech GmbH" stays; "Müller" →
+ * "Muller" (NFKD folds the umlaut to its base letter); "A/B: C" → "A_B_C".
+ * Falls back to a neutral name when nothing usable remains.
+ */
+export function sanitizeAttachmentNamePart(name: string | null | undefined): string {
+  const folded = (name ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  const cleaned = folded
+    .replace(/ß/g, "ss")
+    .replace(/[^A-Za-z0-9._ -]+/g, " ")
+    .replace(/\s+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/\.+/g, ".")
+    .slice(0, 60)
+    .replace(/\.+$/g, "");
+  return cleaned || "Unternehmen";
+}
+
+/* ------------------------------------------------------------------ *
  * Document (CV / certificates) upload validation
  * ------------------------------------------------------------------ */
 

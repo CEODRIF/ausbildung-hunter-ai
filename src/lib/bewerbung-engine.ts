@@ -32,6 +32,10 @@ import { reserveAIUsage, storagePath } from "@/lib/ai-service";
 import { extractPdfText } from "@/lib/pdf-extract";
 import type { Profile } from "@/lib/auth";
 import mammoth from "mammoth";
+import {
+  ensureLetterPdf,
+  type LetterAttachmentRef,
+} from "@/lib/bew-letter-pdf";
 
 import {
   assembleLetter,
@@ -643,7 +647,12 @@ export async function uploadBewDocument(
   const { error: uploadError } = await admin.storage
     .from("application-attachments")
     .upload(path, buffer, { contentType: file.type, upsert: false });
-  if (uploadError) throw new Error("Unable to upload the document.");
+  if (uploadError) {
+    // Stable code (not raw storage text): the UI maps it to the user's
+    // language without leaking paths or bucket details.
+    console.error("[bew] uploadBewDocument: storage upload failed", uploadError.message);
+    throw new Error("DOC_UPLOAD_FAILED");
+  }
 
   const { data, error } = await admin
     .from("bew_documents")
@@ -658,8 +667,10 @@ export async function uploadBewDocument(
     .select("*")
     .single();
   if (error || !data) {
+    // Compensating: never leave an unregistered storage object behind.
     await admin.storage.from("application-attachments").remove([path]);
-    throw new Error("Unable to register the document.");
+    console.error("[bew] uploadBewDocument: metadata insert failed", error?.message);
+    throw new Error("DOC_SAVE_FAILED");
   }
   return data as unknown as BewDocumentRow;
 }
@@ -691,6 +702,39 @@ async function loadCampaignAttachments(
     mimeType: d.mime_type,
     storagePath: d.storage_path,
   }));
+}
+
+/**
+ * The same file attached twice (e.g. the user's own Anschreiben PDF in the
+ * document library AND the generated one) would double the e-mail size —
+ * identical names collapse to the first occurrence.
+ */
+function dedupeAttachmentsByName(
+  refs: Array<AttachmentRef>,
+): Array<AttachmentRef> {
+  const seen = new Set<string>();
+  const out: Array<AttachmentRef> = [];
+  for (const ref of refs) {
+    const key = ref.filename.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ref);
+  }
+  return out;
+}
+
+/** Applicant facts for the letter header (never invented — omitted when absent). */
+async function getApplicantFacts(
+  admin: Admin,
+  userId: string,
+): Promise<{ name: string; email: string }> {
+  const { data } = await admin
+    .from("profiles")
+    .select("full_name, email")
+    .eq("id", userId)
+    .maybeSingle();
+  const row = (data ?? null) as { full_name?: string | null; email?: string | null } | null;
+  return { name: row?.full_name ?? "", email: row?.email ?? "" };
 }
 
 /**
@@ -732,7 +776,10 @@ export async function attachBewDocument(
     )
     .select("*")
     .single();
-  if (error || !data) throw new Error("Unable to attach the document.");
+  if (error || !data) {
+    console.error("[bew] attachBewDocument: attach failed", error?.message);
+    throw new Error("DOC_ATTACH_FAILED");
+  }
   return data as unknown as BewCampaignDocumentRow;
 }
 
@@ -743,12 +790,16 @@ export async function detachBewDocument(
   documentId: string,
 ): Promise<void> {
   const admin = createAdminClient();
-  await admin
+  const { error } = await admin
     .from("bew_campaign_documents")
     .delete()
     .eq("campaign_id", campaignId)
     .eq("document_id", documentId)
     .eq("user_id", userId);
+  if (error) {
+    console.error("[bew] detachBewDocument: delete failed", error.message);
+    throw new Error("DOC_ATTACH_FAILED");
+  }
 }
 
 /** List the user's document library (for the upload picker). */
@@ -913,14 +964,35 @@ export async function generateBewLetters(
           status: "generated",
           body_html: bodyHtml,
           body_text: bodyText,
-          subject:
-            app.subject || buildSubject(purpose, app.company_name),
-          error_code: null,
-          error_message: null,
-        })
-        .eq("id", app.id);
-      generated += 1;
-    } catch (error) {
+           subject:
+             app.subject || buildSubject(purpose, app.company_name),
+           error_code: null,
+           error_message: null,
+         })
+         .eq("id", app.id);
+       // The Anschreiben PDF follows the letter (best-effort here; the send
+       // path re-ensures it, so a transient failure never loses the letter).
+       try {
+        await ensureLetterPdf({
+          userId,
+          app: {
+            id: app.id,
+            company_name: app.company_name,
+            contact_name: app.contact_name,
+            company_address: app.company_address,
+            subject: app.subject || buildSubject(purpose, app.company_name),
+            body_html: bodyHtml,
+          },
+          applicant: { name: profile.full_name, email: profile.email },
+        });
+       } catch (pdfError) {
+         console.error(
+           "[bew] generateBewLetters: letter PDF generation failed",
+           pdfError,
+         );
+       }
+       generated += 1;
+     } catch (error) {
       await admin
         .from("bew_applications")
         .update({
@@ -989,11 +1061,37 @@ export async function updateBewLetter(
       error_code: null,
       error_message: null,
     })
-    .eq("id", applicationId)
-    .eq("user_id", userId)
-    .select("*")
-    .maybeSingle();
-  return (data as BewApplicationRow | null) ?? null;
+     .eq("id", applicationId)
+     .eq("user_id", userId)
+     .select("*")
+     .maybeSingle();
+  const updated = (data as BewApplicationRow | null) ?? null;
+  // The letter changed → regenerate THIS application's PDF (force). The
+  // letter save stands regardless; the send path re-ensures as a last resort.
+  if (updated) {
+    try {
+      const applicant = await getApplicantFacts(admin, userId);
+      await ensureLetterPdf({
+        userId,
+        app: {
+          id: updated.id,
+          company_name: updated.company_name,
+          contact_name: updated.contact_name,
+          company_address: updated.company_address,
+          subject: updated.subject,
+          body_html: updated.body_html,
+        },
+        applicant,
+        force: true,
+      });
+    } catch (pdfError) {
+      console.error(
+        "[bew] updateBewLetter: letter PDF regeneration failed",
+        pdfError,
+      );
+    }
+  }
+  return updated;
 }
 
 /** Exclude an application from the campaign (blocked once in flight). */
@@ -1311,6 +1409,7 @@ export async function processBewSendBatch(
     return { processed: 0, sent: 0, failed: 0, uncertain: 0, slotBusy: false, stop: "no-sender" };
 
   const attachments = await loadCampaignAttachments(admin, campaignId, userId);
+  const applicant = await getApplicantFacts(admin, userId);
   const max = Math.min(Math.max(1, batchSize), BEW_MAX_BATCH);
   let processed = 0;
   let sent = 0;
@@ -1337,9 +1436,35 @@ export async function processBewSendBatch(
     const html = sanitizeEmailHtml(app.body_html);
     const text = htmlToText(app.body_html) || app.body_text;
 
+    // The recipient gets the PDF file, not raw HTML: ensure THIS company's
+    // Anschreiben PDF exists (generates on first send / after edits, heals
+    // orphans). If it cannot be produced, this application is BLOCKED with a
+    // stable, localized error — never sent without its letter.
+    let pdfRef: LetterAttachmentRef | null = null;
+    try {
+      pdfRef = await ensureLetterPdf({ userId, app, applicant });
+    } catch (pdfError) {
+      console.error("[bew] send batch: letter PDF ensure failed", pdfError);
+    }
+    if (!pdfRef) {
+      await markBewApp(
+        admin,
+        app.id,
+        "failed",
+        "pdf_generation_failed",
+        "The cover letter PDF could not be generated for this application.",
+      );
+      await releaseCapacity(admin, userId, campaign.usage_date, 1);
+      failed += 1;
+      continue;
+    }
+    // Campaign documents (CV + certificates) + this company's PDF — no
+    // duplicate attachment names in one e-mail.
+    const appAttachments = dedupeAttachmentsByName([...attachments, pdfRef]);
+
     let provider: Awaited<ReturnType<typeof createEmailProvider>>;
     try {
-      provider = await createEmailProvider(userId, campaign.email_account_id, attachments);
+      provider = await createEmailProvider(userId, campaign.email_account_id, appAttachments);
     } catch (error) {
       const c = classifySendError(error);
       if (c.kind === "reconnect") {

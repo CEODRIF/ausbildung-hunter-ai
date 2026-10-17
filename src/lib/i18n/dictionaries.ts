@@ -2441,7 +2441,16 @@ const de = {
     letterPreviewTitle: "Anschreiben · {company}",
     recipient: "Empfänger",
     subjectLabel: "Betreff",
-    editBodyLabel: "Anschreiben (HTML)",
+    letterGreetingLabel: "Anrede",
+    letterBodyLabel: "Anschreiben-Text",
+    letterBodyHint: "Eine Leerzeile trennt Absätze — HTML-Tags sind nicht nötig.",
+    letterClosingLabel: "Grußformel",
+    letterSignatureLabel: "Name",
+    letterPdf: "Anschreiben (PDF)",
+    letterPdfNote:
+      "Wird automatisch generiert und jeder Bewerbung als Anhang beigefügt.",
+    errPdfGeneration:
+      "Das Anschreiben-PDF konnte nicht erstellt werden — der Versand dieser Bewerbung ist blockiert.",
     saveLetter: "Speichern",
     attachments: "Anhänge",
     flagEmptyLetter: "Anschreiben fehlt",
@@ -2510,6 +2519,12 @@ const de = {
       INVALID_PAYLOAD: "Ungültige Daten.",
       SAVE_FAILED:
         "Speichern fehlgeschlagen — deine Daten sind möglicherweise unvollständig. Bitte erneut versuchen.",
+      DOC_UPLOAD_FAILED:
+        "Die Datei konnte nicht hochgeladen werden. Bitte erneut versuchen.",
+      DOC_SAVE_FAILED:
+        "Die Datei wurde hochgeladen, konnte aber nicht gespeichert werden. Bitte erneut versuchen.",
+      DOC_ATTACH_FAILED:
+        "Das Dokument konnte der Serie nicht zugewiesen werden. Bitte erneut versuchen.",
       UNKNOWN: "Etwas ist schiefgelaufen. Bitte erneut versuchen.",
     },
   },
@@ -4895,7 +4910,17 @@ const en: Dict = {
     letterPreviewTitle: "Cover letter · {company}",
     recipient: "Recipient",
     subjectLabel: "Subject",
-    editBodyLabel: "Cover letter (HTML)",
+    letterGreetingLabel: "Greeting",
+    letterBodyLabel: "Letter text",
+    letterBodyHint:
+      "A blank line separates paragraphs — no HTML tags needed.",
+    letterClosingLabel: "Closing",
+    letterSignatureLabel: "Name",
+    letterPdf: "Cover letter (PDF)",
+    letterPdfNote:
+      "Generated automatically and attached to every application.",
+    errPdfGeneration:
+      "The cover letter PDF could not be generated — sending this application is blocked.",
     saveLetter: "Save",
     attachments: "Attachments",
     flagEmptyLetter: "Cover letter missing",
@@ -4963,6 +4988,12 @@ const en: Dict = {
       INVALID_PAYLOAD: "Invalid data.",
       SAVE_FAILED:
         "Saving failed — your data may be incomplete. Please try again.",
+      DOC_UPLOAD_FAILED:
+        "The file could not be uploaded. Please try again.",
+      DOC_SAVE_FAILED:
+        "The file was uploaded but could not be registered. Please try again.",
+      DOC_ATTACH_FAILED:
+        "The document could not be attached to the series. Please try again.",
       UNKNOWN: "Something went wrong. Please try again.",
     },
   },
@@ -7349,7 +7380,17 @@ const fr: Dict = {
     letterPreviewTitle: "Lettre de motivation · {company}",
     recipient: "Destinataire",
     subjectLabel: "Objet",
-    editBodyLabel: "Lettre de motivation (HTML)",
+    letterGreetingLabel: "Formule d'appel",
+    letterBodyLabel: "Texte de la lettre",
+    letterBodyHint:
+      "Une ligne vide sépare les paragraphes — aucune balise HTML nécessaire.",
+    letterClosingLabel: "Formule de politesse",
+    letterSignatureLabel: "Nom",
+    letterPdf: "Lettre de motivation (PDF)",
+    letterPdfNote:
+      "Générée automatiquement et jointe à chaque candidature.",
+    errPdfGeneration:
+      "La lettre PDF n'a pas pu être générée — l'envoi de cette candidature est bloqué.",
     saveLetter: "Enregistrer",
     attachments: "Pièces jointes",
     flagEmptyLetter: "Lettre manquante",
@@ -7417,6 +7458,12 @@ const fr: Dict = {
       INVALID_PAYLOAD: "Données invalides.",
       SAVE_FAILED:
         "Échec de l'enregistrement — vos données peuvent être incomplètes. Veuillez réessayer.",
+      DOC_UPLOAD_FAILED:
+        "Le fichier n'a pas pu être téléversé. Veuillez réessayer.",
+      DOC_SAVE_FAILED:
+        "Le fichier a été téléversé mais n'a pas pu être enregistré. Veuillez réessayer.",
+      DOC_ATTACH_FAILED:
+        "Le document n'a pas pu être rattaché à la série. Veuillez réessayer.",
       UNKNOWN: "Une erreur est survenue. Veuillez réessayer.",
     },
   },
@@ -9753,7 +9800,16 @@ const ar: Dict = {
     letterPreviewTitle: "خطاب التقديم · {company}",
     recipient: "المتلقي",
     subjectLabel: "الموضوع",
-    editBodyLabel: "خطاب التقديم (HTML)",
+    letterGreetingLabel: "التحية",
+    letterBodyLabel: "نص الخطاب",
+    letterBodyHint:
+      "سطر فارغ يفصل بين الفقرات — لا حاجة إلى وسوم HTML.",
+    letterClosingLabel: "الصيغة الختامية",
+    letterSignatureLabel: "الاسم",
+    letterPdf: "خطاب التقديم (PDF)",
+    letterPdfNote: "يُنشأ تلقائيًا ويُرسل كملف مرفق مع كل طلب.",
+    errPdfGeneration:
+      "تعذر إنشاء ملف PDF لخطاب التقديم — إرسال هذا الطلب محظور.",
     saveLetter: "حفظ",
     attachments: "المرفقات",
     flagEmptyLetter: "خطاب التقديم مفقود",
@@ -9820,6 +9876,9 @@ const ar: Dict = {
       INVALID_PAYLOAD: "بيانات غير صالحة.",
       SAVE_FAILED:
         "فشل الحفظ — قد تكون بياناتك غير مكتملة. يرجى المحاولة مرة أخرى.",
+      DOC_UPLOAD_FAILED: "تعذر رفع الملف. يرجى المحاولة مرة أخرى.",
+      DOC_SAVE_FAILED: "تم رفع الملف لكنه لم يتم تسجيله. يرجى المحاولة مرة أخرى.",
+      DOC_ATTACH_FAILED: "تعذر إرفاق المستند بالسلسلة. يرجى المحاولة مرة أخرى.",
       UNKNOWN: "حدث خطأ ما. يرجى المحاولة مجددًا.",
     },
   },

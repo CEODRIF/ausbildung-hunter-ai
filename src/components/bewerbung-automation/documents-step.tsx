@@ -15,7 +15,6 @@ import {
   bewAttachDocument,
   bewDetachDocument,
   bewListDocuments,
-  bewUploadDocument,
 } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
 import type { DocumentKind } from "@/lib/bewerbung-automation";
@@ -23,6 +22,29 @@ import { Button, Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { StatusPill } from "@/components/ui/feedback";
 import type { BewCampaignDocumentDTO, BewViewDTO } from "./types";
+
+/**
+ * Upload via the /api/bew/documents route (NOT a server action — server
+ * actions cap the request body at 1 MB by default, so a multi-MB certificate
+ * was 413'd by the framework before the engine ever ran; a small CV passed,
+ * a larger second document failed with a generic error). Throws the route's
+ * STABLE CODE so `errMessage` can localize it.
+ */
+async function uploadDocumentViaRoute(
+  fd: FormData,
+): Promise<{ id: string; filename: string; kind: string }> {
+  const res = await fetch("/api/bew/documents", { method: "POST", body: fd });
+  let payload: { error?: string; id?: string; filename?: string; kind?: string } = {};
+  try {
+    payload = await res.json();
+  } catch {
+    payload = {};
+  }
+  if (!res.ok || !payload.id) {
+    throw new Error(payload.error ?? "INTERNAL");
+  }
+  return { id: payload.id, filename: payload.filename ?? "", kind: payload.kind ?? "cv" };
+}
 
 interface Props {
   view: BewViewDTO;
@@ -88,7 +110,7 @@ export function DocumentsStep({ view, refresh }: Props) {
       const fd = new FormData();
       fd.set("file", file);
       fd.set("kind", kind);
-      const doc = await bewUploadDocument(fd);
+      const doc = await uploadDocumentViaRoute(fd);
       const fd2 = new FormData();
       fd2.set("campaignId", view.campaign.id);
       fd2.set("documentId", doc.id);
@@ -283,7 +305,11 @@ function KindSelect({
   );
 }
 
-function errMessage(e: unknown, t: (k: string, v?: Record<string, string | number>) => string): string {
+/** Map a thrown error to a localized, user-safe message (stable codes only). */
+export function errMessage(
+  e: unknown,
+  t: (k: string, v?: Record<string, string | number>) => string,
+): string {
   const code = e instanceof Error ? e.message : "";
   const key = `bewauto.err.${code}`;
   const translated = t(key);

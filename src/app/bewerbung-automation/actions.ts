@@ -32,7 +32,6 @@ import {
   excludeBewApplication,
   generateBewLetters,
   getBewCampaignView,
-  importBewCompaniesFromPdf,
   listBewDocuments,
   restoreBewApplication,
   saveBewCompanies,
@@ -40,7 +39,6 @@ import {
   startBewSend,
   updateBewApplicationFields,
   updateBewLetter,
-  uploadBewDocument,
 } from "@/lib/bewerbung-engine";
 import type {
   BewApplicationRow,
@@ -141,30 +139,13 @@ export async function bewUpdateCompany(
   });
 }
 
-/** Best-effort PDF import → candidates for preview (stores nothing). */
-export async function bewImportPdf(
-  formData: FormData,
-): Promise<{ candidates: Array<{ email: string; companyName: string }>; excerpt: string }> {
-  await requireUser();
-  const file = formData.get("file");
-  if (!(file instanceof File)) throw new Error("NO_FILE");
-  return await importBewCompaniesFromPdf(file);
-}
-
 /* ------------------------------ Step 2 ------------------------------ */
 
-/** Upload a personal document ONCE to the user's library. */
-export async function bewUploadDocument(
-  formData: FormData,
-): Promise<{ id: string; filename: string; kind: string }> {
-  const { userId } = await requireUser();
-  const kind = readString(formData, "kind") as DocumentKind;
-  const file = formData.get("file");
-  if (!isDocumentKind(kind)) throw new Error("INVALID_KIND");
-  if (!(file instanceof File)) throw new Error("NO_FILE");
-  const doc = await uploadBewDocument(userId, file, kind);
-  return { id: doc.id, filename: doc.filename, kind: doc.kind };
-}
+// NOTE: the two File-carrying operations are ROUTE HANDLERS, not server
+// actions — server actions cap the request body at 1 MB by default while
+// documents/PDFs may be 10 MB (the original `bewUploadDocument` action
+// failed exactly that way: a small CV passed, a certificate 413'd in the
+// framework layer). See /api/bew/documents and /api/bew/companies-pdf.
 
 /** Attach a library document to the campaign (shared by all applications). */
 export async function bewAttachDocument(

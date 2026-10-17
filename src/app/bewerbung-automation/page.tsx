@@ -46,6 +46,7 @@ export default async function BewerbungAutomationPage() {
       schemaOk={schemaOk}
       initialView={view}
       userName={profile?.full_name ?? ""}
+      userEmail={profile?.email ?? ""}
     />
   );
 }

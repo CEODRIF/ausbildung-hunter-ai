@@ -5,10 +5,12 @@
  *
  * One row per application keeps the 1:1 association visible: row N always
  * shows THAT company, THAT recipient, THAT letter and the shared attachments.
- * The preview renders the ACTUAL stored (server-sanitized) HTML — the exact
- * content that will be sent — never placeholder text. Editing re-sanitizes on
- * the server. Ineligible rows are flagged (invalid e-mail / missing letter /
- * not generated) and can never be selected for sending.
+ *
+ * The letter is NEVER shown as raw HTML: the preview renders the stored
+ * (server-sanitized) content as PLAIN-TEXT paragraphs on an A4-style page —
+ * exactly the content the generated Anschreiben PDF contains. Editing uses
+ * structured fields (subject, greeting, body paragraphs, closing, signature)
+ * and the save path re-escapes every part on the server.
  */
 import { useMemo, useState } from "react";
 import {
@@ -17,6 +19,14 @@ import {
   bewUpdateLetter,
 } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
+import {
+  formatGermanDate,
+  htmlToParagraphs,
+  letterParagraphsToHtml,
+  letterPdfFilename,
+  splitAddressLines,
+  splitLetterParagraphs,
+} from "@/lib/bewerbung-automation";
 import { Button, Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { StatusPill } from "@/components/ui/feedback";
@@ -32,13 +42,37 @@ interface Props {
   refresh: () => Promise<void>;
   selectedIds: Set<string>;
   onToggle: (id: string, selected: boolean) => void;
+  /** The applicant's profile name (sender block of the A4 preview). */
+  applicantName: string;
+  /** The applicant's profile e-mail (sender block of the A4 preview). */
+  applicantEmail: string;
 }
 
 type ModalState =
   | { mode: "preview" | "edit"; app: BewApplicationDTO }
   | null;
 
-export function ReviewStep({ view, refresh, selectedIds, onToggle }: Props) {
+/** The stored letter as readable plain-text parts (never HTML). */
+function parseLetter(
+  app: BewApplicationDTO,
+  applicantName: string,
+): { greeting: string; body: string[]; closing: string; signature: string } {
+  return splitLetterParagraphs(htmlToParagraphs(app.body_html), applicantName);
+}
+
+/** Plain-text excerpt for the table (tags removed, entities decoded). */
+function letterExcerpt(app: BewApplicationDTO, max = 80): string {
+  return htmlToParagraphs(app.body_html).join(" ").slice(0, max);
+}
+
+export function ReviewStep({
+  view,
+  refresh,
+  selectedIds,
+  onToggle,
+  applicantName,
+  applicantEmail,
+}: Props) {
   const { t } = useI18n();
   const [modal, setModal] = useState<ModalState>(null);
   const [busy, setBusy] = useState(false);
@@ -131,6 +165,10 @@ export function ReviewStep({ view, refresh, selectedIds, onToggle }: Props) {
                 const docsOk = docs.cv && docs.certs;
                 const eligible = flags.length === 0 && docsOk;
                 const checked = eligible && selectedIds.has(app.id);
+                const hasErrorLine =
+                  (app.status === "failed" || app.status === "needs_attention") &&
+                  (app.error_code === "pdf_generation_failed" ||
+                    (app.error_message ?? "").trim().length > 0);
                 return (
                   <tr key={app.id} className="border-t border-line align-top">
                     <td className="px-3 py-2.5">
@@ -159,7 +197,7 @@ export function ReviewStep({ view, refresh, selectedIds, onToggle }: Props) {
                     <td className="px-3 py-2.5">
                       {app.body_html ? (
                         <span className="line-clamp-1 block max-w-48 text-xs italic text-muted">
-                          {stripTags(app.body_html).slice(0, 80)}…
+                          {letterExcerpt(app)}…
                         </span>
                       ) : (
                         <span className="text-xs text-faint">—</span>
@@ -180,10 +218,21 @@ export function ReviewStep({ view, refresh, selectedIds, onToggle }: Props) {
                             ? certDocs.map((d) => d.filename).join(", ") || "—"
                             : t("bewauto.flagMissingCerts")}
                         </span>
+                        <span className="flex items-center gap-1">
+                          <Icon name="file" size={12} />
+                          {letterPdfFilename(app.company_name)}
+                        </span>
                       </div>
                     </td>
                     <td className="px-3 py-2.5">
                       <AppStatusPill status={app.status} t={t} />
+                      {hasErrorLine && (
+                        <p className="mt-1 max-w-44 text-xs leading-4 text-danger">
+                          {app.error_code === "pdf_generation_failed"
+                            ? t("bewauto.errPdfGeneration")
+                            : app.error_message}
+                        </p>
+                      )}
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-1.5">
@@ -221,10 +270,13 @@ export function ReviewStep({ view, refresh, selectedIds, onToggle }: Props) {
 
       {modal && (
         <LetterModal
+          key={modal.app.id}
           app={modal.app}
           mode={modal.mode}
           view={view}
           busy={busy}
+          applicantName={applicantName}
+          applicantEmail={applicantEmail}
           onClose={() => setModal(null)}
           onSave={async (subject, bodyHtml) => {
             const fd = new FormData();
@@ -242,13 +294,16 @@ export function ReviewStep({ view, refresh, selectedIds, onToggle }: Props) {
   );
 }
 
-/* ---------------- letter modal (preview shows the EXACT send content) ---------------- */
+/* ---------------- letter modal (A4 preview, structured editing) ---------------- */
 
-function LetterModal({
+/** Exported for the SSR regression tests (renderToString assertions). */
+export function LetterModal({
   app,
   mode,
   view,
   busy,
+  applicantName,
+  applicantEmail,
   onClose,
   onSave,
   t,
@@ -257,15 +312,30 @@ function LetterModal({
   mode: "preview" | "edit";
   view: BewViewDTO;
   busy: boolean;
+  applicantName: string;
+  applicantEmail: string;
   onClose: () => void;
   onSave: (subject: string, bodyHtml: string) => Promise<void>;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
+  const letter = useMemo(
+    () => parseLetter(app, applicantName),
+    [app, applicantName],
+  );
   const [subject, setSubject] = useState(app.subject);
-  const [body, setBody] = useState(app.body_html);
+  const [body, setBody] = useState(letter.body.join("\n\n"));
   const cvDocs = view.documents.filter((d) => d.kind === "cv");
   const certDocs = view.documents.filter(
     (d) => d.kind === "certificate" || d.kind === "supporting",
+  );
+  /** What the user typed, as paragraph list (blank line = new paragraph). */
+  const bodyParagraphs = useMemo(
+    () =>
+      body
+        .split(/\n{2,}/)
+        .map((p) => p.replace(/\s*\n\s*/g, " ").trim())
+        .filter(Boolean),
+    [body],
   );
 
   return (
@@ -309,25 +379,27 @@ function LetterModal({
                   className="w-full rounded-xl border border-line-strong bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
                 />
               </label>
+              <ReadonlyField label={t("bewauto.letterGreetingLabel")} value={letter.greeting} />
               <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold text-ink-soft">{t("bewauto.editBodyLabel")}</span>
+                <span className="mb-1.5 block text-xs font-semibold text-ink-soft">{t("bewauto.letterBodyLabel")}</span>
                 <textarea
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
-                  rows={16}
-                  className="w-full rounded-xl border border-line-strong bg-surface px-3 py-2 font-mono text-xs leading-5 text-ink outline-none focus:border-accent"
+                  rows={14}
+                  className="w-full rounded-xl border border-line-strong bg-surface px-3 py-2 text-sm leading-6 text-ink outline-none focus:border-accent"
                 />
+                <span className="mt-1 block text-xs text-faint">{t("bewauto.letterBodyHint")}</span>
               </label>
+              <ReadonlyField label={t("bewauto.letterClosingLabel")} value={letter.closing} />
+              <ReadonlyField label={t("bewauto.letterSignatureLabel")} value={letter.signature} />
             </div>
           ) : (
-            <div>
-              <p className="mb-2 text-sm font-semibold text-ink">{app.subject}</p>
-              {/* Server-sanitized HTML — the exact payload that will be sent. */}
-              <div
-                className="rounded-2xl border border-line bg-surface-2/40 px-4 py-3 text-sm leading-6 text-ink"
-                dangerouslySetInnerHTML={{ __html: app.body_html }}
-              />
-            </div>
+            <LetterA4Preview
+              app={app}
+              letter={letter}
+              applicantName={applicantName}
+              applicantEmail={applicantEmail}
+            />
           )}
 
           <div className="mt-4 rounded-2xl border border-line bg-surface-2/40 p-3">
@@ -347,10 +419,16 @@ function LetterModal({
                   {d.filename} <span className="text-xs text-faint">({d.kind === "certificate" ? t("bewauto.kindCertificate") : t("bewauto.kindSupporting")})</span>
                 </li>
               ))}
+              <li className="flex items-center gap-2">
+                <Icon name="file" size={14} className="text-muted" />
+                {letterPdfFilename(app.company_name)}
+                <span className="text-xs text-faint">({t("bewauto.letterPdf")})</span>
+              </li>
               {cvDocs.length + certDocs.length === 0 && (
                 <li className="text-danger">{t("bewauto.flagMissingDocs")}</li>
               )}
             </ul>
+            <p className="mt-2 text-xs leading-4 text-faint">{t("bewauto.letterPdfNote")}</p>
           </div>
         </div>
 
@@ -359,13 +437,104 @@ function LetterModal({
             {t("bewauto.close")}
           </Button>
           {mode === "edit" && (
-            <Button size="sm" disabled={busy || !body.trim()} onClick={() => void onSave(subject, body)}>
+            <Button
+              size="sm"
+              disabled={busy || bodyParagraphs.length === 0}
+              onClick={() =>
+                void onSave(
+                  subject.trim(),
+                  letterParagraphsToHtml(letter.greeting, bodyParagraphs, letter.closing, letter.signature),
+                )
+              }
+            >
               {t("bewauto.saveLetter")}
             </Button>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+/** A4-style rendering of the letter — plain text only, the exact content
+ *  the generated PDF contains (sender top-right, date, recipient block,
+ *  bold subject, greeting, justified body, closing + signature area). */
+function LetterA4Preview({
+  app,
+  letter,
+  applicantName,
+  applicantEmail,
+}: {
+  app: BewApplicationDTO;
+  letter: { greeting: string; body: string[]; closing: string; signature: string };
+  applicantName: string;
+  applicantEmail: string;
+}) {
+  const addressLines = splitAddressLines(app.company_address);
+  return (
+    <div className="mx-auto max-w-[540px] rounded-2xl border border-line bg-white p-8 shadow-sm sm:p-10">
+      {/* Sender block — top right (only data that actually exists) */}
+      <div className="text-right text-[13px] leading-6">
+        {applicantName && (
+          <p className="font-bold uppercase tracking-wide text-ink">{applicantName}</p>
+        )}
+        {applicantEmail && <p className="text-muted">{applicantEmail}</p>}
+        <p className="mt-2 font-semibold text-ink">{formatGermanDate(new Date())}</p>
+      </div>
+
+      {/* The reference document's clear separation between date and recipient */}
+      <div className="h-16" />
+
+      <div className="text-[13px] leading-6">
+        <p className="font-bold text-ink">{app.company_name || "—"}</p>
+        {app.contact_name && <p className="text-ink">{app.contact_name}</p>}
+        {addressLines.map((line) => (
+          <p key={line} className="text-muted">{line}</p>
+        ))}
+      </div>
+
+      <div className="h-10" />
+
+      {app.subject && <p className="text-[13px] font-bold text-ink">{app.subject}</p>}
+
+      <div className="h-6" />
+      {letter.greeting && (
+        <p className="text-[13px] leading-6 text-ink">{letter.greeting}</p>
+      )}
+      <div className="mt-1 space-y-3">
+        {letter.body.map((paragraph, i) => (
+          <p key={i} className="text-justify text-[13px] leading-6 text-ink">
+            {paragraph}
+          </p>
+        ))}
+      </div>
+
+      <div className="h-6" />
+      {letter.closing && (
+        <p className="text-[13px] text-ink">{letter.closing}</p>
+      )}
+      {/* Signature space (kept together with the closing, as in the PDF) */}
+      <div className="h-14" />
+      {letter.signature && (
+        <p className="text-[13px] text-ink">{letter.signature}</p>
+      )}
+    </div>
+  );
+}
+
+/** A labeled read-only line (greeting/closing/signature are fixed by the
+ *  letter assembly — shown so the user knows exactly what will be sent). */
+function ReadonlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-semibold text-ink-soft">{label}</span>
+      <input
+        value={value}
+        readOnly
+        aria-readonly="true"
+        className="w-full cursor-default rounded-xl border border-line bg-surface-2/60 px-3 py-2 text-sm text-muted outline-none"
+      />
+    </label>
   );
 }
 
@@ -396,10 +565,6 @@ function AppStatusPill({
 
 function Th({ children }: { children?: React.ReactNode }) {
   return <th className="px-3 py-2.5 text-start font-semibold">{children}</th>;
-}
-
-function stripTags(html: string): string {
-  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function errMessage(e: unknown, t: (k: string, v?: Record<string, string | number>) => string): string {
