@@ -428,7 +428,11 @@ export function LetterModal({
                 <li className="text-danger">{t("bewauto.flagMissingDocs")}</li>
               )}
             </ul>
-            <p className="mt-2 text-xs leading-4 text-faint">{t("bewauto.letterPdfNote")}</p>
+            <p className="mt-2 text-xs leading-4 text-faint">
+              {app.status === "sent"
+                ? t("bewauto.letterPdfSentNote")
+                : t("bewauto.letterPdfNote")}
+            </p>
           </div>
         </div>
 

@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import {
+  cleanupRecentlyCompletedBewLetterPdfs,
   listSendingBewCampaigns,
   processBewSendBatch,
 } from "@/lib/bewerbung-engine";
@@ -49,6 +50,7 @@ export async function GET(request: Request) {
   const startedAt = Date.now();
   let campaigns = 0;
   let processed = 0;
+  let deletedPdfs = 0;
   let stopped = "queue-empty";
 
   const sending = await listSendingBewCampaigns(MAX_CAMPAIGNS);
@@ -77,8 +79,24 @@ export async function GET(request: Request) {
     }
   }
 
+  // Post-send letter-PDF cleanup retry pass (bounded, idempotent, state-safe):
+  // sweeps terminal campaigns completed within the last 24 h, so a delete
+  // that failed in a campaign's FINAL drain is retried on later ticks
+  // instead of orphaning the file. Never sends or mutates application state.
+  if (Date.now() - startedAt <= SOFT_BUDGET_MS) {
+    try {
+      const cleanup = await cleanupRecentlyCompletedBewLetterPdfs(10);
+      deletedPdfs += cleanup.deleted;
+    } catch (err) {
+      console.warn(
+        "[BEW_SCHEDULER] letter PDF cleanup pass failed:",
+        err instanceof Error ? err.message : "unknown error",
+      );
+    }
+  }
+
   console.info(
-    `[BEW_SCHEDULER] tick done campaigns=${campaigns} processed=${processed} stop=${stopped} elapsed_ms=${
+    `[BEW_SCHEDULER] tick done campaigns=${campaigns} processed=${processed} deleted_pdfs=${deletedPdfs} stop=${stopped} elapsed_ms=${
       Date.now() - startedAt
     }`,
   );
@@ -86,6 +104,7 @@ export async function GET(request: Request) {
     ok: true,
     campaigns,
     processed,
+    deleted_pdfs: deletedPdfs,
     stop: stopped,
     elapsed_ms: Date.now() - startedAt,
   });

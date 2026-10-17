@@ -389,14 +389,27 @@ export async function ensureLetterPdf(
 /**
  * Remove a generated PDF (safe cleanup). Only ever called with a path this
  * module computed for the SAME user (owner-scoped), never user input.
+ *
+ * Returns `true` when the object is gone afterwards (deleted now, or already
+ * absent — callers pre-check with a download), `false` when the storage
+ * operation failed (the orphan is retried by the next cleanup pass).
+ * Non-throwing by contract: cleanup must never break a confirmed send.
  */
 export async function deleteLetterPdf(
   userId: string,
   applicationId: string,
   admin?: Admin,
-): Promise<void> {
+): Promise<boolean> {
   const a = admin ?? createAdminClient();
   const path = letterPdfStoragePath(userId, applicationId);
   const { error } = await a.storage.from(BEW_ATTACHMENT_BUCKET).remove([path]);
-  if (error) console.error("[bew] letter PDF cleanup failed", error.message);
+  if (error) {
+    console.error(
+      "[bew] letter PDF cleanup failed (orphan will be retried by the next cleanup pass)",
+      path,
+      error.message,
+    );
+    return false;
+  }
+  return true;
 }

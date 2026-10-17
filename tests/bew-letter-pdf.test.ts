@@ -889,10 +889,16 @@ describe("processBewSendBatch — attachments + block-on-PDF-failure", () => {
       "cv.pdf",
       "Anschreiben_Firma_2.pdf",
     ]);
-    // The provider pre-fetch verified every path exists in storage (the mock
-    // throws attachment_unavailable otherwise) — no phantom attachments.
-    expect(db.storage.objects.has(letterPdfStoragePath(USER, "app-1"))).toBe(true);
-    expect(db.storage.objects.has(letterPdfStoragePath(USER, "app-2"))).toBe(true);
+    // Post-send cleanup: each generated PDF was DELETED after the provider
+    // confirmed its send — the CV + certificate remain untouched.
+    expect(db.storage.objects.has(letterPdfStoragePath(USER, "app-1"))).toBe(false);
+    expect(db.storage.objects.has(letterPdfStoragePath(USER, "app-2"))).toBe(false);
+    expect(db.storage.objects.has(`${USER}/cv.pdf`)).toBe(true);
+    expect(db.storage.objects.has(`${USER}/cert.pdf`)).toBe(true);
+    expect(db.storage.removedPaths).toEqual([
+      letterPdfStoragePath(USER, "app-1"),
+      letterPdfStoragePath(USER, "app-2"),
+    ]);
     // Quota consumed for both sends.
     expect(daily(USER).emails_sent).toBe(2);
     expect(daily(USER).emails_reserved).toBe(0);
