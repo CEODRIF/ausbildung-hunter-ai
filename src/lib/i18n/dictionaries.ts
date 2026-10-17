@@ -2505,6 +2505,43 @@ const de = {
     stQueuedCount: "{n} in Warteschlange",
     stFailedCount: "{n} fehlgeschlagen",
     stAttentionCount: "{n} zur Prüfung",
+    /* Schritt 4 — E-Mail-Nachricht (unabhängig vom Anschreiben) */
+    emailTitle: "E-Mail-Nachricht",
+    emailBody:
+      "Diese E-Mail wird an alle Firmen der Serie gesendet – mit Lebenslauf, Zeugnissen und dem Anschreiben-PDF der jeweiligen Firma als Anhang. Das Anschreiben bleibt eine eigene Anlage und wird nie als E-Mail-Text gesendet.",
+    emailSubjectLabel: "Betreff",
+    emailSubjectPlaceholder: "Betreff der E-Mail eingeben …",
+    emailMessageLabel: "Nachricht",
+    emailMessageHint:
+      "Saubere HTML-E-Mail · Variablen werden pro Empfänger personalisiert",
+    emailIncomplete: "Betreff und Nachricht sind für den Versand erforderlich.",
+    emailLocked:
+      "Während des laufenden Versands (und danach) kann die E-Mail-Nachricht nicht mehr geändert werden.",
+    emailSave: "E-Mail speichern",
+    emailSaved: "E-Mail gespeichert.",
+    emailPreview: "Vorschau",
+    emailPreviewTitle: "E-Mail-Vorschau",
+    emailPreviewRecipient: "Vorschau für Empfänger",
+    emailPreviewSubject: "Betreff",
+    emailPreviewNote:
+      "Jeder Empfänger erhält diese Nachricht mit seinen eigenen Werten – die Variablen werden pro Firma ersetzt. Die Vorschau entspricht exakt dem Versandinhalt.",
+    emailPreviewUnresolved:
+      "Für diesen Empfänger konnte eine Variable nicht sicher aufgelöst werden – die Nachricht würde nicht gesendet.",
+    emailTemplates: "Vorlagen",
+    emailTemplatesHint:
+      "Füllt Betreff und Nachricht – es wird nichts gesendet und das Anschreiben bleibt unverändert.",
+    emailTemplateAusbildung: "Ausbildung Bewerbung",
+    emailTemplateArbeit: "Allgemeine Bewerbung",
+    emailTemplatePraktikum: "Praktikum Bewerbung",
+    emailVarCandidate: "Bewerber-Name",
+    emailVarContact: "Ansprechpartner",
+    emailVarCompany: "Firmenname",
+    emailVarGreeting: "Anrede",
+    emailInReviewTitle: "E-Mail (für diesen Empfänger)",
+    emailEmptyHint:
+      "Noch keine E-Mail-Nachricht gespeichert – oben Betreff und Nachricht vervollständigen.",
+    flagEmailIncomplete:
+      "Die E-Mail-Nachricht ist unvollständig – bitte im Schritt „Prüfen“ Betreff und Nachricht vervollständigen.",
     /* Fehlermeldungen (stable server codes) */
     err: {
       INVALID_COUNT: "Bitte eine ganze Zahl zwischen 1 und 100 eingeben.",
@@ -2522,6 +2559,12 @@ const de = {
       NO_SENDER: "Kein E-Mail-Konto verknüpft.",
       SENDER_NOT_READY: "Dein E-Mail-Konto muss zuerst erneut verbunden werden.",
       DOCUMENTS_MISSING: "Lebenslauf oder Zeugnisse fehlen noch.",
+      EMAIL_INCOMPLETE:
+        "Die E-Mail-Nachricht ist unvollständig: Betreff und Nachricht müssen ausgefüllt sein (Schritt 4 „Prüfen“).",
+      EMAIL_LOCKED:
+        "Die E-Mail-Nachricht kann während des laufenden Versands nicht geändert werden.",
+      CANDIDATE_NAME_MISSING:
+        "Dein Profilname fehlt – „{{candidate_name}}“ kann nicht ersetzt werden. Bitte vervollständige zuerst dein Profil.",
       NOTHING_TO_SEND: "Keine sendefähige Bewerbung ausgewählt.",
       QUOTA_EXHAUSTED: "Das heutige Sendekontingent ist aufgebraucht.",
       QUEUE_FAILED: "Die Warteschlange konnte nicht erstellt werden – bitte erneut versuchen.",
@@ -4983,6 +5026,43 @@ const en: Dict = {
     stQueuedCount: "{n} queued",
     stFailedCount: "{n} failed",
     stAttentionCount: "{n} to review",
+    /* Step 4 — e-mail message (independent from the cover letter) */
+    emailTitle: "E-mail message",
+    emailBody:
+      "This e-mail is sent to every company in the series — with your CV, certificates and the company's Anschreiben PDF as attachments. The cover letter stays a separate attachment and is never sent as the e-mail text.",
+    emailSubjectLabel: "Subject",
+    emailSubjectPlaceholder: "Type the e-mail subject …",
+    emailMessageLabel: "Message",
+    emailMessageHint:
+      "Clean HTML e-mail · variables are personalized per recipient",
+    emailIncomplete: "Subject and message are required before sending.",
+    emailLocked:
+      "The e-mail message can no longer be changed while a send is running (or afterwards).",
+    emailSave: "Save e-mail",
+    emailSaved: "E-mail saved.",
+    emailPreview: "Preview",
+    emailPreviewTitle: "E-mail preview",
+    emailPreviewRecipient: "Preview for recipient",
+    emailPreviewSubject: "Subject",
+    emailPreviewNote:
+      "Each recipient receives this message with their own values — the variables are replaced per company. The preview matches the outgoing content exactly.",
+    emailPreviewUnresolved:
+      "A variable could not be resolved safely for this recipient — the message would not be sent.",
+    emailTemplates: "Templates",
+    emailTemplatesHint:
+      "Fills subject and message — nothing is sent and the cover letter stays unchanged.",
+    emailTemplateAusbildung: "Ausbildung Bewerbung",
+    emailTemplateArbeit: "Allgemeine Bewerbung",
+    emailTemplatePraktikum: "Praktikum Bewerbung",
+    emailVarCandidate: "Candidate name",
+    emailVarContact: "Contact person",
+    emailVarCompany: "Company name",
+    emailVarGreeting: "Salutation",
+    emailInReviewTitle: "E-mail (for this recipient)",
+    emailEmptyHint:
+      "No e-mail message saved yet — complete the subject and message above.",
+    flagEmailIncomplete:
+      "The e-mail message is incomplete — complete the subject and message in the “Review” step.",
     /* Error messages (stable server codes) */
     err: {
       INVALID_COUNT: "Please enter a whole number between 1 and 100.",
@@ -5000,6 +5080,12 @@ const en: Dict = {
       NO_SENDER: "No e-mail account linked.",
       SENDER_NOT_READY: "Your e-mail account needs to be reconnected first.",
       DOCUMENTS_MISSING: "CV or certificates are still missing.",
+      EMAIL_INCOMPLETE:
+        "The e-mail message is incomplete: subject and message must be filled in (step 4, Review).",
+      EMAIL_LOCKED:
+        "The e-mail message cannot be changed while a send is in progress.",
+      CANDIDATE_NAME_MISSING:
+        "Your profile name is missing — \"{{candidate_name}}\" cannot be resolved. Please complete your profile first.",
       NOTHING_TO_SEND: "No sendable application selected.",
       QUOTA_EXHAUSTED: "Today's sending quota is exhausted.",
       QUEUE_FAILED: "The queue could not be created — please try again.",
@@ -7462,6 +7548,43 @@ const fr: Dict = {
     stQueuedCount: "{n} en file",
     stFailedCount: "{n} échouées",
     stAttentionCount: "{n} à relire",
+    /* Étape 4 — message e-mail (indépendant de la lettre de motivation) */
+    emailTitle: "Message e-mail",
+    emailBody:
+      "Ce message est envoyé à toutes les entreprises de la série — avec votre CV, vos justificatifs et le PDF de la lettre de motivation de chaque entreprise en pièces jointes. La lettre reste une pièce jointe séparée et n'est jamais envoyée comme texte du message.",
+    emailSubjectLabel: "Objet",
+    emailSubjectPlaceholder: "Saisir l'objet du message …",
+    emailMessageLabel: "Message",
+    emailMessageHint:
+      "E-mail HTML propre · les variables sont personnalisées par destinataire",
+    emailIncomplete: "L'objet et le message sont obligatoires avant l'envoi.",
+    emailLocked:
+      "Le message e-mail ne peut plus être modifié pendant l'envoi en cours (ni après).",
+    emailSave: "Enregistrer le message",
+    emailSaved: "Message enregistré.",
+    emailPreview: "Aperçu",
+    emailPreviewTitle: "Aperçu du message",
+    emailPreviewRecipient: "Aperçu pour le destinataire",
+    emailPreviewSubject: "Objet",
+    emailPreviewNote:
+      "Chaque destinataire reçoit ce message avec ses propres valeurs — les variables sont remplacées par entreprise. L'aperçu correspond exactement au contenu envoyé.",
+    emailPreviewUnresolved:
+      "Une variable n'a pas pu être résolue en toute sécurité pour ce destinataire — le message ne serait pas envoyé.",
+    emailTemplates: "Modèles",
+    emailTemplatesHint:
+      "Remplit l'objet et le message — rien n'est envoyé et la lettre de motivation reste inchangée.",
+    emailTemplateAusbildung: "Ausbildung Bewerbung",
+    emailTemplateArbeit: "Allgemeine Bewerbung",
+    emailTemplatePraktikum: "Praktikum Bewerbung",
+    emailVarCandidate: "Nom du candidat",
+    emailVarContact: "Personne de contact",
+    emailVarCompany: "Nom de l'entreprise",
+    emailVarGreeting: "Formule d'appel",
+    emailInReviewTitle: "E-mail (pour ce destinataire)",
+    emailEmptyHint:
+      "Aucun message e-mail enregistré — complétez l'objet et le message ci-dessus.",
+    flagEmailIncomplete:
+      "Le message e-mail est incomplet — complétez l'objet et le message à l'étape « Vérifier ».",
     /* Messages d'erreur (codes serveur stables) */
     err: {
       INVALID_COUNT: "Veuillez saisir un nombre entier entre 1 et 100.",
@@ -7479,6 +7602,12 @@ const fr: Dict = {
       NO_SENDER: "Aucun compte e-mail lié.",
       SENDER_NOT_READY: "Votre compte e-mail doit d'abord être reconnecté.",
       DOCUMENTS_MISSING: "Le CV ou les certificats manquent encore.",
+      EMAIL_INCOMPLETE:
+        "Le message e-mail est incomplet : l'objet et le message doivent être remplis (étape 4, Vérification).",
+      EMAIL_LOCKED:
+        "Le message e-mail ne peut pas être modifié pendant un envoi en cours.",
+      CANDIDATE_NAME_MISSING:
+        "Ton nom de profil manque – « {{candidate_name}} » ne peut pas être résolu. Complète d'abord ton profil.",
       NOTHING_TO_SEND: "Aucune candidature envoyable sélectionnée.",
       QUOTA_EXHAUSTED: "Le quota d'envoi d'aujourd'hui est épuisé.",
       QUEUE_FAILED: "La file d'attente n'a pas pu être créée — veuillez réessayer.",
@@ -9889,6 +10018,41 @@ const ar: Dict = {
     stQueuedCount: "{n} في الانتظار",
     stFailedCount: "{n} فاشل",
     stAttentionCount: "{n} للمراجعة",
+    /* الخطوة 4 — رسالة البريد (مستقلة عن خطاب التقديم) */
+    emailTitle: "رسالة البريد الإلكتروني",
+    emailBody:
+      "تُرسل هذه الرسالة إلى جميع الشركات في السلسلة — مع سيرتك الذاتية وشهاداتك وملف PDF الخاص بخطاب التقديم لكل شركة كمرفقات. يبقى الخطاب مرفقًا منفصلًا ولا يُرسل أبدًا كنص الرسالة.",
+    emailSubjectLabel: "الموضوع",
+    emailSubjectPlaceholder: "اكتب موضوع الرسالة …",
+    emailMessageLabel: "الرسالة",
+    emailMessageHint: "بريد HTML نظيف · تُخَصَّص المتغيرات لكل مستلم",
+    emailIncomplete: "الموضوع والرسالة مطلوبان قبل الإرسال.",
+    emailLocked:
+      "لا يمكن تعديل رسالة البريد بعد الآن أثناء الإرسال الجاري (أو بعد انتهائه).",
+    emailSave: "حفظ الرسالة",
+    emailSaved: "تم حفظ الرسالة.",
+    emailPreview: "معاينة",
+    emailPreviewTitle: "معاينة البريد",
+    emailPreviewRecipient: "معاينة للمستلم",
+    emailPreviewSubject: "الموضوع",
+    emailPreviewNote:
+      "يصل هذا النص إلى كل مستلم بقيمه الخاصة — تُستبدل المتغيرات لكل شركة. تعكس المعاينة محتوى الإرسال بدقة.",
+    emailPreviewUnresolved:
+      "تعذّرت معالجة متغير بشكل آمن لهذا المستلم — لن تُرسل الرسالة.",
+    emailTemplates: "القوالب",
+    emailTemplatesHint:
+      "تعبئ الموضوع والرسالة — لا يُرسل شيء ويبقى خطاب التقديم كما هو.",
+    emailTemplateAusbildung: "Ausbildung Bewerbung",
+    emailTemplateArbeit: "Allgemeine Bewerbung",
+    emailTemplatePraktikum: "Praktikum Bewerbung",
+    emailVarCandidate: "اسم المرشح",
+    emailVarContact: "الشخص المسؤول",
+    emailVarCompany: "اسم الشركة",
+    emailVarGreeting: "التحية",
+    emailInReviewTitle: "البريد (لهذا المستلم)",
+    emailEmptyHint: "لم تُحفظ رسالة بعد — أكمل الموضوع والرسالة أعلاه.",
+    flagEmailIncomplete:
+      "رسالة البريد غير مكتملة — أكمل الموضوع والرسالة في خطوة «المراجعة».",
     /* رسائل الخطأ (رموز خادم ثابتة) */
     err: {
       INVALID_COUNT: "الرجاء إدخال رقم صحيح بين 1 و100.",
@@ -9906,6 +10070,11 @@ const ar: Dict = {
       NO_SENDER: "لا يوجد حساب بريد مرتبط.",
       SENDER_NOT_READY: "يتعين إعادة ربط حساب البريد أولًا.",
       DOCUMENTS_MISSING: "لا تزال السيرة الذاتية أو الشهادات مفقودة.",
+      EMAIL_INCOMPLETE:
+        "رسالة البريد غير مكتملة: يجب ملء الموضوع والرسالة (الخطوة 4، المراجعة).",
+      EMAIL_LOCKED: "لا يمكن تعديل رسالة البريد أثناء الإرسال الجاري.",
+      CANDIDATE_NAME_MISSING:
+        "اسم ملفك الشخصي مفقود – لا يمكن حل «{{candidate_name}}». أكمل ملفك الشخصي أولًا.",
       NOTHING_TO_SEND: "لم يُحدد أي طلب صالح للإرسال.",
       QUOTA_EXHAUSTED: "نفد حد الإرسال اليومي.",
       QUEUE_FAILED: "تعذر إنشاء قائمة الانتظار — يرجى المحاولة مجددًا.",

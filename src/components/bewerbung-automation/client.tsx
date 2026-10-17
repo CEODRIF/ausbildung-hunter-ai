@@ -393,7 +393,10 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
         </div>
         {step === 2 && <DocumentsStep view={view} refresh={refresh} />}
         {step === 3 && <GenerateStep view={view} refresh={refresh} />}
-        {step === 4 && (
+        {/* Step 4 stays MOUNTED (hidden) like Step 1: the campaign e-mail
+            draft (subject + body, until saved) must survive navigating to
+            the Send step and back. */}
+        <div className={step === 4 ? undefined : "hidden"}>
           <ReviewStep
             view={view}
             refresh={refresh}
@@ -402,7 +405,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
             applicantName={userName}
             applicantEmail={userEmail}
           />
-        )}
+        </div>
         {step === 5 && (
           <SendStep
             view={view}

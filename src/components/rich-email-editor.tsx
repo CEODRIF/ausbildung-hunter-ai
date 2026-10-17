@@ -20,7 +20,7 @@ const tools = [
  * ones from lib/personalization (rendered per recipient on the server
  * before sending — the editor itself only ever stores the token).
  */
-const variables = [
+const DEFAULT_VARIABLES = [
   {
     token: "{{company_name}}",
     label: "اسم الشركة",
@@ -38,12 +38,23 @@ const variables = [
   },
 ];
 
+export interface EmailVariable {
+  token: string;
+  label: string;
+  title: string;
+}
+
 export function RichEmailEditor({
   value,
   onChange,
+  variables = DEFAULT_VARIABLES,
 }: {
   value: string;
   onChange: (html: string) => void;
+  /** Insert-variable buttons. Defaults to the standard campaign variables;
+   *  callers (e.g. the Bewerbung Automation e-mail) can pass their own
+   *  localized set. Tokens are still resolved by lib/personalization. */
+  variables?: EmailVariable[];
 }) {
   const editorRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

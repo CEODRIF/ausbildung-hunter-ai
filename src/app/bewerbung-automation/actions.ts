@@ -38,6 +38,7 @@ import {
   setCampaignSender,
   startBewSend,
   updateBewApplicationFields,
+  updateBewCampaignEmail,
   updateBewLetter,
 } from "@/lib/bewerbung-engine";
 import type {
@@ -139,7 +140,23 @@ export async function bewUpdateCompany(
   });
 }
 
-/* ------------------------------ Step 2 ------------------------------ */
+/**
+ * Save the campaign-level e-mail message (subject + HTML body) — the
+ * message that actually goes out. The per-company Anschreiben (and its
+ * PDF) is a separate attachment and is NOT touched by this action.
+ * Locked while a send is in flight (EMAIL_LOCKED) and in terminal states
+ * (CAMPAIGN_CLOSED); the body is server-sanitized.
+ */
+export async function bewSaveEmail(formData: FormData): Promise<{ ok: true }> {
+  const { userId } = await requireUser();
+  const campaignId = readString(formData, "campaignId");
+  const subject = readString(formData, "subject");
+  const bodyHtml = readString(formData, "bodyHtml");
+  await updateBewCampaignEmail(userId, campaignId, { subject, bodyHtml });
+  return { ok: true };
+}
+
+  /* ------------------------------ Step 2 ------------------------------ */
 
 // NOTE: the two File-carrying operations are ROUTE HANDLERS, not server
 // actions — server actions cap the request body at 1 MB by default while

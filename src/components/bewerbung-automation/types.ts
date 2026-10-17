@@ -63,6 +63,11 @@ export interface BewCampaignDTO {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  /** The campaign-level e-mail message (independent from the per-company
+   *  Anschreiben, which stays a PDF attachment). Optional: rows read before
+   *  the 20261113000000 migration lack the columns — treat as "". */
+  email_subject?: string;
+  email_body_html?: string;
 }
 
 export interface BewCampaignDocumentDTO {
@@ -179,6 +184,9 @@ export type BewErrorCode =
   | "NO_SENDER"
   | "SENDER_NOT_READY"
   | "DOCUMENTS_MISSING"
+  | "EMAIL_INCOMPLETE"
+  | "EMAIL_LOCKED"
+  | "CANDIDATE_NAME_MISSING"
   | "NOTHING_TO_SEND"
   | "QUOTA_EXHAUSTED"
   | "QUEUE_FAILED"
@@ -201,10 +209,13 @@ export function bewErrorCode(error: unknown): BewErrorCode {
     message === "APPLICATION_LOCKED" ||
     message === "CAMPAIGN_CLOSED" ||
     message === "NOT_FOUND" ||
-    message === "NO_SENDER" ||
-    message === "SENDER_NOT_READY" ||
-    message === "DOCUMENTS_MISSING" ||
-    message === "NOTHING_TO_SEND" ||
+     message === "NO_SENDER" ||
+     message === "SENDER_NOT_READY" ||
+     message === "DOCUMENTS_MISSING" ||
+     message === "EMAIL_INCOMPLETE" ||
+     message === "EMAIL_LOCKED" ||
+     message === "CANDIDATE_NAME_MISSING" ||
+     message === "NOTHING_TO_SEND" ||
     message === "QUOTA_EXHAUSTED" ||
     message === "QUEUE_FAILED" ||
     message === "INVALID_PAYLOAD" ||

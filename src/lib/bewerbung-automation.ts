@@ -600,6 +600,39 @@ export function buildSubject(purpose: BewPurpose, companyName: string): string {
 }
 
 /* ------------------------------------------------------------------ *
+ * Campaign e-mail message (independent from the per-company letter)
+ * ------------------------------------------------------------------ */
+
+export const BEW_EMAIL_SUBJECT_MAX = 200;
+export const BEW_EMAIL_BODY_MAX = 500_000;
+
+/** Coarse-but-sufficient "is there visible text?" check for an HTML body:
+ *  tags (and common whitespace entities) removed, then trimmed. A body of
+ *  pure markup, entities or blank lines does NOT count as written. */
+export function htmlHasVisibleText(html: string): boolean {
+  const text = (html ?? "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .trim();
+  return text.length > 0;
+}
+
+/**
+ * The send gate for the campaign e-mail message: a subject (non-empty after
+ * trim, within the length cap) AND a body with visible text. The per-company
+ * Anschreiben is a SEPARATE artifact (attachment) and is NOT part of this
+ * check — it has its own row-level gate (appSendFlags).
+ */
+export function isBewEmailComplete(
+  subject: string | null | undefined,
+  bodyHtml: string | null | undefined,
+): boolean {
+  const s = (subject ?? "").trim();
+  return s.length > 0 && s.length <= BEW_EMAIL_SUBJECT_MAX && htmlHasVisibleText(bodyHtml ?? "");
+}
+
+/* ------------------------------------------------------------------ *
  * Letter prompt (pure string building — the AI call happens in the engine)
  * ------------------------------------------------------------------ */
 
