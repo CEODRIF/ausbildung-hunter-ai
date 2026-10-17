@@ -83,12 +83,19 @@ describe("settings profile page — premium visual redesign", () => {
       "selected_goal",
       "daily_email_limit",
       "created_at",
+      // Applicant details (migration 20261114000000) — the seven mandatory
+      // Anschreiben-header fields, read-only on this page:
+      "street",
+      "postal_code",
+      "city",
+      "country",
+      "phone",
     ];
     for (const field of realFields) {
       expect(PAGE, `field ${field} must be used`).toContain(field);
     }
-    // No invented profile data (word-boundary: "opacity" must not trip "city"):
-    for (const invented of ["phone", "date_of_birth", "address", "city", "username"]) {
+    // No invented profile data (word-boundary):
+    for (const invented of ["date_of_birth", "address", "username"]) {
       expect(PAGE, `must not reference invented field "${invented}"`).not.toMatch(
         new RegExp(`\\b${invented}\\b`),
       );

@@ -9,9 +9,13 @@ import {
 } from "@/lib/i18n/core";
 import { GlassCard } from "@/components/ui/surfaces";
 import { Icon, type IconName } from "@/components/icon";
+import { ApplicantProfileForm } from "@/components/applicant-profile-form";
 import { ProfileIdentityForm } from "@/components/profile-identity-form";
 import { UserAvatar } from "@/components/user-avatar";
-import { hasProfileAvatarColumn } from "@/lib/contact-name-support";
+import {
+  hasApplicantProfileColumns,
+  hasProfileAvatarColumn,
+} from "@/lib/contact-name-support";
 import { isProfileAvatarId } from "@/lib/profile-avatars";
 
 export const dynamic = "force-dynamic";
@@ -82,6 +86,10 @@ export default async function ProfileSettingsPage() {
   // deploy first. The display name works on every schema (full_name has
   // existed since the auth foundation).
   const avatarSupported = await hasProfileAvatarColumn();
+  // Applicant details (the seven mandatory Anschreiber-header fields):
+  // editable only once the 20261114000000 migration is applied (manual
+  // migrations — code may deploy first, like the avatar picker above).
+  const applicantSupported = await hasApplicantProfileColumns();
   const avatarId =
     avatarSupported && isProfileAvatarId(profile.avatar)
       ? profile.avatar
@@ -275,6 +283,42 @@ export default async function ProfileSettingsPage() {
                 last
               />
             </dl>
+          </GlassCard>
+
+          {/* Applicant details — the seven mandatory cover-letter fields */}
+          <GlassCard
+            variant="surface"
+            as="section"
+            className="overflow-hidden xl:col-span-2"
+            aria-label={t("profile.page.applicant.title")}
+          >
+            <div className="flex items-center gap-3.5 border-b border-line px-5 py-5 sm:px-6">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+                <Icon name="user" size={19} />
+              </span>
+              <div className="min-w-0">
+                <h2 className="font-bold tracking-tight text-ink">
+                  {t("profile.page.applicant.title")}
+                </h2>
+                <p className="mt-0.5 text-xs text-muted">
+                  {t("profile.page.applicant.hint")}
+                </p>
+              </div>
+            </div>
+            <div className="px-5 py-5 sm:px-6">
+              <ApplicantProfileForm
+                supported={applicantSupported}
+                initial={{
+                  fullName: profile.full_name ?? "",
+                  street: profile.street ?? "",
+                  postalCode: profile.postal_code ?? "",
+                  city: profile.city ?? "",
+                  country: profile.country ?? "",
+                  email: profile.email ?? "",
+                  phone: profile.phone ?? "",
+                }}
+              />
+            </div>
           </GlassCard>
 
           {/* Connected accounts / settings */}

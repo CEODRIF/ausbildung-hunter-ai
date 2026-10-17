@@ -27,11 +27,13 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 type Admin = ReturnType<typeof createAdminClient>;
 import {
+  applicantAddressLines,
   formatGermanDate,
   htmlToParagraphs,
   letterPdfFilename,
   splitAddressLines,
   splitLetterParagraphs,
+  validateApplicantProfile,
 } from "@/lib/bewerbung-automation";
 
 export const BEW_LETTER_PDF_MIME = "application/pdf";
@@ -57,9 +59,29 @@ const MUTED = rgb(0.3, 0.3, 0.3);
 /** Re-exported so the UI and the PDF share ONE date format. */
 export { formatGermanDate };
 
+/**
+ * The applicant profile as handed to the PDF pipeline (engine reads it from
+ * `profiles`, scoped to the authenticated user). All fields nullable —
+ * NEW PDF generation requires all seven to be valid (see ensureLetterPdf);
+ * historical folios may legitimately carry only name+email.
+ */
+export interface ApplicantFacts {
+  name?: string | null;
+  email?: string | null;
+  street?: string | null;
+  postalCode?: string | null;
+  city?: string | null;
+  country?: string | null;
+  phone?: string | null;
+}
+
 export interface LetterFolio {
   senderName: string;
-  /** Only data that actually exists (e-mail today; no invented address). */
+  /**
+   * Applicant header lines in the FIXED order (only non-empty values):
+   * street / "postal code + city" (one line) / country / e-mail / phone.
+   * Historical folios may carry fewer (e-mail only) — never invented.
+   */
   senderLines: string[];
   dateText: string;
   companyName: string;
@@ -79,6 +101,11 @@ export interface LetterFolio {
 export function buildLetterFolio(input: {
   applicantName?: string | null;
   applicantEmail?: string | null;
+  applicantStreet?: string | null;
+  applicantPostalCode?: string | null;
+  applicantCity?: string | null;
+  applicantCountry?: string | null;
+  applicantPhone?: string | null;
   companyName: string;
   companyContactName?: string | null;
   companyAddress?: string | null;
@@ -88,9 +115,18 @@ export function buildLetterFolio(input: {
 }): LetterFolio {
   const paragraphs = htmlToParagraphs(input.bodyHtml);
   const parts = splitLetterParagraphs(paragraphs, input.applicantName ?? "");
+  const senderLines = applicantAddressLines({
+    fullName: input.applicantName ?? "",
+    street: input.applicantStreet ?? "",
+    postalCode: input.applicantPostalCode ?? "",
+    city: input.applicantCity ?? "",
+    country: input.applicantCountry ?? "",
+    email: input.applicantEmail ?? "",
+    phone: input.applicantPhone ?? "",
+  });
   return {
     senderName: (input.applicantName ?? "").trim(),
-    senderLines: (input.applicantEmail ?? "").trim() ? [(input.applicantEmail as string).trim()] : [],
+    senderLines,
     dateText: formatGermanDate(input.date ?? new Date()),
     companyName: (input.companyName ?? "").trim(),
     companyContactName: (input.companyContactName ?? "").trim() || null,
@@ -206,8 +242,16 @@ export async function generateLetterPdf(folio: LetterFolio): Promise<Uint8Array>
     if (opts.spaceAfter) y -= opts.spaceAfter;
   };
 
-  const drawRight = (text: string, font: PDFFont, size: number, color: Color = INK) =>
-    drawLine(text, font, size, { right: true, color });
+  /**
+   * Right-aligned line(s): long content (names, streets, e-mails) wraps to
+   * the content width instead of flowing past the left margin — every
+   * wrapped line stays right-aligned at the same right edge.
+   */
+  const drawRight = (text: string, font: PDFFont, size: number, color: Color = INK) => {
+    for (const line of wrapLine(font, text, size, CONTENT_WIDTH)) {
+      drawLine(line, font, size, { right: true, color });
+    }
+  };
 
   // ---- sender block (top right) — only facts we actually have -----------
   if (folio.senderName) drawRight(folio.senderName.toUpperCase(), bold, 11);
@@ -334,13 +378,35 @@ export async function ensureLetterPdf(
       subject: string;
       body_html: string;
     };
-    applicant: { name?: string | null; email?: string | null };
+    applicant: ApplicantFacts;
     force?: boolean;
     /** Injectable for tests (defaults to the real admin client). */
     admin?: Admin;
   },
 ): Promise<LetterAttachmentRef | null> {
   if (!input.app.body_html || !input.app.body_html.trim()) return null;
+  // The full applicant header (seven mandatory fields) is required for a
+  // NEW PDF. Never fall back to the old name+email-only letter: the caller
+  // blocks the application with a stable, retryable error until the
+  // profile is complete. (Stored/historical PDFs are returned as-is above
+  // or in the !force branch below — they are never rewritten.)
+  const profileCheck = validateApplicantProfile({
+    fullName: input.applicant.name,
+    street: input.applicant.street,
+    postalCode: input.applicant.postalCode,
+    city: input.applicant.city,
+    country: input.applicant.country,
+    email: input.applicant.email,
+    phone: input.applicant.phone,
+  });
+  if (!profileCheck.ok) {
+    // Field NAMES only — never the (private) values — for diagnosis.
+    console.error(
+      "[bew] letter PDF blocked: applicant profile incomplete",
+      JSON.stringify({ missing: profileCheck.missing, invalid: profileCheck.invalid }),
+    );
+    return null;
+  }
   const admin = input.admin ?? createAdminClient();
   const path = letterPdfStoragePath(input.userId, input.app.id);
   const filename = letterPdfFilename(input.app.company_name);
@@ -364,6 +430,11 @@ export async function ensureLetterPdf(
     const folio = buildLetterFolio({
       applicantName: input.applicant.name,
       applicantEmail: input.applicant.email,
+      applicantStreet: input.applicant.street,
+      applicantPostalCode: input.applicant.postalCode,
+      applicantCity: input.applicant.city,
+      applicantCountry: input.applicant.country,
+      applicantPhone: input.applicant.phone,
       companyName: input.app.company_name,
       companyContactName: input.app.contact_name,
       companyAddress: input.app.company_address,

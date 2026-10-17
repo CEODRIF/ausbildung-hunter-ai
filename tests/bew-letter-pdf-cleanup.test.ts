@@ -89,7 +89,18 @@ function freshDb(): DB {
     daily_usage: [
       { user_id: USER, date: TODAY, emails_sent: 0, emails_reserved: 0, daily_limit: 50 },
     ],
-    profiles: [{ id: USER, full_name: "Max Mustermann", email: "max@example.de" }],
+    profiles: [
+      {
+        id: USER,
+        full_name: "Max Mustermann",
+        email: "max@example.de",
+        street: "Musterstraße 12",
+        postal_code: "12345",
+        city: "Berlin",
+        country: "Deutschland",
+        phone: "+49 151 2345678",
+      },
+    ],
     storage: {
       objects: new Map(),
       failUploads: false,
