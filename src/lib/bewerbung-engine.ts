@@ -33,7 +33,10 @@ import { extractPdfText } from "@/lib/pdf-extract";
 import type { Profile } from "@/lib/auth";
 import mammoth from "mammoth";
 import {
+  BEW_ATTACHMENT_BUCKET,
+  deleteLetterPdf,
   ensureLetterPdf,
+  letterPdfStoragePath,
   type LetterAttachmentRef,
 } from "@/lib/bew-letter-pdf";
 
@@ -1416,22 +1419,27 @@ export async function processBewSendBatch(
   let failed = 0;
   let uncertain = 0;
 
-  for (let i = 0; i < max; i += 1) {
-    const slot = await reserveSenderSlot(admin, campaign.email_account_id);
-    if (!slot)
-      return { processed, sent, failed, uncertain, slotBusy: true, stop: "slot-busy" };
+  let stop: SendBatchResult["stop"] = "done";
 
-    const { data: claimedRow, error: claimError } = await admin.rpc(
-      "claim_next_bew_application",
-      { target_user_id: userId, target_campaign_id: campaignId },
-    );
-    if (claimError) throw new Error("claim failed");
-    const app = claimedRow as BewApplicationRow | null;
-    if (!app || !app.id) {
-      await refreshCampaignCounters(admin, campaignId);
-      return { processed, sent, failed, uncertain, slotBusy: false, stop: "queue-empty" };
-    }
-    processed += 1;
+  try {
+    for (let i = 0; i < max; i += 1) {
+      const slot = await reserveSenderSlot(admin, campaign.email_account_id);
+      if (!slot) {
+        stop = "slot-busy";
+        break;
+      }
+
+      const { data: claimedRow, error: claimError } = await admin.rpc(
+        "claim_next_bew_application",
+        { target_user_id: userId, target_campaign_id: campaignId },
+      );
+      if (claimError) throw new Error("claim failed");
+      const app = claimedRow as BewApplicationRow | null;
+      if (!app || !app.id) {
+        stop = "queue-empty";
+        break;
+      }
+      processed += 1;
 
     const html = sanitizeEmailHtml(app.body_html);
     const text = htmlToText(app.body_html) || app.body_text;
@@ -1465,16 +1473,16 @@ export async function processBewSendBatch(
     let provider: Awaited<ReturnType<typeof createEmailProvider>>;
     try {
       provider = await createEmailProvider(userId, campaign.email_account_id, appAttachments);
-    } catch (error) {
-      const c = classifySendError(error);
-      if (c.kind === "reconnect") {
-        await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
-        await releaseCapacity(admin, userId, campaign.usage_date, 1);
-        failed += 1;
-        await refreshCampaignCounters(admin, campaignId);
-        return { processed, sent, failed, uncertain, slotBusy: false, stop: "reconnect" };
-      }
-      await markBewApp(admin, app.id, "failed", c.code, c.message);
+      } catch (error) {
+        const c = classifySendError(error);
+        if (c.kind === "reconnect") {
+          await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
+          await releaseCapacity(admin, userId, campaign.usage_date, 1);
+          failed += 1;
+          stop = "reconnect";
+          break;
+        }
+        await markBewApp(admin, app.id, "failed", c.code, c.message);
       await releaseCapacity(admin, userId, campaign.usage_date, 1);
       failed += 1;
       continue;
@@ -1494,17 +1502,26 @@ export async function processBewSendBatch(
         reservation_date: campaign.usage_date,
       });
       await admin
-        .from("bew_applications")
-        .update({
-          status: "sent",
-          provider_message_id: result.providerMessageId,
-          sent_at: nowIso(),
-          error_code: null,
-          error_message: null,
-        })
-        .eq("id", app.id);
-      sent += 1;
-    } catch (error) {
+         .from("bew_applications")
+         .update({
+           status: "sent",
+           provider_message_id: result.providerMessageId,
+           sent_at: nowIso(),
+           error_code: null,
+           error_message: null,
+         })
+         .eq("id", app.id);
+       // Post-send CLEANUP (best-effort, idempotent): the provider
+       // authoritatively confirmed the send, so this app's generated
+       // Anschreiben PDF is no longer needed. Only the deterministic,
+       // owner-scoped letter path is deleted — NEVER the CV, the
+       // certificates, or another user's objects. deleteLetterPdf is
+       // non-throwing and non-fatal by design: the row stays "sent", the
+       // quota stays consumed, the e-mail is never re-triggered, and the
+       // post-drain sweep retries a failed delete safely.
+       await deleteLetterPdf(userId, app.id, admin);
+       sent += 1;
+     } catch (error) {
       const c = classifySendError(error);
       if (c.kind === "retry" && app.attempt_count < BEW_MAX_SEND_ATTEMPTS) {
         await admin
@@ -1517,13 +1534,13 @@ export async function processBewSendBatch(
           })
           .eq("id", app.id);
         // Quota stays reserved for the retry.
-      } else if (c.kind === "reconnect") {
-        await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
-        await releaseCapacity(admin, userId, campaign.usage_date, 1);
-        failed += 1;
-        await refreshCampaignCounters(admin, campaignId);
-        return { processed, sent, failed, uncertain, slotBusy: false, stop: "reconnect" };
-      } else if (c.kind === "uncertain") {
+       } else if (c.kind === "reconnect") {
+         await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
+         await releaseCapacity(admin, userId, campaign.usage_date, 1);
+         failed += 1;
+         stop = "reconnect";
+         break;
+       } else if (c.kind === "uncertain") {
         // May already be delivered — consume quota (safe) but NEVER retry.
         await admin.rpc("bew_record_email_sent", {
           target_user_id: userId,
@@ -1531,16 +1548,79 @@ export async function processBewSendBatch(
         });
         await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
         uncertain += 1;
-      } else {
-        await markBewApp(admin, app.id, "failed", c.code, c.message);
-        await releaseCapacity(admin, userId, campaign.usage_date, 1);
-        failed += 1;
-      }
+       } else {
+         await markBewApp(admin, app.id, "failed", c.code, c.message);
+         await releaseCapacity(admin, userId, campaign.usage_date, 1);
+         failed += 1;
+       }
+     }
     }
+  } finally {
+    /* Idempotent RETRY of any cleanup the per-app delete could not finish
+       (transient storage error): for EVERY sent row of this campaign the
+       letter object is by definition no longer needed, so a best-effort
+       delete is always safe. Non-sent rows (queued retries, failed,
+       needs_attention, pending, excluded, cancelled) are never touched —
+       their PDF may still be sent, re-sent or reviewed.
+
+       Runs on ALL drain exits (slot-busy, queue-empty, reconnect, claim
+       error included): it is read-only with respect to application state,
+       so it can never double-send an e-mail or corrupt a row — it only
+       re-attempts previously failed deletes. */
+    await cleanupSentLetterPdfs(admin, userId, campaignId);
+    await refreshCampaignCounters(admin, campaignId);
   }
 
-  await refreshCampaignCounters(admin, campaignId);
-  return { processed, sent, failed, uncertain, slotBusy: false, stop: "done" };
+  return {
+    processed,
+    sent,
+    failed,
+    uncertain,
+    slotBusy: stop === "slot-busy",
+    stop,
+  };
+}
+
+/**
+ * Sweep the deterministic letter-PDF paths of every SENT application in the
+ * campaign and delete what is still there. Idempotent (missing object =
+ * success) and owner-scoped (the path is built from `userId`, never taken
+ * from client input). Any failure is logged and retried on the next drain;
+ * it never changes an application's status and never resends e-mail.
+ */
+async function cleanupSentLetterPdfs(
+  admin: Admin,
+  userId: string,
+  campaignId: string,
+): Promise<number> {
+  const { data, error } = await admin
+    .from("bew_applications")
+    .select("id")
+    .eq("campaign_id", campaignId)
+    .eq("user_id", userId)
+    .eq("status", "sent");
+  if (error || !data) {
+    // A failed read is not an authorization to delete — skip, retry next drain.
+    if (error)
+      console.error(
+        "[bew] cleanupSentLetterPdfs: cannot read sent applications; sweep skipped",
+        error.message,
+      );
+    return 0;
+  }
+  let deleted = 0;
+  for (const row of data as Array<{ id: string }>) {
+    const path = letterPdfStoragePath(userId, row.id);
+    // Fast no-op when the object is already gone (the common case on the
+    // second drain).
+    const { data: obj } = await admin.storage
+      .from(BEW_ATTACHMENT_BUCKET)
+      .download(path);
+    if (!obj) continue;
+    // Non-throwing; logs its own failure (→ retried on the next drain).
+    if (await deleteLetterPdf(userId, row.id, admin)) deleted += 1;
+  }
+  return deleted;
 }
 
 async function markBewApp(
@@ -1634,6 +1714,61 @@ export async function listSendingBewCampaigns(
     .limit(limit);
   if (error) return [];
   return (data ?? []) as Array<{ id: string; user_id: string }>;
+}
+
+/**
+ * Bounded RETRY pass for the post-send letter-PDF cleanup (called by the
+ * scheduler tick, not by any user action).
+ *
+ * `processBewSendBatch` sweeps a campaign on every drain while it is still
+ * `sending` — but the final drain can flip the campaign to a terminal state
+ * (`completed` / `partially_failed`), after which no further drain runs. A
+ * delete that failed exactly in that final drain would otherwise leave a
+ * small orphaned object behind. This pass therefore sweeps TERMINAL
+ * campaigns whose `completed_at` falls inside a 24 h window:
+ *
+ *   - idempotent: deleting an already-gone object is a logged no-op;
+ *   - owner-scoped: paths are built from the campaign's user id, never from
+ *     client input; only that user's own bucket prefix is touched;
+ *   - state-safe: only SENT rows' objects are candidates (their e-mail is
+ *     confirmed delivered); it never changes any application status and can
+ *     never trigger a send;
+ *   - bounded: ≤ `limit` campaigns, each ≤ its number of sent rows, and a
+ *     hard 24 h recency window — old campaigns are never re-scanned.
+ */
+export async function cleanupRecentlyCompletedBewLetterPdfs(
+  limit = 20,
+  windowMs = 24 * 60 * 60 * 1000,
+): Promise<{ campaigns: number; deleted: number }> {
+  const admin = createAdminClient();
+  const since = new Date(Date.now() - windowMs).toISOString();
+  const { data, error } = await admin
+    .from("bew_campaigns")
+    .select("id, user_id")
+    .in("status", ["completed", "partially_failed"])
+    .gte("completed_at", since)
+    .order("completed_at", { ascending: true })
+    .limit(limit);
+  if (error) {
+    // Never crash the tick: the next tick retries (or the object simply
+    // ages out of the window — bounded garbage, small size).
+    console.error(
+      "[bew] cleanupRecentlyCompletedBewLetterPdfs: campaign read failed",
+      error.message,
+    );
+    return { campaigns: 0, deleted: 0 };
+  }
+  let campaigns = 0;
+  let deleted = 0;
+  for (const camp of (data ?? []) as Array<{ id: string; user_id: string }>) {
+    campaigns += 1;
+    deleted += await cleanupSentLetterPdfs(admin, camp.user_id, camp.id);
+  }
+  if (deleted > 0)
+    console.info(
+      `[bew] letter PDF cleanup: swept ${campaigns} recently completed campaign(s), deleted ${deleted} orphaned object(s)`,
+    );
+  return { campaigns, deleted };
 }
 
 export async function getLatestBewCampaignId(userId: string): Promise<string | null> {

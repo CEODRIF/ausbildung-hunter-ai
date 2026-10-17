@@ -2449,6 +2449,8 @@ const de = {
     letterPdf: "Anschreiben (PDF)",
     letterPdfNote:
       "Wird automatisch generiert und jeder Bewerbung als Anhang beigefügt.",
+    letterPdfSentNote:
+      "Nach erfolgreichem Versand wird das Anschreiben-PDF automatisch gelöscht. Der Brief-Text bleibt zur Ansicht erhalten.",
     errPdfGeneration:
       "Das Anschreiben-PDF konnte nicht erstellt werden — der Versand dieser Bewerbung ist blockiert.",
     saveLetter: "Speichern",
@@ -4919,6 +4921,8 @@ const en: Dict = {
     letterPdf: "Cover letter (PDF)",
     letterPdfNote:
       "Generated automatically and attached to every application.",
+    letterPdfSentNote:
+      "After a successful send the cover letter PDF is deleted automatically. The letter text is kept for viewing.",
     errPdfGeneration:
       "The cover letter PDF could not be generated — sending this application is blocked.",
     saveLetter: "Save",
@@ -7389,6 +7393,8 @@ const fr: Dict = {
     letterPdf: "Lettre de motivation (PDF)",
     letterPdfNote:
       "Générée automatiquement et jointe à chaque candidature.",
+    letterPdfSentNote:
+      "Après un envoi réussi, le PDF de la lettre est supprimé automatiquement. Le texte de la lettre est conservé pour consultation.",
     errPdfGeneration:
       "La lettre PDF n'a pas pu être générée — l'envoi de cette candidature est bloqué.",
     saveLetter: "Enregistrer",
@@ -9808,6 +9814,8 @@ const ar: Dict = {
     letterSignatureLabel: "الاسم",
     letterPdf: "خطاب التقديم (PDF)",
     letterPdfNote: "يُنشأ تلقائيًا ويُرسل كملف مرفق مع كل طلب.",
+    letterPdfSentNote:
+      "بعد الإرسال الناجح يُحذف ملف PDF الخاص بالخطاب تلقائيًا. يُحفظ نص الخطاب للاطلاع.",
     errPdfGeneration:
       "تعذر إنشاء ملف PDF لخطاب التقديم — إرسال هذا الطلب محظور.",
     saveLetter: "حفظ",
