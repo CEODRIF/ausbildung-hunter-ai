@@ -788,9 +788,11 @@ describe("personal documents (step 2) — ownership + validation", () => {
 
   it("compensates (removes) the storage object when the metadata insert fails", async () => {
     db.insertFailTables.add("bew_documents");
+    // DOC_SAVE_FAILED: stable category (localizable in the UI) — the raw
+    // "Unable to register the document." text must never reach the client.
     await expect(
       uploadBewDocument(USER, makeFile("cv.pdf", "application/pdf"), "cv"),
-    ).rejects.toThrow("Unable to register the document.");
+    ).rejects.toThrow("DOC_SAVE_FAILED");
     // The upload happened …
     expect(db.uploads).toHaveLength(1);
     // …and was compensated by removing the same path, leaving no orphan.

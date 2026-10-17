@@ -184,6 +184,9 @@ export type BewErrorCode =
   | "QUEUE_FAILED"
   | "INVALID_PAYLOAD"
   | "SAVE_FAILED"
+  | "DOC_UPLOAD_FAILED"
+  | "DOC_SAVE_FAILED"
+  | "DOC_ATTACH_FAILED"
   | "UNKNOWN";
 
 export function bewErrorCode(error: unknown): BewErrorCode {
@@ -205,7 +208,10 @@ export function bewErrorCode(error: unknown): BewErrorCode {
     message === "QUOTA_EXHAUSTED" ||
     message === "QUEUE_FAILED" ||
     message === "INVALID_PAYLOAD" ||
-    message === "SAVE_FAILED"
+    message === "SAVE_FAILED" ||
+    message === "DOC_UPLOAD_FAILED" ||
+    message === "DOC_SAVE_FAILED" ||
+    message === "DOC_ATTACH_FAILED"
   )
     return message as BewErrorCode;
   if (message.startsWith("DOCUMENT_")) return message as BewErrorCode;

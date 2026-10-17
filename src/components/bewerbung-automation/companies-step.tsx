@@ -13,7 +13,6 @@
  */
 import { useMemo, useRef, useState } from "react";
 import {
-  bewImportPdf,
   bewSaveCompanies,
   bewUpdateCompany,
 } from "@/app/bewerbung-automation/actions";
@@ -33,6 +32,32 @@ import {
   type ColumnMapping,
 } from "./import-parse";
 import type { BewViewDTO, CompanyRecord } from "./types";
+
+/**
+ * PDF import via the /api/bew/companies-pdf route (NOT a server action —
+ * server actions cap the body at 1 MB by default and would 413 a multi-page
+ * company catalogue before parsing). Throws the route's STABLE CODE so
+ * `errMessage` can localize it.
+ */
+async function importPdfViaRoute(
+  fd: FormData,
+): Promise<{ candidates: Array<{ email: string; companyName: string }>; excerpt: string }> {
+  const res = await fetch("/api/bew/companies-pdf", { method: "POST", body: fd });
+  let payload: {
+    error?: string;
+    candidates?: Array<{ email: string; companyName: string }>;
+    excerpt?: string;
+  } = {};
+  try {
+    payload = await res.json();
+  } catch {
+    payload = {};
+  }
+  if (!res.ok || !Array.isArray(payload.candidates)) {
+    throw new Error(payload.error ?? "INTERNAL");
+  }
+  return { candidates: payload.candidates, excerpt: payload.excerpt ?? "" };
+}
 
 interface Props {
   view: BewViewDTO;
@@ -169,7 +194,7 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
       if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
         const fd = new FormData();
         fd.set("file", file);
-        const result = await bewImportPdf(fd);
+        const result = await importPdfViaRoute(fd);
         if (!result.candidates.length) {
           setImportState({ ...IDLE_IMPORT, phase: "idle", fileName: file.name, error: t("bewauto.pdfNoEmails") });
           return;

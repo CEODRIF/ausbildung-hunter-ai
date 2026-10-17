@@ -643,7 +643,12 @@ export async function uploadBewDocument(
   const { error: uploadError } = await admin.storage
     .from("application-attachments")
     .upload(path, buffer, { contentType: file.type, upsert: false });
-  if (uploadError) throw new Error("Unable to upload the document.");
+  if (uploadError) {
+    // Stable code (not raw storage text): the UI maps it to the user's
+    // language without leaking paths or bucket details.
+    console.error("[bew] uploadBewDocument: storage upload failed", uploadError.message);
+    throw new Error("DOC_UPLOAD_FAILED");
+  }
 
   const { data, error } = await admin
     .from("bew_documents")
@@ -658,8 +663,10 @@ export async function uploadBewDocument(
     .select("*")
     .single();
   if (error || !data) {
+    // Compensating: never leave an unregistered storage object behind.
     await admin.storage.from("application-attachments").remove([path]);
-    throw new Error("Unable to register the document.");
+    console.error("[bew] uploadBewDocument: metadata insert failed", error?.message);
+    throw new Error("DOC_SAVE_FAILED");
   }
   return data as unknown as BewDocumentRow;
 }
@@ -732,7 +739,10 @@ export async function attachBewDocument(
     )
     .select("*")
     .single();
-  if (error || !data) throw new Error("Unable to attach the document.");
+  if (error || !data) {
+    console.error("[bew] attachBewDocument: attach failed", error?.message);
+    throw new Error("DOC_ATTACH_FAILED");
+  }
   return data as unknown as BewCampaignDocumentRow;
 }
 
@@ -743,12 +753,16 @@ export async function detachBewDocument(
   documentId: string,
 ): Promise<void> {
   const admin = createAdminClient();
-  await admin
+  const { error } = await admin
     .from("bew_campaign_documents")
     .delete()
     .eq("campaign_id", campaignId)
     .eq("document_id", documentId)
     .eq("user_id", userId);
+  if (error) {
+    console.error("[bew] detachBewDocument: delete failed", error.message);
+    throw new Error("DOC_ATTACH_FAILED");
+  }
 }
 
 /** List the user's document library (for the upload picker). */

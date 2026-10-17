@@ -16,6 +16,12 @@ import path from "node:path";
  * write to email_campaigns / email_messages / application drafts). They may
  * only use the shared SAFE primitives (quota RPCs, sender slot, the
  * ownership-scoped send provider, AI quota + provider).
+ *
+ * NOTE: the two File-carrying operations (document upload, PDF import) are
+ * ROUTE HANDLERS (/api/bew/documents, /api/bew/companies-pdf), NOT server
+ * actions — server actions cap the request body at 1 MB by default
+ * (serverActions.bodySizeLimit) and would reject a multi-MB document before
+ * the engine runs. A static guard below pins that invariant.
  */
 
 const redirectMock = vi.fn(() => {
@@ -67,10 +73,6 @@ vi.mock("@/lib/bewerbung-engine", () => ({
     usage: { remaining: 0, daily_limit: 50 },
     senderEmail: null,
   })),
-  importBewCompaniesFromPdf: engineMockFactory("importBewCompaniesFromPdf", () => ({
-    candidates: [],
-    excerpt: "",
-  })),
   listBewDocuments: engineMockFactory("listBewDocuments", () => []),
   restoreBewApplication: engineMockFactory("restoreBewApplication"),
   saveBewCompanies: engineMockFactory("saveBewCompanies", () => ({
@@ -80,13 +82,8 @@ vi.mock("@/lib/bewerbung-engine", () => ({
   setCampaignSender: engineMockFactory("setCampaignSender"),
   startBewSend: engineMockFactory("startBewSend", () => ({ ok: true })),
   updateBewApplicationFields: engineMockFactory("updateBewApplicationFields"),
-  updateBewLetter: engineMockFactory("updateBewLetter"),
-  uploadBewDocument: engineMockFactory("uploadBewDocument", () => ({
-    id: "d1",
-    filename: "cv.pdf",
-    kind: "cv",
-  })),
-}));
+   updateBewLetter: engineMockFactory("updateBewLetter"),
+ }));
 
 const actions = await import("@/app/bewerbung-automation/actions");
 
@@ -166,25 +163,6 @@ describe("action → engine argument mapping (service contract)", () => {
     expect(call.args).toEqual(["user-1", "c9"]);
   });
 
-  it("bewUploadDocument rejects a non-File payload before the engine", async () => {
-    const fd = new FormData();
-    fd.set("kind", "cv");
-    fd.set("file", "not-a-file");
-    await expect(actions.bewUploadDocument(fd)).rejects.toThrow("NO_FILE");
-    expect(engineCalls.filter((c) => c.fn === "uploadBewDocument")).toHaveLength(0);
-  });
-
-  it("bewUploadDocument forwards the File + validated kind", async () => {
-    const fd = new FormData();
-    const file = new File([new Uint8Array(8)], "cv.pdf", { type: "application/pdf" });
-    fd.set("kind", "certificate");
-    fd.set("file", file);
-    await actions.bewUploadDocument(fd);
-    const call = engineCalls.find((c) => c.fn === "uploadBewDocument")!;
-    expect(call.args[0]).toBe("user-1");
-    expect(call.args[1]).toBe(file);
-    expect(call.args[2]).toBe("certificate");
-  });
 });
 
 describe("isolation from the protected e-mail machinery (static source guard)", () => {
@@ -222,6 +200,18 @@ describe("isolation from the protected e-mail machinery (static source guard)", 
       "reserveAIUsage",
     ])
       expect(src.includes(allowed), `engine should use: ${allowed}`).toBe(true);
+  });
+
+  it("no server action carries a File body (1 MB action-body limit would 413 real uploads)", () => {
+    // Regression guard for the second-document upload failure: documents and
+    // PDFs go to /api/bew/documents + /api/bew/companies-pdf (route handlers,
+    // no framework body cap). A File inside a server action breaks again the
+    // moment the limit is raised or forgotten.
+    const actionsSrc = read("src/app/bewerbung-automation/actions.ts");
+    expect(
+      actionsSrc.includes("instanceof File"),
+      "server actions must not receive File payloads",
+    ).toBe(false);
   });
 
   it("the actions import NOTHING from the protected e-mail modules", () => {

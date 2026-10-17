@@ -2510,6 +2510,12 @@ const de = {
       INVALID_PAYLOAD: "Ungültige Daten.",
       SAVE_FAILED:
         "Speichern fehlgeschlagen — deine Daten sind möglicherweise unvollständig. Bitte erneut versuchen.",
+      DOC_UPLOAD_FAILED:
+        "Die Datei konnte nicht hochgeladen werden. Bitte erneut versuchen.",
+      DOC_SAVE_FAILED:
+        "Die Datei wurde hochgeladen, konnte aber nicht gespeichert werden. Bitte erneut versuchen.",
+      DOC_ATTACH_FAILED:
+        "Das Dokument konnte der Serie nicht zugewiesen werden. Bitte erneut versuchen.",
       UNKNOWN: "Etwas ist schiefgelaufen. Bitte erneut versuchen.",
     },
   },
@@ -4963,6 +4969,12 @@ const en: Dict = {
       INVALID_PAYLOAD: "Invalid data.",
       SAVE_FAILED:
         "Saving failed — your data may be incomplete. Please try again.",
+      DOC_UPLOAD_FAILED:
+        "The file could not be uploaded. Please try again.",
+      DOC_SAVE_FAILED:
+        "The file was uploaded but could not be registered. Please try again.",
+      DOC_ATTACH_FAILED:
+        "The document could not be attached to the series. Please try again.",
       UNKNOWN: "Something went wrong. Please try again.",
     },
   },
@@ -7417,6 +7429,12 @@ const fr: Dict = {
       INVALID_PAYLOAD: "Données invalides.",
       SAVE_FAILED:
         "Échec de l'enregistrement — vos données peuvent être incomplètes. Veuillez réessayer.",
+      DOC_UPLOAD_FAILED:
+        "Le fichier n'a pas pu être téléversé. Veuillez réessayer.",
+      DOC_SAVE_FAILED:
+        "Le fichier a été téléversé mais n'a pas pu être enregistré. Veuillez réessayer.",
+      DOC_ATTACH_FAILED:
+        "Le document n'a pas pu être rattaché à la série. Veuillez réessayer.",
       UNKNOWN: "Une erreur est survenue. Veuillez réessayer.",
     },
   },
@@ -9820,6 +9838,9 @@ const ar: Dict = {
       INVALID_PAYLOAD: "بيانات غير صالحة.",
       SAVE_FAILED:
         "فشل الحفظ — قد تكون بياناتك غير مكتملة. يرجى المحاولة مرة أخرى.",
+      DOC_UPLOAD_FAILED: "تعذر رفع الملف. يرجى المحاولة مرة أخرى.",
+      DOC_SAVE_FAILED: "تم رفع الملف لكنه لم يتم تسجيله. يرجى المحاولة مرة أخرى.",
+      DOC_ATTACH_FAILED: "تعذر إرفاق المستند بالسلسلة. يرجى المحاولة مرة أخرى.",
       UNKNOWN: "حدث خطأ ما. يرجى المحاولة مجددًا.",
     },
   },
