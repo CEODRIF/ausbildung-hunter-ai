@@ -31,12 +31,37 @@
 -- REVERSIBILITY: drop the four `bew_*` tables, the two enums and the two
 -- functions. No other object is affected.
 
-create type if not exists public.bew_campaign_status as enum
-  ('draft', 'generating', 'sending', 'completed', 'partially_failed', 'cancelled');
+-- PostgreSQL has NO `CREATE TYPE IF NOT EXISTS` (unlike CREATE TABLE — it is
+-- a syntax error, 42601). Guard with pg_type instead: idempotent, and the
+-- enum values below are the fixed contract used by the engine.
+do $$
+begin
+  if not exists (
+    select 1 from pg_type
+    where typname = 'bew_campaign_status'
+      and typnamespace = 'public'::regnamespace
+  ) then
+    create type public.bew_campaign_status as enum (
+      'draft', 'generating', 'sending', 'completed', 'partially_failed', 'cancelled'
+    );
+  end if;
+end
+$$;
 
-create type if not exists public.bew_app_status as enum
-  ('pending', 'generating', 'generated', 'excluded',
-   'queued', 'sending', 'sent', 'failed', 'needs_attention', 'cancelled');
+do $$
+begin
+  if not exists (
+    select 1 from pg_type
+    where typname = 'bew_app_status'
+      and typnamespace = 'public'::regnamespace
+  ) then
+    create type public.bew_app_status as enum (
+      'pending', 'generating', 'generated', 'excluded',
+      'queued', 'sending', 'sent', 'failed', 'needs_attention', 'cancelled'
+    );
+  end if;
+end
+$$;
 
 -- One automation run ("campaign"): the user's batch of 1..100 applications
 -- prepared for a day. Owns the counter set and the quota usage_date.
@@ -72,6 +97,7 @@ create index if not exists bew_campaigns_user_id_idx on public.bew_campaigns(use
 create index if not exists bew_campaigns_status_idx on public.bew_campaigns(status);
 create index if not exists bew_campaigns_created_at_idx on public.bew_campaigns(created_at desc);
 
+drop trigger if exists bew_campaigns_set_updated_at on public.bew_campaigns;
 create trigger bew_campaigns_set_updated_at
   before update on public.bew_campaigns
   for each row execute function public.set_updated_at();
@@ -111,6 +137,7 @@ create index if not exists bew_applications_user_id_idx on public.bew_applicatio
 create index if not exists bew_applications_status_idx on public.bew_applications(status);
 create index if not exists bew_applications_send_idx on public.bew_applications(status, next_attempt_at);
 
+drop trigger if exists bew_applications_set_updated_at on public.bew_applications;
 create trigger bew_applications_set_updated_at
   before update on public.bew_applications
   for each row execute function public.set_updated_at();
@@ -158,12 +185,19 @@ alter table public.bew_applications enable row level security;
 alter table public.bew_documents enable row level security;
 alter table public.bew_campaign_documents enable row level security;
 
+-- CREATE POLICY has no IF NOT EXISTS in PostgreSQL; the drop-then-create
+-- pair keeps a rerun of this migration idempotent (drop only ever targets
+-- the four policies declared in this file — no shared object is touched).
+drop policy if exists "Users can read their own automation campaigns" on public.bew_campaigns;
 create policy "Users can read their own automation campaigns"
   on public.bew_campaigns for select to authenticated using (auth.uid() = user_id);
+drop policy if exists "Users can read their own automation applications" on public.bew_applications;
 create policy "Users can read their own automation applications"
   on public.bew_applications for select to authenticated using (auth.uid() = user_id);
+drop policy if exists "Users can read their own automation documents" on public.bew_documents;
 create policy "Users can read their own automation documents"
   on public.bew_documents for select to authenticated using (auth.uid() = user_id);
+drop policy if exists "Users can read their own automation campaign documents" on public.bew_campaign_documents;
 create policy "Users can read their own automation campaign documents"
   on public.bew_campaign_documents for select to authenticated using (auth.uid() = user_id);
 

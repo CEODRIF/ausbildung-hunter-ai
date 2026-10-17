@@ -276,3 +276,107 @@ describe("migration SQL — reserved identifiers (42601 regression)", () => {
     ).toBe(true);
   });
 });
+
+describe("migration SQL — CREATE TYPE IF NOT EXISTS (42601 regression)", () => {
+  // Second production incident of the same shape: 20261112000000_bewerbung_
+  // automation.sql started with
+  //
+  //   CREATE TYPE IF NOT EXISTS public.bew_campaign_status AS ENUM (...)
+  //
+  // — a syntax error (42601 at "not"), because PostgreSQL has IF NOT EXISTS
+  // for TABLE/INDEX but NOT for TYPE. The Supabase SQL editor aborted the
+  // whole file, so no bew_* object was created. The fix keeps the EXACT enum
+  // values but guards creation with a pg_type probe inside DO blocks.
+
+  const migrationDir = resolve(root, "supabase/migrations");
+  const files = readdirSync(migrationDir).filter((n) => n.endsWith(".sql")).sort();
+  const readMigration = (file: string) => read(`supabase/migrations/${file}`);
+  const BEW = "20261112000000_bewerbung_automation.sql";
+
+  /** Strip plpgsql $$…$$ bodies, `--` line comments and single-quoted
+   *  string literals so the scan sees only real DDL (guard code lives
+   *  inside a DO $$ body). Comments come BEFORE string stripping: an
+   *  apostrophe in a comment (e.g. "campaign's") would otherwise flip the
+   *  quote parity and swallow real DDL. None of the outside-of-$$ string
+   *  literals in this repo contain `--`, so this order is lossless here. */
+  function ddlOnly(sql: string): string {
+    return sql
+      .replace(/\$\$[\s\S]*?\$\$/g, " ")
+      .replace(/--[^\n]*/g, " ")
+      .replace(/'(?:[^']|'')*'/g, " ");
+  }
+
+  it("the bew migration is present", () => {
+    expect(files).toContain(BEW);
+  });
+
+  it("NO migration uses the unsupported `create type if not exists` syntax", () => {
+    const offenders = files.filter((file) =>
+      /create\s+type\s+if\s+not\s+exists/i.test(ddlOnly(readMigration(file))),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("bew: both enums are pg_type-guarded (idempotent) with the exact value contract", () => {
+    const sql = readMigration(BEW);
+    // Guard: probe pg_type in the public schema before creating.
+    expect(sql).toMatch(
+      /do\s*\$\$[\s\S]*?pg_type[\s\S]*?typname = 'bew_campaign_status'[\s\S]*?\$\$;/i,
+    );
+    expect(sql).toMatch(
+      /do\s*\$\$[\s\S]*?pg_type[\s\S]*?typname = 'bew_app_status'[\s\S]*?\$\$;/i,
+    );
+    // Exact value lists — the send engine and the UI depend on these
+    // strings verbatim; a reworded list would silently break round-trips.
+    expect(sql).toMatch(
+      /'draft',\s*'generating',\s*'sending',\s*'completed',\s*'partially_failed',\s*'cancelled'/,
+    );
+    expect(sql).toMatch(
+      /'pending',\s*'generating',\s*'generated',\s*'excluded',\s*'queued',\s*'sending',\s*'sent',\s*'failed',\s*'needs_attention',\s*'cancelled'/,
+    );
+  });
+
+  it("bew: every create policy / create trigger is drop-guarded (rerun-safe)", () => {
+    const raw = readMigration(BEW);
+    const sql = ddlOnly(raw).replace(/\s+/g, " ");
+
+    // CREATE POLICY has no IF NOT EXISTS: each of the four owner-SELECT
+    // policies must be preceded by its own `drop policy if exists`.
+    const policies = [...raw.matchAll(/create policy\s+"([^"]+)"\s+on\s+(\S+)/gi)];
+    expect(policies.length).toBe(4);
+    for (const [, name, table] of policies) {
+      const createIdx = sql.indexOf(`create policy "${name}" on ${table}`);
+      const dropIdx = sql.indexOf(`drop policy if exists "${name}" on ${table}`);
+      expect(dropIdx, `drop guard missing for policy "${name}"`).toBeGreaterThan(-1);
+      expect(dropIdx, `drop guard must precede create for "${name}"`).toBeLessThan(createIdx);
+    }
+
+    // CREATE TRIGGER likewise: both updated_at triggers are drop-guarded.
+    const triggers = [
+      ...raw.matchAll(/create trigger\s+(\w+)\s+(?:before|after|instead of)[\s\S]{0,200}?on\s+(\S+)/gi),
+    ];
+    expect(triggers.length).toBe(2);
+    for (const [, name, table] of triggers) {
+      const createIdx = sql.indexOf(`create trigger ${name}`);
+      const dropIdx = sql.indexOf(`drop trigger if exists ${name} on ${table}`);
+      expect(dropIdx, `drop guard missing for trigger ${name}`).toBeGreaterThan(-1);
+      expect(dropIdx, `drop guard must precede create for ${name}`).toBeLessThan(createIdx);
+    }
+
+    // The privileged RPCs stay create-or-replace (idempotent) and are only
+    // granted to service_role after a full revoke from client roles.
+    expect(
+      sql.match(
+        /create or replace function public\.(claim_next_bew_application|bew_record_email_sent|bew_cancel_queued)\b/gi,
+      ),
+    ).toHaveLength(3);
+    for (const fn of [
+      "claim_next_bew_application(uuid, uuid)",
+      "bew_record_email_sent(uuid, date)",
+      "bew_cancel_queued(uuid, uuid)",
+    ]) {
+      expect(sql).toContain(`revoke all on function public.${fn} from public, anon, authenticated`);
+      expect(sql).toContain(`grant execute on function public.${fn} to service_role`);
+    }
+  });
+});
