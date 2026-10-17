@@ -75,6 +75,9 @@ type CompanyRecord = {
   companyEmail: string;
   contactName: string | null;
   companyAddress: string | null;
+  positionTitle: string;
+  positionBrief: string;
+  employerFacts: string;
 };
 
 /* ------------------------------ Step 0 ------------------------------ */
@@ -87,7 +90,14 @@ export async function bewCreateCampaign(
   const count = Number(readString(formData, "count"));
   const purpose = readString(formData, "purpose") as BewPurpose;
   if (!isBewPurpose(purpose)) throw new Error("INVALID_PURPOSE");
-  const campaign = await createBewCampaign({ userId, count, purpose });
+  const campaign = await createBewCampaign({
+    userId,
+    count,
+    purpose,
+    positionTitle: readString(formData, "positionTitle"),
+    positionBrief: readString(formData, "positionBrief"),
+    employerFacts: readString(formData, "employerFacts"),
+  });
   return { campaignId: campaign.id, count: campaign.requested_count };
 }
 
@@ -110,6 +120,9 @@ export async function bewSaveCompanies(
       // Contract: optional fields are null (never empty strings) downstream.
       contactName: r.contactName || null,
       companyAddress: r.companyAddress || null,
+      positionTitle: r.positionTitle ?? "",
+      positionBrief: r.positionBrief ?? "",
+      employerFacts: r.employerFacts ?? "",
     })),
   );
   return {
@@ -131,12 +144,18 @@ export async function bewUpdateCompany(
     companyEmail: "",
     contactName: null,
     companyAddress: null,
+    positionTitle: "",
+    positionBrief: "",
+    employerFacts: "",
   });
   return await updateBewApplicationFields(userId, applicationId, {
     companyName: payload.companyName ?? "",
     companyEmail: payload.companyEmail ?? "",
     contactName: payload.contactName || null,
     companyAddress: payload.companyAddress || null,
+    positionTitle: payload.positionTitle ?? "",
+    positionBrief: payload.positionBrief ?? "",
+    employerFacts: payload.employerFacts ?? "",
   });
 }
 

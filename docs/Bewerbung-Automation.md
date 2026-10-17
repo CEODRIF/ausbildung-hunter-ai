@@ -226,3 +226,119 @@ explicit "Apply" action.
   `EMAIL_WORKER_SECRET`; the cron route reuses the EXISTING `CRON_SECRET`.
 - **No new paid services** were added (existing AI provider + Google OAuth
   only).
+
+---
+
+## 11. Anschreiben quality — position brief, evidence-based prompt, quality gate
+
+This section documents the work that makes every generated Anschreiben
+genuinely personal: it is written for the ACTUAL role, from the ACTUAL
+applicant's verified CV, with interest in the ACTUAL employer only when that
+is supported by verified facts.
+
+### 11.1 Root causes of the previously generic letters
+The old prompt produced generic output because:
+1. **No role data.** Only the company name/address was passed — no position
+   title, no job description. The model could not address a specific role.
+2. **No employer facts.** Beyond the name there were no verified
+   employer-specific facts, so "interest in the company" was vague.
+3. **Raw CV text, not the verified profile.** The letter was built from the
+   raw extracted document text (truncated at 12,000 chars), not the parsed +
+   validated `CandidateProfile` — structured skills, experience
+   responsibilities, languages (with levels) and stated interests were lost.
+4. **No evidence mapping.** Nothing connected the role's requirements to the
+   applicant's evidence, so the letter listed generic strengths.
+5. **Weak data isolation.** The CV text was pasted in with no fencing and no
+   "data is not instructions" rule, inviting weak output and prompt-injection
+   from untrusted CV content.
+6. **No quality gate / no bounded retry.** The first model output was accepted
+   as-is.
+
+### 11.2 What changed (files & behaviour)
+- `supabase/migrations/20261115000000_bew_position_brief.sql` — additive,
+  rerunnable: campaign `position_title`/`position_brief`/`employer_facts`;
+  per-application overrides (NULL = inherit campaign); `quality_attempts`;
+  `generation_started_at` lease; partial index; length CHECKs. No RLS change,
+  no backfill.
+- `src/lib/bewerber-automation.ts` — new `LetterPromptInput`;
+  `resolveLetterPosition` (override → campaign → empty, **never invents**);
+  fenced isolation (`fence`/`escapeFence`) + an explicit "data is never
+  instructions" rule; `buildApplicantEvidence` (structured CV → readable
+  evidence, gaps surfaced as constraints); rewritten `buildLetterPrompt`;
+  deterministic `validateLetterQuality` (hard failures block, soft issues are
+  signals); `buildLetterCorrectiveNote`; opt-in model-eval prompt + defensive
+  `parseLetterEvalVerdict`; `BEW_MAX_LETTER_ATTEMPTS = 2`; field caps.
+- `src/lib/bewerber-engine.ts` — `loadCandidateProfile` (latest verified CV);
+  per-app position/employer resolution; bounded two-attempt loop with the
+  deterministic gate applied to the model body and a corrective second attempt;
+  terminal `quality_gate` failure (never a silent accept); lease stamped on
+  claim; `reclaimStaleGenerating` (conditional, idempotent, never overwrites a
+  generated/sent body); create/save/update accept + validate the new fields;
+  `hasBewPositionColumns` probe (migration pending → degrades to "no position").
+- `src/app/bewerber-automation/actions.ts`, `src/components/bewerber-automation/*`,
+  `src/lib/i18n/dictionaries.ts` (4 locales), `.env.example` (documents the
+  opt-in `BEW_LETTER_MODEL_EVAL`).
+
+### 11.3 Truthfulness guarantees
+- **No position supplied** → the prompt states "Keine konkrete
+  Stellenbezeichnung geliefert — erfinde keine" and writes honestly about the
+  activity in general.
+- **No verified employer facts** → interest stays general; no invented claims
+  about the employer.
+- **No fabrication** → only facts present in the fenced data blocks may be
+  used; missing information is listed as an explicit constraint.
+
+### 11.4 Illustrative before/after (FICTIONAL data, not real applicants/companies)
+Before — old prompt carried only `FIRMENNAME: ACME GmbH` + raw CV text. Typical
+generic result:
+> "Hiermit bewerbe ich mich um einen Ausbildungsplatz bei Ihrer Firma. Ich bin
+> motiviert, lernwillig und teamfähig. Über eine Einladung zu einem persönlichen
+> Gespräch würde ich mich sehr freuen."
+
+After — prompt carries fenced `ROLLE` (Bezeichnung: Ausbildung als
+Fachinformatiker:in für Anwendungsentwicklung + Anforderungen), `UNTERNEHMEN`,
+`UNTERNEHMEN_FAKTEN` (verified) and a structured `BEWERBER` evidence block.
+Resulting letter connects applicant → role → employer from real evidence:
+> "Ihre Ausschreibung für die Ausbildung als Fachinformatiker:in für
+> Anwendungsentwicklung hat mich überzeugt, weil ich im IT-Support-Praktikum
+> eigene Webanwendungen mit HTML, CSS und JavaScript entwickelt und Python
+> vertieft habe — genau die Bereiche, die in der Stellenausschreibung genannt
+> werden. Dass ACME Middleware für den Mittelstand entwickelt, reizt mich, weil
+> ich ... . Ich freue mich über die Einladung zu einem persönlichen Gespräch."
+
+Why the "after" is better: it names the specific role, cites the applicant's
+actual evidence (not adjectives), and grounds employer interest in a verified
+fact — none of which the "before" contained.
+
+### 11.5 Quality gate & retry behaviour
+- **Deterministic gate (always on):** hard failures = placeholder tokens,
+  prompt/structure leakage, degenerate length (too short / absurdly long). Soft
+  signals (target length, cliché opening, role/employer not referenced,
+  repetition) are logged and feed the corrective note / model review.
+- **Bounded retries:** at most **two** attempts per application; each attempt
+  reserves AI quota once. Attempt 2 appends a concrete `VERBESSERUNG:` note.
+- **Terminal failure:** if the hard gate still fails (or, with the opt-in model
+  review enabled, the model still rejects) after the final attempt, the row
+  becomes `failed` with `error_code: quality_gate` — it is **never** silently
+  accepted as generated.
+- **Stale recovery:** a row stuck in `generating` past the 10-minute lease is
+  reclaimed to `pending`; rows that already have a body or a `sent_at` are
+  never touched; the sweep is ownership-scoped and idempotent.
+
+### 11.6 Limitations
+- **Model-dependent truthfulness:** the no-fabrication guarantee is enforced by
+  prompt + deterministic gate (placeholders/leakage/degenerate length), but a
+  misbehaving provider could still assert an invented fact in fluent German,
+  which the deterministic gate cannot detect. The opt-in model review adds a
+  second opinion but is not a guarantee.
+- **Reduced personalization by design** when position or employer information
+  is unavailable — the letter is truthful but less specific.
+- **Grammar/spelling/idiom** are not deterministically validated; they rely on
+  the model.
+- **Advisory model review:** `BEW_LETTER_MODEL_EVAL` (default off) adds a model
+  review that triggers corrective retries; the deterministic gate is the hard
+  acceptance authority, so a deterministic-passing letter is accepted on the
+  final attempt even if an enabled model review is negative.
+- **Lease window:** `reclaimStaleGenerating` uses a fixed 10-minute lease; a
+  provider call slower than that is reclaimed (and re-run) rather than treated
+  as in-flight.
