@@ -97,10 +97,18 @@ create index if not exists bew_campaigns_user_id_idx on public.bew_campaigns(use
 create index if not exists bew_campaigns_status_idx on public.bew_campaigns(status);
 create index if not exists bew_campaigns_created_at_idx on public.bew_campaigns(created_at desc);
 
+-- REGRESSION (42703): a previous revision of this migration attached the
+-- shared set_updated_at() trigger to bew_campaigns — but this table has NO
+-- updated_at column (only created_at / started_at / completed_at), so the
+-- trigger made EVERY UPDATE fail with
+--   column "updated_at" of relation "bew_campaigns" does not exist.
+-- The application layer did not check the update errors, so the failure was
+-- silent: most visibly the valid_count written after a company import never
+-- landed, the wizard's step-2 gate stayed locked, and the user saw no way to
+-- leave the Companies step. The trigger is therefore dropped (idempotently —
+-- a rerun heals an already-broken database) and must NOT be recreated here.
+-- bew_applications keeps its trigger (that table DOES have updated_at).
 drop trigger if exists bew_campaigns_set_updated_at on public.bew_campaigns;
-create trigger bew_campaigns_set_updated_at
-  before update on public.bew_campaigns
-  for each row execute function public.set_updated_at();
 
 -- One row PER company = the work item. Carries its OWN Anschreiben
 -- (body_html/body_text) — this is what makes "one distinct letter per

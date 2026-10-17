@@ -20,7 +20,11 @@ import {
   bewGetView,
 } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
-import { BEW_MAX_COUNT, BEW_MIN_COUNT } from "@/lib/bewerbung-automation";
+import {
+  BEW_MAX_COUNT,
+  BEW_MIN_COUNT,
+  isValidEmail,
+} from "@/lib/bewerbung-automation";
 import { Button, Card, Input } from "@/components/ui";
 import { GradientMesh } from "@/components/ui/surfaces";
 import { StatusPill } from "@/components/ui/feedback";
@@ -56,9 +60,34 @@ function documentsReady(view: BewViewDTO | null): boolean {
   );
 }
 
-/** Step 1 gate: at least one fully valid company record. */
+/**
+ * A stored row counts as a valid company when it carries a non-empty name
+ * AND a structurally valid recipient address (the exact rule the step UI
+ * applies per row). Excluded/cancelled rows never count.
+ */
+export function isCompanyRowComplete(app: {
+  status: string;
+  company_name: string;
+  company_email: string;
+}): boolean {
+  if (app.status === "excluded" || app.status === "cancelled") return false;
+  return (
+    (app.company_name ?? "").trim().length > 0 && isValidEmail(app.company_email ?? "")
+  );
+}
+
+/**
+ * Step 1 gate: at least one fully valid company record.
+ *
+ * Derived from the APPLICATION ROWS — the source of truth — and NOT from the
+ * denormalized `campaign.valid_count` column: that column was silently left
+ * at 0 after a company import (a broken DB trigger made every campaign UPDATE
+ * fail and the engine swallowed the error), which locked the wizard here with
+ * no visible way to advance. Counters may lag or drift; the rows cannot.
+ */
 function companiesReady(view: BewViewDTO | null): boolean {
-  return (view?.campaign.valid_count ?? 0) >= 1;
+  if (!view) return false;
+  return view.applications.some(isCompanyRowComplete);
 }
 
 /** Step 4/5 gate: generation has finished (nothing pending/generating) and at
@@ -274,6 +303,17 @@ export function BewerbungAutomation({ schemaOk, initialView, userName }: Props) 
     5: lettersReady(view) || view.campaign.status === "sending" || view.campaign.sent_count > 0,
   };
 
+  /** Exact reason the Companies step cannot advance right now (null = ready). */
+  const companiesBlockedReason =
+    view.campaign.status === "sending"
+      ? t("bewauto.continueDocsLocked")
+      : !gates[2]
+        ? t("bewauto.continueDocsNoValid", {
+            valid: view.applications.filter(isCompanyRowComplete).length,
+            total: view.applications.length,
+          })
+        : null;
+
   return (
     <div className="relative mx-auto max-w-6xl px-4 py-8">
       <GradientMesh />
@@ -339,7 +379,17 @@ export function BewerbungAutomation({ schemaOk, initialView, userName }: Props) 
 
         {error && <ErrorLine message={error} className="mb-4" />}
 
-        {step === 1 && <CompaniesStep view={view} refresh={refresh} />}
+        {/* Step 1 stays MOUNTED (hidden) while the user works on later steps:
+            unsaved row edits and an in-flight import preview must survive the
+            round trip back to Companies. */}
+        <div className={step === 1 ? undefined : "hidden"}>
+          <CompaniesStep
+            view={view}
+            refresh={refresh}
+            onNext={() => setStep(2)}
+            nextBlockedReason={companiesBlockedReason}
+          />
+        </div>
         {step === 2 && <DocumentsStep view={view} refresh={refresh} />}
         {step === 3 && <GenerateStep view={view} refresh={refresh} />}
         {step === 4 && (

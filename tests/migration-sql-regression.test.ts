@@ -351,17 +351,39 @@ describe("migration SQL — CREATE TYPE IF NOT EXISTS (42601 regression)", () =>
       expect(dropIdx, `drop guard must precede create for "${name}"`).toBeLessThan(createIdx);
     }
 
-    // CREATE TRIGGER likewise: both updated_at triggers are drop-guarded.
+    // CREATE TRIGGER likewise: every trigger that is created must be
+    // drop-guarded. Only ONE remains — bew_applications (which has an
+    // updated_at column).
     const triggers = [
       ...raw.matchAll(/create trigger\s+(\w+)\s+(?:before|after|instead of)[\s\S]{0,200}?on\s+(\S+)/gi),
     ];
-    expect(triggers.length).toBe(2);
+    expect(triggers.length).toBe(1);
+    expect(triggers[0][1]).toBe("bew_applications_set_updated_at");
     for (const [, name, table] of triggers) {
       const createIdx = sql.indexOf(`create trigger ${name}`);
       const dropIdx = sql.indexOf(`drop trigger if exists ${name} on ${table}`);
       expect(dropIdx, `drop guard missing for trigger ${name}`).toBeGreaterThan(-1);
       expect(dropIdx, `drop guard must precede create for ${name}`).toBeLessThan(createIdx);
     }
+
+    // REGRESSION (42703): bew_campaigns has NO updated_at column, so attaching
+    // set_updated_at() to it made every campaign UPDATE fail (valid_count
+    // never persisted after a company import → step-2 gate locked forever).
+    // The migration must DROP the broken trigger and never re-create an
+    // updated_at trigger on bew_campaigns.
+    expect(
+      sql.indexOf("drop trigger if exists bew_campaigns_set_updated_at on public.bew_campaigns"),
+    ).toBeGreaterThan(-1);
+    expect(
+      /create trigger\s+bew_campaigns_set_updated_at/i.test(raw),
+      "the broken updated_at trigger on bew_campaigns must stay gone",
+    ).toBe(false);
+    // And the table itself must not gain an updated_at column either.
+    const tableList = ddlOnly(raw);
+    const tableMatch = tableList.match(/create table if not exists public\.bew_campaigns \(/i);
+    expect(tableMatch, "bew_campaigns table definition must be present").not.toBeNull();
+    const tableBody = parenListFrom(tableList, tableMatch![0].length - 1) ?? "";
+    expect(/\bupdated_at\b/.test(tableBody), "bew_campaigns must not have updated_at").toBe(false);
 
     // The privileged RPCs stay create-or-replace (idempotent) and are only
     // granted to service_role after a full revoke from client roles.
