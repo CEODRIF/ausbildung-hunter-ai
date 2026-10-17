@@ -14,13 +14,14 @@
 --   `release_email_capacity`) and the shared `daily_usage` quota counter.
 --
 -- SAFETY CONTRACT (manual migration — this file is applied by hand):
---   * purely ADDITIVE: new enums, four new tables, indexes, two new RPCs.
+--   * purely ADDITIVE: two new enums, four new tables, indexes, and three RPCs.
 --   * NO shared table, column, enum value, RPC or storage bucket is altered
 --     or dropped. The existing send engine, Email Verification and the
 --     standard application feature are untouched by this file.
 --   * every `bew_*` row is owner-scoped (`user_id`) and RLS-locked to
 --     SELECT-only for the owner; all writes run with the service role.
---   * idempotent: `if not exists` / `create or replace` throughout.
+--   * safe to re-run: guarded enum/policy creation, `if not exists` tables/indexes,
+--     replaceable functions, and triggers recreated explicitly.
 --
 -- DEPLOY ORDER: apply this migration BEFORE deploying code that references
 -- `bew_documents` in src/lib/storage-reconcile.ts (the storage janitor keeps
@@ -28,15 +29,38 @@
 -- first degrades gracefully via the hasBewAutomationSchema() probe (the
 -- feature shows a "schema pending" state instead of crashing).
 --
--- REVERSIBILITY: drop the four `bew_*` tables, the two enums and the two
--- functions. No other object is affected.
+-- REVERSIBILITY: drop the three RPCs, four `bew_*` tables, and two enums.
+-- No shared table, function, or storage bucket is dropped.
 
-create type if not exists public.bew_campaign_status as enum
-  ('draft', 'generating', 'sending', 'completed', 'partially_failed', 'cancelled');
+-- PostgreSQL does not support `CREATE TYPE IF NOT EXISTS`. Guard creation in
+-- a DO block instead. If either type already exists, its existing definition
+-- is preserved; verify its labels match these definitions before re-running.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_type t
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public' AND t.typname = 'bew_campaign_status'
+  ) THEN
+    CREATE TYPE public.bew_campaign_status AS ENUM
+      ('draft', 'generating', 'sending', 'completed', 'partially_failed', 'cancelled');
+  END IF;
+END
+$$;
 
-create type if not exists public.bew_app_status as enum
-  ('pending', 'generating', 'generated', 'excluded',
-   'queued', 'sending', 'sent', 'failed', 'needs_attention', 'cancelled');
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_type t
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public' AND t.typname = 'bew_app_status'
+  ) THEN
+    CREATE TYPE public.bew_app_status AS ENUM
+      ('pending', 'generating', 'generated', 'excluded',
+       'queued', 'sending', 'sent', 'failed', 'needs_attention', 'cancelled');
+  END IF;
+END
+$$;
 
 -- One automation run ("campaign"): the user's batch of 1..100 applications
 -- prepared for a day. Owns the counter set and the quota usage_date.
@@ -72,6 +96,7 @@ create index if not exists bew_campaigns_user_id_idx on public.bew_campaigns(use
 create index if not exists bew_campaigns_status_idx on public.bew_campaigns(status);
 create index if not exists bew_campaigns_created_at_idx on public.bew_campaigns(created_at desc);
 
+drop trigger if exists bew_campaigns_set_updated_at on public.bew_campaigns;
 create trigger bew_campaigns_set_updated_at
   before update on public.bew_campaigns
   for each row execute function public.set_updated_at();
@@ -111,6 +136,7 @@ create index if not exists bew_applications_user_id_idx on public.bew_applicatio
 create index if not exists bew_applications_status_idx on public.bew_applications(status);
 create index if not exists bew_applications_send_idx on public.bew_applications(status, next_attempt_at);
 
+drop trigger if exists bew_applications_set_updated_at on public.bew_applications;
 create trigger bew_applications_set_updated_at
   before update on public.bew_applications
   for each row execute function public.set_updated_at();
@@ -158,14 +184,26 @@ alter table public.bew_applications enable row level security;
 alter table public.bew_documents enable row level security;
 alter table public.bew_campaign_documents enable row level security;
 
-create policy "Users can read their own automation campaigns"
-  on public.bew_campaigns for select to authenticated using (auth.uid() = user_id);
-create policy "Users can read their own automation applications"
-  on public.bew_applications for select to authenticated using (auth.uid() = user_id);
-create policy "Users can read their own automation documents"
-  on public.bew_documents for select to authenticated using (auth.uid() = user_id);
-create policy "Users can read their own automation campaign documents"
-  on public.bew_campaign_documents for select to authenticated using (auth.uid() = user_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bew_campaigns' AND policyname = 'Users can read their own automation campaigns') THEN
+    CREATE POLICY "Users can read their own automation campaigns"
+      ON public.bew_campaigns FOR SELECT TO authenticated USING (auth.uid() = user_id);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bew_applications' AND policyname = 'Users can read their own automation applications') THEN
+    CREATE POLICY "Users can read their own automation applications"
+      ON public.bew_applications FOR SELECT TO authenticated USING (auth.uid() = user_id);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bew_documents' AND policyname = 'Users can read their own automation documents') THEN
+    CREATE POLICY "Users can read their own automation documents"
+      ON public.bew_documents FOR SELECT TO authenticated USING (auth.uid() = user_id);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bew_campaign_documents' AND policyname = 'Users can read their own automation campaign documents') THEN
+    CREATE POLICY "Users can read their own automation campaign documents"
+      ON public.bew_campaign_documents FOR SELECT TO authenticated USING (auth.uid() = user_id);
+  END IF;
+END
+$$;
 
 revoke all on public.bew_campaigns from anon, authenticated;
 revoke all on public.bew_applications from anon, authenticated;
