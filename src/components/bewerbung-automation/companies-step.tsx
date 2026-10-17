@@ -13,6 +13,7 @@
  */
 import { useMemo, useRef, useState } from "react";
 import {
+  bewExcludeApplication,
   bewSaveCompanies,
   bewUpdateCompany,
 } from "@/app/bewerbung-automation/actions";
@@ -31,6 +32,15 @@ import {
   recordsToPreview,
   type ColumnMapping,
 } from "./import-parse";
+import {
+  applyDraftPatch,
+  filterActiveRows,
+  findDuplicateEmails,
+  rowDirty,
+  rowValues,
+  type CompanyRowView,
+  type Drafts,
+} from "./row-state";
 import type { BewViewDTO, CompanyRecord } from "./types";
 
 /**
@@ -96,13 +106,43 @@ const IDLE_IMPORT: ImportState = {
 
 export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Props) {
   const { t } = useI18n();
-  const apps = view.applications;
+  /* Stable-id row view: the manual table is driven by these (draft-aware),
+     so every field edit and the per-row delete operate on the same identity. */
+  const rows: CompanyRowView[] = useMemo(
+    () =>
+      view.applications.map((a) => ({
+        id: a.id,
+        seq: a.seq,
+        companyName: a.company_name,
+        companyEmail: a.company_email,
+        contactName: a.contact_name,
+        companyAddress: a.company_address,
+        status: a.status,
+        error_code: a.error_code,
+      })),
+    [view.applications],
+  );
+  /* Deleting a row EXCLUDES it on the server (restorable, ownership-checked)
+     — the company-data table then shows only the rows still in the campaign. */
+  const activeRows = useMemo(() => filterActiveRows(rows), [rows]);
   const [importState, setImportState] = useState<ImportState>(IDLE_IMPORT);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, CompanyRecord>>({});
+  const [drafts, setDrafts] = useState<Drafts>({});
   const fileRef = useRef<HTMLInputElement>(null);
+
+  /* Live duplicate check over the CURRENT (draft-aware) active rows —
+     recomputed on every edit, so it updates immediately after a change
+     or a deletion. */
+  const dupEmails = useMemo(() => {
+    const recs: Array<{ companyEmail: string }> = [];
+    for (const a of activeRows) {
+      const v = rowValues(drafts, rows, a.id);
+      if (v) recs.push({ companyEmail: v.companyEmail });
+    }
+    return findDuplicateEmails(recs);
+  }, [activeRows, drafts, rows]);
 
   const preview = useMemo(
     () =>
@@ -113,50 +153,16 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
   );
 
   function setDraft(appId: string, patch: Partial<CompanyRecord>) {
-    const app = apps.find((a) => a.id === appId);
+    const app = rows.find((a) => a.id === appId);
     if (!app) return;
-    setDrafts((d) => ({
-      ...d,
-      [appId]: {
-        companyName: app.company_name,
-        companyEmail: app.company_email,
-        contactName: app.contact_name ?? "",
-        companyAddress: app.company_address ?? "",
-        ...patch,
-      },
-    }));
-  }
-
-  function rowValues(appId: string): CompanyRecord {
-    const app = apps.find((a) => a.id === appId);
-    if (!app)
-      return { companyName: "", companyEmail: "", contactName: "", companyAddress: "" };
-    return (
-      drafts[appId] ?? {
-        companyName: app.company_name,
-        companyEmail: app.company_email,
-        contactName: app.contact_name ?? "",
-        companyAddress: app.company_address ?? "",
-      }
-    );
-  }
-
-  function rowDirty(appId: string): boolean {
-    const app = apps.find((a) => a.id === appId);
-    if (!app || !drafts[appId]) return false;
-    const d = drafts[appId];
-    return (
-      d.companyName !== app.company_name ||
-      d.companyEmail !== app.company_email ||
-      (d.contactName || null) !== (app.contact_name ?? null) ||
-      (d.companyAddress || null) !== (app.company_address ?? null)
-    );
+    // Merge onto the LATEST draft for this row — re-deriving from the server
+    // row on every keystroke was the bug that wiped the other fields.
+    setDrafts((d) => applyDraftPatch(d, appId, app, patch));
   }
 
   async function saveRow(appId: string) {
-    const app = apps.find((a) => a.id === appId);
-    if (!app) return;
-    const values = rowValues(appId);
+    const values = rowValues(drafts, rows, appId);
+    if (!values) return;
     setBusy(true);
     setError(null);
     try {
@@ -177,8 +183,41 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
         delete next[appId];
         return next;
       });
+       await refresh();
+       setNotice(t("bewauto.rowSaved"));
+    } catch (e) {
+      setError(errMessage(e, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Delete ONE company row (the red X). Removes only `app` by its stable id:
+   *   - the server row is EXCLUDED (restorable, ownership-checked, never
+   *     in-flight — the engine blocks queued/sending/sent rows),
+   *   - this row's unsaved draft edits are dropped (the latest version goes
+   *     away WITH the row, as expected for a delete),
+   *   - the other rows, their values and their drafts are untouched.
+   * No confirmation dialog: a single unsent draft row should not be
+   * interrupted for, and the action is restorable from step 4.
+   */
+  async function deleteRow(app: { id: string; seq: number }) {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const fd = new FormData();
+      fd.set("applicationId", app.id);
+      await bewExcludeApplication(fd);
+      setDrafts((d) => {
+        if (!(app.id in d)) return d;
+        const next = { ...d };
+        delete next[app.id];
+        return next;
+      });
       await refresh();
-      setNotice(t("bewauto.rowSaved"));
+      setNotice(t("bewauto.rowDeleted", { n: app.seq }));
     } catch (e) {
       setError(errMessage(e, t));
     } finally {
@@ -378,10 +417,20 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
         {/* Manual table */}
         <div className="mt-6">
           <p className="mb-2 text-sm font-semibold text-ink-soft">
-            {t("bewauto.manageTitle")} ({apps.length})
+            {t("bewauto.manageTitle")} ({activeRows.length})
           </p>
+          {activeRows.length === 0 ? (
+            /* Every row was deleted — the user can still continue: import
+               companies above (or restore a row later from the review step). */
+            <div className="rounded-2xl border border-dashed border-line-strong bg-surface-2/40 px-4 py-8 text-center">
+              <p className="text-sm font-semibold text-ink-soft">{t("bewauto.entriesEmpty")}</p>
+              <p className="mx-auto mt-1 max-w-md text-xs leading-5 text-muted">
+                {t("bewauto.entriesEmptyHint")}
+              </p>
+            </div>
+          ) : (
           <div className="max-h-96 overflow-auto rounded-2xl border border-line">
-            <table className="w-full min-w-[760px] border-collapse text-sm">
+            <table className="w-full min-w-[800px] border-collapse text-sm">
               <thead className="sticky top-0 z-10 bg-surface-2 text-xs uppercase tracking-wide text-muted">
                 <tr>
                   <Th>{t("bewauto.colRow")}</Th>
@@ -390,14 +439,19 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
                   <Th>{t("bewauto.colContact")}</Th>
                   <Th>{t("bewauto.colAddress")}</Th>
                   <Th>{t("bewauto.colStatus")}</Th>
+                  <Th><span className="sr-only">{t("bewauto.deleteCol")}</span></Th>
                 </tr>
               </thead>
               <tbody>
-                {apps.map((app) => {
-                  const values = rowValues(app.id);
-                  const dirty = rowDirty(app.id);
+                {activeRows.map((app) => {
+                  const values = rowValues(drafts, rows, app.id);
+                  if (!values) return null;
+                  const dirty = rowDirty(drafts, rows, app.id);
                   const emailOk = isValidEmail(values.companyEmail);
                   const nameOk = values.companyName.trim().length > 0;
+                  const isDup =
+                    values.companyEmail.trim() !== "" &&
+                    dupEmails.has(values.companyEmail.trim().toLowerCase());
                   return (
                     <tr key={app.id} className="border-t border-line align-top">
                       <td className="px-3 py-2.5 text-xs font-semibold text-faint">{app.seq}</td>
@@ -435,9 +489,12 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
                           onChange={(v) => setDraft(app.id, { companyAddress: v })}
                         />
                       </td>
-                      <td className="px-3 py-2.5">
+                       <td className="px-3 py-2.5">
                         <div className="flex flex-col items-start gap-2">
                           <RowStatus app={app} emailOk={emailOk} nameOk={nameOk} t={t} />
+                          {isDup && (
+                            <span className="text-xs text-danger">{t("bewauto.duplicateEmail")}</span>
+                          )}
                           {dirty && !lockApp && (
                             <Button size="sm" variant="secondary" disabled={busy} onClick={() => void saveRow(app.id)}>
                               {t("bewauto.save")}
@@ -445,12 +502,27 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
                           )}
                         </div>
                       </td>
+                      <td className="px-2 py-2">
+                        {/* Red X: deletes THIS row only (by stable id). The
+                            action is restorable (exclude), so no confirmation
+                            dialog for a single unsent draft row. */}
+                        <button
+                          type="button"
+                          onClick={() => void deleteRow(app)}
+                          disabled={lockApp || busy}
+                          aria-label={t("bewauto.deleteRow", { n: app.seq })}
+                          className="rounded-lg p-1.5 text-danger transition hover:bg-danger-soft disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <Icon name="x" size={16} />
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
+          )}
         </div>
 
         {/* Wizard footer — the explicit, always-visible way forward.
