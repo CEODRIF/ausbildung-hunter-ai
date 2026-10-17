@@ -44,6 +44,10 @@ export interface BewApplicationDTO {
   attempt_count: number;
   provider_message_id: string | null;
   sent_at: string | null;
+  /** Position override (20261115000000); null/absent => inherit the campaign. */
+  position_title?: string | null;
+  position_brief?: string | null;
+  employer_facts?: string | null;
 }
 
 export interface BewCampaignDTO {
@@ -103,6 +107,10 @@ export interface CompanyRecord {
   companyEmail: string;
   contactName: string;
   companyAddress: string;
+  /** Per-company position override (20261115000000); absent/"" => inherit campaign. */
+  positionTitle?: string;
+  positionBrief?: string;
+  employerFacts?: string;
 }
 
 /** Client-side import preview row (before anything is stored). */

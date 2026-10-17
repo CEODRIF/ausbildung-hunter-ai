@@ -125,6 +125,9 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
         companyEmail: a.company_email,
         contactName: a.contact_name,
         companyAddress: a.company_address,
+        positionTitle: a.position_title ?? null,
+        positionBrief: a.position_brief ?? null,
+        employerFacts: a.employer_facts ?? null,
         status: a.status,
         error_code: a.error_code,
       })),
@@ -202,6 +205,9 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
           companyEmail: values.companyEmail,
           contactName: values.contactName || null,
           companyAddress: values.companyAddress || null,
+          positionTitle: values.positionTitle || "",
+          positionBrief: values.positionBrief || "",
+          employerFacts: values.employerFacts || "",
         }),
       );
       await bewUpdateCompany(fd);
@@ -551,6 +557,33 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
                             <Button size="sm" variant="secondary" disabled={busy} onClick={() => void saveRow(app.id)}>
                               {t("bewauto.save")}
                             </Button>
+                          )}
+                          {!lockApp && (
+                            <details className="text-xs">
+                              <summary className="cursor-pointer list-none text-faint transition hover:text-ink">
+                                {t("bewauto.perCompanyPosition")}
+                              </summary>
+                              <div className="mt-2 flex flex-col gap-1.5">
+                                <MiniInput
+                                  value={values.positionTitle ?? ""}
+                                  disabled={lockApp}
+                                  placeholder={t("bewauto.positionTitle")}
+                                  onChange={(v) => setDraft(app.id, { positionTitle: v })}
+                                />
+                                <MiniInput
+                                  value={values.positionBrief ?? ""}
+                                  disabled={lockApp}
+                                  placeholder={t("bewauto.positionBrief")}
+                                  onChange={(v) => setDraft(app.id, { positionBrief: v })}
+                                />
+                                <MiniInput
+                                  value={values.employerFacts ?? ""}
+                                  disabled={lockApp}
+                                  placeholder={t("bewauto.employerFacts")}
+                                  onChange={(v) => setDraft(app.id, { employerFacts: v })}
+                                />
+                              </div>
+                            </details>
                           )}
                         </div>
                       </td>

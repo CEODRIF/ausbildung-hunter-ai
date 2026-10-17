@@ -105,6 +105,9 @@ describe("row state: field edits preserve every other field (Bug 1)", () => {
       companyEmail: "jobs@muster.de",
       contactName: "Herr Beispiel",
       companyAddress: "Musterstraße 1",
+      positionTitle: "",
+      positionBrief: "",
+      employerFacts: "",
     };
     const orders: Array<Array<keyof CompanyRecord>> = [
       ["companyEmail", "companyName", "contactName", "companyAddress"],
@@ -135,12 +138,18 @@ describe("row state: field edits preserve every other field (Bug 1)", () => {
       companyEmail: "a@a.de",
       contactName: "",
       companyAddress: "",
+      positionTitle: "",
+      positionBrief: "",
+      employerFacts: "",
     });
     expect(rowValues(d, [r1, r2], r2.id)).toEqual({
       companyName: "Row Two",
       companyEmail: "",
       contactName: "",
       companyAddress: "Str. 2",
+      positionTitle: "",
+      positionBrief: "",
+      employerFacts: "",
     });
     // The untouched third row stays pristine.
     const r3 = row(3, { companyEmail: "c@c.de" });
@@ -149,6 +158,9 @@ describe("row state: field edits preserve every other field (Bug 1)", () => {
       companyEmail: "c@c.de",
       contactName: "",
       companyAddress: "",
+      positionTitle: "",
+      positionBrief: "",
+      employerFacts: "",
     });
   });
 
@@ -207,12 +219,18 @@ describe("row state: deleting a row (Bug 2)", () => {
       companyEmail: "a@a.de",
       contactName: "Hr. A",
       companyAddress: "",
+      positionTitle: "",
+      positionBrief: "",
+      employerFacts: "",
     });
     expect(rowValues(d, after, "app-3")).toEqual({
       companyName: "C GmbH",
       companyEmail: "c@c.de",
       contactName: "",
       companyAddress: "",
+      positionTitle: "",
+      positionBrief: "",
+      employerFacts: "",
     });
     // The deleted row's draft is dropped with the row.
     d = (() => {

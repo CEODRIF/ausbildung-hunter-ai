@@ -18,6 +18,9 @@ export interface CompanyRowView {
   companyEmail: string;
   contactName: string | null;
   companyAddress: string | null;
+  positionTitle?: string | null;
+  positionBrief?: string | null;
+  employerFacts?: string | null;
   status: string;
   error_code: string | null;
 }
@@ -45,6 +48,9 @@ export function applyDraftPatch(
     companyEmail: serverRow.companyEmail,
     contactName: serverRow.contactName ?? "",
     companyAddress: serverRow.companyAddress ?? "",
+    positionTitle: serverRow.positionTitle ?? "",
+    positionBrief: serverRow.positionBrief ?? "",
+    employerFacts: serverRow.employerFacts ?? "",
   };
   return {
     ...drafts,
@@ -67,6 +73,9 @@ export function rowValues(
       companyEmail: app.companyEmail,
       contactName: app.contactName ?? "",
       companyAddress: app.companyAddress ?? "",
+      positionTitle: app.positionTitle ?? "",
+      positionBrief: app.positionBrief ?? "",
+      employerFacts: app.employerFacts ?? "",
     }
   );
 }

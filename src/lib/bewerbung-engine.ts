@@ -33,6 +33,7 @@ import { extractPdfText } from "@/lib/pdf-extract";
 import type { Profile } from "@/lib/auth";
 import mammoth from "mammoth";
 import { hasApplicantProfileColumns } from "@/lib/contact-name-support";
+import { candidateProfileSchema, type CandidateProfile } from "@/lib/bewerbung-schema";
 import {
   BEW_ATTACHMENT_BUCKET,
   deleteLetterPdf,
@@ -70,6 +71,18 @@ import {
   type DocumentKind,
   type PdfCompanyCandidate,
   type SendPlan,
+  resolveLetterPosition,
+  validateLetterQuality,
+  buildLetterCorrectiveNote,
+  buildLetterEvalPrompt,
+  parseLetterEvalVerdict,
+  BEW_MAX_LETTER_ATTEMPTS,
+  BEW_POSITION_TITLE_MAX,
+  BEW_POSITION_BRIEF_MAX,
+  BEW_EMPLOYER_FACTS_MAX,
+  type LetterPromptInput,
+  type LetterQualityResult,
+  type LetterEvalVerdict,
 } from "@/lib/bewerbung-automation";
 
 /* ------------------------------------------------------------------ *
@@ -101,6 +114,10 @@ export type BewCampaignRow = {
    */
   email_subject?: string;
   email_body_html?: string;
+  /** Position brief (20261115000000) — the role this campaign targets. */
+  position_title?: string;
+  position_brief?: string;
+  employer_facts?: string;
 };
 
 export type BewApplicationRow = {
@@ -122,6 +139,14 @@ export type BewApplicationRow = {
   next_attempt_at: string | null;
   provider_message_id: string | null;
   sent_at: string | null;
+  /** Position override (20261115000000); null/absent => inherit campaign. */
+  position_title?: string | null;
+  position_brief?: string | null;
+  employer_facts?: string | null;
+  /** Generation retries used for this letter (capped). */
+  quality_attempts?: number;
+  /** Lease for stale-generation recovery. */
+  generation_started_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -409,6 +434,10 @@ export interface CreateBewCampaignInput {
   count: number;
   purpose: BewPurpose;
   emailAccountId?: string | null;
+  /** The role this campaign targets (empty => general, never invented). */
+  positionTitle?: string;
+  positionBrief?: string;
+  employerFacts?: string;
 }
 
 /**
@@ -422,7 +451,14 @@ export async function createBewCampaign(
   const check = validateCompanyCount(input.count);
   if (!check.ok) throw new Error("INVALID_COUNT");
   if (!isBewPurpose(input.purpose)) throw new Error("INVALID_PURPOSE");
+  const positionTitle = (input.positionTitle ?? "").trim();
+  const positionBrief = (input.positionBrief ?? "").trim();
+  const employerFacts = (input.employerFacts ?? "").trim();
+  if (positionTitle.length > BEW_POSITION_TITLE_MAX) throw new Error("POSITION_TOO_LONG");
+  if (positionBrief.length > BEW_POSITION_BRIEF_MAX) throw new Error("POSITION_TOO_LONG");
+  if (employerFacts.length > BEW_EMPLOYER_FACTS_MAX) throw new Error("POSITION_TOO_LONG");
   const admin = createAdminClient();
+  const positionSupported = await hasBewPositionColumns();
 
   // Default sender: the user's own ACTIVE, healthy account (the feature is
   // designed around the already-connected Gmail — no new integration).
@@ -448,6 +484,13 @@ export async function createBewCampaign(
       status: "draft",
       requested_count: check.value,
       usage_date: todayUtcDate(),
+      ...(positionSupported
+        ? {
+            position_title: positionTitle,
+            position_brief: positionBrief,
+            employer_facts: employerFacts,
+          }
+        : {}),
     })
     .select("*")
     .single();
@@ -496,26 +539,50 @@ export async function saveBewCompanies(
     companyEmail: string;
     contactName: string | null;
     companyAddress: string | null;
+    positionTitle: string;
+    positionBrief: string;
+    employerFacts: string;
   }>>,
 ): Promise<{ campaign: BewCampaignRow; result: BewImportResult }> {
   const { admin, campaign } = await requireOwnedCampaign(userId, campaignId);
+  const positionSupported = await hasBewPositionColumns();
+  const overrides = records.map((r) => ({
+    positionTitle: (r.positionTitle ?? "").trim(),
+    positionBrief: (r.positionBrief ?? "").trim(),
+    employerFacts: (r.employerFacts ?? "").trim(),
+  }));
+  for (const o of overrides) {
+    if (o.positionTitle.length > BEW_POSITION_TITLE_MAX) throw new Error("POSITION_TOO_LONG");
+    if (o.positionBrief.length > BEW_POSITION_BRIEF_MAX) throw new Error("POSITION_TOO_LONG");
+    if (o.employerFacts.length > BEW_EMPLOYER_FACTS_MAX) throw new Error("POSITION_TOO_LONG");
+  }
   const result = buildImportResult(records, 1);
 
   // Replace existing applications with the imported set (reset letters).
   await admin.from("bew_applications").delete().eq("campaign_id", campaignId);
-  const rows = result.rows.map((r) => ({
-    campaign_id: campaignId,
-    user_id: userId,
-    seq: r.seq,
-    company_name: r.companyName,
-    company_email: r.companyEmail,
-    contact_name: r.contactName,
-    company_address: r.companyAddress,
-    subject: r.companyName ? buildSubject(campaign.purpose as BewPurpose, r.companyName) : "",
-    body_html: "",
-    body_text: "",
-    status: "pending",
-  }));
+  const rows = result.rows.map((r, i) => {
+    const ov = overrides[i];
+    return {
+      campaign_id: campaignId,
+      user_id: userId,
+      seq: r.seq,
+      company_name: r.companyName,
+      company_email: r.companyEmail,
+      contact_name: r.contactName,
+      company_address: r.companyAddress,
+      subject: r.companyName ? buildSubject(campaign.purpose as BewPurpose, r.companyName) : "",
+      body_html: "",
+      body_text: "",
+      status: "pending",
+      ...(positionSupported && ov
+        ? {
+            position_title: ov.positionTitle || null,
+            position_brief: ov.positionBrief || null,
+            employer_facts: ov.employerFacts || null,
+          }
+        : {}),
+    };
+  });
   if (rows.length > 0) {
     const { error } = await admin.from("bew_applications").insert(rows);
     if (error) throw new Error("Unable to save the company list.");
@@ -582,6 +649,9 @@ export async function updateBewApplicationFields(
     companyEmail: string;
     contactName: string | null;
     companyAddress: string | null;
+    positionTitle?: string;
+    positionBrief?: string;
+    employerFacts?: string;
   },
 ): Promise<BewApplicationRow | null> {
   const admin = createAdminClient();
@@ -594,6 +664,9 @@ export async function updateBewApplicationFields(
   const app = existing as BewApplicationRow | null;
   if (!app) return null;
   if (BEW_IN_FLIGHT.has(app.status)) throw new Error("APPLICATION_LOCKED");
+  if ((fields.positionTitle ?? "").trim().length > BEW_POSITION_TITLE_MAX) throw new Error("POSITION_TOO_LONG");
+  if ((fields.positionBrief ?? "").trim().length > BEW_POSITION_BRIEF_MAX) throw new Error("POSITION_TOO_LONG");
+  if ((fields.employerFacts ?? "").trim().length > BEW_EMPLOYER_FACTS_MAX) throw new Error("POSITION_TOO_LONG");
 
   const purpose =
     ((await getBewCampaignOwned(admin, userId, app.campaign_id))
@@ -612,6 +685,7 @@ export async function updateBewApplicationFields(
     app.seq,
   ).rows[0];
 
+  const positionSupportedUpdate = await hasBewPositionColumns();
   const { data: updated } = await admin
     .from("bew_applications")
     .update({
@@ -629,6 +703,13 @@ export async function updateBewApplicationFields(
       error_code: null,
       error_message: null,
       next_attempt_at: null,
+      ...(positionSupportedUpdate
+        ? {
+            position_title: (fields.positionTitle ?? "").trim() || null,
+            position_brief: (fields.positionBrief ?? "").trim() || null,
+            employer_facts: (fields.employerFacts ?? "").trim() || null,
+          }
+        : {}),
     })
     .eq("id", applicationId)
     .eq("user_id", userId)
@@ -927,6 +1008,139 @@ export interface GenerateBewResult {
   aiQuotaHit: boolean;
 }
 
+/* ---------------- Position-brief migration probe ---------------- */
+
+let bewPositionProbe: Promise<boolean> | null = null;
+
+/**
+ * Migration-state probe for the 20261115000000 position-brief columns.
+ * Same contract as the other probes: a CLEAN READ proves support; any error
+ * (e.g. the column is missing because the migration is pending) resolves to
+ * false, and the feature degrades to "no position" instead of a 42703 crash.
+ */
+export function hasBewPositionColumns(): Promise<boolean> {
+  bewPositionProbe ??= (async () => {
+    try {
+      const admin = createAdminClient();
+      const { error } = await admin
+        .from("bew_campaigns")
+        .select("position_title")
+        .limit(1);
+      return error === null;
+    } catch {
+      return false;
+    }
+  })();
+  return bewPositionProbe;
+}
+
+/** Test hook: drop the cached position-columns probe. */
+export function resetBewPositionColumnsProbe(): void {
+  bewPositionProbe = null;
+}
+
+/* ---------------- Candidate (CV) profile load ---------------- */
+
+/**
+ * Load the applicant's latest PARSED + VERIFIED candidate profile (from the
+ * CV scanner, `candidate_profiles`). This structured profile is the
+ * trustworthy evidence base for the Anschreiben and is preferred over the raw
+ * extracted text. Ownership-filtered; returns null when the user has not
+ * scanned a CV (the engine then falls back to the raw CV text).
+ */
+async function loadCandidateProfile(
+  admin: Admin,
+  userId: string,
+): Promise<CandidateProfile | null> {
+  const { data } = await admin
+    .from("candidate_profiles")
+    .select("profile_json")
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const raw = (data as { profile_json: unknown } | null)?.profile_json ?? null;
+  if (!raw) return null;
+  try {
+    return candidateProfileSchema.parse(raw);
+  } catch {
+    return null; // malformed stored profile → degrade to raw CV text
+  }
+}
+
+/* ---------------- Stale-generation recovery ---------------- */
+
+/** How long a 'generating' row may sit before it is considered stale. */
+const BEW_GENERATION_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * Reclaim application rows stuck in 'generating' (e.g. the process crashed
+ * mid-generation). Safe + idempotent:
+ *  - only rows STILL 'generating' whose lease (generation_started_at) is older
+ *    than the window, AND with an empty body and no sent_at, are touched;
+ *  - generated / sent rows are NEVER reset;
+ *  - the campaign is only re-marked 'generating' when something was reclaimed.
+ * Returns the number of reclaimed rows.
+ */
+export async function reclaimStaleGenerating(
+  admin: Admin,
+  userId: string,
+  campaignId: string,
+  staleMs: number = BEW_GENERATION_STALE_MS,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - staleMs).toISOString();
+  const { data, error } = await admin
+    .from("bew_applications")
+    .update({
+      status: "pending",
+      error_code: null,
+      error_message: null,
+      generation_started_at: null,
+    })
+    .eq("campaign_id", campaignId)
+    .eq("user_id", userId)
+    .eq("status", "generating")
+    .eq("body_html", "")
+    .is("sent_at", null)
+    .lt("generation_started_at", cutoff)
+    .select("id");
+  if (error) throw error;
+  const reclaimed = (data ?? []).length;
+  if (reclaimed > 0) {
+    await admin
+      .from("bew_campaigns")
+      .update({ status: "generating" })
+      .eq("id", campaignId)
+      .eq("status", "completed");
+  }
+  return reclaimed;
+}
+
+/* ---------------- Optional model-based quality eval ---------------- */
+
+/**
+ * Model-based quality evaluation (best-effort). Returns a parsed verdict, or
+ * null when the provider is unavailable, the call fails, or the response is
+ * not a well-formed verdict — in which case the caller falls back to the
+ * deterministic gate (never over-rejects a sound letter on eval flakiness).
+ */
+async function runModelEval(
+  userId: string,
+  letterBody: string,
+  promptInput: LetterPromptInput,
+): Promise<LetterEvalVerdict | null> {
+  try {
+    await reserveAIUsage(userId);
+    const out = await createAIProvider().generateText(
+      [{ role: "user", content: buildLetterEvalPrompt(letterBody, promptInput) }],
+      60_000,
+    );
+    return parseLetterEvalVerdict(out);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Generate a distinct Anschreiben for up to `limit` (bounded) applications.
  *
@@ -976,6 +1190,21 @@ export async function generateBewLetters(
     )
   ).join("\n\n");
 
+  // Structured, verified CV evidence (preferred) + raw text (fallback).
+  const candidate = await loadCandidateProfile(admin, userId);
+  // Optional model-based quality eval (off by default; opt-in via env so the
+  // deterministic gate keeps the suite fast and quota-stable).
+  const modelEvalEnabled =
+    process.env.BEW_LETTER_MODEL_EVAL === "1" ||
+    process.env.BEW_LETTER_MODEL_EVAL === "true";
+  // Reclaim rows a previous run left stuck in 'generating' (best-effort; a
+  // test mock without the lease columns simply no-ops here).
+  try {
+    await reclaimStaleGenerating(admin, userId, campaignId);
+  } catch {
+    /* no-op when the lease columns / .lt() are unavailable */
+  }
+
   // Claim a bounded set (atomic: only rows still in a generatable state flip).
   const wanted = opts.onlyFailed ? ["failed"] : [...BEW_GENERATABLE];
   const { data: candidateRows } = await admin
@@ -990,7 +1219,7 @@ export async function generateBewLetters(
     return { generated: 0, failed: 0, remaining: 0, aiQuotaHit: false };
   const { data: claimedRows } = await admin
     .from("bew_applications")
-    .update({ status: "generating" })
+    .update({ status: "generating", generation_started_at: new Date().toISOString() })
     .in("id", ids)
     .in("status", wanted)
     .select("*");
@@ -1000,32 +1229,74 @@ export async function generateBewLetters(
   let failed = 0;
   let aiQuotaHit = false;
 
+  let stopAll = false;
   for (const app of apps) {
-    try {
-      await reserveAIUsage(userId);
-    } catch {
-      aiQuotaHit = true;
-      // Park this (and the rest) for later; not a generation failure.
-      await admin
-        .from("bew_applications")
-        .update({ status: "pending", error_code: "ai_quota", error_message: null })
-        .eq("id", app.id);
-      break;
-    }
-    try {
-      const prompt = buildLetterPrompt({
-        purpose,
+    if (stopAll) break;
+
+    const pos = resolveLetterPosition(app, campaign);
+    const promptInput: LetterPromptInput = {
+      purpose,
+      position: { title: pos.title, brief: pos.brief },
+      employer: {
         companyName: app.company_name,
         contactName: app.contact_name,
         companyAddress: app.company_address,
-        applicantName: profile.full_name,
-        cvText,
-        certificatesText: certText,
-      });
-      const aiBody = await createAIProvider().generateText(
-        [{ role: "user", content: prompt }],
-        90_000,
-      );
+        facts: pos.employerFacts,
+      },
+      applicant: { candidate, cvText, certificatesText: certText },
+    };
+    const subject = app.subject || buildSubject(purpose, app.company_name);
+
+    let attempts = 0;
+    let lastGate: LetterQualityResult | null = null;
+    let lastVerdict: LetterEvalVerdict | null = null;
+    let aiError: string | null = null;
+    let accepted = false;
+
+    while (attempts < BEW_MAX_LETTER_ATTEMPTS && !stopAll) {
+      attempts += 1;
+      try {
+        await reserveAIUsage(userId);
+      } catch {
+        aiQuotaHit = true;
+        stopAll = true;
+        // Park this (and the rest, via stopAll) for later; not a generation
+        // failure. Orphaned 'generating' rows are reclaimed on the next run.
+        await admin
+          .from("bew_applications")
+          .update({
+            status: "pending",
+            error_code: "ai_quota",
+            error_message: null,
+            quality_attempts: attempts,
+          })
+          .eq("id", app.id);
+        break;
+      }
+
+      let prompt = buildLetterPrompt(promptInput);
+      if (attempts > 1) {
+        const base: LetterQualityResult =
+          lastGate ?? { accepted: false, words: 0, hardFailures: ["too_short"], issues: [] };
+        const corrective =
+          buildLetterCorrectiveNote(base) +
+          (lastVerdict && lastVerdict.reasons.length
+            ? " Prüferhinweise: " + lastVerdict.reasons.join("; ")
+            : "");
+        prompt += `\n\nVERBESSERUNG: ${corrective}`;
+      }
+
+      let aiBody: string;
+      try {
+        aiBody = await createAIProvider().generateText(
+          [{ role: "user", content: prompt }],
+          90_000,
+        );
+      } catch (err) {
+        aiError = err instanceof Error ? err.message : "AI generation failed";
+        break; // provider error — not a quality failure
+      }
+
       const letter = assembleLetter({
         aiBody,
         contactName: app.contact_name,
@@ -1033,21 +1304,46 @@ export async function generateBewLetters(
       });
       const bodyHtml = sanitizeEmailHtml(letter.bodyHtml);
       const bodyText = htmlToText(bodyHtml) || letter.bodyText;
+
+      // Deterministic quality gate (always on). Gate the MODEL'S body, not the
+      // assembled letter — the greeting/closing/signature are deterministic
+      // boilerplate and must not inflate the measured length.
+      const gate = validateLetterQuality({
+        bodyText: aiBody,
+        positionTitle: pos.title,
+        companyName: app.company_name,
+      });
+      if (!gate.accepted) {
+        lastGate = gate;
+        continue; // hard failure → bounded retry
+      }
+
+      // Optional model-based eval (deterministic gate already passed).
+      if (modelEvalEnabled) {
+        const verdict = await runModelEval(userId, bodyText, promptInput);
+        if (verdict && !verdict.ok && attempts < BEW_MAX_LETTER_ATTEMPTS) {
+          lastVerdict = verdict;
+          lastGate = gate;
+          continue;
+        }
+      }
+
+      // Accept.
       await admin
         .from("bew_applications")
         .update({
           status: "generated",
           body_html: bodyHtml,
           body_text: bodyText,
-           subject:
-             app.subject || buildSubject(purpose, app.company_name),
-           error_code: null,
-           error_message: null,
-         })
-         .eq("id", app.id);
-       // The Anschreiben PDF follows the letter (best-effort here; the send
-       // path re-ensures it, so a transient failure never loses the letter).
-       try {
+          subject,
+          error_code: null,
+          error_message: null,
+          quality_attempts: attempts,
+        })
+        .eq("id", app.id);
+      // The Anschreiben PDF follows the letter (best-effort here; the send
+      // path re-ensures it, so a transient failure never loses the letter).
+      try {
         await ensureLetterPdf({
           userId,
           app: {
@@ -1055,31 +1351,53 @@ export async function generateBewLetters(
             company_name: app.company_name,
             contact_name: app.contact_name,
             company_address: app.company_address,
-            subject: app.subject || buildSubject(purpose, app.company_name),
+            subject,
             body_html: bodyHtml,
           },
-          // The FULL applicant facts (already validated complete by the
-          // PROFILE_INCOMPLETE gate above) — the PDF carries all seven
-          // fields, never the old name+email-only header.
+          // The FULL applicant facts (validated complete by the
+          // PROFILE_INCOMPLETE gate above) — the PDF carries all seven fields.
           applicant: applicantFacts,
         });
-       } catch (pdfError) {
-         console.error(
-           "[bew] generateBewLetters: letter PDF generation failed",
-           pdfError,
-         );
-       }
-       generated += 1;
-     } catch (error) {
+      } catch (pdfError) {
+        console.error(
+          "[bew] generateBewLetters: letter PDF generation failed",
+          pdfError,
+        );
+      }
+      generated += 1;
+      accepted = true;
+      break;
+    }
+
+    if (accepted) continue;
+    if (stopAll) continue; // quota: already parked as pending
+
+    if (aiError) {
       await admin
         .from("bew_applications")
         .update({
           status: "failed",
           error_code: "generation_failed",
-          error_message: left(
-            error instanceof Error ? error.message : "generation failed",
-            500,
-          ),
+          error_message: left(aiError, 500),
+          quality_attempts: attempts,
+        })
+        .eq("id", app.id);
+      failed += 1;
+    } else {
+      // Exhausted the bounded attempts on quality: a clear failure, never a
+      // silently-accepted poor letter.
+      const gate =
+        lastGate ?? { accepted: false, words: 0, hardFailures: ["quality_gate"], issues: [] };
+      const summary =
+        "Qualitätsprüfung fehlgeschlagen: " +
+        [...gate.hardFailures, ...gate.issues].join(", ");
+      await admin
+        .from("bew_applications")
+        .update({
+          status: "failed",
+          error_code: "quality_gate",
+          error_message: left(summary, 500),
+          quality_attempts: attempts,
         })
         .eq("id", app.id);
       failed += 1;

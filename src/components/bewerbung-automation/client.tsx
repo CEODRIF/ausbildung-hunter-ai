@@ -25,7 +25,7 @@ import {
   BEW_MIN_COUNT,
   isValidEmail,
 } from "@/lib/bewerbung-automation";
-import { Button, Card, Input } from "@/components/ui";
+import { Button, Card, Input, Textarea } from "@/components/ui";
 import { GradientMesh } from "@/components/ui/surfaces";
 import { StatusPill } from "@/components/ui/feedback";
 import { Icon } from "@/components/icon";
@@ -143,6 +143,9 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
   // Setup form (only used while there is no campaign yet).
   const [count, setCount] = useState("10");
   const [purpose, setPurpose] = useState("ausbildung");
+  const [positionTitle, setPositionTitle] = useState("");
+  const [positionBrief, setPositionBrief] = useState("");
+  const [employerFacts, setEmployerFacts] = useState("");
 
   const refresh = useCallback(async () => {
     if (!view) return;
@@ -194,6 +197,9 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
       const fd = new FormData();
       fd.set("count", count);
       fd.set("purpose", purpose);
+      fd.set("positionTitle", positionTitle);
+      fd.set("positionBrief", positionBrief);
+      fd.set("employerFacts", employerFacts);
       const result = await bewCreateCampaign(fd);
       if (result) {
         const fresh = await bewGetView(result.campaignId);
@@ -201,6 +207,9 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
         setDeselected(new Set());
         setStep(1);
         setCount("10");
+        setPositionTitle("");
+        setPositionBrief("");
+        setEmployerFacts("");
       }
       return result;
     });
@@ -276,6 +285,35 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
                 <option value="praktikum">{t("bewauto.purposePraktikum")}</option>
               </select>
             </label>
+          </div>
+
+          <div className="mt-2 grid gap-4">
+            <div className="text-sm font-semibold text-ink-soft">
+              {t("bewauto.positionSection")}
+            </div>
+            <Input
+              id="bew-position-title"
+              label={`${t("bewauto.positionTitle")} · ${t("bewauto.positionOptional")}`}
+              hint={t("bewauto.positionTitleHint")}
+              value={positionTitle}
+              onChange={(e) => setPositionTitle(e.target.value)}
+            />
+            <Textarea
+              id="bew-position-brief"
+              label={`${t("bewauto.positionBrief")} · ${t("bewauto.positionOptional")}`}
+              hint={t("bewauto.positionBriefHint")}
+              rows={3}
+              value={positionBrief}
+              onChange={(e) => setPositionBrief(e.target.value)}
+            />
+            <Textarea
+              id="bew-employer-facts"
+              label={`${t("bewauto.employerFacts")} · ${t("bewauto.positionOptional")}`}
+              hint={t("bewauto.employerFactsHint")}
+              rows={2}
+              value={employerFacts}
+              onChange={(e) => setEmployerFacts(e.target.value)}
+            />
           </div>
 
           {error && <ErrorLine message={error} />}

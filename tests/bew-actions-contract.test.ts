@@ -129,7 +129,7 @@ describe("action → engine argument mapping (service contract)", () => {
     const result = await actions.bewCreateCampaign(fd);
     expect(result).toEqual({ campaignId: "camp-new", count: 5 });
     const call = engineCalls.find((c) => c.fn === "createBewCampaign")!;
-    expect(call.args[0]).toEqual({ userId: "user-1", count: 42, purpose: "arbeit" });
+    expect(call.args[0]).toEqual({ userId: "user-1", count: 42, purpose: "arbeit", positionTitle: "", positionBrief: "", employerFacts: "" });
   });
 
   it("bewStartSend parses the selected seqs and forwards them intact", async () => {
@@ -153,7 +153,7 @@ describe("action → engine argument mapping (service contract)", () => {
     await actions.bewSaveCompanies(fd);
     const call = engineCalls.find((c) => c.fn === "saveBewCompanies")!;
     expect(call.args[2]).toEqual([
-      { companyName: "A", companyEmail: "a@b.de", contactName: null, companyAddress: null },
+      { companyName: "A", companyEmail: "a@b.de", contactName: null, companyAddress: null, positionTitle: "", positionBrief: "", employerFacts: "" },
     ]);
   });
 
