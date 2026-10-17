@@ -32,11 +32,13 @@ import { reserveAIUsage, storagePath } from "@/lib/ai-service";
 import { extractPdfText } from "@/lib/pdf-extract";
 import type { Profile } from "@/lib/auth";
 import mammoth from "mammoth";
+import { hasApplicantProfileColumns } from "@/lib/contact-name-support";
 import {
   BEW_ATTACHMENT_BUCKET,
   deleteLetterPdf,
   ensureLetterPdf,
   letterPdfStoragePath,
+  type ApplicantFacts,
   type LetterAttachmentRef,
 } from "@/lib/bew-letter-pdf";
 
@@ -56,6 +58,8 @@ import {
   computeSendPlan,
   isBewEmailComplete,
   isBewPurpose,
+  type ApplicantProfileField,
+  validateApplicantProfile,
   isDocumentKind,
   isValidEmail,
   parsePdfCompanyCandidates,
@@ -742,18 +746,64 @@ function dedupeAttachmentsByName(
   return out;
 }
 
-/** Applicant facts for the letter header (never invented — omitted when absent). */
-async function getApplicantFacts(
-  admin: Admin,
-  userId: string,
-): Promise<{ name: string; email: string }> {
+/**
+ * Applicant facts for the letter header — the full applicant profile
+ * (name, e-mail + the five address fields). NEVER invented: absent values
+ * stay "". While the 20261114000000 migration is pending the new columns
+ * are not SELECT-able (manual-migration safety), so they degrade to "" —
+ * which makes the profile "incomplete" and gates NEW letter generation
+ * with the stable PROFILE_INCOMPLETE code instead of silently producing
+ * the old name+email-only letter.
+ */
+async function getApplicantFacts(admin: Admin, userId: string): Promise<ApplicantFacts> {
+  const addressSupported = await hasApplicantProfileColumns();
   const { data } = await admin
     .from("profiles")
-    .select("full_name, email")
+    .select(
+      addressSupported
+        ? "full_name, email, street, postal_code, city, country, phone"
+        : "full_name, email",
+    )
     .eq("id", userId)
     .maybeSingle();
-  const row = (data ?? null) as { full_name?: string | null; email?: string | null } | null;
-  return { name: row?.full_name ?? "", email: row?.email ?? "" };
+  const row = (data ?? null) as
+    | {
+        full_name?: string | null;
+        email?: string | null;
+        street?: string | null;
+        postal_code?: string | null;
+        city?: string | null;
+        country?: string | null;
+        phone?: string | null;
+      }
+    | null;
+  return {
+    name: row?.full_name ?? "",
+    email: row?.email ?? "",
+    street: row?.street ?? "",
+    postalCode: row?.postal_code ?? "",
+    city: row?.city ?? "",
+    country: row?.country ?? "",
+    phone: row?.phone ?? "",
+  };
+}
+
+/** Field record for validateApplicantProfile (name → fullName mapping). */
+function applicantFields(f: ApplicantFacts): Partial<Record<ApplicantProfileField, unknown>> {
+  return {
+    fullName: f.name,
+    street: f.street,
+    postalCode: f.postalCode,
+    city: f.city,
+    country: f.country,
+    email: f.email,
+    phone: f.phone,
+  };
+}
+
+/** True when all seven applicant fields are valid (the PDF header gate). */
+function isApplicantComplete(f: ApplicantFacts): boolean {
+  return validateApplicantProfile(applicantFields(f)).ok;
 }
 
 /**
@@ -900,6 +950,12 @@ export async function generateBewLetters(
   const { admin, campaign } = await requireOwnedCampaign(userId, campaignId);
   if (BEW_TERMINAL_CAMPAIGN.has(campaign.status))
     throw new Error("CAMPAIGN_CLOSED");
+  // The full applicant header (seven mandatory profile fields) is required
+  // before any NEW Anschreiben is generated. Stable code — the wizard maps
+  // it to a localized "complete your profile" explanation. No rows are
+  // claimed and nothing is mutated before this gate.
+  const applicantFacts = await getApplicantFacts(admin, userId);
+  if (!isApplicantComplete(applicantFacts)) throw new Error("PROFILE_INCOMPLETE");
   const limit = Math.min(Math.max(1, opts.limit ?? BEW_MAX_BATCH), BEW_MAX_BATCH);
   const purpose = (campaign.purpose as BewPurpose) || "ausbildung";
 
@@ -1002,7 +1058,10 @@ export async function generateBewLetters(
             subject: app.subject || buildSubject(purpose, app.company_name),
             body_html: bodyHtml,
           },
-          applicant: { name: profile.full_name, email: profile.email },
+          // The FULL applicant facts (already validated complete by the
+          // PROFILE_INCOMPLETE gate above) — the PDF carries all seven
+          // fields, never the old name+email-only header.
+          applicant: applicantFacts,
         });
        } catch (pdfError) {
          console.error(
@@ -1522,6 +1581,12 @@ export async function processBewSendBatch(
   // quota moves, nothing is mutated.
   if (!isBewEmailComplete(emailTemplate.subject, emailTemplate.bodyHtml))
     return { processed: 0, sent: 0, failed: 0, uncertain: 0, slotBusy: false, stop: "email-incomplete" };
+
+  // Same defensive rule for the applicant header: a drain must never (re)
+  // generate a letter PDF without the full profile. Stop WITHOUT claiming
+  // or sending: rows stay queued, no quota moves, nothing is mutated.
+  if (!isApplicantComplete(applicant))
+    return { processed: 0, sent: 0, failed: 0, uncertain: 0, slotBusy: false, stop: "profile-incomplete" };
 
   try {
     for (let i = 0; i < max; i += 1) {

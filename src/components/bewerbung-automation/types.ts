@@ -187,6 +187,7 @@ export type BewErrorCode =
   | "EMAIL_INCOMPLETE"
   | "EMAIL_LOCKED"
   | "CANDIDATE_NAME_MISSING"
+  | "PROFILE_INCOMPLETE"
   | "NOTHING_TO_SEND"
   | "QUOTA_EXHAUSTED"
   | "QUEUE_FAILED"
@@ -215,6 +216,7 @@ export function bewErrorCode(error: unknown): BewErrorCode {
      message === "EMAIL_INCOMPLETE" ||
      message === "EMAIL_LOCKED" ||
      message === "CANDIDATE_NAME_MISSING" ||
+     message === "PROFILE_INCOMPLETE" ||
      message === "NOTHING_TO_SEND" ||
     message === "QUOTA_EXHAUSTED" ||
     message === "QUEUE_FAILED" ||

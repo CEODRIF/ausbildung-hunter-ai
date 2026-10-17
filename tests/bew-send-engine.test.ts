@@ -17,7 +17,8 @@ type TableKey =
   | "bew_documents"
   | "bew_campaign_documents"
   | "email_accounts"
-  | "daily_usage";
+  | "daily_usage"
+  | "profiles";
 
 interface DB {
   bew_campaigns: Row[];
@@ -26,6 +27,7 @@ interface DB {
   bew_campaign_documents: Row[];
   email_accounts: Row[];
   daily_usage: Row[];
+  profiles: Row[];
   aiRemaining: number;
   slotFree: boolean;
   /** Scripted provider outcomes, consumed one per sendEmail call. */
@@ -62,6 +64,18 @@ function freshDb(): DB {
     ],
     daily_usage: [
       { user_id: "user-1", date: TODAY, emails_sent: 0, emails_reserved: 0, daily_limit: 50 },
+    ],
+    profiles: [
+      {
+        id: "user-1",
+        full_name: "Max Mustermann",
+        email: "max@example.de",
+        street: "Musterstraße 12",
+        postal_code: "12345",
+        city: "Berlin",
+        country: "Deutschland",
+        phone: "+49 151 2345678",
+      },
     ],
     aiRemaining: 100,
     slotFree: true,

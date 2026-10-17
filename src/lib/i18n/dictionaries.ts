@@ -238,6 +238,42 @@ const de = {
         hint: "E-Mail, Verbrauch, Abrechnung und Daten.",
       },
       social: { title: "Social Media" },
+      // ---- Applicant details (seven mandatory Anschreiber-header fields) ----
+      applicant: {
+        title: "Bewerberdaten",
+        hint: "Pflichtangaben für deine Anschreiben — sie erscheinen oben rechts in jedem neu generierten PDF.",
+        pending:
+          "Diese Angaben werden erst nach der anstehenden Datenbank-Aktualisierung verfügbar.",
+        save: "Bewerberdaten speichern",
+        saving: "Wird gespeichert …",
+        saved: "Bewerberdaten gespeichert.",
+        error: "Speichern fehlgeschlagen. Bitte versuche es erneut.",
+        errorInvalid:
+          "Bitte prüfe die markierten Felder — alle Angaben sind Pflichtfelder.",
+        errorRequired: "Pflichtfeld — bitte ausfüllen.",
+        errorTooLong: "Zu lang — bitte kürzen.",
+        errorEmail: "Bitte eine gültige E-Mail-Adresse eingeben.",
+        errorPhone:
+          "Bitte eine gültige Telefonnummer eingeben (internationale Formate sind erlaubt).",
+        labels: {
+          fullName: "Vollständiger Name",
+          street: "Straße und Hausnummer",
+          postalCode: "Postleitzahl (PLZ)",
+          city: "Stadt",
+          country: "Land",
+          email: "E-Mail-Adresse",
+          phone: "Telefonnummer",
+        },
+        placeholders: {
+          fullName: "z. B. Max Mustermann",
+          street: "z. B. Musterstraße 12",
+          postalCode: "z. B. 12345",
+          city: "z. B. Berlin",
+          country: "z. B. Deutschland",
+          email: "z. B. max@beispiel.de",
+          phone: "z. B. +49 151 2345678",
+        },
+      },
       // ---- Identity editor (display name + avatar gallery) ----
       edit: {
         title: "Profil bearbeiten",
@@ -2565,6 +2601,8 @@ const de = {
         "Die E-Mail-Nachricht kann während des laufenden Versands nicht geändert werden.",
       CANDIDATE_NAME_MISSING:
         "Dein Profilname fehlt – „{{candidate_name}}“ kann nicht ersetzt werden. Bitte vervollständige zuerst dein Profil.",
+      PROFILE_INCOMPLETE:
+        "Dein Profil ist unvollständig — bitte trage unter „Einstellungen → Profil“ alle sieben Bewerberdaten (Name, Straße, Postleitzahl, Stadt, Land, E-Mail, Telefon) ein, bevor Anschreiben generiert oder versendet werden.",
       NOTHING_TO_SEND: "Keine sendefähige Bewerbung ausgewählt.",
       QUOTA_EXHAUSTED: "Das heutige Sendekontingent ist aufgebraucht.",
       QUEUE_FAILED: "Die Warteschlange konnte nicht erstellt werden – bitte erneut versuchen.",
@@ -2798,6 +2836,42 @@ const en: Dict = {
         hint: "Email, usage, billing and data.",
       },
       social: { title: "Social media" },
+      // ---- Applicant details (seven mandatory cover-letter header fields) ----
+      applicant: {
+        title: "Applicant details",
+        hint: "Mandatory information for your cover letters — it appears top-right in every newly generated PDF.",
+        pending:
+          "These details become available after the pending database update.",
+        save: "Save applicant details",
+        saving: "Saving…",
+        saved: "Applicant details saved.",
+        error: "Failed to save. Please try again.",
+        errorInvalid:
+          "Please check the highlighted fields — every one of them is mandatory.",
+        errorRequired: "Required field — please fill in.",
+        errorTooLong: "Too long — please shorten.",
+        errorEmail: "Please enter a valid e-mail address.",
+        errorPhone:
+          "Please enter a valid phone number (international formats are allowed).",
+        labels: {
+          fullName: "Full name",
+          street: "Street and house number",
+          postalCode: "Postal code",
+          city: "City",
+          country: "Country",
+          email: "E-mail address",
+          phone: "Phone number",
+        },
+        placeholders: {
+          fullName: "e.g. Max Mustermann",
+          street: "e.g. Musterstraße 12",
+          postalCode: "e.g. 12345",
+          city: "e.g. Berlin",
+          country: "e.g. Germany",
+          email: "e.g. max@example.com",
+          phone: "e.g. +49 151 2345678",
+        },
+      },
       // ---- Identity editor (display name + avatar gallery) ----
       edit: {
         title: "Edit profile",
@@ -5086,6 +5160,8 @@ const en: Dict = {
         "The e-mail message cannot be changed while a send is in progress.",
       CANDIDATE_NAME_MISSING:
         "Your profile name is missing — \"{{candidate_name}}\" cannot be resolved. Please complete your profile first.",
+      PROFILE_INCOMPLETE:
+        "Your profile is incomplete — please fill in all seven applicant details (full name, street, postal code, city, country, e-mail, phone) under Settings → Profile before cover letters can be generated or sent.",
       NOTHING_TO_SEND: "No sendable application selected.",
       QUOTA_EXHAUSTED: "Today's sending quota is exhausted.",
       QUEUE_FAILED: "The queue could not be created — please try again.",
@@ -5315,6 +5391,42 @@ const fr: Dict = {
         hint: "E-mail, utilisation, facturation et données.",
       },
       social: { title: "Réseaux sociaux" },
+      // ---- Coordonnées du candidat (sept champs obligatoires) ----
+      applicant: {
+        title: "Coordonnées du candidat",
+        hint: "Informations obligatoires pour vos lettres de motivation — elles figurent en haut à droite de chaque PDF nouvellement généré.",
+        pending:
+          "Ces coordonnées seront disponibles après la mise à jour en attente de la base de données.",
+        save: "Enregistrer les coordonnées",
+        saving: "Enregistrement…",
+        saved: "Coordonnées enregistrées.",
+        error: "Échec de l'enregistrement. Veuillez réessayer.",
+        errorInvalid:
+          "Veuillez vérifier les champs mis en évidence — tous sont obligatoires.",
+        errorRequired: "Champ obligatoire — veuillez le remplir.",
+        errorTooLong: "Trop long — veuillez raccourcir.",
+        errorEmail: "Veuillez saisir une adresse e-mail valide.",
+        errorPhone:
+          "Veuillez saisir un numéro de téléphone valide (les formats internationaux sont acceptés).",
+        labels: {
+          fullName: "Nom complet",
+          street: "Rue et numéro",
+          postalCode: "Code postal",
+          city: "Ville",
+          country: "Pays",
+          email: "Adresse e-mail",
+          phone: "Numéro de téléphone",
+        },
+        placeholders: {
+          fullName: "p. ex. Max Mustermann",
+          street: "p. ex. Musterstraße 12",
+          postalCode: "p. ex. 12345",
+          city: "p. ex. Berlin",
+          country: "p. ex. Allemagne",
+          email: "p. ex. max@exemple.fr",
+          phone: "p. ex. +49 151 2345678",
+        },
+      },
       // ---- Identity editor (display name + avatar gallery) ----
       edit: {
         title: "Modifier le profil",
@@ -7608,6 +7720,8 @@ const fr: Dict = {
         "Le message e-mail ne peut pas être modifié pendant un envoi en cours.",
       CANDIDATE_NAME_MISSING:
         "Ton nom de profil manque – « {{candidate_name}} » ne peut pas être résolu. Complète d'abord ton profil.",
+      PROFILE_INCOMPLETE:
+        "Ton profil est incomplet — renseigne les sept coordonnées du candidat (nom complet, rue, code postal, ville, pays, e-mail, téléphone) sous Paramètres → Profil avant de générer ou d'envoyer des lettres.",
       NOTHING_TO_SEND: "Aucune candidature envoyable sélectionnée.",
       QUOTA_EXHAUSTED: "Le quota d'envoi d'aujourd'hui est épuisé.",
       QUEUE_FAILED: "La file d'attente n'a pas pu être créée — veuillez réessayer.",
@@ -7829,6 +7943,39 @@ const ar: Dict = {
         hint: "البريد الإلكتروني والاستخدام والفوترة والبيانات.",
       },
       social: { title: "وسائل التواصل الاجتماعي" },
+      // ---- بيانات المرشح (سبعة حقول إلزامية) ----
+      applicant: {
+        title: "بيانات المرشح",
+        hint: "معلومات إلزامية لخطابات التقديم — تظهر في أعلى يمين كل ملف PDF يُنشأ حديثًا.",
+        pending: "تصبح هذه البيانات متاحة بعد تحديث قاعدة البيانات المجدول.",
+        save: "حفظ بيانات المرشح",
+        saving: "جارٍ الحفظ…",
+        saved: "تم حفظ بيانات المرشح.",
+        error: "فشل الحفظ. يُرجى المحاولة مرة أخرى.",
+        errorInvalid: "يُرجى مراجعة الحقول المميزة — جميعها إلزامية.",
+        errorRequired: "حقل إلزامي — يُرجى ملؤه.",
+        errorTooLong: "طويل جدًّا — يُرجى الاختصار.",
+        errorEmail: "يُرجى إدخال بريد إلكتروني صحيح.",
+        errorPhone: "يُرجى إدخال رقم هاتف صحيح (تُقبل الصيغ الدولية).",
+        labels: {
+          fullName: "الاسم الكامل",
+          street: "الشارع ورقم المبنى",
+          postalCode: "الرمز البريدي",
+          city: "المدينة",
+          country: "الدولة",
+          email: "البريد الإلكتروني",
+          phone: "رقم الهاتف",
+        },
+        placeholders: {
+          fullName: "مثال: Max Mustermann",
+          street: "مثال: Musterstraße 12",
+          postalCode: "مثال: 12345",
+          city: "مثال: Berlin",
+          country: "مثال: Deutschland",
+          email: "مثال: max@example.com",
+          phone: "مثال: +49 151 2345678",
+        },
+      },
       // ---- Identity editor (display name + avatar gallery) ----
       edit: {
         title: "تعديل الملف الشخصي",
@@ -10075,6 +10222,8 @@ const ar: Dict = {
       EMAIL_LOCKED: "لا يمكن تعديل رسالة البريد أثناء الإرسال الجاري.",
       CANDIDATE_NAME_MISSING:
         "اسم ملفك الشخصي مفقود – لا يمكن حل «{{candidate_name}}». أكمل ملفك الشخصي أولًا.",
+      PROFILE_INCOMPLETE:
+        "ملفك الشخصي غير مكتمل — يُرجى إدخال بيانات المرشح السبعة (الاسم الكامل، الشارع، الرمز البريدي، المدينة، الدولة، البريد الإلكتروني، الهاتف) من الإعدادات → الملف الشخصي قبل إنشاء الخطابات أو إرسالها.",
       NOTHING_TO_SEND: "لم يُحدد أي طلب صالح للإرسال.",
       QUOTA_EXHAUSTED: "نفد حد الإرسال اليومي.",
       QUEUE_FAILED: "تعذر إنشاء قائمة الانتظار — يرجى المحاولة مجددًا.",

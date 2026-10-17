@@ -78,7 +78,21 @@ function freshDb(): DB {
     daily_usage: [
       { user_id: "user-1", date: TODAY, emails_sent: 0, emails_reserved: 0, daily_limit: 50 },
     ],
-    profiles: [],
+    // The full applicant profile is part of a valid send fixture (the
+    // letter PDF requires all seven fields). Tests that need an incomplete
+    // profile override this row.
+    profiles: [
+      {
+        id: USER,
+        full_name: "Max Mustermann",
+        email: "max@example.de",
+        street: "Musterstraße 12",
+        postal_code: "12345",
+        city: "Berlin",
+        country: "Deutschland",
+        phone: "+49 151 2345678",
+      },
+    ],
     sendScripts: [],
     sendLog: [],
     deletedLetters: [],
@@ -465,7 +479,23 @@ function seedDocuments() {
 }
 
 function seedProfile(name: string) {
-  db.profiles.push({ id: USER, full_name: name, email: "max@example.de" });
+  // The default fixture row already carries the complete profile; this only
+  // overrides the name (e.g. the profile-less candidate-token scenarios set
+  // it to ""). A full row is kept so other fields stay valid.
+  if (db.profiles.length === 0) {
+    db.profiles.push({
+      id: USER,
+      full_name: name,
+      email: "max@example.de",
+      street: "Musterstraße 12",
+      postal_code: "12345",
+      city: "Berlin",
+      country: "Deutschland",
+      phone: "+49 151 2345678",
+    });
+  } else {
+    db.profiles[0].full_name = name;
+  }
 }
 
 const okSend = (id: string) => () => ({ ok: true as const, id });
@@ -690,7 +720,7 @@ describe("startBewSend — the e-mail message gates the send", () => {
 
   it("blocks with CANDIDATE_NAME_MISSING when the token is used but the profile has no name", async () => {
     seedReadyCampaign({ email_body_html: "<p>Grüße {{candidate_name}}</p>" });
-    // No profile row → the name is empty.
+    seedProfile(""); // the profile exists, but the name is empty
     const res = await startBewSend(USER, CAMPAIGN);
     expect(res.ok).toBe(false);
     expect(res.error).toBe("CANDIDATE_NAME_MISSING");

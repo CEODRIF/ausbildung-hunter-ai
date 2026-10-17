@@ -98,7 +98,16 @@ function freshDb(): DB {
       { user_id: USER, date: TODAY, emails_sent: 0, emails_reserved: 0, daily_limit: 50 },
     ],
     profiles: [
-      { id: USER, full_name: "Max Mustermann", email: "max@example.de" },
+      {
+        id: USER,
+        full_name: "Max Mustermann",
+        email: "max@example.de",
+        street: "Musterstraße 12",
+        postal_code: "12345",
+        city: "Berlin",
+        country: "Deutschland",
+        phone: "+49 151 2345678",
+      },
     ],
     storage: { objects: new Map(), failUploads: false, lastBucket: null, uploadCount: 0, removedPaths: [] },
     slotFree: true,
@@ -697,7 +706,15 @@ describe("ensureLetterPdf — persistence in the existing bucket", () => {
   const input = () => ({
     userId: USER,
     app: REF_APP,
-    applicant: { name: "Max Mustermann", email: "max@example.de" },
+    applicant: {
+      name: "Max Mustermann",
+      email: "max@example.de",
+      street: "Musterstraße 12",
+      postalCode: "12345",
+      city: "Berlin",
+      country: "Deutschland",
+      phone: "+49 151 2345678",
+    },
   });
 
   it("generates on first call at the deterministic owner-scoped path (existing bucket)", async () => {

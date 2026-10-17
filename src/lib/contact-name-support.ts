@@ -200,3 +200,40 @@ export function hasProfileAvatarColumn(): Promise<boolean> {
 export function resetProfileAvatarColumnProbe(): void {
   profileAvatarProbe = null;
 }
+
+let applicantProfileProbe: Promise<boolean> | null = null;
+
+/**
+ * Migration-state probe for the applicant address columns
+ * (migration 20261114000000_applicant_profile_fields):
+ * `street, postal_code, city, country, phone`.
+ *
+ * Same contract as the other probes: cached per process, only a CLEAN READ
+ * proves the columns; any error resolves to `false` — the safe default.
+ * Consumers:
+ *   - the settings page hides the applicant form while the migration is
+ *     pending (display of the existing data is unaffected);
+ *   - the engine degrades the new fields to "" (so stored profiles are
+ *     simply "incomplete" and new letter generation is gated with the
+ *     stable PROFILE_INCOMPLETE code — never a silent name+email letter).
+ */
+export function hasApplicantProfileColumns(): Promise<boolean> {
+  applicantProfileProbe ??= (async () => {
+    try {
+      const admin = createAdminClient();
+      const { error } = await admin
+        .from("profiles")
+        .select("street, postal_code, city, country, phone")
+        .limit(1);
+      return error === null;
+    } catch {
+      return false;
+    }
+  })();
+  return applicantProfileProbe;
+}
+
+/** Test hook: drop the cached probe so a test can simulate a schema change. */
+export function resetApplicantProfileColumnsProbe(): void {
+  applicantProfileProbe = null;
+}

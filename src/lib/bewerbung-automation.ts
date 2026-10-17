@@ -1028,3 +1028,119 @@ export function classifySendError(error: unknown): ClassifiedSendError {
           : "The provider did not confirm the send.",
   };
 }
+
+/* ------------------------------------------------------------------ *
+ * Applicant profile (mandatory for NEW Anschreiben PDFs)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The seven mandatory personal-information fields of the applicant header.
+ * `fullName` + `email` already existed on `profiles`; the other five come
+ * from migration 20261114000000_applicant_profile_fields.
+ */
+export const APPLICANT_PROFILE_FIELDS = [
+  "fullName",
+  "street",
+  "postalCode",
+  "city",
+  "country",
+  "email",
+  "phone",
+] as const;
+
+export type ApplicantProfileField = (typeof APPLICANT_PROFILE_FIELDS)[number];
+
+export interface ApplicantProfile {
+  fullName: string;
+  street: string;
+  postalCode: string;
+  city: string;
+  country: string;
+  email: string;
+  phone: string;
+}
+
+/** Field lengths (mirror the DB CHECK constraints; email is the RFC cap). */
+export const APPLICANT_FIELD_MAX: Record<ApplicantProfileField, number> = {
+  fullName: 120,
+  street: 120,
+  postalCode: 32,
+  city: 80,
+  country: 80,
+  email: 254,
+  phone: 40,
+};
+
+/**
+ * Phone normalization/acceptance — deliberately WITHOUT country-specific
+ * assumptions: an international number with a leading `+`, or a national
+ * format with digits, spaces, parentheses, dashes and dots, is all valid as
+ * long as it starts with a digit/`+`, carries at least 5 digits (no
+ * placeholders/gibberish) and stays within the length bound.
+ */
+const APPLICANT_PHONE_RE = /^\+?\d[\d\s()./-]{4,39}$/;
+function hasAtLeastFiveDigits(value: string): boolean {
+  let digits = 0;
+  for (const ch of value) if (ch >= "0" && ch <= "9") digits += 1;
+  return digits >= 5;
+}
+
+/** Collapse internal whitespace runs (multi-word entries stay one line). */
+function normalizeApplicantField(value: unknown): string {
+  return (typeof value === "string" ? value : "").replace(/\s+/g, " ").trim();
+}
+
+export type ApplicantProfileValidation =
+  | { ok: true; value: ApplicantProfile }
+  | { ok: false; missing: ApplicantProfileField[]; invalid: ApplicantProfileField[] };
+
+/**
+ * Validate + normalize the seven fields. Pure: no I/O, no locale
+ * assumptions. `missing` = absent or whitespace-only; `invalid` = present
+ * but malformed (email syntax / phone shape / overlong).
+ */
+export function validateApplicantProfile(
+  input: Partial<Record<ApplicantProfileField, unknown>>,
+): ApplicantProfileValidation {
+  const value = {} as Record<ApplicantProfileField, string>;
+  for (const field of APPLICANT_PROFILE_FIELDS) value[field] = normalizeApplicantField(input[field]);
+
+  const missing = APPLICANT_PROFILE_FIELDS.filter((f) => value[f].length === 0);
+  const invalid = APPLICANT_PROFILE_FIELDS.filter((f) => {
+    const v = value[f];
+    if (v.length === 0) return false;
+    if (v.length > APPLICANT_FIELD_MAX[f]) return true;
+    if (f === "email") return !isValidEmail(v);
+    if (f === "phone") return !APPLICANT_PHONE_RE.test(v) || !hasAtLeastFiveDigits(v);
+    return false;
+  });
+  if (missing.length > 0 || invalid.length > 0)
+    return { ok: false, missing, invalid };
+  return { ok: true, value: value as ApplicantProfile };
+}
+
+/** Map a STORED profile row (snake_case, nullable) to the field record. */
+export function applicantProfileFromRow(
+  row: Record<string, unknown> | null | undefined,
+): Record<ApplicantProfileField, string> {
+  return {
+    fullName: normalizeApplicantField(row?.full_name),
+    street: normalizeApplicantField(row?.street),
+    postalCode: normalizeApplicantField(row?.postal_code),
+    city: normalizeApplicantField(row?.city),
+    country: normalizeApplicantField(row?.country),
+    email: normalizeApplicantField(row?.email),
+    phone: normalizeApplicantField(row?.phone),
+  };
+}
+
+/**
+ * The applicant header lines for the Anschreiben PDF, in the FIXED order:
+ *   street / "postal code + city" (one line) / country / e-mail / phone.
+ * Empty values are omitted — the generation gate guarantees all five for
+ * NEW PDFs, but historical/folio-level rendering stays defensive.
+ */
+export function applicantAddressLines(p: ApplicantProfile): string[] {
+  const postalCity = [p.postalCode, p.city].filter(Boolean).join(" ");
+  return [p.street, postalCity, p.country, p.email, p.phone].filter(Boolean);
+}

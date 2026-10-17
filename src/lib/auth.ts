@@ -19,6 +19,19 @@ export type Profile = {
    *  manual migration is pending — full_name + initials stay the fallback.
    *  Canonical id → asset mapping: src/lib/profile-avatars.ts. */
   avatar?: string | null;
+  /**
+   * Applicant address/contact (20261114000000_applicant_profile_fields) —
+   * the full header of a generated Anschreiben PDF. All five are optional
+   * in the type: null on accounts that have not filled the form yet,
+   * `undefined` while the manual migration is pending. They are MANDATORY
+   * for new letter generation (stable PROFILE_INCOMPLETE gate) but never
+   * back-filled and never fabricated.
+   */
+  street?: string | null;
+  postal_code?: string | null;
+  city?: string | null;
+  country?: string | null;
+  phone?: string | null;
   email: string;
   account_status: "pending" | "active" | "suspended";
   selected_goal: "ausbildung" | "arbeit" | null;
