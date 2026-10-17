@@ -7,7 +7,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 const { createAdminClient } = await import("@/lib/supabase/admin");
 const { getCurrentUserAndProfile } = await import("@/lib/auth");
-const { reconcileStorage, MAX_MAX_DELETES } =
+const { reconcileStorage, MAX_MAX_DELETES, BUCKETS } =
   await import("@/lib/storage-reconcile");
 const { POST: reconcileRoute } =
   await import("@/app/api/internal/storage-reconcile/route");
@@ -744,5 +744,101 @@ describe("removeAttachment (Phase 17 ordering)", () => {
     ).rejects.toThrow("Unable to remove attachment.");
     expect(engine.tables["application_draft_attachments"]).toHaveLength(1);
     expect(engine.events).toEqual([]);
+  });
+});
+
+describe("Bewerbung Automation document retention (bew_documents)", () => {
+  // Regression guard for the additive BUCKETS change: the feature's CV /
+  // certificate uploads live in the SHARED `application-attachments` bucket,
+  // so the janitor must count live `bew_documents` rows as references —
+  // otherwise a user's uploaded CV would be deleted 24h after upload.
+
+  it("keeps an old object alive while a bew_documents row references it", async () => {
+    const engine = makeEngine({
+      users: [USER_A],
+      tables: {
+        bew_documents: [
+          {
+            id: "d1",
+            user_id: USER_A,
+            storage_path: `${USER_A}/cv.pdf`,
+            filename: "cv.pdf",
+          },
+        ],
+      },
+      objects: {
+        "application-attachments": [
+          { name: `${USER_A}/cv.pdf`, created_at: OLD },
+        ],
+      },
+    });
+    const report = await reconcileStorage({ execute: true, now: NOW });
+    const att = report.buckets.find(
+      (b) => b.bucket === "application-attachments",
+    );
+    expect(att?.orphans).toBe(0);
+    expect(att?.deleted).toBe(0);
+    expect(engine.objects["application-attachments"]).toHaveLength(1);
+    expect(engine.events).toEqual([]);
+  });
+
+  it("reclaims an old object once its bew_documents row is gone", async () => {
+    // No bew_documents rows at all → the stale upload is a genuine orphan.
+    const engine = makeEngine({
+      users: [USER_A],
+      tables: {},
+      objects: {
+        "application-attachments": [
+          { name: `${USER_A}/stale-cv.pdf`, created_at: OLD },
+        ],
+      },
+    });
+    const report = await reconcileStorage({ execute: true, now: NOW });
+    const att = report.buckets.find(
+      (b) => b.bucket === "application-attachments",
+    );
+    expect(att?.orphans).toBe(1);
+    expect(att?.deleted).toBe(1);
+    expect(engine.objects["application-attachments"]).toEqual([]);
+    expect(engine.events).toEqual([
+      `storage-remove:application-attachments:${USER_A}/stale-cv.pdf`,
+    ]);
+  });
+
+  it("keeps a YOUNG bew-referenced object alive (age grace still respected)", async () => {
+    const engine = makeEngine({
+      users: [USER_A],
+      tables: {
+        bew_documents: [
+          {
+            id: "d1",
+            user_id: USER_A,
+            storage_path: `${USER_A}/new-cv.pdf`,
+            filename: "new-cv.pdf",
+          },
+        ],
+      },
+      objects: {
+        "application-attachments": [
+          { name: `${USER_A}/new-cv.pdf`, created_at: YOUNG },
+        ],
+      },
+    });
+    const report = await reconcileStorage({ execute: true, now: NOW });
+    const att = report.buckets.find(
+      (b) => b.bucket === "application-attachments",
+    );
+    expect(att?.orphans).toBe(0);
+    expect(att?.deleted).toBe(0);
+    expect(engine.objects["application-attachments"]).toHaveLength(1);
+  });
+
+  it("BUCKETS declares bew_documents.storage_path as a reference (static guard)", () => {
+    const spec = BUCKETS.find((b) => b.bucket === "application-attachments");
+    expect(
+      spec?.referenceTables.some(
+        (r) => r.table === "bew_documents" && r.column === "storage_path",
+      ),
+    ).toBe(true);
   });
 });

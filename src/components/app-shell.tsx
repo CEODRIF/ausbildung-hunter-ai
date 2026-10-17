@@ -167,6 +167,11 @@ const NAV_SECTIONS: NavSection[] = [
       { labelKey: "nav.templates", href: "/dashboard/templates", icon: "file" },
       { labelKey: "nav.coverLetter", href: "/dashboard/cover-letter", icon: "send" },
       { labelKey: "nav.deckblatt", href: "/deckblatt", icon: "image" },
+      {
+        labelKey: "nav.bewerbungAutomation",
+        href: "/bewerbung-automation",
+        icon: "paperclip",
+      },
     ],
   },
   {
@@ -303,6 +308,13 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
   {
     match: (p) => p === "/deckblatt" || p.startsWith("/deckblatt/"),
     heading: { titleKey: "pages.deckblatt.title", subtitleKey: "pages.deckblatt.subtitle" },
+  },
+  {
+    match: (p) => p === "/bewerbung-automation" || p.startsWith("/bewerbung-automation/"),
+    heading: {
+      titleKey: "pages.bewerbungAutomation.title",
+      subtitleKey: "pages.bewerbungAutomation.subtitle",
+    },
   },
   {
     match: (p) => p === "/dashboard/faq",

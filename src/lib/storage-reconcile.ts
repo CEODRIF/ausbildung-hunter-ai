@@ -82,6 +82,12 @@ export const BUCKETS: BucketSpec[] = [
       // age grace period.
       { table: "application_draft_attachments", column: "storage_path" },
       { table: "email_campaign_attachments", column: "storage_path" },
+      // Bewerbung Automation (feature-isolated): the user's document
+      // library rows keep uploaded CV/certificates alive. DEPLOY ORDER: the
+      // 20261112000000 migration must be applied BEFORE deploying code that
+      // references this table — until then the janitor tick fails loud
+      // (no deletions at all), which is the safe direction.
+      { table: "bew_documents", column: "storage_path" },
     ],
   },
   // Phase 6A — Community images. Reference set = every live Community image

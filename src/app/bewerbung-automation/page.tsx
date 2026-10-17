@@ -1,0 +1,51 @@
+import type { Metadata } from "next";
+import {
+  getBewCampaignView,
+  getLatestBewCampaignId,
+  hasBewAutomationSchema,
+  type BewCampaignView,
+} from "@/lib/bewerbung-engine";
+import { BewerbungAutomation } from "@/components/bewerbung-automation/client";
+
+export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Bewerbung-Automatisierung",
+};
+
+/**
+ * /bewerbung-automation — server component (data loader).
+ *
+ * The layout already guarantees an authenticated, ACTIVE user and renders the
+ * global shell. Here we only resolve the INITIAL state for the client:
+ *
+ *   - whether the isolated `bew_*` schema is applied (this repo applies
+ *     migrations manually, so code may run ahead of the schema — we degrade
+ *     to a "pending" notice instead of crashing);
+ *   - the most recent campaign + its applications/documents/usage snapshot,
+ *     so a returning user lands directly on the right step.
+ *
+ * All interactivity (the five steps, uploads, generation, send) lives in the
+ * client component, which talks to the dedicated server actions — never to
+ * the protected standard-email path.
+ */
+export default async function BewerbungAutomationPage() {
+  const { getCurrentUserAndProfile } = await import("@/lib/auth");
+  const { user, profile } = await getCurrentUserAndProfile();
+
+  const schemaOk = await hasBewAutomationSchema();
+
+  let view: BewCampaignView | null = null;
+  if (schemaOk && user && profile && profile.account_status === "active") {
+    const latestId = await getLatestBewCampaignId(profile.id);
+    if (latestId) view = await getBewCampaignView(profile.id, latestId);
+  }
+
+  return (
+    <BewerbungAutomation
+      schemaOk={schemaOk}
+      initialView={view}
+      userName={profile?.full_name ?? ""}
+    />
+  );
+}
