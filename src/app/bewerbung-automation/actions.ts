@@ -25,6 +25,7 @@ import {
   type DocumentKind,
 } from "@/lib/bewerbung-automation";
 import {
+  BEW_MAX_BATCH,
   attachBewDocument,
   cancelBewSend,
   createBewCampaign,
@@ -33,6 +34,7 @@ import {
   generateBewLetters,
   getBewCampaignView,
   listBewDocuments,
+  processBewSendBatch,
   rescheduleBewSend,
   restoreBewApplication,
   saveBewCompanies,
@@ -380,5 +382,49 @@ export async function bewGetView(
   campaignId: string,
 ): Promise<BewCampaignView | null> {
   const { userId } = await requireUser();
+  return await getBewCampaignView(userId, campaignId);
+}
+
+/**
+ * Refresh the campaign status AND continue any send whose time has come.
+ *
+ * Server action behind the step-5 Refresh button and the live send poll. It
+ * re-authenticates, then:
+ *
+ *   1. runs ONE bounded drain of THIS campaign through the SAME atomic claim
+ *      core the cron tick uses (processBewSendBatch): queued rows are only
+ *      claimable at/after their due instant, so a still-pending scheduled
+ *      batch sends NOTHING, a due batch drains ≤ BEW_MAX_BATCH messages, and
+ *      overlapping drivers (browser + cron + worker) can never double-send
+ *      (FOR UPDATE SKIP LOCKED);
+ *   2. returns the FRESH persisted view (status, queued/sent/failed counts,
+ *      current schedule) — the UI renders server truth only.
+ *
+ * This is the browser's continuation driver (the docs' "second, idempotent
+ * driver"): with the Actions cron running at an irregular cadence, a due
+ * scheduled batch is released at the due instant as soon as the user's page
+ * is active, instead of waiting for the next tick. It is NOT a scheduler —
+ * no timer fires it; the existing 3 s poll (while a send is in flight) and
+ * the explicit Refresh click do.
+ *
+ * A drain failure is NEVER fatal: it is logged (message only — no
+ * recipients, no secrets) and the fresh view is returned anyway, so a
+ * transient provider hiccup cannot freeze the status panel. Ownership is
+ * enforced by processBewSendBatch AND getBewCampaignView (both scope on the
+ * authenticated user_id): a foreign campaign id drains nothing and yields no
+ * view (null).
+ */
+export async function bewRefreshSend(
+  campaignId: string,
+): Promise<BewCampaignView | null> {
+  const { userId } = await requireUser();
+  try {
+    await processBewSendBatch(userId, campaignId, BEW_MAX_BATCH);
+  } catch (err) {
+    console.error(
+      "[bew] bewRefreshSend: drain failed (view still refreshed)",
+      err instanceof Error ? err.message : "unknown error",
+    );
+  }
   return await getBewCampaignView(userId, campaignId);
 }

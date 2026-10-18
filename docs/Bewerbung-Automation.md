@@ -210,8 +210,16 @@ explicit "Apply" action.
 - Sender pacing: existing per-account 5–6 s slot (`reserveSenderSlot`).
 - AI generation: existing `reserveAIUsage` daily AI limit; when hit, the
   run parks remaining letters (no error, no duplicate).
-- Cron tick: ≤3 campaigns × ≤5 messages, 45 s wall budget — backlogs drain
-  over multiple ticks; the browser poll is a second, idempotent driver.
+- Cron tick: ≤10 campaigns × ≤5 messages, 45 s wall budget — backlogs drain
+  over multiple ticks. Campaign selection is DUE-AWARE (in-flight first, then
+  scheduled batches that are now due, then timestamp-less legacy rows), so a
+  pending scheduled batch can no longer be starved behind idle in-flight
+  campaigns at the cap. The browser send poll — and the Refresh button on the
+  scheduled card (server action `bewRefreshSend`) — are the second, idempotent
+  driver: with the Actions cron running at an irregular cadence, a due batch
+  is released at its instant as soon as the user's page is active. Both
+  drivers share the same `FOR UPDATE SKIP LOCKED` claim core, so overlapping
+  drains can never double-send.
 
 ## 10. Explicit confirmations
 

@@ -2540,6 +2540,9 @@ const de = {
     scheduledFor: "{when} · {tz} ({offset})",
     scheduledHint:
       "Bis dahin wird nichts gesendet. Du kannst den Versand abbrechen oder neu planen.",
+    refreshStatus: "Status aktualisieren",
+    refreshed: "Status aktualisiert.",
+    refreshFailed: "Der Status konnte nicht aktualisiert werden.",
     rescheduleTitle: "Versand neu planen",
     rescheduleBody:
       "Wähle einen neuen zukünftigen Zeitpunkt. Bereits gesendete Mails können nicht mehr zurückgerufen werden.",
@@ -5136,6 +5139,9 @@ const en: Dict = {
     scheduledFor: "{when} · {tz} ({offset})",
     scheduledHint:
       "Nothing is sent until then. You can cancel or reschedule in the meantime.",
+    refreshStatus: "Refresh status",
+    refreshed: "Status updated.",
+    refreshFailed: "The status could not be updated.",
     rescheduleTitle: "Reschedule sending",
     rescheduleBody:
       "Choose a new future time. E-mails already sent cannot be recalled.",
@@ -7732,6 +7738,9 @@ const fr: Dict = {
     scheduledFor: "{when} · {tz} ({offset})",
     scheduledHint:
       "Rien n'est envoyé d'ici là. Vous pouvez annuler ou replanifier en attendant.",
+    refreshStatus: "Actualiser le statut",
+    refreshed: "Statut actualisé.",
+    refreshFailed: "Le statut n'a pas pu être actualisé.",
     rescheduleTitle: "Replanifier l'envoi",
     rescheduleBody:
       "Choisissez une nouvelle heure future. Les e-mails déjà envoyés ne peuvent pas être rappelés.",
@@ -10273,6 +10282,9 @@ const ar: Dict = {
     scheduledFor: "{when} · {tz} ({offset})",
     scheduledHint:
       "لن يتم إرسال أي شيء حتى ذلك الحين. يمكنك الإلغاء أو الجدولة من جديد.",
+    refreshStatus: "تحديث الحالة",
+    refreshed: "تم تحديث الحالة.",
+    refreshFailed: "تعذّر تحديث الحالة.",
     rescheduleTitle: "إعادة جدولة الإرسال",
     rescheduleBody: "اختر وقتًا مستقبليًا جديدًا. لا يمكن استدعاء الرسائل المرسلة بالفعل.",
     reschedule: "جدولة من جديد",

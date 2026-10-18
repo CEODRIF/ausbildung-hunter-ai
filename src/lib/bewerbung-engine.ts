@@ -2355,21 +2355,89 @@ export async function setCampaignSender(
  * ------------------------------------------------------------------ */
 
 /**
- * All campaigns still draining (status `sending`), oldest first — the input
- * for the cron tick. Bounded; a backlog drains over multiple ticks.
+ * All campaigns that have drainable work now (or have it coming), in tick
+ * priority order — the input for the cron tick.
+ *
+ * DUE-AWARE selection (regression fix for scheduled batches): a PENDING
+ * scheduled batch carries started_at = NULL by design (the first REAL claim
+ * stamps it), so the old single `ORDER BY started_at ASC` — Postgres NULLS
+ * LAST for ascending — always listed it AFTER every in-flight campaign and,
+ * behind the tick's bounded campaign cap, a batch that was now due could be
+ * starved by idle in-flight campaigns. The tick now selects, in order:
+ *
+ *   1. IN-FLIGHT campaigns (started_at set) — oldest start first (the
+ *      previous FIFO; finishing an already-draining campaign keeps priority);
+ *   2. DUE scheduled campaigns (started_at NULL, scheduled_at <= now) —
+ *      nearest due instant first; these are exactly the batches the tick
+ *      exists to release at their instant;
+ *   3. anomalous sending rows with NEITHER timestamp (legacy/manual) — last:
+ *      drained (never stranded) without outrunning real work.
+ *
+ * NOT-yet-due scheduled campaigns are deliberately EXCLUDED: the claim
+ * predicate defers them (nothing claimable), and processing them would only
+ * burn the tick's bounded campaign slots and wall budget.
+ *
+ * Manual-migration safety: scheduled_at is an ADDITIVE column (20261116).
+ * On a database where that read fails (migration pending), the function
+ * degrades to the pre-scheduling selection (in-flight campaigns only) —
+ * never to an EMPTY list: a tick that lists nothing sends nothing, ever.
+ *
+ * Bounded: at most `limit` campaigns per tick; a backlog drains over
+ * multiple ticks (each no-op scan is cheap — one claim RPC finding nothing).
  */
 export async function listSendingBewCampaigns(
   limit = 20,
 ): Promise<Array<{ id: string; user_id: string }>> {
   const admin = createAdminClient();
-  const { data, error } = await admin
+  const now = nowIso();
+  type Candidate = {
+    id: string;
+    user_id: string;
+    started_at: string | null;
+    scheduled_at?: string | null;
+  };
+  const inFlightQ = admin
     .from("bew_campaigns")
-    .select("id, user_id")
+    .select("id, user_id, started_at, scheduled_at")
     .eq("status", "sending")
+    .not("started_at", "is", null)
     .order("started_at", { ascending: true })
     .limit(limit);
-  if (error) return [];
-  return (data ?? []) as Array<{ id: string; user_id: string }>;
+  const dueScheduledQ = admin
+    .from("bew_campaigns")
+    .select("id, user_id, started_at, scheduled_at")
+    .eq("status", "sending")
+    .is("started_at", null)
+    .lte("scheduled_at", now)
+    .order("scheduled_at", { ascending: true })
+    .limit(limit);
+  const legacyQ = admin
+    .from("bew_campaigns")
+    .select("id, user_id, started_at, scheduled_at")
+    .eq("status", "sending")
+    .is("started_at", null)
+    .is("scheduled_at", null)
+    .limit(limit);
+  const [inFlight, dueScheduled, legacy] = await Promise.all([
+    inFlightQ,
+    dueScheduledQ,
+    legacyQ,
+  ]);
+  if (inFlight.error) return [];
+  if (dueScheduled.error || legacy.error) {
+    // scheduled_at read failed (migration pending on this database): fall
+    // back to the pre-scheduling list instead of an empty one.
+    return ((inFlight.data ?? []) as Candidate[]).slice(0, limit).map((r) => ({
+      id: r.id,
+      user_id: r.user_id,
+    }));
+  }
+  const merged: Candidate[] = [
+    ...((inFlight.data ?? []) as Candidate[]),
+    ...((dueScheduled.data ?? []) as Candidate[]),
+    ...((legacy.data ?? []) as Candidate[]),
+  ];
+  return merged.slice(0, limit).map((r) => ({ id: r.id, user_id: r.user_id }));
 }
 
 /**

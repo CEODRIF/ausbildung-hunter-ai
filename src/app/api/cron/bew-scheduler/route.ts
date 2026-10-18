@@ -27,7 +27,15 @@ import {
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const MAX_CAMPAIGNS = 3;
+// How many campaigns ONE tick may scan. Each scan is itself bounded (≤
+// BATCH_SIZE messages, 5–6 s pacing each) and the tick's WALL budget
+// (SOFT_BUDGET_MS) is the hard cap either way. The list is DUE-AWARE
+// (listSendingBewCampaigns: in-flight first, then scheduled batches that
+// are now due, then timestamp-less legacy rows), so a larger scan cap
+// cannot let idle in-flight campaigns starve a due scheduled batch behind
+// the cap — with the old cap of 3 they could (regression: the pending
+// batch's started_at is NULL and Postgres orders NULLS LAST for ASC).
+const MAX_CAMPAIGNS = 10;
 const BATCH_SIZE = 5;
 const SOFT_BUDGET_MS = 45_000;
 

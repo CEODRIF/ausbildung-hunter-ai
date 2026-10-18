@@ -40,16 +40,25 @@ import {
 interface Props {
   view: BewViewDTO;
   refresh: () => Promise<void>;
+  /** Pump: fresh persisted view + one bounded drain of THIS campaign's due
+   *  queue (the same atomic claim core the cron uses). Resolves true when a
+   *  fresh view was received, false when the campaign is gone/not owned. */
+  pump: () => Promise<boolean>;
   selectedIds: Set<string>;
   onCancelSend: () => void;
   sending: boolean;
 }
 
-export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: Props) {
+export function SendStep({ view, refresh, pump, selectedIds, onCancelSend, sending }: Props) {
   const { t, lang } = useI18n();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Refresh button (scheduled card): loading state + inline notice/error,
+  // same notification pattern as the e-mail step (localized, no reload).
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   // Scheduled send (reuses the existing scheduler): the date/time/timezone
   // picker + the reschedule dialog are mutually exclusive with the immediate
   // confirm dialog. `scheduleError` shows a failed schedule/reschedule result.
@@ -163,6 +172,28 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
   const rescheduleAction = (fd: FormData) =>
     runScheduling(fd, (f) => bewRescheduleSend(f), () => setRescheduleOpen(false));
 
+  /** Refresh button: fetch the latest persisted status (and let the server
+   *  continue this campaign's queue if it is now due — bounded, idempotent,
+   *  nothing before the due instant). Loading state disables the button so
+   *  a slow drain can't stack concurrent requests. No page reload: the
+   *  fresh view re-renders every status field in place (status, queued /
+   *  sent / failed counts, and the schedule if it changed). */
+  async function refreshStatus() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshNotice(null);
+    setRefreshError(null);
+    try {
+      const ok = await pump();
+      if (ok) setRefreshNotice(t("bewauto.refreshed"));
+      else setRefreshError(t("bewauto.refreshFailed"));
+    } catch (e) {
+      setRefreshError(errMessage(e, t));
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   const c = view.campaign;
   const queued = view.applications.filter((a) => a.status === "queued").length;
   const inSending = view.applications.filter((a) => a.status === "sending").length;
@@ -198,22 +229,42 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
         </div>
       )}
 
-      {/* Scheduled batch that is still PENDING (not yet due): show the exact
-          instant + timezone, the eligible count, and Cancel / Reschedule. */}
-      {sending && scheduledPending && scheduledIso && scheduledZone && (
-        <div className="mb-6 rounded-2xl border border-accent/30 bg-accent-soft/40 p-4" role="status">
-          <p className="mb-2 text-sm font-semibold text-ink-soft">{t("bewauto.scheduledTitle")}</p>
-          <p className="text-sm font-medium text-ink">
-            {t("bewauto.scheduledFor", {
-              when: formatScheduledLocal(scheduledIso, scheduledZone, locale),
-              tz: scheduledZone,
-              offset: offsetLabelAt(scheduledIso, scheduledZone),
-            })}
-          </p>
-          <p className="mt-2 text-xs leading-5 text-muted">{t("bewauto.scheduledHint")}</p>
-          <div className="mt-3">
-            <StatusPill tone="neutral" label={t("bewauto.stQueuedCount", { n: queued })} />
-          </div>
+       {/* Scheduled batch that is still PENDING (not yet due): show the exact
+           instant + timezone, the eligible count, and Cancel / Reschedule.
+           The refresh icon re-reads the persisted status (and lets the
+           server continue the queue once it is due) without a page reload. */}
+       {sending && scheduledPending && scheduledIso && scheduledZone && (
+         <div className="mb-6 rounded-2xl border border-accent/30 bg-accent-soft/40 p-4" role="status">
+           <div className="mb-2 flex items-center justify-between gap-3">
+             <p className="text-sm font-semibold text-ink-soft">{t("bewauto.scheduledTitle")}</p>
+             <button
+               type="button"
+               onClick={() => void refreshStatus()}
+               disabled={refreshing}
+               aria-label={t("bewauto.refreshStatus")}
+               title={t("bewauto.refreshStatus")}
+               className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-line-strong bg-surface text-ink-soft transition hover:border-faint hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+             >
+               <Icon name="refresh" size={14} className={refreshing ? "animate-spin" : undefined} />
+             </button>
+           </div>
+           <p className="text-sm font-medium text-ink">
+             {t("bewauto.scheduledFor", {
+               when: formatScheduledLocal(scheduledIso, scheduledZone, locale),
+               tz: scheduledZone,
+               offset: offsetLabelAt(scheduledIso, scheduledZone),
+             })}
+           </p>
+           {refreshError && (
+             <p role="alert" className="mt-2 text-xs font-medium text-danger">{refreshError}</p>
+           )}
+           {refreshNotice && !refreshError && (
+             <p className="mt-2 text-xs font-medium text-success">{refreshNotice}</p>
+           )}
+           <p className="mt-2 text-xs leading-5 text-muted">{t("bewauto.scheduledHint")}</p>
+           <div className="mt-3">
+             <StatusPill tone="neutral" label={t("bewauto.stQueuedCount", { n: queued })} />
+           </div>
           <div className="mt-4 flex flex-wrap gap-3">
             <Button variant="ghost" size="sm" disabled={busy} className="text-danger hover:text-danger" onClick={onCancelSend}>
               <Icon name="stop" size={14} />

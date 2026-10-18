@@ -51,6 +51,9 @@ interface DB {
   removedPaths: string[];
   /** Tables whose INSERT should fail (compensation-path proofs). */
   insertFailTables: Set<string>;
+  /** Simulate a database WITHOUT the scheduled_at column (20261116 pending):
+   *  any query using `lte` fails, mirroring PostgREST's column-missing error. */
+  failLte: boolean;
 }
 
 function freshDb(): DB {
@@ -86,6 +89,7 @@ function freshDb(): DB {
     uploads: [],
     removedPaths: [],
     insertFailTables: new Set<string>(),
+    failLte: false,
   };
 }
 
@@ -221,8 +225,9 @@ function makeFrom(db: DB, table: TableKey) {
   const state = {
     op: "select" as string,
     payload: undefined as any,
-    filters: [] as Array<{ col: string; val: any }>,
+    filters: [] as Array<{ col: string; val: any; negated?: boolean }>,
     inFilters: [] as Array<{ col: string; values: any[] }>,
+    lteFilters: [] as Array<{ col: string; val: any }>,
     orderBy: [] as Array<{ col: string; ascending: boolean }>,
     limitN: undefined as number | undefined,
     selectCols: "*",
@@ -233,8 +238,12 @@ function makeFrom(db: DB, table: TableKey) {
 
   function rows(): Row[] {
     let out = (db[table] ?? []).slice();
-    for (const f of state.filters) out = out.filter((r) => r[f.col] === f.val);
+    for (const f of state.filters)
+      out = out.filter((r) => (f.negated ? r[f.col] !== f.val : r[f.col] === f.val));
     for (const f of state.inFilters) out = out.filter((r) => f.values.includes(r[f.col]));
+    // ISO-8601 strings compare chronologically as strings.
+    for (const f of state.lteFilters)
+      out = out.filter((r) => r[f.col] != null && r[f.col] <= f.val);
     if (state.orderBy.length) {
       out.sort((a, b) => {
         for (const o of state.orderBy) {
@@ -281,6 +290,8 @@ function makeFrom(db: DB, table: TableKey) {
       return { data: existing ?? db[table][db[table].length - 1], error: null };
     }
     // select
+    if (state.lteFilters.length > 0 && db.failLte)
+      return { data: null, error: { message: "column scheduled_at does not exist (injected)" } };
     const matched = rows();
     if (state.selectOpts?.count) return { data: state.selectOpts.head ? null : matched, error: null, count: matched.length };
     if (state.terminal === "single") return { data: matched[0] ?? null, error: null };
@@ -295,6 +306,19 @@ function makeFrom(db: DB, table: TableKey) {
     },
     in(col: string, values: any[]) {
       state.inFilters.push({ col, values });
+      return chain;
+    },
+    is(col: string, val: any) {
+      state.filters.push({ col, val });
+      return chain;
+    },
+    not(col: string, op: string, val: any) {
+      if (op !== "is") throw new Error("fake chain: not() supports 'is' only");
+      state.filters.push({ col, val, negated: true });
+      return chain;
+    },
+    lte(col: string, val: any) {
+      state.lteFilters.push({ col, val });
       return chain;
     },
     order(col: string, o?: { ascending?: boolean }) {
@@ -807,19 +831,21 @@ describe("scheduled sending — reuses the existing scheduler (no second system)
       selectedSeqs: [1],
       scheduling: { utcIso: future, timeZone: "Europe/Berlin" },
     });
-    // The scheduler's input: the pending batch is listed (status 'sending').
-    const listed = await listSendingBewCampaigns();
-    expect(listed.map((c) => c.id)).toContain(CAMPAIGN);
-
-    // BEFORE due: a drain (the cron tick) claims nothing → sends nothing.
+    // BEFORE due: the due-aware tick selection skips the pending batch
+    // (nothing is claimable yet — no wasted campaign slot) and a direct drain
+    // claims nothing → sends nothing.
+    expect((await listSendingBewCampaigns()).map((c) => c.id)).not.toContain(CAMPAIGN);
     db.sendScripts = [okSend("too-early")];
     const early = await processBewSendBatch(USER, CAMPAIGN, 5);
     expect(early.sent).toBe(0);
     expect(db.sendLog).toHaveLength(0);
     expect(db.bew_applications[0].status).toBe("queued");
 
-    // DUE (simulate time passing): the same claim core sends it exactly once.
+    // DUE (simulate time passing): the batch is now listed, and the SAME
+    // idempotency core sends it exactly once.
+    db.bew_campaigns[0].scheduled_at = new Date(0).toISOString();
     db.bew_applications[0].next_attempt_at = new Date(0).toISOString();
+    expect((await listSendingBewCampaigns()).map((c) => c.id)).toContain(CAMPAIGN);
     const late = await processBewSendBatch(USER, CAMPAIGN, 5);
     expect(late.sent).toBe(1);
     expect(db.sendLog).toHaveLength(1);
@@ -903,6 +929,87 @@ describe("scheduled sending — reuses the existing scheduler (no second system)
     expect(db.daily_usage.find((d) => d.date === usageDate)!.emails_reserved).toBe(0);
     expect(db.bew_applications.every((a) => a.status === "generated")).toBe(true);
     expect(db.sendLog).toHaveLength(0);
+  });
+});
+
+describe("listSendingBewCampaigns — due-aware selection (scheduled-batch starvation regression)", () => {
+  /** Minimal campaign row for selection tests (only the read columns matter). */
+  function seedRow(id: string, over: Partial<Row> = {}) {
+    db.bew_campaigns.push({
+      id,
+      user_id: USER,
+      status: "sending",
+      started_at: null,
+      scheduled_at: null,
+      ...over,
+    });
+  }
+  const pastIso = () => new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const futureIso = () => new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+  it("lists a scheduled batch that is NOW DUE (started_at null by design)", async () => {
+    seedRow("camp-due", { scheduled_at: pastIso() });
+    expect(await listSendingBewCampaigns()).toEqual([{ id: "camp-due", user_id: USER }]);
+  });
+
+  it("excludes a scheduled batch that is NOT yet due (nothing is claimable yet)", async () => {
+    seedRow("camp-pending", { scheduled_at: futureIso() });
+    expect(await listSendingBewCampaigns()).toEqual([]);
+  });
+
+  it("a due scheduled batch is not starved behind in-flight campaigns at the tick cap", async () => {
+    seedRow("camp-inf-1", { started_at: pastIso() });
+    seedRow("camp-inf-2", { started_at: pastIso() });
+    seedRow("camp-inf-3", { started_at: pastIso() });
+    seedRow("camp-due", { scheduled_at: pastIso() });
+
+    // Even with due-aware ordering, at the OLD cap of 3 the due batch still
+    // falls behind the three in-flight rows — which is why the cap had to be
+    // raised to 10 together with the ordering fix (both halves of the fix).
+    const oldCap = await listSendingBewCampaigns(3);
+    expect(oldCap.map((c) => c.id)).toEqual(["camp-inf-1", "camp-inf-2", "camp-inf-3"]);
+
+    // At the tick's cap (10): in-flight first (unchanged priority), then the
+    // due batch — the regression where the pending batch sat behind the cap.
+    const listed = await listSendingBewCampaigns(10);
+    expect(listed.map((c) => c.id)).toEqual(["camp-inf-1", "camp-inf-2", "camp-inf-3", "camp-due"]);
+  });
+
+  it("keeps in-flight campaigns in FIFO order by started_at", async () => {
+    seedRow("camp-new", { started_at: new Date(Date.now() - 30 * 60 * 1000).toISOString() });
+    seedRow("camp-old", { started_at: new Date(Date.now() - 120 * 60 * 1000).toISOString() });
+    const listed = await listSendingBewCampaigns();
+    expect(listed.map((c) => c.id)).toEqual(["camp-old", "camp-new"]);
+  });
+
+  it("orders due batches by scheduled_at ascending (longest-waiting first)", async () => {
+    seedRow("camp-far", { scheduled_at: new Date(Date.now() - 60 * 60 * 1000).toISOString() });
+    seedRow("camp-near", { scheduled_at: new Date(Date.now() - 15 * 60 * 1000).toISOString() });
+    const listed = await listSendingBewCampaigns();
+    expect(listed.map((c) => c.id)).toEqual(["camp-far", "camp-near"]);
+  });
+
+  it("lists an in-flight campaign that STARTED from a schedule exactly once (no duplicate)", async () => {
+    // After the first real claim the row carries BOTH timestamps.
+    seedRow("camp-started-from-schedule", { started_at: pastIso(), scheduled_at: pastIso() });
+    expect(await listSendingBewCampaigns()).toEqual([
+      { id: "camp-started-from-schedule", user_id: USER },
+    ]);
+  });
+
+  it("drains timestamp-less legacy rows last (never stranded, never prioritized)", async () => {
+    seedRow("camp-legacy");
+    seedRow("camp-inf", { started_at: pastIso() });
+    seedRow("camp-due", { scheduled_at: pastIso() });
+    const listed = await listSendingBewCampaigns();
+    expect(listed.map((c) => c.id)).toEqual(["camp-inf", "camp-due", "camp-legacy"]);
+  });
+
+  it("on a database without the scheduled_at column the read degrades to the in-flight list — never empty", async () => {
+    seedRow("camp-inf", { started_at: pastIso() });
+    seedRow("camp-due", { scheduled_at: pastIso() });
+    db.failLte = true; // the due/legacy reads fail as on a pre-20261116 database
+    expect(await listSendingBewCampaigns()).toEqual([{ id: "camp-inf", user_id: USER }]);
   });
 });
 

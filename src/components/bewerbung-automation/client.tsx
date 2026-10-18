@@ -18,6 +18,7 @@ import {
   bewCancelSend,
   bewCreateCampaign,
   bewGetView,
+  bewRefreshSend,
 } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
 import {
@@ -153,14 +154,31 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
     if (fresh) setView(fresh);
   }, [view]);
 
-  /* Poll the view while a send is draining (the browser is just one of the
-     concurrent drivers; the engine's atomic claims keep it safe). */
+  /* Step-5 pump: fresh view + one bounded drain of THIS campaign's due
+      queue (the same atomic claim core the cron tick uses — nothing sends
+      before its due instant, and overlapping drivers cannot double-send).
+      Returns true when a fresh view was received (false = not found /
+      not owned — the displayed view is left untouched). */
+  const pump = useCallback(async (): Promise<boolean> => {
+    if (!view) return false;
+    const fresh = await bewRefreshSend(view.campaign.id);
+    if (fresh) setView(fresh);
+    return Boolean(fresh);
+  }, [view]);
+
+  /* Poll (and CONTINUE) the send every 3 s while it is in flight. The
+      browser is one of the concurrent drivers — the server action runs the
+      same bounded, SKIP-LOCKED drain the cron tick does, so a scheduled
+      batch that is now due is released at the due instant (the Actions
+      cron runs at an irregular cadence and is only the durable fallback),
+      and the remainder of an immediate send keeps flowing while the user
+      is here. The engine's atomic claims keep all drivers safe. */
   const campaignId = view?.campaign.id ?? null;
   const sending = view?.campaign.status === "sending";
   useEffect(() => {
     if (!campaignId || !sending) return;
     const id = setInterval(() => {
-      bewGetView(campaignId)
+      bewRefreshSend(campaignId)
         .then((fresh) => {
           if (fresh) setView(fresh);
         })
@@ -463,6 +481,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
           <SendStep
             view={view}
             refresh={refresh}
+            pump={pump}
             selectedIds={selectedIds}
             onCancelSend={() => void cancelCurrentSend()}
             sending={sending}

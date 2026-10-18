@@ -51,7 +51,11 @@ const engineMockFactory = (name: string, impl?: (...a: unknown[]) => unknown) =>
     return undefined;
   });
 
+/** Injectable drain outcome for the bewRefreshSend tests. */
+const drainBehavior: { reject?: Error } = {};
+
 vi.mock("@/lib/bewerbung-engine", () => ({
+  BEW_MAX_BATCH: 5,
   attachBewDocument: engineMockFactory("attachBewDocument", () => ({ ok: true })),
   cancelBewSend: engineMockFactory("cancelBewSend", () => ({ cancelled: 0 })),
   createBewCampaign: engineMockFactory("createBewCampaign", () => ({
@@ -74,6 +78,10 @@ vi.mock("@/lib/bewerbung-engine", () => ({
     senderEmail: null,
   })),
   listBewDocuments: engineMockFactory("listBewDocuments", () => []),
+  processBewSendBatch: engineMockFactory("processBewSendBatch", () => {
+    if (drainBehavior.reject) throw drainBehavior.reject;
+    return { processed: 0, sent: 0, failed: 0, remaining: 0 };
+  }),
   rescheduleBewSend: engineMockFactory("rescheduleBewSend", () => ({ ok: true })),
   restoreBewApplication: engineMockFactory("restoreBewApplication"),
   saveBewCompanies: engineMockFactory("saveBewCompanies", () => ({
@@ -99,6 +107,7 @@ function login(user: { id: string } | null = USER) {
 beforeEach(() => {
   engineCalls.length = 0;
   redirectMock.mockClear();
+  drainBehavior.reject = undefined;
   login();
 });
 
@@ -209,6 +218,35 @@ describe("action → engine argument mapping (service contract)", () => {
     expect(call.args).toEqual(["user-1", "c9"]);
   });
 
+});
+
+describe("bewRefreshSend — status refresh + bounded drain", () => {
+  it("redirects to /login when there is no authenticated user (engine never touched)", async () => {
+    login(null);
+    await expect(actions.bewRefreshSend("c1")).rejects.toThrow("NEXT_REDIRECT");
+    expect(redirectMock).toHaveBeenCalledWith("/login");
+    expect(engineCalls).toHaveLength(0);
+  });
+
+  it("drains THIS campaign (bounded) first, then returns the fresh owner view", async () => {
+    const view = await actions.bewRefreshSend("c7");
+    const drain = engineCalls.find((c) => c.fn === "processBewSendBatch")!;
+    // The authenticated user id is used — never anything client-chosen — and
+    // the batch is bounded by the engine's BEW_MAX_BATCH (5).
+    expect(drain.args).toEqual(["user-1", "c7", 5]);
+    const viewCall = engineCalls.find((c) => c.fn === "getBewCampaignView")!;
+    expect(viewCall.args).toEqual(["user-1", "c7"]);
+    // Drain BEFORE the view, so the returned view reflects the drain outcome.
+    expect(engineCalls.indexOf(drain)).toBeLessThan(engineCalls.indexOf(viewCall));
+    expect(view).toMatchObject({ campaign: { id: "c" } });
+  });
+
+  it("a drain failure is NON-FATAL: the action still resolves with the fresh view", async () => {
+    drainBehavior.reject = new Error("injected drain failure");
+    const view = await actions.bewRefreshSend("c7");
+    expect(view).toMatchObject({ campaign: { id: "c" } });
+    expect(engineCalls.find((c) => c.fn === "getBewCampaignView")).toBeTruthy();
+  });
 });
 
 describe("isolation from the protected e-mail machinery (static source guard)", () => {
