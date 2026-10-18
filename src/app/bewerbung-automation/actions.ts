@@ -41,6 +41,7 @@ import {
   saveBewCompanies,
   setBewCompanyCount,
   setCampaignSender,
+  addBewCompanyRows,
   startBewSend,
   updateBewApplicationFields,
   updateBewCampaignEmail,
@@ -225,6 +226,24 @@ export async function bewSetCompanyCount(
   const count = Number(readString(formData, "count"));
   const campaign = await setBewCompanyCount(userId, campaignId, count);
   return { campaignId: campaign.id, requestedCount: campaign.requested_count };
+}
+
+/**
+ * Add REAL empty company rows to the campaign (grows the series beyond the
+ * seeded rows, up to the 100-per-campaign platform cap). The server
+ * re-validates the batch (INVALID_COUNT), clamps it to the remaining room,
+ * rejects a full campaign (CAMPAIGN_FULL) and enforces the same locks as
+ * the other step-1 mutations (CAMPAIGN_CLOSED / APPLICATION_LOCKED).
+ * Returns the server-confirmed numbers.
+ */
+export async function bewAddCompanyRows(
+  formData: FormData,
+): Promise<{ campaignId: string; added: number; total: number }> {
+  const { userId } = await requireUser();
+  const campaignId = readString(formData, "campaignId");
+  const count = Number(readString(formData, "count"));
+  const res = await addBewCompanyRows(userId, campaignId, count);
+  return { campaignId, ...res };
 }
 
 /** Edit a single company row (invalidates a stale generated letter). */

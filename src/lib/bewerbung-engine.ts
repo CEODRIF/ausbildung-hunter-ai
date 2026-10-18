@@ -84,6 +84,7 @@ import {
   type LetterPromptInput,
   type LetterQualityResult,
   type LetterEvalVerdict,
+  BEW_MAX_COUNT,
   BEW_PLATFORM_DAILY_CAP,
 } from "@/lib/bewerbung-automation";
 
@@ -722,6 +723,89 @@ export async function setBewCompanyCount(
     throw new Error("SAVE_FAILED");
   }
   return data as unknown as BewCampaignRow;
+}
+
+/**
+ * Add `count` REAL empty pending application rows to an EXISTING campaign —
+ * how a series grows beyond the rows that were seeded at creation (the user
+ * wants to fill 100 companies in the same campaign, not just raise the
+ * target number).
+ *
+ * Contract (mirrors the other step-1 mutations):
+ *   - the batch is validated with the SAME 1..100 rule as creation
+ *     (INVALID_COUNT for empty/negative/fractional/too-large),
+ *   - ownership is enforced by the read (foreign/unknown → NOT_FOUND),
+ *   - a TERMINAL campaign (completed / partially_failed / cancelled) and a
+ *     campaign with a SEND IN FLIGHT reject the change (CAMPAIGN_CLOSED /
+ *     APPLICATION_LOCKED),
+ *   - the 100-per-campaign cap (BEW_MAX_COUNT — the platform limit, same as
+ *     creation and import) is enforced against ALL existing rows, including
+ *     excluded ones (they hold a seq slot): the batch is clamped to the
+ *     remaining room, and a campaign that is already full rejects with
+ *     CAMPAIGN_FULL,
+ *   - the new rows continue the seq sequence (max seq + 1 — the table has
+ *     UNIQUE(campaign_id, seq)) and are byte-identical in shape to the
+ *     creation seeds (empty pending rows — NOT fake company data),
+ *   - the denormalized counters are RECOMPUTED after the insert (the 42703
+ *     lesson: a missed counter write freezes the wizard's step gates),
+ *   - the batch insert is a single statement — atomic; a failed insert
+ *     (SAVE_FAILED) leaves the campaign untouched.
+ *
+ * The returned rows are ordinary `bew_applications` records: editable via
+ * the existing per-row save, replaceable by import, counted by the validity
+ * gate and sendable through the existing send flow once they carry a name
+ * and a valid e-mail.
+ */
+export async function addBewCompanyRows(
+  userId: string,
+  campaignId: string,
+  count: number,
+): Promise<{ added: number; total: number }> {
+  const check = validateCompanyCount(count);
+  if (!check.ok) throw new Error("INVALID_COUNT");
+  const { admin, campaign } = await requireOwnedCampaign(userId, campaignId);
+  if (BEW_TERMINAL_CAMPAIGN.has(campaign.status)) throw new Error("CAMPAIGN_CLOSED");
+  if (campaign.status === "sending") throw new Error("APPLICATION_LOCKED");
+  const { data: existing, error: readError } = await admin
+    .from("bew_applications")
+    .select("seq")
+    .eq("campaign_id", campaignId)
+    .eq("user_id", userId)
+    .order("seq", { ascending: true });
+  if (readError || !existing) {
+    console.error(
+      "[bew] addBewCompanyRows: existing rows read failed",
+      readError?.message ?? "no data returned",
+    );
+    throw new Error("SAVE_FAILED");
+  }
+  const current = existing.length;
+  if (current >= BEW_MAX_COUNT) throw new Error("CAMPAIGN_FULL");
+  const n = Math.min(check.value, BEW_MAX_COUNT - current);
+  const maxSeq = (existing as Array<{ seq?: number | null }>).reduce(
+    (m, r) => Math.max(m, r?.seq ?? 0),
+    0,
+  );
+  const rows = Array.from({ length: n }, (_, i) => ({
+    campaign_id: campaignId,
+    user_id: userId,
+    seq: maxSeq + 1 + i,
+    company_name: "",
+    company_email: "",
+    contact_name: null,
+    company_address: null,
+    subject: "",
+    body_html: "",
+    body_text: "",
+    status: "pending",
+  }));
+  const { error: insertError } = await admin.from("bew_applications").insert(rows);
+  if (insertError) {
+    console.error("[bew] addBewCompanyRows: row insert failed", insertError.message);
+    throw new Error("SAVE_FAILED");
+  }
+  await refreshCampaignCounters(admin, campaignId);
+  return { added: n, total: current + n };
 }
 
 /**
