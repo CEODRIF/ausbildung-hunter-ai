@@ -2392,6 +2392,14 @@ const de = {
     enteredOf: "{entered} von {target} Unternehmen eingegeben",
     targetReached: "Ziel erreicht",
     countMaxHint: "Maximal 100 Unternehmen pro Serie (Plattform-Limit).",
+    addRowsLabel: "Zeilen hinzufügen",
+    addRowsHint:
+      "Leere Unternehmenszeilen in dieser Serie anlegen (echte Zeilen, mit der Serie gespeichert). Maximal 100 pro Serie.",
+    addRowsBatchAria: "Anzahl der hinzuzufügenden Zeilen",
+    addRowsDecreaseAria: "Anzahl der hinzuzufügenden Zeilen verringern",
+    addRowsIncreaseAria: "Anzahl der hinzuzufügenden Zeilen erhöhen",
+    addRowsButton: "Hinzufügen",
+    addRowsFull: "100 / 100 — Serien-Limit erreicht (Plattform-Limit).",
     importTitle: "Datei-Import (CSV, Excel, PDF)",
     importHint:
       "Die Datei wird zuerst als Vorschau geprüft: doppelte und ungültige Einträge werden angezeigt, nichts wird stillschweigend verworfen.",
@@ -2624,6 +2632,8 @@ const de = {
     /* Fehlermeldungen (stable server codes) */
     err: {
       INVALID_COUNT: "Bitte eine ganze Zahl zwischen 1 und 100 eingeben.",
+      CAMPAIGN_FULL:
+        "Diese Serie ist voll (maximal 100 Unternehmen pro Serie — Plattform-Limit).",
       INVALID_PURPOSE: "Ungültiger Bewerbungstyp.",
       INVALID_RECORDS: "Die Firmendaten sind ungültig oder überschreiten 100 Einträge.",
       INVALID_KIND: "Ungültige Dokumentenart.",
@@ -5004,6 +5014,14 @@ const en: Dict = {
     enteredOf: "{entered} of {target} companies entered",
     targetReached: "Target reached",
     countMaxHint: "Maximum of 100 companies per series (platform limit).",
+    addRowsLabel: "Add rows",
+    addRowsHint:
+      "Create empty company rows in this series (real rows, saved with the series). Maximum of 100 per series.",
+    addRowsBatchAria: "Number of rows to add",
+    addRowsDecreaseAria: "Decrease number of rows to add",
+    addRowsIncreaseAria: "Increase number of rows to add",
+    addRowsButton: "Add",
+    addRowsFull: "100 / 100 — series limit reached (platform limit).",
     importTitle: "File import (CSV, Excel, PDF)",
     importHint:
       "The file is checked as a preview first: duplicate and invalid entries are shown, nothing is silently discarded.",
@@ -5236,6 +5254,8 @@ const en: Dict = {
     /* Error messages (stable server codes) */
     err: {
       INVALID_COUNT: "Please enter a whole number between 1 and 100.",
+      CAMPAIGN_FULL:
+        "This series is full (maximum of 100 companies per series — platform limit).",
       INVALID_PURPOSE: "Invalid application type.",
       INVALID_RECORDS: "The company data is invalid or exceeds 100 entries.",
       INVALID_KIND: "Invalid document type.",
@@ -7617,6 +7637,14 @@ const fr: Dict = {
     enteredOf: "{entered} sur {target} entreprises saisies",
     targetReached: "Objectif atteint",
     countMaxHint: "100 entreprises maximum par série (limite de la plateforme).",
+    addRowsLabel: "Ajouter des lignes",
+    addRowsHint:
+      "Créer des lignes d'entreprises vides dans cette série (lignes réelles, enregistrées avec la série). 100 maximum par série.",
+    addRowsBatchAria: "Nombre de lignes à ajouter",
+    addRowsDecreaseAria: "Diminuer le nombre de lignes à ajouter",
+    addRowsIncreaseAria: "Augmenter le nombre de lignes à ajouter",
+    addRowsButton: "Ajouter",
+    addRowsFull: "100 / 100 — limite de la série atteinte (limite de la plateforme).",
     importTitle: "Import de fichier (CSV, Excel, PDF)",
     importHint:
       "Le fichier est d'abord vérifié en aperçu : les doublons et les entrées invalides sont affichés, rien n'est supprimé en silence.",
@@ -7849,6 +7877,8 @@ const fr: Dict = {
     /* Messages d'erreur (codes serveur stables) */
     err: {
       INVALID_COUNT: "Veuillez saisir un nombre entier entre 1 et 100.",
+      CAMPAIGN_FULL:
+        "Cette série est pleine (100 entreprises maximum par série — limite de la plateforme).",
       INVALID_PURPOSE: "Type de candidature invalide.",
       INVALID_RECORDS: "Les données d'entreprise sont invalides ou dépassent 100 entrées.",
       INVALID_KIND: "Type de document invalide.",
@@ -10178,6 +10208,14 @@ const ar: Dict = {
     enteredOf: "تم إدخال {entered} من {target} شركة",
     targetReached: "تم بلوغ الهدف",
     countMaxHint: "الحد الأقصى 100 شركة لكل سلسلة (حد المنصة).",
+    addRowsLabel: "إضافة صفوف",
+    addRowsHint:
+      "إنشاء صفوف شركات فارغة في هذه السلسلة (صفوف حقيقية تُحفظ مع الحملة). الحد الأقصى 100 لكل سلسلة.",
+    addRowsBatchAria: "عدد الصفوف لإضافتها",
+    addRowsDecreaseAria: "إنقاص عدد الصفوف لإضافتها",
+    addRowsIncreaseAria: "زيادة عدد الصفوف لإضافتها",
+    addRowsButton: "إضافة",
+    addRowsFull: "100 / 100 — تم بلوغ حد السلسلة (حد المنصة).",
     importTitle: "استيراد ملف (CSV، Excel، PDF)",
     importHint:
       "يُفحص الملف كعينة أولًا: تُعرض السلل المكررة وغير الصالحة، ولا يُحذف شيء بصمت.",
@@ -10404,6 +10442,8 @@ const ar: Dict = {
     /* رسائل الخطأ (رموز خادم ثابتة) */
     err: {
       INVALID_COUNT: "الرجاء إدخال رقم صحيح بين 1 و100.",
+      CAMPAIGN_FULL:
+        "هذه السلسلة ممتلئة (الحد الأقصى 100 شركة لكل سلسلة — حد المنصة).",
       INVALID_PURPOSE: "نوع الطلب غير صالح.",
       INVALID_RECORDS: "بيانات الشركات غير صالحة أو تتجاوز 100 سطر.",
       INVALID_KIND: "نوع المستند غير صالح.",

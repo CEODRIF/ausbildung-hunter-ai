@@ -317,6 +317,7 @@ vi.mock("@/app/bewerbung-automation/actions", () => ({
   bewCreateCampaign: vi.fn(async () => ({ campaignId: "c", count: 10 })),
   bewGetView: vi.fn(async () => null),
   bewSetCompanyCount: vi.fn(async () => ({ campaignId: "c1", requestedCount: 1 })),
+  bewAddCompanyRows: vi.fn(async () => ({ campaignId: "c1", added: 0, total: 1 })),
 }));
 
 const React = await import("react");

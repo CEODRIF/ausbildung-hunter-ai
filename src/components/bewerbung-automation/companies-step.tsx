@@ -13,6 +13,7 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  bewAddCompanyRows,
   bewExcludeApplication,
   bewSaveCompanies,
   bewSetCompanyCount,
@@ -24,6 +25,7 @@ import {
   isValidEmail,
   recordsFromCsvMatrix,
 } from "@/lib/bewerbung-automation";
+import { AddRowsControl } from "./add-rows";
 import { CompanyCountStepper } from "./company-count";
 import { Button, Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
@@ -582,6 +584,33 @@ export const CompaniesStep = memo(function CompaniesStep({
     [patchCampaign, t],
   );
 
+  /* ADD REAL ROWS — grow the campaign beyond its seeded rows (up to the
+      100 platform cap). The server does one atomic insert of empty pending
+      rows and recomputes the counters; then the plain refresh brings the
+      new rows (and totals) into the view — they are DB rows from here on,
+      so they survive reload, step navigation, imports and the send flow. */
+  const [addRowsBusy, setAddRowsBusy] = useState(false);
+  const onAddRows = useCallback(
+    async (count: number) => {
+      if (creatingRef.current) return;
+      const status = campaignStatusRef.current;
+      if (status === "sending" || isBewCampaignTerminal(status)) return;
+      setAddRowsBusy(true);
+      try {
+        const fd = new FormData();
+        fd.set("campaignId", campaignIdRef.current);
+        fd.set("count", String(count));
+        await bewAddCompanyRows(fd);
+        await refresh();
+      } catch (e) {
+        setError(errMessage(e, t));
+      } finally {
+        setAddRowsBusy(false);
+      }
+    },
+    [refresh, t],
+  );
+
   async function handleFile(file: File) {
     setBusy(true);
     setError(null);
@@ -702,10 +731,10 @@ export const CompaniesStep = memo(function CompaniesStep({
           </a>
         </div>
 
-        {/* Company TARGET (user-controlled count). The persisted target
-            (requested_count) and the ACTUAL entries stay visible side by
-            side — changing the target never creates or fills rows. */}
-        <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-line bg-surface-2/40 px-4 py-3">
+        {/* Company TARGET (user-controlled goal) + ADD ROWS (grow the real
+            row list to 100). The persisted target (requested_count), the
+            actual entries and the row capacity stay visible side by side. */}
+        <div className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-2xl border border-line bg-surface-2/40 px-4 py-3">
           <CompanyCountStepper
             target={view.campaign.requested_count}
             actual={visibleRows.length}
@@ -716,6 +745,17 @@ export const CompaniesStep = memo(function CompaniesStep({
             }
             busy={countBusy}
             onCommit={onCommitCount}
+            t={t}
+          />
+          <AddRowsControl
+            total={view.applications.length}
+            disabled={
+              creatingSeries ||
+              lockApp ||
+              isBewCampaignTerminal(view.campaign.status)
+            }
+            busy={addRowsBusy}
+            onAdd={onAddRows}
             t={t}
           />
         </div>
