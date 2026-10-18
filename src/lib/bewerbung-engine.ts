@@ -52,6 +52,7 @@ import {
   assembleLetter,
   BEW_EMAIL_BODY_MAX,
   BEW_EMAIL_SUBJECT_MAX,
+  BEW_TERMINAL_CAMPAIGN_STATUSES,
   buildImportResult,
   buildLetterPrompt,
   buildSubject,
@@ -201,11 +202,7 @@ export const BEW_MAX_BATCH = 5;
 /** Retry backoff for a transient send failure (seconds). */
 const BEW_RETRY_AFTER_SECONDS = 60;
 
-const BEW_TERMINAL_CAMPAIGN = new Set([
-  "completed",
-  "partially_failed",
-  "cancelled",
-]);
+const BEW_TERMINAL_CAMPAIGN = new Set<string>(BEW_TERMINAL_CAMPAIGN_STATUSES);
 /** App states from which a letter can be generated / regenerated. */
 const BEW_GENERATABLE = ["pending", "failed"];
 /** App states that are part of the send queue (must not be edited). */
@@ -679,6 +676,52 @@ export async function saveBewCompanies(
 
   const fresh = await getBewCampaignOwned(admin, userId, campaignId);
   return { campaign: fresh ?? campaign, result };
+}
+
+/**
+ * Set the campaign's TARGET company count (`requested_count`) — the number
+ * of companies the user WANTS the series to cover.
+ *
+ * Contract (mirrors the other step-1 mutations):
+ *   - the count is validated with the SAME rule as creation (1..100 — the
+ *     platform daily cap, and inside the DB CHECK `0..100`),
+ *   - ownership is enforced by the read; a foreign/unknown campaign id
+ *     yields NOT_FOUND,
+ *   - a TERMINAL campaign (completed / partially_failed / cancelled) and a
+ *     campaign with a SEND IN FLIGHT reject the change (CAMPAIGN_CLOSED /
+ *     APPLICATION_LOCKED — the same contract as the row and e-mail edits),
+ *   - ONLY `requested_count` is written. No application row is created,
+ *     filled or touched: the target is a goal, not a quota — empty rows are
+ *     never seeded to reach it (the user fills the rows manually or by
+ *     import, and entering MORE companies than the target is fine).
+ */
+export async function setBewCompanyCount(
+  userId: string,
+  campaignId: string,
+  count: number,
+): Promise<BewCampaignRow> {
+  const check = validateCompanyCount(count);
+  if (!check.ok) throw new Error("INVALID_COUNT");
+  const { admin, campaign } = await requireOwnedCampaign(userId, campaignId);
+  if (BEW_TERMINAL_CAMPAIGN.has(campaign.status)) throw new Error("CAMPAIGN_CLOSED");
+  if (campaign.status === "sending") throw new Error("APPLICATION_LOCKED");
+  const { data, error } = await admin
+    .from("bew_campaigns")
+    .update({ requested_count: check.value })
+    .eq("id", campaignId)
+    .eq("user_id", userId)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) {
+    // A failed target write must be visible (same lesson as the 42703
+    // counter regression: silent failures freeze the UI state).
+    console.error(
+      "[bew] setBewCompanyCount: requested_count update failed",
+      error?.message ?? "no row returned",
+    );
+    throw new Error("SAVE_FAILED");
+  }
+  return data as unknown as BewCampaignRow;
 }
 
 /**

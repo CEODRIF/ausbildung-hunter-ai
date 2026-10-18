@@ -39,6 +39,7 @@ import {
   rescheduleBewSend,
   restoreBewApplication,
   saveBewCompanies,
+  setBewCompanyCount,
   setCampaignSender,
   startBewSend,
   updateBewApplicationFields,
@@ -207,6 +208,23 @@ export async function bewSaveCompanies(
     valid: result.validCount,
     duplicates: result.duplicateEmails,
   };
+}
+
+/**
+ * Set the campaign's TARGET company count (requested_count). The rows are
+ * untouched — the target is a goal the user fills manually or by import.
+ * The server re-validates the 1..100 range (INVALID_COUNT) and enforces the
+ * same locks as the other step-1 mutations (CAMPAIGN_CLOSED /
+ * APPLICATION_LOCKED). Returns the server-confirmed value.
+ */
+export async function bewSetCompanyCount(
+  formData: FormData,
+): Promise<{ campaignId: string; requestedCount: number }> {
+  const { userId } = await requireUser();
+  const campaignId = readString(formData, "campaignId");
+  const count = Number(readString(formData, "count"));
+  const campaign = await setBewCompanyCount(userId, campaignId, count);
+  return { campaignId: campaign.id, requestedCount: campaign.requested_count };
 }
 
 /** Edit a single company row (invalidates a stale generated letter). */

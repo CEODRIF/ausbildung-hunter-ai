@@ -125,6 +125,32 @@ export function validateCompanyCount(n: unknown): CountCheck {
   return { ok: true, value: asNumber };
 }
 
+/**
+ * Clamp an arbitrary number into the campaign count range
+ * [BEW_MIN_COUNT, BEW_MAX_COUNT]. The stepper's −/+ buttons use this, so a
+ * double-click at a boundary can never push the target past 1 or 100 (the
+ * two GENUINE limits — the platform daily cap / DB CHECK). Non-finite input
+ * is pinned to the range edge its sign points to (NaN → the minimum).
+ */
+export function clampCompanyCount(n: number): number {
+  if (Number.isNaN(n)) return BEW_MIN_COUNT;
+  if (n === Infinity || n > BEW_MAX_COUNT) return BEW_MAX_COUNT;
+  if (n === -Infinity || n < BEW_MIN_COUNT) return BEW_MIN_COUNT;
+  const truncated = Math.trunc(n);
+  return Math.min(BEW_MAX_COUNT, Math.max(BEW_MIN_COUNT, truncated));
+}
+
+/** Campaign states after which the series is closed (no further edits). */
+export const BEW_TERMINAL_CAMPAIGN_STATUSES = [
+  "completed",
+  "partially_failed",
+  "cancelled",
+] as const;
+
+export function isBewCampaignTerminal(status: string): boolean {
+  return (BEW_TERMINAL_CAMPAIGN_STATUSES as readonly string[]).includes(status);
+}
+
 /* ------------------------------------------------------------------ *
  * E-mail validation
  * ------------------------------------------------------------------ */
