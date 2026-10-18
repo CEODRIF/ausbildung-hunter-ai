@@ -168,6 +168,49 @@ function rpc(db: DB, name: string, args: any): Promise<{ data: any; error: any }
       if (!stillSending) camp.status = "cancelled";
       return Promise.resolve({ data: cancelled, error: null });
     }
+    case "reserve_email_capacity_on": {
+      // Date-parameterised reserve: reserves against args.on_date (the
+      // scheduled date), mirroring the SQL RPC's daily_quota_exceeded.
+      let du = db.daily_usage.find((d) => d.user_id === args.target_user_id && d.date === args.on_date);
+      if (!du) {
+        du = { user_id: args.target_user_id, date: args.on_date, emails_sent: 0, emails_reserved: 0, daily_limit: 50 };
+        db.daily_usage.push(du);
+      }
+      const limit = du.daily_limit ?? 50;
+      const available = limit - du.emails_sent - du.emails_reserved;
+      if (args.requested <= 0 || args.requested > 1000)
+        return Promise.resolve({ data: null, error: { message: "invalid_request_size" } });
+      if (args.requested > available)
+        return Promise.resolve({ data: null, error: { message: "daily_quota_exceeded" } });
+      du.emails_reserved += args.requested;
+      return Promise.resolve({ data: { date: du.date, remaining: available - args.requested }, error: null });
+    }
+    case "bew_reschedule": {
+      const camp = db.bew_campaigns.find((c) => c.id === args.target_campaign_id && c.user_id === args.target_user_id);
+      if (!camp) return Promise.resolve({ data: false, error: null });
+      if (!args.new_scheduled_at || Date.parse(args.new_scheduled_at) <= Date.now()) return Promise.resolve({ data: false, error: null });
+      if (camp.status !== "sending" || camp.started_at !== null) return Promise.resolve({ data: false, error: null });
+      const reservedCount = db.bew_applications.filter((a) => a.campaign_id === camp.id && a.status === "queued").length;
+      if (reservedCount === 0) return Promise.resolve({ data: false, error: null });
+      if (camp.usage_date !== args.new_usage_date) {
+        const oldDu = db.daily_usage.find((d) => d.user_id === camp.user_id && d.date === camp.usage_date);
+        if (oldDu) oldDu.emails_reserved = Math.max(oldDu.emails_reserved - reservedCount, 0);
+        let newDu = db.daily_usage.find((d) => d.user_id === camp.user_id && d.date === args.new_usage_date);
+        if (!newDu) {
+          newDu = { user_id: camp.user_id, date: args.new_usage_date, emails_sent: 0, emails_reserved: 0, daily_limit: 50 };
+          db.daily_usage.push(newDu);
+        }
+        const avail = (newDu.daily_limit ?? 50) - newDu.emails_sent - newDu.emails_reserved;
+        if (reservedCount > avail) return Promise.resolve({ data: null, error: { message: "daily_quota_exceeded" } });
+        newDu.emails_reserved += reservedCount;
+      }
+      camp.scheduled_at = args.new_scheduled_at;
+      camp.timezone = args.new_timezone;
+      camp.usage_date = args.new_usage_date;
+      for (const a of db.bew_applications)
+        if (a.campaign_id === camp.id && a.status === "queued") a.next_attempt_at = args.new_scheduled_at;
+      return Promise.resolve({ data: true, error: null });
+    }
     default:
       return Promise.resolve({ data: null, error: { message: `unknown rpc ${name}` } });
   }
@@ -392,7 +435,9 @@ const {
   detachBewDocument,
   generateBewLetters,
   listBewDocuments,
+  listSendingBewCampaigns,
   processBewSendBatch,
+  rescheduleBewSend,
   restoreBewApplication,
   startBewSend,
   uploadBewDocument,
@@ -705,6 +750,159 @@ describe("startBewSend — explicit, quota-aware entry point", () => {
     expect(result.plan?.batch).toBe(1);
     expect(db.sendLog).toHaveLength(1);
     expect(db.sendLog[0].to).toBe("jobs3@firma3.de");
+  });
+});
+
+describe("scheduled sending — reuses the existing scheduler (no second system)", () => {
+  // Scheduled instants must fall on a LATER CALENDAR DAY than today: the
+  // quota is keyed by usage_date = utcIso.slice(0,10), and a same-day "future"
+  // instant would collide with today's quota row (the engine must reserve the
+  // future date's quota, not today's). 24h guarantees a different day at any
+  // execution time; extra hours keep the relative spacing of the cases.
+  const futureIn = (hours: number) => new Date(Date.now() + (24 + hours) * 60 * 60 * 1000).toISOString();
+
+  it("schedules: reserves the FUTURE date, future-dates the queue, leaves started_at null, sends NOTHING", async () => {
+    seedCampaign({ status: "draft" });
+    seedDocuments();
+    seedApp(1, { status: "generated" });
+    seedApp(2, { status: "generated" });
+    seedApp(3, { status: "generated" });
+    const future = futureIn(2);
+    const usageDate = future.slice(0, 10);
+    db.daily_usage.push({ user_id: USER, date: usageDate, emails_sent: 0, emails_reserved: 0, daily_limit: 50 });
+
+    const result = await startBewSend(USER, CAMPAIGN, {
+      selectedSeqs: [1, 2, 3],
+      scheduling: { utcIso: future, timeZone: "Europe/Berlin" },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.queuedCount).toBe(3);
+    // Persisted, not sent: NO immediate drain ran.
+    expect(db.sendLog).toHaveLength(0);
+    for (const a of db.bew_applications) {
+      expect(a.status).toBe("queued");
+      expect(a.next_attempt_at).toBe(future);
+    }
+    // Quota reserved on the FUTURE date, not today.
+    expect(db.daily_usage.find((d) => d.date === usageDate)!.emails_reserved).toBe(3);
+    expect(daily(db, USER).emails_reserved).toBe(0);
+    // Campaign: canonical instant + zone + scheduled usage_date; started_at
+    // stays NULL (pending → still cancellable / reschedulable; the first
+    // claim stamps it at the due instant).
+    const camp = db.bew_campaigns[0];
+    expect(camp.status).toBe("sending");
+    expect(camp.scheduled_at).toBe(future);
+    expect(camp.timezone).toBe("Europe/Berlin");
+    expect(camp.usage_date).toBe(usageDate);
+    expect(camp.started_at).toBeNull();
+  });
+
+  it("the existing drain sends nothing BEFORE the due instant, then the SAME idempotency core sends it once when due", async () => {
+    seedCampaign({ status: "draft" });
+    seedDocuments();
+    seedApp(1, { status: "generated" });
+    const future = futureIn(1);
+    db.daily_usage.push({ user_id: USER, date: future.slice(0, 10), emails_sent: 0, emails_reserved: 0, daily_limit: 50 });
+    await startBewSend(USER, CAMPAIGN, {
+      selectedSeqs: [1],
+      scheduling: { utcIso: future, timeZone: "Europe/Berlin" },
+    });
+    // The scheduler's input: the pending batch is listed (status 'sending').
+    const listed = await listSendingBewCampaigns();
+    expect(listed.map((c) => c.id)).toContain(CAMPAIGN);
+
+    // BEFORE due: a drain (the cron tick) claims nothing → sends nothing.
+    db.sendScripts = [okSend("too-early")];
+    const early = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(early.sent).toBe(0);
+    expect(db.sendLog).toHaveLength(0);
+    expect(db.bew_applications[0].status).toBe("queued");
+
+    // DUE (simulate time passing): the same claim core sends it exactly once.
+    db.bew_applications[0].next_attempt_at = new Date(0).toISOString();
+    const late = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(late.sent).toBe(1);
+    expect(db.sendLog).toHaveLength(1);
+    expect(db.bew_applications[0].status).toBe("sent");
+  });
+
+  it("reschedules a pending batch to a new future instant (moves quota + re-gates the queue), still sends nothing", async () => {
+    seedCampaign({ status: "draft" });
+    seedDocuments();
+    seedApp(1, { status: "generated" });
+    seedApp(2, { status: "generated" });
+    const first = futureIn(1);
+    const second = futureIn(25); // two days ahead (clearly a different quota date)
+    db.daily_usage.push({ user_id: USER, date: first.slice(0, 10), emails_sent: 0, emails_reserved: 0, daily_limit: 50 });
+    db.daily_usage.push({ user_id: USER, date: second.slice(0, 10), emails_sent: 0, emails_reserved: 0, daily_limit: 50 });
+    await startBewSend(USER, CAMPAIGN, {
+      selectedSeqs: [1, 2],
+      scheduling: { utcIso: first, timeZone: "Europe/Berlin" },
+    });
+    expect(db.daily_usage.find((d) => d.date === first.slice(0, 10))!.emails_reserved).toBe(2);
+
+    await rescheduleBewSend(USER, CAMPAIGN, { utcIso: second, timeZone: "Europe/Berlin" });
+
+    const camp = db.bew_campaigns[0];
+    expect(camp.scheduled_at).toBe(second);
+    expect(camp.usage_date).toBe(second.slice(0, 10));
+    for (const a of db.bew_applications) expect(a.next_attempt_at).toBe(second);
+    // Quota moved off the first date onto the second (nothing leaked).
+    expect(db.daily_usage.find((d) => d.date === first.slice(0, 10))!.emails_reserved).toBe(0);
+    expect(db.daily_usage.find((d) => d.date === second.slice(0, 10))!.emails_reserved).toBe(2);
+    expect(db.sendLog).toHaveLength(0);
+  });
+
+  it("refuses to reschedule once the batch has started (started_at set / row in flight)", async () => {
+    seedCampaign({ status: "sending", started_at: new Date().toISOString() });
+    seedDocuments();
+    seedApp(1, { status: "sending" }); // a claim already happened
+    await expect(
+      rescheduleBewSend(USER, CAMPAIGN, { utcIso: futureIn(2), timeZone: "Europe/Berlin" }),
+    ).rejects.toThrow("CANNOT_RESCHEDULE");
+  });
+
+  it("cancels a pending scheduled batch and releases the FUTURE-date quota", async () => {
+    seedCampaign({ status: "draft" });
+    seedDocuments();
+    seedApp(1, { status: "generated" });
+    seedApp(2, { status: "generated" });
+    const future = futureIn(1);
+    const usageDate = future.slice(0, 10);
+    db.daily_usage.push({ user_id: USER, date: usageDate, emails_sent: 0, emails_reserved: 0, daily_limit: 50 });
+    await startBewSend(USER, CAMPAIGN, {
+      selectedSeqs: [1, 2],
+      scheduling: { utcIso: future, timeZone: "Europe/Berlin" },
+    });
+    expect(db.daily_usage.find((d) => d.date === usageDate)!.emails_reserved).toBe(2);
+
+    const { cancelled } = await cancelBewSend(USER, CAMPAIGN);
+    expect(cancelled).toBe(2);
+    expect(db.daily_usage.find((d) => d.date === usageDate)!.emails_reserved).toBe(0);
+    expect(db.bew_applications.every((a) => a.status === "cancelled")).toBe(true);
+    expect(db.bew_campaigns[0].status).toBe("cancelled");
+    expect(db.sendLog).toHaveLength(0);
+  });
+
+  it("rejects a scheduled send that cannot be afforded on the FUTURE date (no partial reserve)", async () => {
+    seedCampaign({ status: "draft" });
+    seedDocuments();
+    seedApp(1, { status: "generated" });
+    seedApp(2, { status: "generated" });
+    const future = futureIn(1);
+    const usageDate = future.slice(0, 10);
+    // Only 1 slot left on the future date → 2 requested cannot be reserved.
+    db.daily_usage.push({ user_id: USER, date: usageDate, emails_sent: 49, emails_reserved: 0, daily_limit: 50 });
+    const result = await startBewSend(USER, CAMPAIGN, {
+      selectedSeqs: [1, 2],
+      scheduling: { utcIso: future, timeZone: "Europe/Berlin" },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("QUOTA_EXHAUSTED");
+    // Nothing reserved, nothing queued, nothing sent.
+    expect(db.daily_usage.find((d) => d.date === usageDate)!.emails_reserved).toBe(0);
+    expect(db.bew_applications.every((a) => a.status === "generated")).toBe(true);
+    expect(db.sendLog).toHaveLength(0);
   });
 });
 

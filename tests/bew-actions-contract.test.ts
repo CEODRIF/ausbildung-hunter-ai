@@ -74,6 +74,7 @@ vi.mock("@/lib/bewerbung-engine", () => ({
     senderEmail: null,
   })),
   listBewDocuments: engineMockFactory("listBewDocuments", () => []),
+  rescheduleBewSend: engineMockFactory("rescheduleBewSend", () => ({ ok: true })),
   restoreBewApplication: engineMockFactory("restoreBewApplication"),
   saveBewCompanies: engineMockFactory("saveBewCompanies", () => ({
     campaign: { id: "c" },
@@ -141,6 +142,51 @@ describe("action → engine argument mapping (service contract)", () => {
     expect(call.args[0]).toBe("user-1");
     expect(call.args[1]).toBe("c1");
     expect(call.args[2]).toEqual({ selectedSeqs: [1, 3, 7] });
+  });
+
+  it("bewStartSend with schedule fields forwards a server-converted scheduling", async () => {
+    const soon = new Date(Date.now() + 2 * 3600 * 1000);
+    const fd = new FormData();
+    fd.set("campaignId", "c1");
+    fd.set("selectedSeqs", JSON.stringify([1, 3]));
+    fd.set("scheduleYear", String(soon.getFullYear()));
+    fd.set("scheduleMonth", String(soon.getMonth() + 1));
+    fd.set("scheduleDay", String(soon.getDate()));
+    fd.set("scheduleHour", String(soon.getHours()));
+    fd.set("scheduleMinute", String(soon.getMinutes()));
+    fd.set("scheduleTimezone", "Europe/Berlin");
+    await actions.bewStartSend(fd);
+    const call = engineCalls.find((c) => c.fn === "startBewSend")!;
+    const opts = call.args[2] as { selectedSeqs: number[]; scheduling?: { utcIso: string; timeZone: string } };
+    expect(opts.selectedSeqs).toEqual([1, 3]);
+    expect(opts.scheduling).toBeTruthy();
+    expect(opts.scheduling!.timeZone).toBe("Europe/Berlin");
+    // The persisted instant is a canonical UTC ISO string (server-converted).
+    expect(new Date(opts.scheduling!.utcIso).toISOString()).toBe(opts.scheduling!.utcIso);
+  });
+
+  it("bewRescheduleSend forwards (userId, campaignId, scheduling) and refuses without one", async () => {
+    const soon = new Date(Date.now() + 2 * 3600 * 1000);
+    const fd = new FormData();
+    fd.set("campaignId", "c1");
+    fd.set("scheduleYear", String(soon.getFullYear()));
+    fd.set("scheduleMonth", String(soon.getMonth() + 1));
+    fd.set("scheduleDay", String(soon.getDate()));
+    fd.set("scheduleHour", String(soon.getHours()));
+    fd.set("scheduleMinute", String(soon.getMinutes()));
+    fd.set("scheduleTimezone", "Europe/Berlin");
+    await actions.bewRescheduleSend(fd);
+    const call = engineCalls.find((c) => c.fn === "rescheduleBewSend")!;
+    expect(call.args[0]).toBe("user-1");
+    expect(call.args[1]).toBe("c1");
+    expect(call.args[2]).toMatchObject({ timeZone: "Europe/Berlin" });
+
+    // No schedule fields → refuses BEFORE touching the engine.
+    const before = engineCalls.filter((c) => c.fn === "rescheduleBewSend").length;
+    const empty = new FormData();
+    empty.set("campaignId", "c1");
+    await expect(actions.bewRescheduleSend(empty)).rejects.toThrow("INVALID_SCHEDULE");
+    expect(engineCalls.filter((c) => c.fn === "rescheduleBewSend").length).toBe(before);
   });
 
   it("bewSaveCompanies forwards parsed records with null normalization", async () => {

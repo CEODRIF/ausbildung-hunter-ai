@@ -33,6 +33,7 @@ import {
   generateBewLetters,
   getBewCampaignView,
   listBewDocuments,
+  rescheduleBewSend,
   restoreBewApplication,
   saveBewCompanies,
   setCampaignSender,
@@ -41,6 +42,11 @@ import {
   updateBewCampaignEmail,
   updateBewLetter,
 } from "@/lib/bewerbung-engine";
+import {
+  isSupportedTimezone,
+  wallClockToUtc,
+  type DstResolution,
+} from "@/lib/schedule-time";
 import type {
   BewApplicationRow,
   BewCampaignView,
@@ -68,6 +74,53 @@ function readJson<T>(formData: FormData, key: string, fallback: T): T {
   } catch {
     throw new Error("INVALID_PAYLOAD");
   }
+}
+
+/** A schedule must be at least this far in the future — anything closer is
+ *  treated as "now" and rejected (the user should pick "Jetzt senden").
+ *  Measured against the SERVER clock (the browser clock is never trusted). */
+const BEW_MIN_FUTURE_MS = 60_000;
+
+/**
+ * Parse + validate an OPTIONAL schedule from the form (the same hidden
+ * inputs the reused ScheduleForm posts: scheduleYear..scheduleTimezone +
+ * dstResolution). Returns null when no schedule fields are present (an
+ * IMMEDIATE send). The server clock is authoritative for "future"; the
+ * wall-clock → UTC conversion is re-run here, exactly like the protected
+ * engine's schedule action — the browser preview is never persisted.
+ *
+ * Throws STABLE codes (INVALID_TIMEZONE / INVALID_SCHEDULE / SCHEDULE_NOT_FUTURE)
+ * so the client can map them to localized messages without leaking internals.
+ */
+function readScheduling(
+  formData: FormData,
+): { utcIso: string; timeZone: string } | null {
+  const rawYear = formData.get("scheduleYear");
+  const timeZone = String(formData.get("scheduleTimezone") ?? "");
+  // No schedule fields => immediate send (the common path, unchanged).
+  if (rawYear === null || rawYear === "" || !timeZone) return null;
+
+  if (!isSupportedTimezone(timeZone)) throw new Error("INVALID_TIMEZONE");
+  const year = Number(formData.get("scheduleYear"));
+  const month = Number(formData.get("scheduleMonth"));
+  const day = Number(formData.get("scheduleDay"));
+  const hour = Number(formData.get("scheduleHour"));
+  const minute = Number(formData.get("scheduleMinute"));
+  const rawResolution = String(formData.get("dstResolution") ?? "");
+  const resolution: DstResolution | null =
+    rawResolution === "start" || rawResolution === "end"
+      ? rawResolution
+      : null;
+
+  const result = wallClockToUtc(
+    { year, month, day, hour, minute },
+    timeZone,
+    resolution,
+  );
+  if (!result.ok) throw new Error("INVALID_SCHEDULE");
+  if (result.utcMs - Date.now() < BEW_MIN_FUTURE_MS)
+    throw new Error("SCHEDULE_NOT_FUTURE");
+  return { utcIso: result.utcIso, timeZone };
 }
 
 type CompanyRecord = {
@@ -284,14 +337,31 @@ export async function bewRestoreApplication(
 
 /* ------------------------------ Step 5 ------------------------------ */
 
-/** Explicit, quota-aware send start (the ONLY enqueue entry point). */
+/** Explicit, quota-aware send start (the ONLY enqueue entry point).
+ *  Optional schedule fields (from the reused ScheduleForm) turn this into a
+ *  SCHEDULED send; without them the argument shape is unchanged (immediate). */
 export async function bewStartSend(
   formData: FormData,
 ): Promise<StartSendResult> {
   const { userId } = await requireUser();
   const campaignId = readString(formData, "campaignId");
   const selectedSeqs = readJson<number[]>(formData, "selectedSeqs", []);
-  return await startBewSend(userId, campaignId, { selectedSeqs });
+  const scheduling = readScheduling(formData);
+  return await startBewSend(userId, campaignId, {
+    selectedSeqs,
+    ...(scheduling ? { scheduling } : {}),
+  });
+}
+
+/** Reschedule a PENDING scheduled batch to a new future instant. */
+export async function bewRescheduleSend(
+  formData: FormData,
+): Promise<{ ok: true }> {
+  const { userId } = await requireUser();
+  const campaignId = readString(formData, "campaignId");
+  const scheduling = readScheduling(formData);
+  if (!scheduling) throw new Error("INVALID_SCHEDULE");
+  return await rescheduleBewSend(userId, campaignId, scheduling);
 }
 
 /** Cancel all queued (not-yet-sent) applications; releases their quota. */

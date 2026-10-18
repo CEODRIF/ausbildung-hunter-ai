@@ -67,12 +67,18 @@ export interface BewCampaignDTO {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
-  /** The campaign-level e-mail message (independent from the per-company
-   *  Anschreiben, which stays a PDF attachment). Optional: rows read before
-   *  the 20261113000000 migration lack the columns — treat as "". */
-  email_subject?: string;
-  email_body_html?: string;
-}
+   /** The campaign-level e-mail message (independent from the per-company
+    *  Anschreiben, which stays a PDF attachment). Optional: rows read before
+    *  the 20261113000000 migration lack the columns — treat as "". */
+   email_subject?: string;
+   email_body_html?: string;
+   /** Scheduled send (20261116000000): the canonical UTC instant the batch is
+    *  due (null = immediate / not scheduled). Optional: pre-migration rows
+    *  lack the column — treat as "not scheduled". */
+   scheduled_at?: string | null;
+   /** IANA zone the user chose for the scheduled send (display/audit). */
+   timezone?: string | null;
+ }
 
 export interface BewCampaignDocumentDTO {
   id: string;

@@ -83,6 +83,7 @@ import {
   type LetterPromptInput,
   type LetterQualityResult,
   type LetterEvalVerdict,
+  BEW_PLATFORM_DAILY_CAP,
 } from "@/lib/bewerbung-automation";
 
 /* ------------------------------------------------------------------ *
@@ -102,23 +103,32 @@ export type BewCampaignRow = {
   sent_count: number;
   failed_count: number;
   excluded_count: number;
-  usage_date: string;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  /**
-   * The campaign-level e-mail message (independent from the per-company
-   * Anschreiben, which stays an ATTACHMENT). Optional in the type: rows read
-   * before the 20261113000000 migration simply lack the columns — the code
-   * treats absence as "no e-mail yet" (empty strings).
-   */
-  email_subject?: string;
-  email_body_html?: string;
-  /** Position brief (20261115000000) — the role this campaign targets. */
-  position_title?: string;
-  position_brief?: string;
-  employer_facts?: string;
-};
+   usage_date: string;
+   created_at: string;
+   started_at: string | null;
+   completed_at: string | null;
+   /**
+    * The campaign-level e-mail message (independent from the per-company
+    * Anschreiben, which stays an ATTACHMENT). Optional in the type: rows read
+    * before the 20261113000000 migration simply lack the columns — the code
+    * treats absence as "no e-mail yet" (empty strings).
+    */
+   email_subject?: string;
+   email_body_html?: string;
+   /** Position brief (20261115000000) — the role this campaign targets. */
+   position_title?: string;
+   position_brief?: string;
+   employer_facts?: string;
+   /**
+    * Scheduled send (20261116000000). The canonical UTC instant the batch is
+    * due (null = immediate / not scheduled); every queued application carries
+    * next_attempt_at = this value so the existing claim predicate defers it.
+    * Optional in the type: rows read before the migration lack the column.
+    */
+   scheduled_at?: string | null;
+   /** IANA zone the user chose for a scheduled send (display/audit only). */
+   timezone?: string | null;
+ };
 
 export type BewApplicationRow = {
   id: string;
@@ -1611,6 +1621,27 @@ async function reserveCapacity(admin: Admin, userId: string, n: number) {
   if (error) throw new Error(error.message);
 }
 
+/**
+ * Reserve the shared daily quota against an EXPLICIT future date (a scheduled
+ * send). Reuses the existing date-parameterised RPC `reserve_email_capacity_on`
+ * (the twin of `reserve_email_capacity` that the protected engine introduced
+ * for scheduled campaigns) — no new quota mechanism. `daily_quota_exceeded`
+ * propagates so the caller can explain the shortfall.
+ */
+async function reserveCapacityOnDate(
+  admin: Admin,
+  userId: string,
+  date: string,
+  n: number,
+) {
+  const { error } = await admin.rpc("reserve_email_capacity_on", {
+    target_user_id: userId,
+    requested: n,
+    on_date: date,
+  });
+  if (error) throw new Error(error.message);
+}
+
 async function releaseCapacity(
   admin: Admin,
   userId: string,
@@ -1672,7 +1703,19 @@ export interface StartSendResult {
 export async function startBewSend(
   userId: string,
   campaignId: string,
-  opts: { selectedSeqs?: number[] } = {},
+  opts: {
+    selectedSeqs?: number[];
+    /**
+     * SCHEDULED send (reuses the existing scheduler): when present, the batch
+     * is persisted WITHOUT sending. Every queued application carries
+     * next_attempt_at = scheduling.utcIso, so the EXISTING
+     * claim_next_bew_application predicate (and thus /api/cron/bew-scheduler)
+     * defers it until the due instant. The campaign stores the canonical UTC
+     * instant + zone + the scheduled usage_date; started_at is left null until
+     * the first real claim. No immediate drain runs for a scheduled batch.
+     */
+    scheduling?: { utcIso: string; timeZone: string };
+  } = {},
 ): Promise<StartSendResult> {
   const { admin, campaign } = await requireOwnedCampaign(userId, campaignId);
   if (BEW_TERMINAL_CAMPAIGN.has(campaign.status))
@@ -1752,11 +1795,30 @@ export async function startBewSend(
       hasCertificates,
     };
 
-  const snapshot = await getUsageSnapshot(userId);
-  const plan = computeSendPlan({
-    requested: candidates.length,
-    remaining: snapshot.remaining,
-  });
+  const scheduling = opts.scheduling ?? null;
+
+  // IMMEDIATE: plan against TODAY's remaining shared daily quota (unchanged).
+  // SCHEDULED: the batch is due LATER, so it reserves against the SCHEDULED
+  // date's quota (the daily limit that day) — today's remaining is irrelevant.
+  // The real per-date quota is enforced by reserveCapacityOnDate below
+  // (daily_quota_exceeded => explained, nothing reserved).
+  let usageDate: string;
+  let plan: SendPlan;
+  if (scheduling) {
+    usageDate = scheduling.utcIso.slice(0, 10);
+    plan = computeSendPlan({
+      requested: candidates.length,
+      remaining: BEW_PLATFORM_DAILY_CAP,
+      platformCap: BEW_PLATFORM_DAILY_CAP,
+    });
+  } else {
+    usageDate = campaign.usage_date;
+    const snapshot = await getUsageSnapshot(userId);
+    plan = computeSendPlan({
+      requested: candidates.length,
+      remaining: snapshot.remaining,
+    });
+  }
   if (plan.batch === 0)
     return {
       ok: false,
@@ -1769,16 +1831,25 @@ export async function startBewSend(
 
   let reserved = 0;
   try {
-    await reserveCapacity(admin, userId, plan.batch);
+    if (scheduling)
+      await reserveCapacityOnDate(admin, userId, usageDate, plan.batch);
+    else await reserveCapacity(admin, userId, plan.batch);
     reserved = plan.batch;
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message.includes("daily_quota_exceeded")) {
-      const snap = await getUsageSnapshot(userId);
+      const snap = scheduling ? null : await getUsageSnapshot(userId);
+      const remaining = snap
+        ? snap.remaining
+        : BEW_PLATFORM_DAILY_CAP;
       return {
         ok: false,
         error: "QUOTA_EXHAUSTED",
-        plan: computeSendPlan({ requested: candidates.length, remaining: snap.remaining }),
+        plan: computeSendPlan({
+          requested: candidates.length,
+          remaining,
+          platformCap: BEW_PLATFORM_DAILY_CAP,
+        }),
         senderEmail: sender.email,
         hasCv,
         hasCertificates,
@@ -1789,38 +1860,64 @@ export async function startBewSend(
 
   candidates.sort((a, b) => a.seq - b.seq);
   const toQueue = candidates.slice(0, plan.batch);
+  // Scheduling = future-dated: next_attempt_at gates the EXISTING claim
+  // predicate, so NOTHING is sent before the due instant. Immediate = null
+  // (due now) — identical to the previous behavior.
   const { error: queueError } = await admin
     .from("bew_applications")
-    .update({ status: "queued", next_attempt_at: null })
+    .update({
+      status: "queued",
+      next_attempt_at: scheduling ? scheduling.utcIso : null,
+    })
     .in("id", toQueue.map((a) => a.id))
     .eq("campaign_id", campaignId);
   if (queueError) {
-    await releaseCapacity(admin, userId, campaign.usage_date, reserved);
+    await releaseCapacity(admin, userId, usageDate, reserved);
     return { ok: false, error: "QUEUE_FAILED" };
   }
 
+  // IMMEDIATE: flip to sending + stamp started_at now (unchanged).
+  // SCHEDULED: flip to sending, persist the schedule (canonical UTC instant +
+  // zone) and point the quota at the scheduled date — but LEAVE started_at
+  // null: the first REAL claim coalesces it at the due instant, and a
+  // null started_at is what keeps the batch reschedulable / cancellable while
+  // it is still pending.
+  const campaignUpdate: Record<string, unknown> = { status: "sending" };
+  if (scheduling) {
+    campaignUpdate.scheduled_at = scheduling.utcIso;
+    campaignUpdate.timezone = scheduling.timeZone;
+    campaignUpdate.usage_date = usageDate;
+  } else {
+    campaignUpdate.started_at = campaign.started_at ?? nowIso();
+  }
   const { error: statusError } = await admin
     .from("bew_campaigns")
-    .update({ status: "sending", started_at: campaign.started_at ?? nowIso() })
+    .update(campaignUpdate)
     .eq("id", campaignId);
   if (statusError) {
     // The claim RPC only drains campaigns with status 'sending' — if this
     // flip fails, the queued batch could never be consumed and the reserved
     // quota would leak. Roll back cleanly instead.
     console.error(
-      "[bew] startBewSend: campaign status update failed",
+      "[bew] startBewSend: campaign update failed",
       statusError.message,
     );
-    await releaseCapacity(admin, userId, campaign.usage_date, reserved);
+    await releaseCapacity(admin, userId, usageDate, reserved);
     return { ok: false, error: "QUEUE_FAILED" };
   }
 
-  // Consume the queue right away (bounded); the rest continues via the
-  // worker / cron / monitor. A failure here is never fatal.
-  try {
-    await processBewSendBatch(userId, campaignId, BEW_MAX_BATCH);
-  } catch {
-    // The campaign is intact and keeps draining on the next tick.
+  // IMMEDIATE only: consume the queue right away (bounded); the rest continues
+  // via the worker / cron / monitor. A failure here is never fatal.
+  // SCHEDULED: deliberately NO drain here — the durable scheduler
+  // (/api/cron/bew-scheduler) picks the batch up at scheduled_at. The browser
+  // is not needed for sending, and the claim predicate guarantees nothing is
+  // claimed (sent) before the due instant.
+  if (!scheduling) {
+    try {
+      await processBewSendBatch(userId, campaignId, BEW_MAX_BATCH);
+    } catch {
+      // The campaign is intact and keeps draining on the next tick.
+    }
   }
 
   return {
@@ -2179,6 +2276,43 @@ export async function cancelBewSend(
   });
   if (!error) await refreshCampaignCounters(admin, campaignId);
   return { cancelled: typeof data === "number" ? data : 0 };
+}
+
+/**
+ * Reschedule a PENDING (not-yet-started) scheduled batch to a new future
+ * instant. Reuses the existing atomic `bew_reschedule` RPC (mirrors the
+ * protected engine's reschedule_campaign): it locks the campaign row, refuses
+ * once any application has been claimed (started_at set), moves the quota to
+ * the new date atomically, and re-gates every queued application to the new
+ * due instant. Already-sent applications can never be recalled.
+ *
+ * Ownership is enforced twice: getBewCampaignOwned (the batch belongs to the
+ * user) and the RPC itself (user-scoped FOR UPDATE lock).
+ */
+export async function rescheduleBewSend(
+  userId: string,
+  campaignId: string,
+  scheduling: { utcIso: string; timeZone: string },
+): Promise<{ ok: true }> {
+  const admin = createAdminClient();
+  const campaign = await getBewCampaignOwned(admin, userId, campaignId);
+  if (!campaign) throw new Error("NOT_FOUND");
+  const { data, error } = await admin.rpc("bew_reschedule", {
+    target_user_id: userId,
+    target_campaign_id: campaignId,
+    new_scheduled_at: scheduling.utcIso,
+    new_timezone: scheduling.timeZone,
+    new_usage_date: scheduling.utcIso.slice(0, 10),
+  });
+  if (error) {
+    if (error.message.includes("daily_quota_exceeded"))
+      throw new Error("QUOTA_EXHAUSTED");
+    throw new Error("RESCHEDULE_FAILED");
+  }
+  if (data !== true)
+    throw new Error("CANNOT_RESCHEDULE"); // already started / not pending
+  await refreshCampaignCounters(admin, campaignId);
+  return { ok: true };
 }
 
 /** (Re)assign the sending account to a campaign (ownership-verified). */

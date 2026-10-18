@@ -2528,6 +2528,23 @@ const de = {
       "Nur {batch} von {total} passen in das heutige Kontingent – {deferred} bleiben gespeichert und können an einem späteren Tag gesendet werden.",
     confirmGo: "Jetzt senden",
     confirmCancel: "Abbrechen",
+    nowSend: "Jetzt senden ({n})",
+    scheduledSend: "Zeitgesteuert senden ({n})",
+    scheduleTitle: "Versand planen",
+    scheduleBody:
+      "{n} Bewerbungen werden planmäßig versendet. Wähle Datum, Uhrzeit und Zeitzone — der Versand startet automatisch zum gewählten Zeitpunkt.",
+    scheduleSubmit: "Zeitplan festlegen",
+    schedulePending: "Wird festgelegt …",
+    scheduleClose: "Schließen",
+    scheduledTitle: "Geplanter Versand",
+    scheduledFor: "{when} · {tz} ({offset})",
+    scheduledHint:
+      "Bis dahin wird nichts gesendet. Du kannst den Versand abbrechen oder neu planen.",
+    rescheduleTitle: "Versand neu planen",
+    rescheduleBody:
+      "Wähle einen neuen zukünftigen Zeitpunkt. Bereits gesendete Mails können nicht mehr zurückgerufen werden.",
+    reschedule: "Neu planen",
+    rescheduleSubmit: "Neuen Zeitplan festlegen",
     progressTitle: "Versand läuft …",
     cancelSend: "Verbleibende abbrechen",
     resultTitle: "Ergebnis",
@@ -2624,6 +2641,16 @@ const de = {
         "Die Datei wurde hochgeladen, konnte aber nicht gespeichert werden. Bitte erneut versuchen.",
       DOC_ATTACH_FAILED:
         "Das Dokument konnte der Serie nicht zugewiesen werden. Bitte erneut versuchen.",
+      INVALID_TIMEZONE:
+        "Unbekannte Zeitzone — bitte eine der aufgelisteten wählen.",
+      INVALID_SCHEDULE:
+        "Ungültiger Zeitplan — bitte Datum und Uhrzeit prüfen.",
+      SCHEDULE_NOT_FUTURE:
+        "Der gewählte Zeitpunkt liegt nicht in der Zukunft. Später wählen oder jetzt senden.",
+      CANNOT_RESCHEDULE:
+        "Diese Serie kann nicht mehr umgeplant werden — der Versand hat bereits begonnen.",
+      RESCHEDULE_FAILED:
+        "Der Zeitplan konnte nicht geändert werden. Bitte erneut versuchen.",
       UNKNOWN: "Etwas ist schiefgelaufen. Bitte erneut versuchen.",
     },
   },
@@ -5097,6 +5124,23 @@ const en: Dict = {
       "Only {batch} of {total} fit today's quota — {deferred} stay saved and can be sent on a later day.",
     confirmGo: "Send now",
     confirmCancel: "Cancel",
+    nowSend: "Send now ({n})",
+    scheduledSend: "Send at a scheduled time ({n})",
+    scheduleTitle: "Schedule sending",
+    scheduleBody:
+      "{n} applications will be sent on schedule. Choose the date, time and timezone — sending starts automatically at the chosen time.",
+    scheduleSubmit: "Set schedule",
+    schedulePending: "Saving …",
+    scheduleClose: "Close",
+    scheduledTitle: "Scheduled sending",
+    scheduledFor: "{when} · {tz} ({offset})",
+    scheduledHint:
+      "Nothing is sent until then. You can cancel or reschedule in the meantime.",
+    rescheduleTitle: "Reschedule sending",
+    rescheduleBody:
+      "Choose a new future time. E-mails already sent cannot be recalled.",
+    reschedule: "Reschedule",
+    rescheduleSubmit: "Set new schedule",
     progressTitle: "Sending in progress …",
     cancelSend: "Cancel remaining",
     resultTitle: "Result",
@@ -5192,6 +5236,16 @@ const en: Dict = {
         "The file was uploaded but could not be registered. Please try again.",
       DOC_ATTACH_FAILED:
         "The document could not be attached to the series. Please try again.",
+      INVALID_TIMEZONE:
+        "Unknown timezone — please choose one from the list.",
+      INVALID_SCHEDULE:
+        "Invalid schedule — please check the date and time.",
+      SCHEDULE_NOT_FUTURE:
+        "The selected time is not in the future. Choose a later time, or send now.",
+      CANNOT_RESCHEDULE:
+        "This batch can no longer be rescheduled — sending has already started.",
+      RESCHEDULE_FAILED:
+        "The schedule could not be changed. Please try again.",
       UNKNOWN: "Something went wrong. Please try again.",
     },
   },
@@ -7666,6 +7720,23 @@ const fr: Dict = {
       "Seules {batch} candidatures sur {total} entrent dans le quota d'aujourd'hui — {deferred} restent enregistrées et peuvent être envoyées un jour plus tard.",
     confirmGo: "Envoyer maintenant",
     confirmCancel: "Annuler",
+    nowSend: "Envoyer maintenant ({n})",
+    scheduledSend: "Envoyer à une date planifiée ({n})",
+    scheduleTitle: "Planifier l'envoi",
+    scheduleBody:
+      "{n} candidatures seront envoyées sur plan. Choisissez la date, l'heure et le fuseau horaire — l'envoi démarre automatiquement à l'heure choisie.",
+    scheduleSubmit: "Fixer le planning",
+    schedulePending: "Enregistrement …",
+    scheduleClose: "Fermer",
+    scheduledTitle: "Envoi planifié",
+    scheduledFor: "{when} · {tz} ({offset})",
+    scheduledHint:
+      "Rien n'est envoyé d'ici là. Vous pouvez annuler ou replanifier en attendant.",
+    rescheduleTitle: "Replanifier l'envoi",
+    rescheduleBody:
+      "Choisissez une nouvelle heure future. Les e-mails déjà envoyés ne peuvent pas être rappelés.",
+    reschedule: "Replanifier",
+    rescheduleSubmit: "Fixer le nouveau planning",
     progressTitle: "Envoi en cours …",
     cancelSend: "Annuler le reste",
     resultTitle: "Résultat",
@@ -7761,6 +7832,16 @@ const fr: Dict = {
         "Le fichier a été téléversé mais n'a pas pu être enregistré. Veuillez réessayer.",
       DOC_ATTACH_FAILED:
         "Le document n'a pas pu être rattaché à la série. Veuillez réessayer.",
+      INVALID_TIMEZONE:
+        "Fuseau horaire inconnu — veuillez en choisir un dans la liste.",
+      INVALID_SCHEDULE:
+        "Planning invalide — veuillez vérifier la date et l'heure.",
+      SCHEDULE_NOT_FUTURE:
+        "L'heure choisie n'est pas dans le futur. Choisissez une heure plus tard, ou envoyez maintenant.",
+      CANNOT_RESCHEDULE:
+        "Cette série ne peut plus être replanifiée — l'envoi a déjà commencé.",
+      RESCHEDULE_FAILED:
+        "Le planning n'a pas pu être modifié. Veuillez réessayer.",
       UNKNOWN: "Une erreur est survenue. Veuillez réessayer.",
     },
   },
@@ -10180,6 +10261,22 @@ const ar: Dict = {
       "يسع حد اليوم {batch} فقط من أصل {total} — تبقى {deferred} محفوظة ويمكن إرسالها في يوم لاحق.",
     confirmGo: "إرسال الآن",
     confirmCancel: "إلغاء",
+    nowSend: "إرسال الآن ({n})",
+    scheduledSend: "إرسال مجدول ({n})",
+    scheduleTitle: "جدولة الإرسال",
+    scheduleBody:
+      "سيتم إرسال {n} من الطلبات حسب الجدول. اختر التاريخ والوقت والمنطقة الزمنية — يبدأ الإرسال تلقائيًا في الوقت المحدد.",
+    scheduleSubmit: "تحديد الجدول",
+    schedulePending: "جارٍ الحفظ …",
+    scheduleClose: "إغلاق",
+    scheduledTitle: "إرسال مجدول",
+    scheduledFor: "{when} · {tz} ({offset})",
+    scheduledHint:
+      "لن يتم إرسال أي شيء حتى ذلك الحين. يمكنك الإلغاء أو الجدولة من جديد.",
+    rescheduleTitle: "إعادة جدولة الإرسال",
+    rescheduleBody: "اختر وقتًا مستقبليًا جديدًا. لا يمكن استدعاء الرسائل المرسلة بالفعل.",
+    reschedule: "جدولة من جديد",
+    rescheduleSubmit: "تحديد الجدول الجديد",
     progressTitle: "جارٍ الإرسال …",
     cancelSend: "إلغاء المتبقي",
     resultTitle: "النتيجة",
@@ -10269,6 +10366,13 @@ const ar: Dict = {
       DOC_UPLOAD_FAILED: "تعذر رفع الملف. يرجى المحاولة مرة أخرى.",
       DOC_SAVE_FAILED: "تم رفع الملف لكنه لم يتم تسجيله. يرجى المحاولة مرة أخرى.",
       DOC_ATTACH_FAILED: "تعذر إرفاق المستند بالسلسلة. يرجى المحاولة مرة أخرى.",
+      INVALID_TIMEZONE: "منطقة زمنية غير معروفة — يرجى اختيار واحدة من القائمة.",
+      INVALID_SCHEDULE: "جدول غير صالح — يرجى التحقق من التاريخ والوقت.",
+      SCHEDULE_NOT_FUTURE:
+        "الوقت المحدد ليس في المستقبل. اختر وقتًا لاحقًا أو أرسل الآن.",
+      CANNOT_RESCHEDULE:
+        "لم يعد بإمكانك إعادة جدولة هذه السلسلة — بدأ الإرسال بالفعل.",
+      RESCHEDULE_FAILED: "تعذر تغيير الجدول. يرجى المحاولة مرة أخرى.",
       UNKNOWN: "حدث خطأ ما. يرجى المحاولة مجددًا.",
     },
   },

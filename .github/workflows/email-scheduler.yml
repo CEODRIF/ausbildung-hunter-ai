@@ -1,9 +1,14 @@
 # Email Scheduler — the primary (and only) trigger for scheduled sends.
 #
-# Every 5 minutes on the default branch (main), each run makes ONE
-# authenticated GET to the secure server-side scheduler endpoint
-# /api/cron/email-scheduler, which then performs its bounded claim+batch
-# loop over the existing durable engine. The browser is never involved.
+# Every 5 minutes on the default branch (main), each run makes authenticated
+# GET calls to the secure server-side scheduler endpoints:
+#   1. /api/cron/email-scheduler — the protected application-campaign engine,
+#   2. /api/cron/bew-scheduler   — the ISOLATED Bewerbung-Automation engine
+#      (an EXISTING endpoint; drains immediate batches past the first slice
+#      and SCHEDULED batches that are now due through the same FOR UPDATE
+#      SKIP LOCKED idempotency core — nothing is double-sent).
+# Each performs its bounded claim+batch loop over its own durable engine.
+# The browser is never involved.
 #
 # Cost: the repository is PUBLIC, so GitHub Actions minutes are unlimited
 # and free — this scheduler costs zero (no Vercel Pro, no paid services).
@@ -64,3 +69,26 @@ jobs:
             -H "Authorization: Bearer $CRON_SECRET" \
             "$DEPLOY_URL/api/cron/email-scheduler")"
           echo "Scheduler tick: $body"
+      - name: Bewerbung-Automation scheduler tick
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DEPLOY_URL: ${{ vars.EMAIL_SCHEDULER_URL || 'https://ausbildungsweg.net' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::CRON_SECRET is not set in repository secrets."
+            exit 1
+          fi
+          : "${DEPLOY_URL:=https://ausbildungsweg.net}"
+          DEPLOY_URL="${DEPLOY_URL%/}"
+          # The ISOLATED bew drain — the SAME existing CRON_SECRET, the SAME
+          # fail-closed auth, the SAME */5 cadence and concurrency group. It
+          # ticks the EXISTING /api/cron/bew-scheduler endpoint (not a new one),
+          # which claims due bew applications (immediate batches past the first
+          # slice, and SCHEDULED batches that are now due) through the same
+          # FOR UPDATE SKIP LOCKED idempotency core, so nothing double-sends.
+          # 401/5xx fails the run on purpose (a red tick > a silent one).
+          body="$(curl -sS --fail-with-body --max-time 90 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$DEPLOY_URL/api/cron/bew-scheduler")"
+          echo "Bew scheduler tick: $body"

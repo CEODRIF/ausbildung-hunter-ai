@@ -11,16 +11,26 @@
  * a message is "sent" only because the provider answered success.
  */
 import { useMemo, useState } from "react";
-import { bewStartSend } from "@/app/bewerbung-automation/actions";
+import {
+  bewRescheduleSend,
+  bewStartSend,
+} from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
+import { localeForLang } from "@/lib/i18n/core";
 import {
   BEW_PLATFORM_DAILY_CAP,
   computeSendPlan,
   isBewEmailComplete,
 } from "@/lib/bewerbung-automation";
+import {
+  formatScheduledLocal,
+  offsetLabelAt,
+  utcToLocalParts,
+} from "@/lib/schedule-time";
 import { Button, Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { StatusPill } from "@/components/ui/feedback";
+import { ScheduleForm, type ScheduleDefaults } from "@/components/schedule-form";
 import {
   appSendFlags,
   hasRequiredDocuments,
@@ -36,10 +46,16 @@ interface Props {
 }
 
 export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: Props) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Scheduled send (reuses the existing scheduler): the date/time/timezone
+  // picker + the reschedule dialog are mutually exclusive with the immediate
+  // confirm dialog. `scheduleError` shows a failed schedule/reschedule result.
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
 
   const docs = hasRequiredDocuments(view.documents);
   const certCount = view.documents.filter(
@@ -95,6 +111,58 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
     }
   }
 
+  // Scheduled-send display values (all derived from the persisted row; the
+  // browser clock never decides "due" — only the claim predicate does).
+  const locale = localeForLang(lang);
+  const scheduledIso = view.campaign.scheduled_at ?? null;
+  const scheduledZone = view.campaign.timezone ?? null;
+  const hasSchedule = Boolean(scheduledIso);
+  // Pending vs. in-flight — decided by SERVER data only (no browser clock in
+  // render): a scheduled batch is "pending" while the claim predicate has not
+  // yet run, which is exactly when campaign.started_at is still NULL. The
+  // first claim (at/after the due instant) coalesces started_at, so the view
+  // flips to the ordinary live-progress panel on the next 3s poll. The claim
+  // predicate — not this flag — remains the only authority for when anything
+  // is sent.
+  const scheduledPending = hasSchedule && view.campaign.started_at === null;
+  // Prefill the reschedule picker with the CURRENT scheduled instant.
+  const rescheduleDefaults: ScheduleDefaults | undefined = useMemo(() => {
+    if (!scheduledIso || !scheduledZone) return undefined;
+    const parts = utcToLocalParts(scheduledIso, scheduledZone);
+    return parts ? { ...parts, timeZone: scheduledZone } : undefined;
+  }, [scheduledIso, scheduledZone]);
+
+  const eligibleSeqs = eligibleSelected.map((a) => a.seq);
+
+  // Funnel the reused server actions (immediate + scheduled + reschedule)
+  // through one wrapper: report the result, close the dialog on success, and
+  // refresh the view. A thrown server-action error becomes a localized message.
+  async function runScheduling(
+    fd: FormData,
+    fn: (fd: FormData) => Promise<unknown>,
+    closeOnSuccess: () => void,
+  ) {
+    setScheduleError(null);
+    try {
+      const result = (await fn(fd)) as { ok?: boolean; error?: string } | null;
+      if (result && !result.ok)
+        setScheduleError(
+          result.error
+            ? errCodeMessage(result.error, t)
+            : t("bewauto.err.UNKNOWN"),
+        );
+      else closeOnSuccess();
+    } catch (e) {
+      setScheduleError(errMessage(e, t));
+    } finally {
+      await refresh();
+    }
+  }
+  const scheduleAction = (fd: FormData) =>
+    runScheduling(fd, (f) => bewStartSend(f), () => setScheduleOpen(false));
+  const rescheduleAction = (fd: FormData) =>
+    runScheduling(fd, (f) => bewRescheduleSend(f), () => setRescheduleOpen(false));
+
   const c = view.campaign;
   const queued = view.applications.filter((a) => a.status === "queued").length;
   const inSending = view.applications.filter((a) => a.status === "sending").length;
@@ -130,8 +198,36 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
         </div>
       )}
 
-      {/* Live progress while draining */}
-      {sending && (
+      {/* Scheduled batch that is still PENDING (not yet due): show the exact
+          instant + timezone, the eligible count, and Cancel / Reschedule. */}
+      {sending && scheduledPending && scheduledIso && scheduledZone && (
+        <div className="mb-6 rounded-2xl border border-accent/30 bg-accent-soft/40 p-4" role="status">
+          <p className="mb-2 text-sm font-semibold text-ink-soft">{t("bewauto.scheduledTitle")}</p>
+          <p className="text-sm font-medium text-ink">
+            {t("bewauto.scheduledFor", {
+              when: formatScheduledLocal(scheduledIso, scheduledZone, locale),
+              tz: scheduledZone,
+              offset: offsetLabelAt(scheduledIso, scheduledZone),
+            })}
+          </p>
+          <p className="mt-2 text-xs leading-5 text-muted">{t("bewauto.scheduledHint")}</p>
+          <div className="mt-3">
+            <StatusPill tone="neutral" label={t("bewauto.stQueuedCount", { n: queued })} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button variant="ghost" size="sm" disabled={busy} className="text-danger hover:text-danger" onClick={onCancelSend}>
+              <Icon name="stop" size={14} />
+              {t("bewauto.cancelSend")}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setRescheduleOpen(true)}>
+              <Icon name="clock" size={14} />
+              {t("bewauto.reschedule")}
+            </Button>
+          </div>
+        </div>
+      )}
+      {/* Live progress while draining (immediate send, or a schedule now due) */}
+      {sending && !scheduledPending && (
         <div className="mb-6 rounded-2xl border border-line bg-surface-2/40 p-4" role="status">
           <p className="mb-3 text-sm font-semibold text-ink-soft">{t("bewauto.progressTitle")}</p>
           <div className="flex flex-wrap gap-2">
@@ -165,18 +261,30 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
         </div>
       )}
 
-      {/* The explicit send trigger */}
+      {/* The explicit send trigger — a choice between immediate and scheduled */}
       {!sending && (
         <div className="flex flex-col items-start gap-3 rounded-2xl border border-accent/30 bg-accent-soft/40 p-5">
-          <Button
-            size="lg"
-            disabled={busy || n === 0 || !view.senderEmail || !(docs.cv && docs.certs) || !emailComplete}
-            onClick={() => setConfirmOpen(true)}
-            className="w-full sm:w-auto"
-          >
-            <Icon name="send" size={18} />
-            {t("bewauto.sendButton", { n })}
-          </Button>
+          <div className="flex w-full flex-col gap-3 sm:flex-row">
+            <Button
+              size="lg"
+              disabled={busy || n === 0 || !view.senderEmail || !(docs.cv && docs.certs) || !emailComplete}
+              onClick={() => setConfirmOpen(true)}
+              className="w-full flex-1"
+            >
+              <Icon name="send" size={18} />
+              {t("bewauto.nowSend", { n })}
+            </Button>
+            <Button
+              size="lg"
+              variant="ghost"
+              disabled={busy || n === 0 || !view.senderEmail || !(docs.cv && docs.certs) || !emailComplete}
+              onClick={() => setScheduleOpen(true)}
+              className="w-full flex-1"
+            >
+              <Icon name="clock" size={18} />
+              {t("bewauto.scheduledSend", { n })}
+            </Button>
+          </div>
           {n === 0 && (
             <p className="text-xs text-muted">{t("bewauto.nothingToSend")}</p>
           )}
@@ -235,6 +343,80 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
             {/* iPhone safe area: on phones the sheet is bottom-anchored, so
                 reserve the home-indicator inset below the action row (zero
                 height where the inset is 0 / at >= sm). */}
+            <div aria-hidden="true" className="max-sm:h-[env(safe-area-inset-bottom)]" />
+          </div>
+        </div>
+      )}
+
+      {/* Schedule dialog (initial) — reuses the existing ScheduleForm picker
+          (day/month/year + 24h hour/minute + IANA zone + live UTC preview +
+          DST handling). The hidden inputs carry campaignId + selectedSeqs. */}
+      {scheduleOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("bewauto.scheduleTitle")}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setScheduleOpen(false);
+          }}
+        >
+          <div className="max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-6 shadow-2xl sm:rounded-3xl">
+            <h3 className="text-lg font-bold text-ink">{t("bewauto.scheduleTitle")}</h3>
+            <p className="mt-1 text-sm leading-6 text-muted">{t("bewauto.scheduleBody", { n })}</p>
+            {scheduleError && (
+              <p role="alert" className="mt-3 text-sm font-medium text-danger">
+                {scheduleError}
+              </p>
+            )}
+            <div className="mt-4">
+              <ScheduleForm
+                action={scheduleAction}
+                extraHidden={[
+                  { name: "campaignId", value: view.campaign.id },
+                  { name: "selectedSeqs", value: JSON.stringify(eligibleSeqs) },
+                ]}
+                submitLabel={t("bewauto.scheduleSubmit")}
+                pendingLabel={t("bewauto.schedulePending")}
+                cancelLabel={t("bewauto.scheduleClose")}
+                onCancel={() => setScheduleOpen(false)}
+              />
+            </div>
+            <div aria-hidden="true" className="max-sm:h-[env(safe-area-inset-bottom)]" />
+          </div>
+        </div>
+      )}
+
+      {/* Reschedule dialog — same picker, prefilled with the current instant. */}
+      {rescheduleOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("bewauto.rescheduleTitle")}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setRescheduleOpen(false);
+          }}
+        >
+          <div className="max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-6 shadow-2xl sm:rounded-3xl">
+            <h3 className="text-lg font-bold text-ink">{t("bewauto.rescheduleTitle")}</h3>
+            <p className="mt-1 text-sm leading-6 text-muted">{t("bewauto.rescheduleBody")}</p>
+            {scheduleError && (
+              <p role="alert" className="mt-3 text-sm font-medium text-danger">
+                {scheduleError}
+              </p>
+            )}
+            <div className="mt-4">
+              <ScheduleForm
+                action={rescheduleAction}
+                extraHidden={[{ name: "campaignId", value: view.campaign.id }]}
+                defaults={rescheduleDefaults}
+                submitLabel={t("bewauto.rescheduleSubmit")}
+                pendingLabel={t("bewauto.schedulePending")}
+                cancelLabel={t("bewauto.scheduleClose")}
+                onCancel={() => setRescheduleOpen(false)}
+              />
+            </div>
             <div aria-hidden="true" className="max-sm:h-[env(safe-area-inset-bottom)]" />
           </div>
         </div>
