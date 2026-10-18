@@ -7,7 +7,7 @@
  * browser. No React, no actions, no I/O — one place to reason about row
  * state, imported by `companies-step.tsx` and the regression tests.
  */
-import { isValidEmail } from "@/lib/bewerbung-automation";
+import { buildSubject, isValidEmail, type BewPurpose } from "@/lib/bewerbung-automation";
 import type { CompanyRecord } from "./types";
 
 /** A stored application row as the table sees it. */
@@ -80,7 +80,14 @@ export function rowValues(
   );
 }
 
-/** True when the row carries unsaved edits (drives the per-row Save). */
+/**
+ * True when the row carries unsaved edits (drives the per-row Save).
+ *
+ * Compares ALL persisted fields — including the per-company position
+ * override: the save path always sends all seven fields, so a
+ * position-only edit must show a Save button too (before this fix such an
+ * edit sat in the draft with no way to persist it).
+ */
 export function rowDirty(
   drafts: Drafts,
   serverRows: CompanyRowView[],
@@ -88,13 +95,43 @@ export function rowDirty(
 ): boolean {
   const app = serverRows.find((a) => a.id === appId);
   if (!app || !drafts[appId]) return false;
-  const d = drafts[appId];
+  return rowDirtyOf(drafts[appId], app);
+}
+
+/** The same rule as `rowDirty`, given both sides (no row lookup — for the
+ *  render hot path). */
+export function rowDirtyOf(d: CompanyRecord, app: CompanyRowView): boolean {
   return (
     d.companyName !== app.companyName ||
     d.companyEmail !== app.companyEmail ||
     (d.contactName || null) !== (app.contactName ?? null) ||
-    (d.companyAddress || null) !== (app.companyAddress ?? null)
+    (d.companyAddress || null) !== (app.companyAddress ?? null) ||
+    (d.positionTitle || null) !== (app.positionTitle ?? null) ||
+    (d.positionBrief || null) !== (app.positionBrief ?? null) ||
+    (d.employerFacts || null) !== (app.employerFacts ?? null)
   );
+}
+
+/** Rows addressed by their stable id (O(1) per row instead of a per-row
+ *  linear scan in the render hot path). */
+export function indexRows(rows: CompanyRowView[]): Map<string, CompanyRowView> {
+  const byId = new Map<string, CompanyRowView>();
+  for (const r of rows) byId.set(r.id, r);
+  return byId;
+}
+
+/** A stored row's values as a record (the no-draft case of `rowValues`,
+ *  pre-computed once per row for the render hot path). */
+export function rowToRecord(app: CompanyRowView): CompanyRecord {
+  return {
+    companyName: app.companyName,
+    companyEmail: app.companyEmail,
+    contactName: app.contactName ?? "",
+    companyAddress: app.companyAddress ?? "",
+    positionTitle: app.positionTitle ?? "",
+    positionBrief: app.positionBrief ?? "",
+    employerFacts: app.employerFacts ?? "",
+  };
 }
 
 /** A row is still part of the campaign's company list. */
@@ -303,5 +340,227 @@ export async function deleteCompanyRow(deps: RowDeleteDeps): Promise<void> {
   }
   deps.retire(deps.appId);
   deps.onSuccess(deps.seq);
+  deps.release(deps.appId);
+}
+
+/* ------------------------------------------------------------------ *\
+ * Optimistic per-row SAVE (instant UI response, rollback on failure)
+ * ------------------------------------------------------------------ *\
+ *
+ * The per-row Save must respond on the FIRST click: the row's values are
+ * already what the user typed (drafts), so "saving" flips only the row's
+ * indicator and — optimistically — the row's status/letter-invalidation
+ * that the server will apply. The ownership-checked server action then
+ * runs; its RETURNED ROW is the confirmation (no full-view refetch — that
+ * was the latency: every row save re-fetched the entire campaign, and a
+ * step-wide busy flag locked every other row meanwhile).
+ *
+ *   claim (synchronous ref guard) → begin (per-row "Saving…" indicator)
+ *   → optimistic patch (the row already shows the saved values + the
+ *     letter-invalidation the server applies)
+ *   → update (the server action, returning the saved row)
+ *     ├─ row:   confirm → apply the SERVER row (authoritative) → dropDraft
+ *     │         → onSaved (transient "Saved" chip) → release
+ *     │         (the row VANISHED mid-flight — another tab switched the
+ *     │          campaign: one best-effort resync, never fatal)
+ *     ├─ null:  the row is gone (deleted elsewhere): roll the optimistic
+ *     │         patch back, keep nothing, report NOT_FOUND → release
+ *     └─ error: roll the optimistic patch back, KEEP the draft (the user's
+ *              edits survive), fail (indicator cleared) → onError → release
+ *
+ * Only THIS row is touched: the indicator, the view patch, the draft and the
+ * release are all keyed by the stable id, so rows can save concurrently.
+ */
+
+export interface RowSaveState {
+  /** Rows whose server save is in flight (per-row "Saving…" + lock). */
+  pending: Set<string>;
+  /** Rows confirmed by the server — the transient "Saved" chip. */
+  saved: Set<string>;
+}
+
+export const EMPTY_ROW_SAVE_STATE: RowSaveState = {
+  pending: new Set<string>(),
+  saved: new Set<string>(),
+};
+
+/** Start the row's save: the indicator shows NOW. A begin for a row that is
+ *  already pending returns the SAME reference (no-op) — the state-level
+ *  duplicate guard on top of the component's synchronous claim. */
+export function beginRowSave(state: RowSaveState, id: string): RowSaveState {
+  if (state.pending.has(id)) return state;
+  const saved = new Set(state.saved);
+  saved.delete(id); // a re-save supersedes a previous "Saved" chip
+  return { pending: new Set(state.pending).add(id), saved };
+}
+
+/** The server confirmed: "Saving…" → "Saved" (transient chip). */
+export function confirmRowSave(state: RowSaveState, id: string): RowSaveState {
+  if (!state.pending.has(id)) return state;
+  const pending = new Set(state.pending);
+  pending.delete(id);
+  return { pending, saved: new Set(state.saved).add(id) };
+}
+
+/** The server rejected (or the row vanished): the indicator clears, the row
+ *  is editable again with its draft intact. */
+export function failRowSave(state: RowSaveState, id: string): RowSaveState {
+  if (!state.pending.has(id)) return state;
+  const pending = new Set(state.pending);
+  pending.delete(id);
+  return { ...state, pending };
+}
+
+/** Retire the transient "Saved" chip (the component schedules this). */
+export function clearRowSaved(state: RowSaveState, id: string): RowSaveState {
+  if (!state.saved.has(id)) return state;
+  const saved = new Set(state.saved);
+  saved.delete(id);
+  return { ...state, saved };
+}
+
+/**
+ * The view-row fields a save touches. The server resets the letter
+ * (`status: "pending"`, empty body, recomputed subject) whenever a company
+ * is saved — the optimistic patch applies exactly those changes, so the
+ * status pill and the wizard gates react on the click, not on the answer.
+ * The position override fields are carried by the CONFIRMED patch (the
+ * server row) only.
+ */
+export type RowSaveFields = {
+  company_name: string;
+  company_email: string;
+  contact_name: string | null;
+  company_address: string | null;
+  subject: string;
+  status: string;
+  body_html: string;
+  body_text: string;
+  error_code: string | null;
+  error_message: string | null;
+  position_title?: string | null;
+  position_brief?: string | null;
+  employer_facts?: string | null;
+};
+
+/** The optimistic row patch for the values about to be saved. `purpose` is
+ *  the campaign's purpose (the server recomputes the subject with the same
+ *  pure `buildSubject`). */
+export function optimisticSaveFields(
+  values: CompanyRecord,
+  purpose: string,
+): RowSaveFields {
+  const name = (values.companyName ?? "").trim();
+  return {
+    company_name: values.companyName ?? "",
+    company_email: values.companyEmail ?? "",
+    contact_name: values.contactName || null,
+    company_address: values.companyAddress || null,
+    subject: name ? buildSubject(purpose as BewPurpose, name) : "",
+    status: "pending",
+    body_html: "",
+    body_text: "",
+    error_code: null,
+    error_message: null,
+  };
+}
+
+/** The pre-save row fields the optimistic patch must be rolled back to. */
+export function snapshotSaveFields(row: RowSaveFields): RowSaveFields {
+  return { ...row };
+}
+
+/** Snapshot a stored view row (any shape carrying these fields — the
+ *  client DTO and the engine row both do) as the rollback target. */
+export function snapshotFromRow(
+  row: Pick<RowSaveFields, "company_name" | "company_email" | "contact_name" | "company_address" | "subject" | "status" | "body_html" | "body_text" | "error_code" | "error_message">,
+): RowSaveFields {
+  return {
+    company_name: row.company_name,
+    company_email: row.company_email,
+    contact_name: row.contact_name,
+    company_address: row.company_address,
+    subject: row.subject,
+    status: row.status,
+    body_html: row.body_html,
+    body_text: row.body_text,
+    error_code: row.error_code,
+    error_message: row.error_message,
+  };
+}
+
+export interface RowSaveDeps {
+  appId: string;
+  seq: number;
+  /** The row's values about to be saved (draft-aware). */
+  values: CompanyRecord;
+  /** The campaign purpose (subject recomputation). */
+  purpose: string;
+  /** The row's CURRENT (pre-save) view fields — the rollback target. */
+  snapshot: RowSaveFields;
+  /** Synchronously claim this row for an in-flight save; false when one is
+   *  already running (two rapid clicks can never start two requests). */
+  claim: (id: string) => boolean;
+  release: (id: string) => void;
+  begin: (id: string) => void;
+  confirm: (id: string) => void;
+  fail: (id: string) => void;
+  /** Apply fields to the row IN THE VIEW. Returns whether the row was
+   *  present (false = the view switched to another campaign mid-flight —
+   *  the patch is a no-op there and the orchestrator resyncs once). */
+  apply: (id: string, fields: RowSaveFields) => boolean;
+  /** Drop this row's unsaved draft — only after server confirmation. */
+  dropDraft: (id: string) => void;
+  /** The ownership-checked server save; the returned row is the
+   *  confirmation (null = the row no longer exists). */
+  update: () => Promise<RowSaveFields | null>;
+  /** ONE best-effort view resync when the row vanished mid-flight. */
+  resync: () => Promise<void>;
+  onSaved: (seq: number) => void;
+  onError: (error: unknown) => void;
+}
+
+/**
+ * The optimistic save flow (see the section header for the ordering).
+ * The visual response (indicator + optimistic row state) is applied
+ * SYNCHRONOUSLY on the call — the server round trip never gates it.
+ */
+export async function saveCompanyRow(deps: RowSaveDeps): Promise<void> {
+  if (!deps.claim(deps.appId)) return; // this row's save is already in flight
+  deps.begin(deps.appId);
+  const optimisticApplied = deps.apply(deps.appId, optimisticSaveFields(deps.values, deps.purpose));
+  let saved: RowSaveFields | null;
+  let error: unknown = null;
+  try {
+    saved = await deps.update();
+  } catch (e) {
+    saved = null;
+    error = e;
+  }
+  if (saved) {
+    // Confirmation: the SERVER row is authoritative — apply it (it also
+    // carries the position override + recomputed subject).
+    const patched = deps.apply(deps.appId, saved);
+    deps.confirm(deps.appId);
+    deps.dropDraft(deps.appId);
+    if (!patched) {
+      // The view switched campaigns while this save was in flight: the
+      // current view does not contain the row — resync once so whichever
+      // campaign it belongs to shows the saved values.
+      try {
+        await deps.resync();
+      } catch {
+        // Best effort: the next explicit refresh reconciles.
+      }
+    }
+    deps.onSaved(deps.seq);
+    deps.release(deps.appId);
+    return;
+  }
+  // Failure (or a vanished row): roll the optimistic patch back…
+  if (optimisticApplied) deps.apply(deps.appId, snapshotSaveFields(deps.snapshot));
+  deps.fail(deps.appId);
+  // …the draft is KEPT (the user's edits survive) and the error is shown.
+  deps.onError(error ?? new Error("NOT_FOUND"));
   deps.release(deps.appId);
 }

@@ -450,14 +450,45 @@ export interface CreateBewCampaignInput {
   employerFacts?: string;
 }
 
+/** A resolved e-mail account row (ownership-verified by the query). */
+interface ResolvedSenderAccount {
+  id: string;
+  email: string;
+  is_active: boolean;
+  requires_reconnect: boolean;
+}
+
 /**
- * Create a new automation campaign and seed `count` empty pending
- * applications (seq 1..count). The count is validated (1..100). No quota is
- * reserved and no e-mail is sent — this only prepares the structure.
+ * The default sender: the user's own ACTIVE, healthy account (the feature is
+ * designed around the already-connected Gmail — no new integration).
+ * `null` when the user has no such account.
  */
-export async function createBewCampaign(
+async function resolveDefaultSenderAccount(
+  admin: Admin,
+  userId: string,
+): Promise<ResolvedSenderAccount | null> {
+  const { data: accounts } = await admin
+    .from("email_accounts")
+    .select("id, email, is_active, requires_reconnect")
+    .eq("user_id", userId)
+    .eq("is_active", true)
+    .eq("requires_reconnect", false)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  return ((accounts ?? []) as ResolvedSenderAccount[])[0] ?? null;
+}
+
+/**
+ * The full creation work (validation, default-sender resolution, campaign
+ * insert, row seeding). `defaultSenderEmail` is the display e-mail of the
+ * DEFAULT sender resolved in THIS call — so `createBewCampaignView` can build
+ * the view without re-reading the account. `undefined` when the caller passed
+ * an explicit `emailAccountId` (its e-mail was not read); `null` when no
+ * default account exists (the view then has no sender to resolve either).
+ */
+async function createBewCampaignCore(
   input: CreateBewCampaignInput,
-): Promise<BewCampaignRow> {
+): Promise<{ row: BewCampaignRow; defaultSenderEmail: string | null | undefined }> {
   const check = validateCompanyCount(input.count);
   if (!check.ok) throw new Error("INVALID_COUNT");
   if (!isBewPurpose(input.purpose)) throw new Error("INVALID_PURPOSE");
@@ -468,22 +499,19 @@ export async function createBewCampaign(
   if (positionBrief.length > BEW_POSITION_BRIEF_MAX) throw new Error("POSITION_TOO_LONG");
   if (employerFacts.length > BEW_EMPLOYER_FACTS_MAX) throw new Error("POSITION_TOO_LONG");
   const admin = createAdminClient();
-  const positionSupported = await hasBewPositionColumns();
+  // The schema probe and the default-sender read are INDEPENDENT — start both
+  // now (the probe is cached process-wide; this saves one sequential round
+  // trip on the first creation per process).
+  const positionProbe = hasBewPositionColumns();
 
-  // Default sender: the user's own ACTIVE, healthy account (the feature is
-  // designed around the already-connected Gmail — no new integration).
   let emailAccountId = input.emailAccountId ?? null;
+  let defaultSenderEmail: string | null | undefined = undefined;
   if (!emailAccountId) {
-    const { data: accounts } = await admin
-      .from("email_accounts")
-      .select("id")
-      .eq("user_id", input.userId)
-      .eq("is_active", true)
-      .eq("requires_reconnect", false)
-      .order("created_at", { ascending: true })
-      .limit(1);
-    emailAccountId = ((accounts ?? []) as Array<{ id: string }>)[0]?.id ?? null;
+    const sender = await resolveDefaultSenderAccount(admin, input.userId);
+    emailAccountId = sender?.id ?? null;
+    defaultSenderEmail = sender ? sender.email : null;
   }
+  const positionSupported = await positionProbe;
 
   const { data: campaign, error: campaignError } = await admin
     .from("bew_campaigns")
@@ -531,7 +559,39 @@ export async function createBewCampaign(
     throw new Error("Unable to initialize the application list.");
   }
 
+  return { row, defaultSenderEmail };
+}
+
+/**
+ * Create a new automation campaign and seed `count` empty pending
+ * applications (seq 1..count). The count is validated (1..100). No quota is
+ * reserved and no e-mail is sent — this only prepares the structure.
+ */
+export async function createBewCampaign(
+  input: CreateBewCampaignInput,
+): Promise<BewCampaignRow> {
+  const { row } = await createBewCampaignCore(input);
   return row;
+}
+
+/**
+ * Create a new campaign AND build its fresh view in ONE operation (one
+ * authenticated request from the client's perspective).
+ *
+ * Why: the "+ New series" flow used to call the create action and THEN a
+ * separate `getBewCampaignView` action — two re-authentication round trips and
+ * a redundant campaign re-read before the UI could show the new series. The
+ * view is built from the just-inserted row (the default sender's e-mail is
+ * reused when it was resolved in this call), so nothing is fetched twice.
+ * The created campaign is identical to `createBewCampaign`'s — same
+ * validation, seeding and compensation.
+ */
+export async function createBewCampaignView(
+  input: CreateBewCampaignInput,
+): Promise<BewCampaignView> {
+  const { row, defaultSenderEmail } = await createBewCampaignCore(input);
+  const admin = createAdminClient();
+  return buildBewCampaignView(admin, row, input.userId, defaultSenderEmail);
 }
 
 /**
@@ -665,6 +725,10 @@ export async function updateBewApplicationFields(
   },
 ): Promise<BewApplicationRow | null> {
   const admin = createAdminClient();
+  // The schema probe is independent of the row read — start it now so its
+  // (cold, process-first) round trip overlaps the ownership select instead of
+  // queueing after it.
+  const positionProbe = hasBewPositionColumns();
   const { data: existing } = await admin
     .from("bew_applications")
     .select("*")
@@ -695,7 +759,7 @@ export async function updateBewApplicationFields(
     app.seq,
   ).rows[0];
 
-  const positionSupportedUpdate = await hasBewPositionColumns();
+  const positionSupportedUpdate = await positionProbe;
   const { data: updated } = await admin
     .from("bew_applications")
     .update({
@@ -2519,24 +2583,30 @@ export interface BewCampaignView {
   senderEmail: string | null;
 }
 
-export async function getBewCampaignView(
+/**
+ * Build the view from an ALREADY ownership-verified campaign row (read the
+ * applications + documents in parallel, then usage, then the sender display
+ * e-mail). `senderEmailOverride` — the sender's display e-mail resolved in
+ * the SAME operation (see `createBewCampaignView`) — skips the redundant
+ * account read; `undefined` means "resolve it here" (the normal read path).
+ */
+async function buildBewCampaignView(
+  admin: Admin,
+  campaign: BewCampaignRow,
   userId: string,
-  campaignId: string,
-): Promise<BewCampaignView | null> {
-  const admin = createAdminClient();
-  const campaign = await getBewCampaignOwned(admin, userId, campaignId);
-  if (!campaign) return null;
+  senderEmailOverride?: string | null,
+): Promise<BewCampaignView> {
   const [{ data: apps }, { data: docs }] = await Promise.all([
     admin
       .from("bew_applications")
       .select("*")
-      .eq("campaign_id", campaignId)
+      .eq("campaign_id", campaign.id)
       .eq("user_id", userId)
       .order("seq", { ascending: true }),
     admin
       .from("bew_campaign_documents")
       .select("*")
-      .eq("campaign_id", campaignId)
+      .eq("campaign_id", campaign.id)
       .eq("user_id", userId)
       .order("kind", { ascending: true })
       .order("filename", { ascending: true }),
@@ -2552,16 +2622,22 @@ export async function getBewCampaignView(
   // Resolve the sender display e-mail (ownership-verified, read-only).
   let senderEmail: string | null = null;
   if (campaign.email_account_id) {
-    const { data: acct } = await admin
-      .from("email_accounts")
-      .select("email, is_active, requires_reconnect")
-      .eq("id", campaign.email_account_id)
-      .eq("user_id", userId)
-      .maybeSingle();
-    const a = acct as
-      | { email: string; is_active: boolean; requires_reconnect: boolean }
-      | null;
-    if (a && a.is_active && !a.requires_reconnect) senderEmail = a.email;
+    if (senderEmailOverride !== undefined) {
+      // The account was read moments ago in the same operation (and the
+      // default-sender query already filters to active, healthy accounts).
+      senderEmail = senderEmailOverride;
+    } else {
+      const { data: acct } = await admin
+        .from("email_accounts")
+        .select("email, is_active, requires_reconnect")
+        .eq("id", campaign.email_account_id)
+        .eq("user_id", userId)
+        .maybeSingle();
+      const a = acct as
+        | { email: string; is_active: boolean; requires_reconnect: boolean }
+        | null;
+      if (a && a.is_active && !a.requires_reconnect) senderEmail = a.email;
+    }
   }
 
   return {
@@ -2571,4 +2647,14 @@ export async function getBewCampaignView(
     usage,
     senderEmail,
   };
+}
+
+export async function getBewCampaignView(
+  userId: string,
+  campaignId: string,
+): Promise<BewCampaignView | null> {
+  const admin = createAdminClient();
+  const campaign = await getBewCampaignOwned(admin, userId, campaignId);
+  if (!campaign) return null;
+  return buildBewCampaignView(admin, campaign, userId);
 }

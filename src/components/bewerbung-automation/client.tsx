@@ -12,11 +12,11 @@
  * on this page sends e-mail until the user confirms step 5 — generation and
  * page opens are strictly side-effect free with respect to delivery.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   bewCancelSend,
-  bewCreateCampaign,
+  bewCreateCampaignView,
   bewGetView,
   bewRefreshSend,
 } from "@/app/bewerbung-automation/actions";
@@ -34,9 +34,14 @@ import {
   appSendFlags,
   bewErrorCode,
   hasRequiredDocuments,
+  type BewApplicationDTO,
   type BewViewDTO,
   type Step,
 } from "./types";
+import {
+  buildPendingView,
+  isPendingCampaignId,
+} from "./pending-series";
 import { CompaniesStep } from "./companies-step";
 import { DocumentsStep } from "./documents-step";
 import { GenerateStep } from "./generate-step";
@@ -117,6 +122,26 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /* "+ New series" — the PENDING flow (instant UI, confirmed persistence):
+     the interface opens on a locally-built placeholder view SYNCHRONOUSLY
+     with the click; the single create+view server action runs in the
+     background and either confirms (the real view replaces the placeholder)
+     or rolls back (the previous view is restored, error shown). */
+  const [creatingSeries, setCreatingSeries] = useState(false);
+  const [seriesConfirmation, setSeriesConfirmation] = useState<{ id: string; token: number } | null>(null);
+  /** Synchronous duplicate-click guard (state updates are batched — only a
+      ref claim is race-free between two rapid clicks). */
+  const creatingRef = useRef(false);
+  const confirmTokenRef = useRef(0);
+
+  /* Latest view for the STABLE callbacks (refresh/pump/patch) — a callback
+     that depends on `view` would be recreated on every poll and re-render
+     every (memoized) step. */
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+
   /* Send selection: everything ELIGIBLE is selected by default; the user can
      opt rows out (checkbox) or they drop out automatically when they become
      ineligible. We store the Deselected ids so a fresh poll can re-add rows. */
@@ -149,10 +174,11 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
   const [employerFacts, setEmployerFacts] = useState("");
 
   const refresh = useCallback(async () => {
-    if (!view) return;
-    const fresh = await bewGetView(view.campaign.id);
+    const current = viewRef.current;
+    if (!current) return;
+    const fresh = await bewGetView(current.campaign.id);
     if (fresh) setView(fresh);
-  }, [view]);
+  }, []);
 
   /* Step-5 pump: fresh view + one bounded drain of THIS campaign's due
       queue (the same atomic claim core the cron tick uses — nothing sends
@@ -160,11 +186,28 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
       Returns true when a fresh view was received (false = not found /
       not owned — the displayed view is left untouched). */
   const pump = useCallback(async (): Promise<boolean> => {
-    if (!view) return false;
-    const fresh = await bewRefreshSend(view.campaign.id);
+    const current = viewRef.current;
+    if (!current) return false;
+    const fresh = await bewRefreshSend(current.campaign.id);
     if (fresh) setView(fresh);
     return Boolean(fresh);
-  }, [view]);
+  }, []);
+
+  /**
+   * Apply fields to ONE application row in the current view (the
+   * Companies step's optimistic / confirmed / rollback row patches).
+   * Rows the view no longer contains are skipped (no-op) — the caller
+   * detects that and resyncs if needed.
+   */
+  const patchApplication = useCallback((appId: string, fields: Partial<BewApplicationDTO>) => {
+    setView((v) => {
+      if (!v) return v;
+      return {
+        ...v,
+        applications: v.applications.map((a) => (a.id === appId ? { ...a, ...fields } : a)),
+      };
+    });
+  }, []);
 
   /* Poll (and CONTINUE) the send every 3 s while it is in flight. The
       browser is one of the concurrent drivers — the server action runs the
@@ -197,50 +240,101 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
     [t],
   );
 
-  async function run<T>(fn: () => Promise<T>): Promise<T | null> {
-    setBusy(true);
-    setError(null);
-    try {
-      return await fn();
-    } catch (e) {
-      setError(errText(e));
-      return null;
-    } finally {
-      setBusy(false);
-    }
-  }
+  const run = useCallback(
+    async <T,>(fn: () => Promise<T>): Promise<T | null> => {
+      setBusy(true);
+      setError(null);
+      try {
+        return await fn();
+      } catch (e) {
+        setError(errText(e));
+        return null;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [errText],
+  );
 
-  const createCampaign = () =>
-    run(async () => {
-      const fd = new FormData();
-      fd.set("count", count);
-      fd.set("purpose", purpose);
-      fd.set("positionTitle", positionTitle);
-      fd.set("positionBrief", positionBrief);
-      fd.set("employerFacts", employerFacts);
-      const result = await bewCreateCampaign(fd);
-      if (result) {
-        const fresh = await bewGetView(result.campaignId);
-        if (fresh) setView(fresh);
+  /**
+   * "+ New series" / setup "Start" — INSTANT interface, confirmed
+   * persistence:
+   *
+   *   click → (synchronous, one render) the NEW SERIES UI is open: step 1
+   *           on a locally-built placeholder view (the exact rows the
+   *           engine seeds — `count` empty pending rows) with a visible
+   *           "being created" indicator
+   *         → ONE server action (create + view in a single authenticated
+   *           request; previously two actions re-authenticating each)
+   *           ├─ confirmed: the REAL view replaces the placeholder, the
+   *           │             placeholder drafts are remapped to the real row
+   *           │             ids (by seed seq) and the setup fields reset
+   *           └─ failed:    the PREVIOUS view is restored as-is and the
+   *                         localized error is shown (the placeholder
+   *                         drafts are inert and purged by the next
+   *                         confirmed creation)
+   *
+   * The seeding of `count` empty rows happens exactly as before (server
+   * side, `createBewCampaignView` = same engine call) — nothing extra is
+   * written, nothing is skipped. A second click while the creation is in
+   * flight is a no-op (synchronous ref claim).
+   */
+  const startNewSeries = useCallback(() => {
+    if (creatingRef.current) return; // duplicate-click guard
+    const countNum = Number(count);
+    if (!Number.isInteger(countNum) || countNum < BEW_MIN_COUNT || countNum > BEW_MAX_COUNT)
+      return; // the setup form is already gated on this; the server re-checks
+    creatingRef.current = true;
+    setError(null);
+    const previousView = viewRef.current;
+    // The interface opens NOW — before any network round trip.
+    setView(buildPendingView(previousView, countNum, purpose));
+    setStep(1);
+    setCreatingSeries(true);
+    void (async () => {
+      try {
+        const fd = new FormData();
+        fd.set("count", String(countNum));
+        fd.set("purpose", purpose);
+        fd.set("positionTitle", positionTitle);
+        fd.set("positionBrief", positionBrief);
+        fd.set("employerFacts", employerFacts);
+        const fresh = await bewCreateCampaignView(fd);
+        confirmTokenRef.current += 1;
+        setSeriesConfirmation({ id: fresh.campaign.id, token: confirmTokenRef.current });
+        setView(fresh);
         setDeselected(new Set());
-        setStep(1);
         setCount("10");
         setPositionTitle("");
         setPositionBrief("");
         setEmployerFacts("");
+      } catch (e) {
+        // Roll back: only undo the pending swap if the view is still the
+        // placeholder (never clobber a view that moved on meanwhile).
+        setView((v) => (v && isPendingCampaignId(v.campaign.id) ? previousView : v));
+        setError(errText(e));
+      } finally {
+        creatingRef.current = false;
+        setCreatingSeries(false);
       }
-      return result;
-    });
+    })();
+  }, [count, purpose, positionTitle, positionBrief, employerFacts, errText]);
 
-  const cancelCurrentSend = () =>
-    run(async () => {
-      if (!view) return null;
-      const fd = new FormData();
-      fd.set("campaignId", view.campaign.id);
-      const result = await bewCancelSend(fd);
-      await refresh();
-      return result;
-    });
+  const cancelCurrentSend = useCallback(
+    () =>
+      run(async () => {
+        const current = viewRef.current;
+        if (!current) return null;
+        const fd = new FormData();
+        fd.set("campaignId", current.campaign.id);
+        const result = await bewCancelSend(fd);
+        await refresh();
+        return result;
+      }),
+    [run, refresh],
+  );
+
+  const goToDocuments = useCallback(() => setStep(2), []);
 
   /* ---------------------------------------------------------------- */
 
@@ -345,13 +439,21 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
           {error && <ErrorLine message={error} />}
 
           <div className="mt-8">
+            {/* Same instant flow as the header button: on the click the new
+                series UI opens (placeholder rows) and the single
+                create+view action confirms it in the background. */}
             <Button
               size="lg"
-              disabled={busy || !countOk}
-              onClick={() => void createCampaign()}
+              disabled={busy || creatingSeries || !countOk}
+              onClick={startNewSeries}
+              aria-busy={creatingSeries || undefined}
             >
-              <Icon name="spark" size={18} />
-              {t("bewauto.setupStart")}
+              {creatingSeries ? (
+                <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+              ) : (
+                <Icon name="spark" size={18} />
+              )}
+              {creatingSeries ? t("bewauto.newSeriesCreating") : t("bewauto.setupStart")}
             </Button>
           </div>
         </Card>
@@ -402,9 +504,17 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
               tone={usageTone(view)}
               label={t("bewauto.usageLeft", { n: view.usage.remaining })}
             />
-            <Button variant="secondary" size="sm" onClick={() => void createCampaign()} disabled={busy}>
-              <Icon name="plus" size={15} />
-              {t("bewauto.newCampaign")}
+            {/* The new series opens INSTANTLY on the click (placeholder
+                view); this button only reflects the in-flight creation. */}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={startNewSeries}
+              disabled={busy || creatingSeries}
+              aria-busy={creatingSeries || undefined}
+            >
+              <Icon name={creatingSeries ? "refresh" : "plus"} size={15} className={creatingSeries ? "animate-spin" : undefined} />
+              {creatingSeries ? t("bewauto.newSeriesCreating") : t("bewauto.newCampaign")}
             </Button>
           </div>
         </div>
@@ -453,13 +563,17 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
 
         {/* Step 1 stays MOUNTED (hidden) while the user works on later steps:
             unsaved row edits and an in-flight import preview must survive the
-            round trip back to Companies. */}
+            round trip back to Companies. (Memoized: it only re-renders when
+            its own props change, not on every parent re-render.) */}
         <div className={step === 1 ? undefined : "hidden"}>
           <CompaniesStep
             view={view}
             refresh={refresh}
-            onNext={() => setStep(2)}
+            onNext={goToDocuments}
             nextBlockedReason={companiesBlockedReason}
+            creatingSeries={creatingSeries}
+            seriesConfirmation={seriesConfirmation}
+            patchApplication={patchApplication}
           />
         </div>
         {step === 2 && <DocumentsStep view={view} refresh={refresh} />}
@@ -483,7 +597,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
             refresh={refresh}
             pump={pump}
             selectedIds={selectedIds}
-            onCancelSend={() => void cancelCurrentSend()}
+            onCancelSend={cancelCurrentSend}
             sending={sending}
           />
         )}

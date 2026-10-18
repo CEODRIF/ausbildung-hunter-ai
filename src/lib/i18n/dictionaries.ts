@@ -2372,6 +2372,10 @@ const de = {
     campaignSummary: "Gesendet: {sent} · Fehlgeschlagen: {failed} · Alle: {total}",
     usageLeft: "{n} Sends heute übrig",
     newCampaign: "Neue Serie",
+    newSeriesCreating: "Serie wird erstellt …",
+    seriesCreatingHint:
+      "Die neue Serie wird gespeichert — du kannst bereits Einträge erfassen, Speichern und Löschen sind bis zur Bestätigung kurz gesperrt.",
+    savedFlash: "Gespeichert",
     emailSettingsLink: "E-Mail-Konto verwalten",
     /* Schritt 1 — Firmendaten */
     step1Title: "Firmendaten",
@@ -4970,6 +4974,10 @@ const en: Dict = {
     campaignSummary: "Sent: {sent} · Failed: {failed} · Total: {total}",
     usageLeft: "{n} sends left today",
     newCampaign: "New series",
+    newSeriesCreating: "Creating series…",
+    seriesCreatingHint:
+      "The new series is being saved — you can already enter entries; saving and deleting rows are briefly locked until it is confirmed.",
+    savedFlash: "Saved",
     emailSettingsLink: "Manage e-mail account",
     /* Step 1 — company data */
     step1Title: "Company data",
@@ -7569,6 +7577,10 @@ const fr: Dict = {
     campaignSummary: "Envoyées : {sent} · Échouées : {failed} · Total : {total}",
     usageLeft: "{n} envois restants aujourd'hui",
     newCampaign: "Nouvelle série",
+    newSeriesCreating: "Création de la série…",
+    seriesCreatingHint:
+      "La nouvelle série est en cours d'enregistrement — vous pouvez déjà saisir des entrées ; l'enregistrement et la suppression des lignes sont brièvement verrouillés jusqu'à confirmation.",
+    savedFlash: "Enregistré",
     emailSettingsLink: "Gérer le compte e-mail",
     /* Étape 1 — données entreprises */
     step1Title: "Données des entreprises",
@@ -10116,6 +10128,10 @@ const ar: Dict = {
     campaignSummary: "المُرسل: {sent} · الفاشل: {failed} · الإجمالي: {total}",
     usageLeft: "{n} إرسال متبقٍ اليوم",
     newCampaign: "سلسلة جديدة",
+    newSeriesCreating: "جارٍ إنشاء السلسلة…",
+    seriesCreatingHint:
+      "جاري حفظ السلسلة الجديدة — يمكنك إدخال البيانات بالفعل؛ الحفظ والحذف مقفَّلان مؤقتًا حتى التأكيد.",
+    savedFlash: "تم الحفظ",
     emailSettingsLink: "إدارة حساب البريد",
     /* الخطوة 1 — بيانات الشركات */
     step1Title: "بيانات الشركات",

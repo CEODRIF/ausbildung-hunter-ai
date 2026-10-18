@@ -10,7 +10,7 @@
  * ownership-verified, and the janitor now knows `bew_documents` as a
  * reference table (see storage-reconcile BUCKETS).
  */
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   bewAttachDocument,
   bewDetachDocument,
@@ -64,7 +64,7 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function DocumentsStep({ view, refresh }: Props) {
+export const DocumentsStep = memo(function DocumentsStep({ view, refresh }: Props) {
   const { t } = useI18n();
   const [library, setLibrary] = useState<LibraryDoc[] | null>(null);
   const [kind, setKind] = useState<DocumentKind>("cv");
@@ -227,7 +227,7 @@ export function DocumentsStep({ view, refresh }: Props) {
       )}
     </Card>
   );
-}
+});
 
 function DocSlot({
   title,

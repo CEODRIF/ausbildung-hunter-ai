@@ -12,7 +12,7 @@
  * structured fields (subject, greeting, body paragraphs, closing, signature)
  * and the save path re-escapes every part on the server.
  */
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   bewExcludeApplication,
   bewRestoreApplication,
@@ -71,7 +71,7 @@ function letterExcerpt(app: BewApplicationDTO, max = 80): string {
   return htmlToParagraphs(app.body_html).join(" ").slice(0, max);
 }
 
-export function ReviewStep({
+export const ReviewStep = memo(function ReviewStep({
   view,
   refresh,
   selectedIds,
@@ -305,7 +305,7 @@ export function ReviewStep({
       )}
     </div>
   );
-}
+});
 
 /* ---------------- letter modal (A4 preview, structured editing) ---------------- */
 

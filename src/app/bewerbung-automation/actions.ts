@@ -29,6 +29,7 @@ import {
   attachBewDocument,
   cancelBewSend,
   createBewCampaign,
+  createBewCampaignView,
   detachBewDocument,
   excludeBewApplication,
   generateBewLetters,
@@ -52,6 +53,7 @@ import {
 import type {
   BewApplicationRow,
   BewCampaignView,
+  CreateBewCampaignInput,
   StartSendResult,
 } from "@/lib/bewerbung-engine";
 
@@ -137,23 +139,42 @@ type CompanyRecord = {
 
 /* ------------------------------ Step 0 ------------------------------ */
 
+function readCampaignInput(
+  userId: string,
+  formData: FormData,
+): CreateBewCampaignInput {
+  const purpose = readString(formData, "purpose") as BewPurpose;
+  if (!isBewPurpose(purpose)) throw new Error("INVALID_PURPOSE");
+  return {
+    userId,
+    count: Number(readString(formData, "count")),
+    purpose,
+    positionTitle: readString(formData, "positionTitle"),
+    positionBrief: readString(formData, "positionBrief"),
+    employerFacts: readString(formData, "employerFacts"),
+  };
+}
+
 /** Create a new campaign (validates the 1..100 count server-side). */
 export async function bewCreateCampaign(
   formData: FormData,
 ): Promise<{ campaignId: string; count: number }> {
   const { userId } = await requireUser();
-  const count = Number(readString(formData, "count"));
-  const purpose = readString(formData, "purpose") as BewPurpose;
-  if (!isBewPurpose(purpose)) throw new Error("INVALID_PURPOSE");
-  const campaign = await createBewCampaign({
-    userId,
-    count,
-    purpose,
-    positionTitle: readString(formData, "positionTitle"),
-    positionBrief: readString(formData, "positionBrief"),
-    employerFacts: readString(formData, "employerFacts"),
-  });
+  const campaign = await createBewCampaign(readCampaignInput(userId, formData));
   return { campaignId: campaign.id, count: campaign.requested_count };
+}
+
+/**
+ * Create a new campaign AND return its fresh view in ONE action (one
+ * re-authentication, no follow-up `bewGetView` round trip). The client uses
+ * this for "+ New series": the returned view is the confirmed, persisted
+ * state of the brand-new campaign.
+ */
+export async function bewCreateCampaignView(
+  formData: FormData,
+): Promise<BewCampaignView> {
+  const { userId } = await requireUser();
+  return await createBewCampaignView(readCampaignInput(userId, formData));
 }
 
 /* ------------------------------ Step 1 ------------------------------ */

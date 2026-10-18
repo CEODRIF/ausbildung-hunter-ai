@@ -11,7 +11,7 @@
  *      validity + duplicate flags; nothing is stored without the explicit
  *      "Apply" — and the server re-validates the identical rules.
  */
-import { useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   bewExcludeApplication,
   bewSaveCompanies,
@@ -35,21 +35,80 @@ import {
 import {
   applyDraftPatch,
   beginRowDelete,
+  beginRowSave,
+  clearRowSaved,
   confirmRowDelete,
+  confirmRowSave,
   deleteCompanyRow,
   EMPTY_ROW_DELETE_STATE,
+  EMPTY_ROW_SAVE_STATE,
   failRowDelete,
+  failRowSave,
   filterActiveRows,
   findDuplicateEmails,
+  indexRows,
   pruneRowDeleteState,
   retireRowDelete,
-  rowDirty,
-  rowValues,
+  rowDirtyOf,
+  rowToRecord,
+  saveCompanyRow,
+  snapshotFromRow,
   type CompanyRowView,
   type Drafts,
   type RowDeleteState,
+  type RowSaveFields,
+  type RowSaveState,
 } from "./row-state";
-import type { BewViewDTO, CompanyRecord } from "./types";
+import {
+  isPendingCampaignId,
+  remapPendingDrafts,
+} from "./pending-series";
+import type { BewApplicationDTO, BewViewDTO, CompanyRecord } from "./types";
+
+/** How long the per-row "Saved" chip stays visible after confirmation. */
+const SAVED_FLASH_MS = 2500;
+
+/**
+ * The row's server save (ownership-checked, returns the SAVED row — the
+ * confirmation). Module-level so the stable per-row callback never closes
+ * over render state.
+ */
+async function updateCompanyRow(
+  appId: string,
+  values: CompanyRecord,
+): Promise<RowSaveFields | null> {
+  const fd = new FormData();
+  fd.set("applicationId", appId);
+  fd.set(
+    "payload",
+    JSON.stringify({
+      companyName: values.companyName,
+      companyEmail: values.companyEmail,
+      contactName: values.contactName || null,
+      companyAddress: values.companyAddress || null,
+      positionTitle: values.positionTitle || "",
+      positionBrief: values.positionBrief || "",
+      employerFacts: values.employerFacts || "",
+    }),
+  );
+  const row = await bewUpdateCompany(fd);
+  if (!row) return null;
+  return {
+    company_name: row.company_name,
+    company_email: row.company_email,
+    contact_name: row.contact_name,
+    company_address: row.company_address,
+    subject: row.subject,
+    status: row.status,
+    body_html: row.body_html,
+    body_text: row.body_text,
+    error_code: row.error_code,
+    error_message: row.error_message,
+    position_title: row.position_title ?? null,
+    position_brief: row.position_brief ?? null,
+    employer_facts: row.employer_facts ?? null,
+  };
+}
 
 /**
  * PDF import via the /api/bew/companies-pdf route (NOT a server action —
@@ -84,6 +143,18 @@ interface Props {
   onNext: () => void;
   /** Exact reason advancing is blocked right now (null = ready to go). */
   nextBlockedReason: string | null;
+  /** A new series is being created (the view holds the PENDING placeholder
+   *  rows): row SAVE/DELETE/IMPORT wait for the confirmed ids — typing and
+   *  validation still work immediately (drafts remap on confirmation). */
+  creatingSeries: boolean;
+  /** Set (with a fresh token) the moment a series creation is CONFIRMED —
+   *  the one-shot signal that remaps the placeholder drafts to the real
+   *  row ids. A FAILED creation rolls the view back WITHOUT setting this,
+   *  so its drafts are never absorbed by another campaign. */
+  seriesConfirmation: { id: string; token: number } | null;
+  /** Apply fields to ONE application row in the parent's view (the
+   *  optimistic/confirmed/rollback row patches). Stable reference. */
+  patchApplication: (appId: string, fields: RowSaveFields) => void;
 }
 
 type ImportPhase = "idle" | "preview";
@@ -112,7 +183,18 @@ const IDLE_IMPORT: ImportState = {
   error: null,
 };
 
-export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Props) {
+/** Memoized: with all step props reference-stable, this component only
+ *  re-renders when ITS data changes — a keystroke in one row re-renders the
+ *  row (and the step shell), not every hidden/sibling step in the wizard. */
+export const CompaniesStep = memo(function CompaniesStep({
+  view,
+  refresh,
+  onNext,
+  nextBlockedReason,
+  creatingSeries,
+  seriesConfirmation,
+  patchApplication,
+}: Props) {
   const { t } = useI18n();
   /* Stable-id row view: the manual table is driven by these (draft-aware),
      so every field edit and the per-row delete operate on the same identity. */
@@ -133,6 +215,14 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
       })),
     [view.applications],
   );
+  /* O(1) row lookups for the render hot path (a per-row linear scan made
+     every keystroke O(n²) on long lists). */
+  const rowsById = useMemo(() => indexRows(rows), [rows]);
+  const serverRecords = useMemo(() => {
+    const m = new Map<string, CompanyRecord>();
+    for (const r of rows) m.set(r.id, rowToRecord(r));
+    return m;
+  }, [rows]);
   /* Deleting a row EXCLUDES it on the server (restorable, ownership-checked)
      — the company-data table then shows only the rows still in the campaign. */
   const activeRows = useMemo(() => filterActiveRows(rows), [rows]);
@@ -150,6 +240,57 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
       ref claim is race-free between two rapid clicks of the same row). */
   const inFlightDeletes = useRef<Set<string>>(new Set());
 
+  /* Optimistic per-row SAVE: the indicator + row patch are local to the
+     affected row (the step-wide busy flag that locked EVERY other row on
+     each save is gone). */
+  const [saveState, setSaveState] = useState<RowSaveState>(EMPTY_ROW_SAVE_STATE);
+  const inFlightSaves = useRef<Set<string>>(new Set());
+  const savedTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  /* Latest-value refs for the STABLE callbacks (typing/save/delete): the
+     row components are memoized and only re-render when their own props
+     change, so their handlers must not be recreated on every render. */
+  const rowsByIdRef = useRef(rowsById);
+  const rawAppsRef = useRef<BewApplicationDTO[]>(view.applications);
+  const purposeRef = useRef(view.campaign.purpose);
+  const campaignStatusRef = useRef(view.campaign.status);
+  const creatingRef = useRef(creatingSeries);
+  useEffect(() => {
+    rowsByIdRef.current = rowsById;
+  }, [rowsById]);
+  useEffect(() => {
+    rawAppsRef.current = view.applications;
+    purposeRef.current = view.campaign.purpose;
+    campaignStatusRef.current = view.campaign.status;
+    creatingRef.current = creatingSeries;
+  }, [view.applications, view.campaign.purpose, view.campaign.status, creatingSeries]);
+
+  /* Clear any pending "Saved" chip timers on unmount. */
+  useEffect(() => {
+    const timers = savedTimers.current;
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
+
+  /* Remap the placeholder drafts onto the CONFIRMED campaign's rows (by
+     seed seq) exactly once per confirmed creation. The one-shot token is
+     what keeps a FAILED creation's rollback from absorbing drafts into the
+     previous campaign. */
+  const consumedTokenRef = useRef(0);
+  const prevCampaignRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevCampaignRef.current;
+    prevCampaignRef.current = view.campaign.id;
+    if (!prev || prev === view.campaign.id) return;
+    if (!isPendingCampaignId(prev)) return;
+    if (!seriesConfirmation || view.campaign.id !== seriesConfirmation.id) return;
+    if (seriesConfirmation.token === consumedTokenRef.current) return;
+    consumedTokenRef.current = seriesConfirmation.token;
+    setDrafts((d) => remapPendingDrafts(d, view.applications));
+  }, [view, seriesConfirmation]);
+
   /* Reconcile hidden rows with the fresh view after every refresh: a row
      the view reports active again (restored from the review step) re-
      appears; nothing the user entered is ever clobbered by stale data. */
@@ -164,15 +305,15 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
 
   /* Live duplicate check over the CURRENT (draft-aware) visible rows —
      recomputed on every edit, so it updates immediately after a change
-     or a deletion. */
+     or a deletion. (O(1) per row via the pre-computed records map.) */
   const dupEmails = useMemo(() => {
     const recs: Array<{ companyEmail: string }> = [];
     for (const a of visibleRows) {
-      const v = rowValues(drafts, rows, a.id);
+      const v = drafts[a.id] ?? serverRecords.get(a.id);
       if (v) recs.push({ companyEmail: v.companyEmail });
     }
     return findDuplicateEmails(recs);
-  }, [visibleRows, drafts, rows]);
+  }, [visibleRows, drafts, serverRecords]);
 
   const preview = useMemo(
     () =>
@@ -182,48 +323,99 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
     [importState.phase, importState.records],
   );
 
-  function setDraft(appId: string, patch: Partial<CompanyRecord>) {
-    const app = rows.find((a) => a.id === appId);
-    if (!app) return;
-    // Merge onto the LATEST draft for this row — re-deriving from the server
-    // row on every keystroke was the bug that wiped the other fields.
-    setDrafts((d) => applyDraftPatch(d, appId, app, patch));
-  }
+  /** Stable per-row field edit: merge onto the LATEST draft for this row
+   *  (re-deriving from the server row on every keystroke was the bug that
+   *  wiped the other fields). */
+  const onFieldChange = useCallback(
+    (appId: string, field: keyof CompanyRecord, value: string) => {
+      const app = rowsByIdRef.current.get(appId);
+      if (!app) return;
+      setDrafts((d) => applyDraftPatch(d, appId, app, { [field]: value }));
+    },
+    [],
+  );
 
-  async function saveRow(appId: string) {
-    const values = rowValues(drafts, rows, appId);
-    if (!values) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const fd = new FormData();
-      fd.set("applicationId", appId);
-      fd.set(
-        "payload",
-        JSON.stringify({
-          companyName: values.companyName,
-          companyEmail: values.companyEmail,
-          contactName: values.contactName || null,
-          companyAddress: values.companyAddress || null,
-          positionTitle: values.positionTitle || "",
-          positionBrief: values.positionBrief || "",
-          employerFacts: values.employerFacts || "",
-        }),
-      );
-      await bewUpdateCompany(fd);
-      setDrafts((d) => {
-        const next = { ...d };
-        delete next[appId];
-        return next;
+  /** Schedule (and re-schedule) the transient "Saved" chip retirement. */
+  const scheduleSavedClear = useCallback((id: string) => {
+    const prev = savedTimers.current.get(id);
+    if (prev) clearTimeout(prev);
+    savedTimers.current.set(
+      id,
+      setTimeout(() => {
+        savedTimers.current.delete(id);
+        setSaveState((s) => clearRowSaved(s, id));
+      }, SAVED_FLASH_MS),
+    );
+  }, []);
+
+  /**
+   * Stable per-row SAVE — optimistic, scoped to the row:
+   *
+   *   click → indicator + optimistic row state (synchronous)
+   *         → server action (ownership-checked)
+   *           ├─ saved row returned: the SERVER row patches the view (no
+   *           │   full-view refetch — that was the latency), the draft is
+   *           │   dropped, a transient "Saved" chip shows,
+   *           └─ failure / vanished row: the optimistic patch is rolled
+   *               back, the draft is KEPT, the error is shown.
+   *
+   * Only THIS row is locked (`saveState.pending`), so the other rows — and
+   * the import and the wizard footer — stay interactive while it saves.
+   * A duplicate click on the same row is a no-op (synchronous ref claim).
+   */
+  const onSaveRow = useCallback(
+    (app: CompanyRowView, values: CompanyRecord) => {
+      if (creatingRef.current) return; // placeholder ids are not real rows yet
+      const raw = rawAppsRef.current.find((a) => a.id === app.id);
+      if (!raw) return;
+      setError(null);
+      void saveCompanyRow({
+        appId: app.id,
+        seq: app.seq,
+        values,
+        purpose: purposeRef.current,
+        snapshot: snapshotFromRow(raw),
+        claim: (id) => {
+          if (inFlightSaves.current.has(id)) return false;
+          inFlightSaves.current.add(id);
+          return true;
+        },
+        release: (id) => {
+          inFlightSaves.current.delete(id);
+        },
+        begin: (id) => {
+          const timer = savedTimers.current.get(id);
+          if (timer) {
+            clearTimeout(timer);
+            savedTimers.current.delete(id);
+          }
+          setSaveState((s) => beginRowSave(s, id));
+        },
+        confirm: (id) => {
+          setSaveState((s) => confirmRowSave(s, id));
+          scheduleSavedClear(id);
+        },
+        fail: (id) => setSaveState((s) => failRowSave(s, id)),
+        apply: (id, fields) => {
+          const exists = rawAppsRef.current.some((a) => a.id === id);
+          patchApplication(id, fields);
+          return exists;
+        },
+        dropDraft: (id) =>
+          setDrafts((d) => {
+            if (!(id in d)) return d;
+            const next = { ...d };
+            delete next[id];
+            return next;
+          }),
+        update: () => updateCompanyRow(app.id, values),
+        resync: refresh,
+        onSaved: () => undefined, // the "Saved" chip is driven by saveState.saved
+        onError: (e) => setError(errMessage(e, t)),
       });
-       await refresh();
-       setNotice(t("bewauto.rowSaved"));
-    } catch (e) {
-      setError(errMessage(e, t));
-    } finally {
-      setBusy(false);
-    }
-  }
+    },
+    [patchApplication, refresh, scheduleSavedClear, t],
+  );
 
   /**
    * Delete ONE company row (the red X) — OPTIMISTICALLY. Removes only
@@ -243,45 +435,71 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
    *     a no-op (synchronous ref claim — no duplicate requests), and
    *     in-flight rows (queued/sending/sent) stay locked: the engine
    *     rejects the exclusion and the row is restored with an error.
+    * No confirmation dialog: a single unsent draft row should not be
+    * interrupted for, and the action is restorable from step 4.
+    */
+
+   /**
+    * Stable per-row DELETE (the red X) — OPTIMISTICALLY. Removes only
+   * `app`, addressed by its stable id:
+   *   - the row disappears from the table IMMEDIATELY on the click (the
+   *     entry count, validation flags and duplicate check all update at
+   *     once) — the ownership-checked server exclusion runs in the
+   *     background and NEVER gates the visual update,
+   *   - on success the row's unsaved draft edits are dropped (the latest
+   *     version goes away WITH the row) and one authoritative view refresh
+   *     syncs the wizard gates/counters,
+   *   - on failure the row is restored in its original position with all
+   *     its latest field values and a localized error is shown,
+   *   - the other rows, their values and their drafts are untouched; the
+   *     whole list is never replaced with stale server data,
+   *   - a second click for the same row while the request is in flight is
+   *     a no-op (synchronous ref claim — no duplicate requests), and
+   *     in-flight rows (queued/sending/sent) stay locked: the engine
+   *     rejects the exclusion and the row is restored with an error.
    * No confirmation dialog: a single unsent draft row should not be
    * interrupted for, and the action is restorable from step 4.
    */
-  function handleDeleteClick(app: CompanyRowView) {
-    if (lockApp) return; // a send is in progress — every row input is locked
-    setError(null);
-    setNotice(null);
-    void deleteCompanyRow({
-      appId: app.id,
-      seq: app.seq,
-      claim: (id) => {
-        if (inFlightDeletes.current.has(id)) return false;
-        inFlightDeletes.current.add(id);
-        return true;
-      },
-      release: (id) => {
-        inFlightDeletes.current.delete(id);
-      },
-      begin: (id) => setDeleteState((s) => beginRowDelete(s, id)),
-      confirm: (id) => setDeleteState((s) => confirmRowDelete(s, id)),
-      retire: (id) => setDeleteState((s) => retireRowDelete(s, id)),
-      fail: (id) => setDeleteState((s) => failRowDelete(s, id)),
-      dropDraft: (id) =>
-        setDrafts((d) => {
-          if (!(id in d)) return d;
-          const next = { ...d };
-          delete next[id];
-          return next;
-        }),
-      exclude: async (id) => {
-        const fd = new FormData();
-        fd.set("applicationId", id);
-        await bewExcludeApplication(fd);
-      },
-      refresh,
-      onSuccess: (seq) => setNotice(t("bewauto.rowDeleted", { n: seq })),
-      onError: (error) => setError(errMessage(error, t)),
-    });
-  }
+  const onDeleteRow = useCallback(
+    (app: CompanyRowView) => {
+      if (campaignStatusRef.current === "sending") return; // a send locks every row
+      if (creatingRef.current) return; // placeholder rows are not real rows yet
+      setError(null);
+      setNotice(null);
+      void deleteCompanyRow({
+        appId: app.id,
+        seq: app.seq,
+        claim: (id) => {
+          if (inFlightDeletes.current.has(id)) return false;
+          inFlightDeletes.current.add(id);
+          return true;
+        },
+        release: (id) => {
+          inFlightDeletes.current.delete(id);
+        },
+        begin: (id) => setDeleteState((s) => beginRowDelete(s, id)),
+        confirm: (id) => setDeleteState((s) => confirmRowDelete(s, id)),
+        retire: (id) => setDeleteState((s) => retireRowDelete(s, id)),
+        fail: (id) => setDeleteState((s) => failRowDelete(s, id)),
+        dropDraft: (id) =>
+          setDrafts((d) => {
+            if (!(id in d)) return d;
+            const next = { ...d };
+            delete next[id];
+            return next;
+          }),
+        exclude: async (id) => {
+          const fd = new FormData();
+          fd.set("applicationId", id);
+          await bewExcludeApplication(fd);
+        },
+        refresh,
+        onSuccess: (seq) => setNotice(t("bewauto.rowDeleted", { n: seq })),
+        onError: (error) => setError(errMessage(error, t)),
+      });
+    },
+    [refresh, t],
+  );
 
   async function handleFile(file: File) {
     setBusy(true);
@@ -352,7 +570,7 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
   }
 
   async function applyImport() {
-    if (!preview) return;
+    if (!preview || creatingSeries) return; // the campaign must exist first
     setBusy(true);
     setError(null);
     try {
@@ -413,28 +631,28 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
               </div>
               {/* w-full on phones: the picker gets its own line + a
                   comfortable full-width tap target (sm: back to inline). */}
-              <div className="w-full sm:w-auto">
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept=".csv,.xlsx,.xls,.pdf,text/csv"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void handleFile(f);
-                  }}
-                />
-                 <Button
-                   variant="secondary"
-                   size="sm"
-                   disabled={busy || lockApp}
-                   onClick={() => fileRef.current?.click()}
-                   className="w-full sm:w-auto"
-                 >
-                   <Icon name="upload" size={15} />
-                   {t("bewauto.chooseFile")}
-                 </Button>
-              </div>
+               <div className="w-full sm:w-auto">
+                 <input
+                   ref={fileRef}
+                   type="file"
+                   accept=".csv,.xlsx,.xls,.pdf,text/csv"
+                   className="hidden"
+                   onChange={(e) => {
+                     const f = e.target.files?.[0];
+                     if (f) void handleFile(f);
+                   }}
+                 />
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy || lockApp || creatingSeries}
+                    onClick={() => fileRef.current?.click()}
+                    className="w-full sm:w-auto"
+                  >
+                    <Icon name="upload" size={15} />
+                    {t("bewauto.chooseFile")}
+                  </Button>
+               </div>
             </div>
           ) : (
             importState.error ? null : (
@@ -474,6 +692,12 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
 
         {error && <AlertLine message={error} />}
         {notice && !error && <InfoLine message={notice} />}
+        {creatingSeries && (
+          <p role="status" className="mt-3 flex items-center gap-2 text-xs font-medium text-muted">
+            <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-line-strong border-t-accent" />
+            {t("bewauto.seriesCreatingHint")}
+          </p>
+        )}
 
         {/* Manual table */}
         <div className="mt-6">
@@ -493,7 +717,11 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
              row — the `.bew-cards` rules in globals.css (max-width
              639.98px) swap the presentation only; `data-label` re-prints
              each column header per cell and is inert at >= 640px, where
-             the bounded 800px scrollable table is untouched. */
+             the bounded 800px scrollable table is untouched.
+
+             Each row is a memoized <CompanyRow>: typing or saving in one
+             row re-renders that row only (stable values object + stable
+             callbacks), so the full list stays instant at 100 rows. */
           ) : (
           <div className="bew-cards max-h-96 overflow-auto rounded-2xl border border-line max-sm:max-h-none max-sm:overflow-visible max-sm:border-0">
             <table className="w-full min-w-[800px] border-collapse text-sm max-sm:min-w-0">
@@ -510,106 +738,31 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
               </thead>
               <tbody>
                 {visibleRows.map((app) => {
-                  const values = rowValues(drafts, rows, app.id);
+                  /* Draft-aware values; the REFERENCE is stable (the draft
+                     object itself, or the pre-computed server record) so
+                     unchanged rows keep their memo hit. */
+                  const values = drafts[app.id] ?? serverRecords.get(app.id);
                   if (!values) return null;
-                  const dirty = rowDirty(drafts, rows, app.id);
-                  const emailOk = isValidEmail(values.companyEmail);
-                  const nameOk = values.companyName.trim().length > 0;
-                  const isDup =
-                    values.companyEmail.trim() !== "" &&
-                    dupEmails.has(values.companyEmail.trim().toLowerCase());
                   return (
-                      <tr key={app.id} className="border-t border-line align-top">
-                        <td data-label={t("bewauto.colRow")} className="px-3 py-2.5 text-xs font-semibold text-faint">{app.seq}</td>
-                        <td data-label={t("bewauto.colCompany")} className="px-2 py-1.5">
-                          <MiniInput
-                            value={values.companyName}
-                            disabled={lockApp}
-                            error={!nameOk && values.companyName !== ""}
-                            placeholder={t("bewauto.phCompany")}
-                            onChange={(v) => setDraft(app.id, { companyName: v })}
-                          />
-                        </td>
-                        <td data-label={t("bewauto.colEmail")} className="px-2 py-1.5">
-                          <MiniInput
-                            value={values.companyEmail}
-                            disabled={lockApp}
-                            error={!emailOk}
-                            placeholder={t("bewauto.phEmail")}
-                            onChange={(v) => setDraft(app.id, { companyEmail: v })}
-                          />
-                        </td>
-                        <td data-label={t("bewauto.colContact")} className="px-2 py-1.5">
-                          <MiniInput
-                            value={values.contactName}
-                            disabled={lockApp}
-                            placeholder={t("bewauto.phContact")}
-                            onChange={(v) => setDraft(app.id, { contactName: v })}
-                          />
-                        </td>
-                        <td data-label={t("bewauto.colAddress")} className="px-2 py-1.5">
-                          <MiniInput
-                            value={values.companyAddress}
-                            disabled={lockApp}
-                            placeholder={t("bewauto.phAddress")}
-                            onChange={(v) => setDraft(app.id, { companyAddress: v })}
-                          />
-                        </td>
-                        <td data-label={t("bewauto.colStatus")} className="px-3 py-2.5">
-                        <div className="flex flex-col items-start gap-2">
-                          <RowStatus app={app} emailOk={emailOk} nameOk={nameOk} t={t} />
-                          {isDup && (
-                            <span className="text-xs text-danger">{t("bewauto.duplicateEmail")}</span>
-                          )}
-                          {dirty && !lockApp && (
-                            <Button size="sm" variant="secondary" disabled={busy} onClick={() => void saveRow(app.id)}>
-                              {t("bewauto.save")}
-                            </Button>
-                          )}
-                          {!lockApp && (
-                            <details className="text-xs">
-                              <summary className="cursor-pointer list-none text-faint transition hover:text-ink">
-                                {t("bewauto.perCompanyPosition")}
-                              </summary>
-                              <div className="mt-2 flex flex-col gap-1.5">
-                                <MiniInput
-                                  value={values.positionTitle ?? ""}
-                                  disabled={lockApp}
-                                  placeholder={t("bewauto.positionTitle")}
-                                  onChange={(v) => setDraft(app.id, { positionTitle: v })}
-                                />
-                                <MiniInput
-                                  value={values.positionBrief ?? ""}
-                                  disabled={lockApp}
-                                  placeholder={t("bewauto.positionBrief")}
-                                  onChange={(v) => setDraft(app.id, { positionBrief: v })}
-                                />
-                                <MiniInput
-                                  value={values.employerFacts ?? ""}
-                                  disabled={lockApp}
-                                  placeholder={t("bewauto.employerFacts")}
-                                  onChange={(v) => setDraft(app.id, { employerFacts: v })}
-                                />
-                              </div>
-                            </details>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-2 py-2">
-                        {/* Red X: deletes THIS row only (by stable id). The
-                            action is restorable (exclude), so no confirmation
-                            dialog for a single unsent draft row. */}
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteClick(app)}
-                          disabled={lockApp || deleteView.pending.has(app.id)}
-                          aria-label={t("bewauto.deleteRow", { n: app.seq })}
-                          className="rounded-lg p-1.5 text-danger transition hover:bg-danger-soft disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          <Icon name="x" size={16} />
-                        </button>
-                      </td>
-                    </tr>
+                    <CompanyRow
+                      key={app.id}
+                      app={app}
+                      values={values}
+                      dirty={drafts[app.id] ? rowDirtyOf(drafts[app.id], app) : false}
+                      isDup={
+                        values.companyEmail.trim() !== "" &&
+                        dupEmails.has(values.companyEmail.trim().toLowerCase())
+                      }
+                      saving={saveState.pending.has(app.id)}
+                      saved={saveState.saved.has(app.id)}
+                      deletePending={deleteView.pending.has(app.id)}
+                      creatingSeries={creatingSeries}
+                      lockApp={lockApp}
+                      onFieldChange={onFieldChange}
+                      onSaveRow={onSaveRow}
+                      onDeleteRow={onDeleteRow}
+                      t={t}
+                    />
                   );
                 })}
               </tbody>
@@ -646,7 +799,7 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
       </Card>
     </div>
   );
-}
+});
 
 /* ---------------- sub-components ---------------- */
 
@@ -667,6 +820,167 @@ function matrixRecords(
 function Th({ children }: { children?: React.ReactNode }) {
   return <th className="px-3 py-2.5 text-start font-semibold">{children}</th>;
 }
+
+/**
+ * One manual-table row — MEMOIZED.
+ *
+ * Before this, every keystroke in any field re-rendered the whole tbody
+ * (up to 100 rows × 7 controlled inputs): the map built fresh inline
+ * callbacks and fresh value objects for EVERY row on every render. Now the
+ * row's props are all reference-stable while it is unchanged — the row's
+ * own `values` object (the draft, or the pre-computed server record),
+ * primitive flags (dirty/isDup/saving/saved/…) and the STABLE handlers — so
+ * a change in one row re-renders exactly that row.
+ */
+interface CompanyRowProps {
+  app: CompanyRowView;
+  /** Draft-aware values (stable reference unless THIS row changed). */
+  values: CompanyRecord;
+  dirty: boolean;
+  isDup: boolean;
+  /** THIS row's save is in flight (per-row indicator, other rows free). */
+  saving: boolean;
+  /** THIS row was just confirmed by the server (transient "Saved" chip). */
+  saved: boolean;
+  /** THIS row's delete is in flight (optimistic). */
+  deletePending: boolean;
+  creatingSeries: boolean;
+  lockApp: boolean;
+  onFieldChange: (appId: string, field: keyof CompanyRecord, value: string) => void;
+  onSaveRow: (app: CompanyRowView, values: CompanyRecord) => void;
+  onDeleteRow: (app: CompanyRowView) => void;
+  t: (k: string, v?: Record<string, string | number>) => string;
+}
+
+const CompanyRow = memo(function CompanyRow({
+  app,
+  values,
+  dirty,
+  isDup,
+  saving,
+  saved,
+  deletePending,
+  creatingSeries,
+  lockApp,
+  onFieldChange,
+  onSaveRow,
+  onDeleteRow,
+  t,
+}: CompanyRowProps) {
+  const emailOk = isValidEmail(values.companyEmail);
+  const nameOk = values.companyName.trim().length > 0;
+  const setField = (field: keyof CompanyRecord) => (v: string) =>
+    onFieldChange(app.id, field, v);
+  return (
+    <tr className="border-t border-line align-top">
+      <td data-label={t("bewauto.colRow")} className="px-3 py-2.5 text-xs font-semibold text-faint">{app.seq}</td>
+      <td data-label={t("bewauto.colCompany")} className="px-2 py-1.5">
+        <MiniInput
+          value={values.companyName}
+          disabled={lockApp}
+          error={!nameOk && values.companyName !== ""}
+          placeholder={t("bewauto.phCompany")}
+          onChange={setField("companyName")}
+        />
+      </td>
+      <td data-label={t("bewauto.colEmail")} className="px-2 py-1.5">
+        <MiniInput
+          value={values.companyEmail}
+          disabled={lockApp}
+          error={!emailOk}
+          placeholder={t("bewauto.phEmail")}
+          onChange={setField("companyEmail")}
+        />
+      </td>
+      <td data-label={t("bewauto.colContact")} className="px-2 py-1.5">
+        <MiniInput
+          value={values.contactName}
+          disabled={lockApp}
+          placeholder={t("bewauto.phContact")}
+          onChange={setField("contactName")}
+        />
+      </td>
+      <td data-label={t("bewauto.colAddress")} className="px-2 py-1.5">
+        <MiniInput
+          value={values.companyAddress}
+          disabled={lockApp}
+          placeholder={t("bewauto.phAddress")}
+          onChange={setField("companyAddress")}
+        />
+      </td>
+      <td data-label={t("bewauto.colStatus")} className="px-3 py-2.5">
+        <div className="flex flex-col items-start gap-2">
+          <RowStatus app={app} emailOk={emailOk} nameOk={nameOk} t={t} />
+          {isDup && (
+            <span className="text-xs text-danger">{t("bewauto.duplicateEmail")}</span>
+          )}
+          {dirty && !lockApp && (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={creatingSeries || saving}
+              onClick={() => onSaveRow(app, values)}
+              aria-busy={saving || undefined}
+            >
+              {saving && (
+                <span className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-line-strong border-t-accent" />
+              )}
+              {saving ? t("bewauto.saving") : t("bewauto.save")}
+            </Button>
+          )}
+          {saved && !dirty && (
+            <span className="flex items-center gap-1.5 text-xs font-medium text-success">
+              <Icon name="check" size={13} />
+              {t("bewauto.savedFlash")}
+            </span>
+          )}
+          {!lockApp && (
+            <details className="text-xs">
+              <summary className="cursor-pointer list-none text-faint transition hover:text-ink">
+                {t("bewauto.perCompanyPosition")}
+              </summary>
+              <div className="mt-2 flex flex-col gap-1.5">
+                <MiniInput
+                  value={values.positionTitle ?? ""}
+                  disabled={lockApp}
+                  placeholder={t("bewauto.positionTitle")}
+                  onChange={setField("positionTitle")}
+                />
+                <MiniInput
+                  value={values.positionBrief ?? ""}
+                  disabled={lockApp}
+                  placeholder={t("bewauto.positionBrief")}
+                  onChange={setField("positionBrief")}
+                />
+                <MiniInput
+                  value={values.employerFacts ?? ""}
+                  disabled={lockApp}
+                  placeholder={t("bewauto.employerFacts")}
+                  onChange={setField("employerFacts")}
+                />
+              </div>
+            </details>
+          )}
+        </div>
+      </td>
+      <td className="px-2 py-2">
+        {/* Red X: deletes THIS row only (by stable id). The
+            action is restorable (exclude), so no confirmation
+            dialog for a single unsent draft row. Locked while
+            THIS row saves (no interleaving) or a send runs. */}
+        <button
+          type="button"
+          onClick={() => onDeleteRow(app)}
+          disabled={lockApp || creatingSeries || deletePending || saving}
+          aria-label={t("bewauto.deleteRow", { n: app.seq })}
+          className="rounded-lg p-1.5 text-danger transition hover:bg-danger-soft disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Icon name="x" size={16} />
+        </button>
+      </td>
+    </tr>
+  );
+});
 
 function MiniInput({
   value,

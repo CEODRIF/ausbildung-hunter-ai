@@ -378,6 +378,9 @@ function renderStep(appsList: BewApplicationDTO[], campaign: { status?: string }
         refresh: async () => undefined,
         onNext: () => undefined,
         nextBlockedReason: null,
+        creatingSeries: false,
+        seriesConfirmation: null,
+        patchApplication: () => undefined,
       }),
     ),
   );

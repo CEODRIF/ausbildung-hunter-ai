@@ -10,7 +10,7 @@
  * view is polled (client.tsx) and the actual per-message outcome is shown —
  * a message is "sent" only because the provider answered success.
  */
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   bewRescheduleSend,
   bewStartSend,
@@ -49,7 +49,7 @@ interface Props {
   sending: boolean;
 }
 
-export function SendStep({ view, refresh, pump, selectedIds, onCancelSend, sending }: Props) {
+export const SendStep = memo(function SendStep({ view, refresh, pump, selectedIds, onCancelSend, sending }: Props) {
   const { t, lang } = useI18n();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -474,7 +474,7 @@ export function SendStep({ view, refresh, pump, selectedIds, onCancelSend, sendi
       )}
     </Card>
   );
-}
+});
 
 function ConfirmRow({ label }: { label: string }) {
   return (

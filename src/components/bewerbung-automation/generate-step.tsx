@@ -10,7 +10,7 @@
  * `onlyFailed` — the engine claims `failed` rows only, so already-generated
  * letters are never duplicated.
  */
-import { useState } from "react";
+import { memo, useState } from "react";
 import { bewGenerateLetters } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
 import { BEW_MAX_COUNT } from "@/lib/bewerbung-automation";
@@ -24,7 +24,7 @@ interface Props {
   refresh: () => Promise<void>;
 }
 
-export function GenerateStep({ view, refresh }: Props) {
+export const GenerateStep = memo(function GenerateStep({ view, refresh }: Props) {
   const { t } = useI18n();
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -134,7 +134,7 @@ export function GenerateStep({ view, refresh }: Props) {
       </div>
     </Card>
   );
-}
+});
 
 function errMessage(e: unknown, t: (k: string, v?: Record<string, string | number>) => string): string {
   const code = e instanceof Error ? e.message : "";

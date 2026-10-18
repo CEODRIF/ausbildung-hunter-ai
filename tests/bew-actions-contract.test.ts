@@ -62,6 +62,13 @@ vi.mock("@/lib/bewerbung-engine", () => ({
     id: "camp-new",
     requested_count: 5,
   })),
+  createBewCampaignView: engineMockFactory("createBewCampaignView", () => ({
+    campaign: { id: "camp-new" },
+    applications: [],
+    documents: [],
+    usage: { remaining: 50, daily_limit: 50 },
+    senderEmail: "sender@gmail.com",
+  })),
   detachBewDocument: engineMockFactory("detachBewDocument"),
   excludeBewApplication: engineMockFactory("excludeBewApplication"),
   generateBewLetters: engineMockFactory("generateBewLetters", () => ({
@@ -140,6 +147,29 @@ describe("action → engine argument mapping (service contract)", () => {
     expect(result).toEqual({ campaignId: "camp-new", count: 5 });
     const call = engineCalls.find((c) => c.fn === "createBewCampaign")!;
     expect(call.args[0]).toEqual({ userId: "user-1", count: 42, purpose: "arbeit", positionTitle: "", positionBrief: "", employerFacts: "" });
+  });
+
+  it("bewCreateCampaignView forwards the SAME input as bewCreateCampaign (one engine call, one auth)", async () => {
+    const fd = new FormData();
+    fd.set("count", "42");
+    fd.set("purpose", "arbeit");
+    const view = await actions.bewCreateCampaignView(fd);
+    expect(view).toMatchObject({ campaign: { id: "camp-new" } });
+    // Exactly ONE engine call for the whole operation (no follow-up
+    // getBewCampaignView round trip on the server side).
+    expect(engineCalls).toHaveLength(1);
+    const call = engineCalls[0];
+    expect(call.fn).toBe("createBewCampaignView");
+    expect(call.args[0]).toEqual({ userId: "user-1", count: 42, purpose: "arbeit", positionTitle: "", positionBrief: "", employerFacts: "" });
+  });
+
+  it("bewCreateCampaignView redirects unauthenticated users before any engine work", async () => {
+    login(null);
+    const fd = new FormData();
+    fd.set("count", "3");
+    fd.set("purpose", "ausbildung");
+    await expect(actions.bewCreateCampaignView(fd)).rejects.toThrow("NEXT_REDIRECT");
+    expect(engineCalls).toHaveLength(0);
   });
 
   it("bewStartSend parses the selected seqs and forwards them intact", async () => {
