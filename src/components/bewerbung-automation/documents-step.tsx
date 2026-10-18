@@ -295,7 +295,7 @@ function KindSelect({
       onChange={(e) => onChange(e.target.value as DocumentKind)}
       aria-label={t("bewauto.kindLabel")}
       className={`${
-        compact ? "h-8 rounded-lg text-xs" : "h-10 rounded-xl text-sm"
+        compact ? "h-9 rounded-lg text-base lg:h-8 lg:text-xs" : "h-10 rounded-xl text-base lg:text-sm"
       } border border-line-strong bg-surface px-2.5 text-ink outline-none transition focus:border-accent`}
     >
       <option value="cv">{t("bewauto.kindCv")}</option>

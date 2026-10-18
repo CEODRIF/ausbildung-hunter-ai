@@ -389,7 +389,7 @@ export function LetterModal({
                 <input
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
-                  className="w-full rounded-xl border border-line-strong bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+                  className="w-full rounded-xl border border-line-strong bg-surface px-3 py-2 text-base text-ink outline-none focus:border-accent lg:text-sm"
                 />
               </label>
               <ReadonlyField label={t("bewauto.letterGreetingLabel")} value={letter.greeting} />
@@ -399,7 +399,7 @@ export function LetterModal({
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
                   rows={14}
-                  className="w-full rounded-xl border border-line-strong bg-surface px-3 py-2 text-sm leading-6 text-ink outline-none focus:border-accent"
+                  className="w-full rounded-xl border border-line-strong bg-surface px-3 py-2 text-base leading-7 text-ink outline-none focus:border-accent lg:text-sm lg:leading-6"
                 />
                 <span className="mt-1 block text-xs text-faint">{t("bewauto.letterBodyHint")}</span>
               </label>
@@ -474,6 +474,11 @@ export function LetterModal({
             </Button>
           )}
         </div>
+        {/* iPhone safe area: on phones the sheet is bottom-anchored
+            (items-end, no backdrop padding), so reserve the home-indicator
+            inset below the action row. Zero height everywhere the inset is
+            0 (incl. >= sm, where the sheet is centered). */}
+        <div aria-hidden="true" className="max-sm:h-[env(safe-area-inset-bottom)]" />
       </div>
     </div>
   );
@@ -609,7 +614,7 @@ function ReadonlyField({ label, value }: { label: string; value: string }) {
         value={value}
         readOnly
         aria-readonly="true"
-        className="w-full cursor-default rounded-xl border border-line bg-surface-2/60 px-3 py-2 text-sm text-muted outline-none"
+        className="w-full cursor-default rounded-xl border border-line bg-surface-2/60 px-3 py-2 text-base text-muted outline-none lg:text-sm"
       />
     </label>
   );

@@ -172,6 +172,7 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
             size="lg"
             disabled={busy || n === 0 || !view.senderEmail || !(docs.cv && docs.certs) || !emailComplete}
             onClick={() => setConfirmOpen(true)}
+            className="w-full sm:w-auto"
           >
             <Icon name="send" size={18} />
             {t("bewauto.sendButton", { n })}
@@ -231,6 +232,10 @@ export function SendStep({ view, refresh, selectedIds, onCancelSend, sending }: 
                 {t("bewauto.confirmGo")}
               </Button>
             </div>
+            {/* iPhone safe area: on phones the sheet is bottom-anchored, so
+                reserve the home-indicator inset below the action row (zero
+                height where the inset is 0 / at >= sm). */}
+            <div aria-hidden="true" className="max-sm:h-[env(safe-area-inset-bottom)]" />
           </div>
         </div>
       )}

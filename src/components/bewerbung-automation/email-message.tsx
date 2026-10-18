@@ -176,7 +176,7 @@ export function EmailMessageCard({ view, refresh, applicantName }: Props) {
             setNotice(null);
           }}
           placeholder={t("bewauto.emailSubjectPlaceholder")}
-          className="h-11 w-full rounded-xl border border-line-strong bg-surface px-3.5 text-sm text-ink outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-11 w-full rounded-xl border border-line-strong bg-surface px-3.5 text-base text-ink outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10 disabled:cursor-not-allowed disabled:opacity-50 lg:text-sm"
         />
       </label>
 
@@ -360,6 +360,10 @@ function EmailPreviewModal({
             {t("bewauto.close")}
           </Button>
         </div>
+        {/* iPhone safe area: on phones the sheet is bottom-anchored, so
+            reserve the home-indicator inset below the action row (zero
+            height where the inset is 0 / at >= sm). */}
+        <div aria-hidden="true" className="max-sm:h-[env(safe-area-inset-bottom)]" />
       </div>
     </div>
   );

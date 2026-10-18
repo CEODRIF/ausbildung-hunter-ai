@@ -859,3 +859,87 @@ textarea:focus-visible,
     height: 6px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Bewerbung Automation — the step-1 company table as stacked cards.
+   PHONES ONLY (max-width 639.98px = the Tailwind `sm` edge).
+   --------------------------------------------------------------------------- */
+/* The wrapper (`.bew-cards`, companies-step.tsx) carries the SAME table DOM
+   at every width; on phones only the presentation changes — no JS, no
+   duplicated inputs, no new state:
+   - thead is hidden (every cell re-prints its own label below),
+   - each tr becomes a bordered card (the site's card language: 1rem radius,
+     --line border, --shadow-card, --surface fill),
+   - each td becomes a labeled block; the label text comes from the inert
+     `data-label` attribute (it renders NOTHING at >= 640px, where the
+     original min-w-[800px] scrollable table is untouched),
+   - the action cell (red X) floats into the card's top corner with a
+     larger touch target.
+   Unlayered rules intentionally win over the Tailwind utilities for the
+   same elements — desktop (>= 640px) matches are impossible inside this
+   media query, so the desktop table is byte-identical. */
+@media (max-width: 639.98px) {
+  .bew-cards table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .bew-cards thead {
+    display: none;
+  }
+  .bew-cards tbody {
+    display: block;
+  }
+  .bew-cards tr {
+    position: relative;
+    display: block;
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: 1rem;
+    background: var(--surface);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+  }
+  .bew-cards tr:last-child {
+    margin-bottom: 0;
+  }
+  .bew-cards td {
+    display: block;
+    width: 100%;
+    padding: 0.625rem 0.875rem;
+    border-top: 1px solid var(--line);
+  }
+  .bew-cards td:first-child {
+    border-top: 0;
+  }
+  .bew-cards td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.375rem;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .bew-cards td:last-child {
+    position: absolute;
+    top: 0.5rem;
+    inset-inline-end: 0.5rem;
+    border: 0;
+    padding: 0;
+    background: transparent;
+  }
+  .bew-cards td:last-child button {
+    padding: 0.5rem;
+  }
+  /* Comfortable touch targets for the inline inputs in card mode. */
+  .bew-cards td input {
+    min-height: 44px;
+    /* iOS Safari zooms to 100% when a form control under 16 px gains focus.
+       The unlayered `button, input { font: inherit }` above beats Tailwind's
+       text-* utilities on inputs, so set the size here (mobile only —
+       desktop keeps the inherited 14/12 px exactly as before). */
+    font-size: 16px;
+  }
+}

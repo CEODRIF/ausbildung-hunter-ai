@@ -407,11 +407,13 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
         <div className="rounded-2xl border border-dashed border-line-strong bg-surface-2/40 p-4">
           {importState.phase === "idle" ? (
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm font-semibold text-ink-soft">{t("bewauto.importTitle")}</p>
                 <p className="mt-0.5 text-xs leading-5 text-muted">{t("bewauto.importHint")}</p>
               </div>
-              <div>
+              {/* w-full on phones: the picker gets its own line + a
+                  comfortable full-width tap target (sm: back to inline). */}
+              <div className="w-full sm:w-auto">
                 <input
                   ref={fileRef}
                   type="file"
@@ -422,15 +424,16 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
                     if (f) void handleFile(f);
                   }}
                 />
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy || lockApp}
-                  onClick={() => fileRef.current?.click()}
-                >
-                  <Icon name="upload" size={15} />
-                  {t("bewauto.chooseFile")}
-                </Button>
+                 <Button
+                   variant="secondary"
+                   size="sm"
+                   disabled={busy || lockApp}
+                   onClick={() => fileRef.current?.click()}
+                   className="w-full sm:w-auto"
+                 >
+                   <Icon name="upload" size={15} />
+                   {t("bewauto.chooseFile")}
+                 </Button>
               </div>
             </div>
           ) : (
@@ -486,9 +489,14 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
                 {t("bewauto.entriesEmptyHint")}
               </p>
             </div>
+          /* Phones (<sm): the SAME table DOM below renders as one card per
+             row — the `.bew-cards` rules in globals.css (max-width
+             639.98px) swap the presentation only; `data-label` re-prints
+             each column header per cell and is inert at >= 640px, where
+             the bounded 800px scrollable table is untouched. */
           ) : (
-          <div className="max-h-96 overflow-auto rounded-2xl border border-line">
-            <table className="w-full min-w-[800px] border-collapse text-sm">
+          <div className="bew-cards max-h-96 overflow-auto rounded-2xl border border-line max-sm:max-h-none max-sm:overflow-visible max-sm:border-0">
+            <table className="w-full min-w-[800px] border-collapse text-sm max-sm:min-w-0">
               <thead className="sticky top-0 z-10 bg-surface-2 text-xs uppercase tracking-wide text-muted">
                 <tr>
                   <Th>{t("bewauto.colRow")}</Th>
@@ -511,43 +519,43 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
                     values.companyEmail.trim() !== "" &&
                     dupEmails.has(values.companyEmail.trim().toLowerCase());
                   return (
-                    <tr key={app.id} className="border-t border-line align-top">
-                      <td className="px-3 py-2.5 text-xs font-semibold text-faint">{app.seq}</td>
-                      <td className="px-2 py-1.5">
-                        <MiniInput
-                          value={values.companyName}
-                          disabled={lockApp}
-                          error={!nameOk && values.companyName !== ""}
-                          placeholder={t("bewauto.phCompany")}
-                          onChange={(v) => setDraft(app.id, { companyName: v })}
-                        />
-                      </td>
-                      <td className="px-2 py-1.5">
-                        <MiniInput
-                          value={values.companyEmail}
-                          disabled={lockApp}
-                          error={!emailOk}
-                          placeholder={t("bewauto.phEmail")}
-                          onChange={(v) => setDraft(app.id, { companyEmail: v })}
-                        />
-                      </td>
-                      <td className="px-2 py-1.5">
-                        <MiniInput
-                          value={values.contactName}
-                          disabled={lockApp}
-                          placeholder={t("bewauto.phContact")}
-                          onChange={(v) => setDraft(app.id, { contactName: v })}
-                        />
-                      </td>
-                      <td className="px-2 py-1.5">
-                        <MiniInput
-                          value={values.companyAddress}
-                          disabled={lockApp}
-                          placeholder={t("bewauto.phAddress")}
-                          onChange={(v) => setDraft(app.id, { companyAddress: v })}
-                        />
-                      </td>
-                       <td className="px-3 py-2.5">
+                      <tr key={app.id} className="border-t border-line align-top">
+                        <td data-label={t("bewauto.colRow")} className="px-3 py-2.5 text-xs font-semibold text-faint">{app.seq}</td>
+                        <td data-label={t("bewauto.colCompany")} className="px-2 py-1.5">
+                          <MiniInput
+                            value={values.companyName}
+                            disabled={lockApp}
+                            error={!nameOk && values.companyName !== ""}
+                            placeholder={t("bewauto.phCompany")}
+                            onChange={(v) => setDraft(app.id, { companyName: v })}
+                          />
+                        </td>
+                        <td data-label={t("bewauto.colEmail")} className="px-2 py-1.5">
+                          <MiniInput
+                            value={values.companyEmail}
+                            disabled={lockApp}
+                            error={!emailOk}
+                            placeholder={t("bewauto.phEmail")}
+                            onChange={(v) => setDraft(app.id, { companyEmail: v })}
+                          />
+                        </td>
+                        <td data-label={t("bewauto.colContact")} className="px-2 py-1.5">
+                          <MiniInput
+                            value={values.contactName}
+                            disabled={lockApp}
+                            placeholder={t("bewauto.phContact")}
+                            onChange={(v) => setDraft(app.id, { contactName: v })}
+                          />
+                        </td>
+                        <td data-label={t("bewauto.colAddress")} className="px-2 py-1.5">
+                          <MiniInput
+                            value={values.companyAddress}
+                            disabled={lockApp}
+                            placeholder={t("bewauto.phAddress")}
+                            onChange={(v) => setDraft(app.id, { companyAddress: v })}
+                          />
+                        </td>
+                        <td data-label={t("bewauto.colStatus")} className="px-3 py-2.5">
                         <div className="flex flex-col items-start gap-2">
                           <RowStatus app={app} emailOk={emailOk} nameOk={nameOk} t={t} />
                           {isDup && (
@@ -629,6 +637,7 @@ export function CompaniesStep({ view, refresh, onNext, nextBlockedReason }: Prop
             disabled={advanceBlocked}
             onClick={onNext}
             aria-describedby={advanceBlocked ? "bew-continue-blocked" : undefined}
+            className="w-full sm:w-auto"
           >
             {t("bewauto.continueDocs")}
             <Icon name="arrowRight" size={18} />
@@ -678,7 +687,7 @@ function MiniInput({
       disabled={disabled}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
-      className={`w-full min-w-40 rounded-xl border bg-surface px-2.5 py-1.5 text-sm text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-2 focus:ring-accent/10 disabled:opacity-50 ${
+      className={`w-full min-w-40 rounded-xl border bg-surface px-2.5 py-1.5 text-base text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-2 focus:ring-accent/10 disabled:opacity-50 lg:text-sm ${
         error ? "border-danger" : "border-line-strong"
       }`}
     />
@@ -775,7 +784,7 @@ function ImportPreview({
               <select
                 value={mapping[field] ?? ""}
                 onChange={(e) => onMap(field, e.target.value)}
-                className="h-10 w-full rounded-xl border border-line-strong bg-surface px-2.5 text-sm text-ink outline-none focus:border-accent"
+                className="h-10 w-full rounded-xl border border-line-strong bg-surface px-2.5 text-base text-ink outline-none focus:border-accent lg:text-sm"
               >
                 <option value="">{t("bewauto.mapSkip")}</option>
                 {header.map((h, i) => (

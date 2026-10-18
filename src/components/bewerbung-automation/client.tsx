@@ -230,7 +230,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
     return (
       <div className="relative mx-auto max-w-3xl px-4 py-10">
         <GradientMesh />
-        <Card className="relative p-8 text-center">
+        <Card className="relative p-5 text-center sm:p-8">
           <h1 className="text-xl font-bold text-ink">{t("bewauto.title")}</h1>
           <p className="mt-3 text-sm leading-6 text-muted">
             {t("bewauto.schemaPending")}
@@ -250,7 +250,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
     return (
       <div className="relative mx-auto max-w-3xl px-4 py-10">
         <GradientMesh />
-        <Card className="relative p-8">
+        <Card className="relative p-5 sm:p-8">
           <h1 className="text-2xl font-extrabold tracking-tight text-ink">
             {t("bewauto.title")}
           </h1>
@@ -278,7 +278,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
               <select
                 value={purpose}
                 onChange={(e) => setPurpose(e.target.value)}
-                className="h-12 w-full rounded-2xl border border-line-strong bg-surface px-3.5 text-sm text-ink outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10"
+                className="h-12 w-full rounded-2xl border border-line-strong bg-surface px-3.5 text-base text-ink outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10 lg:text-sm"
               >
                 <option value="ausbildung">{t("bewauto.purposeAusbildung")}</option>
                 <option value="arbeit">{t("bewauto.purposeArbeit")}</option>
@@ -303,6 +303,13 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
               label={`${t("bewauto.positionBrief")} · ${t("bewauto.positionOptional")}`}
               hint={t("bewauto.positionBriefHint")}
               rows={3}
+              /* 16 px on phones (iOS Safari zooms in on <16 px inputs).
+                 The shared Textarea hard-codes text-sm; a plain text-base
+                 here would LOSE the cascade (text-sm is emitted later in
+                 the utility sheet), so the mobile-only max-sm variant —
+                 emitted after both — wins below 640 px and desktop keeps
+                 the component's original 14 px untouched. */
+              className="max-sm:text-base"
               value={positionBrief}
               onChange={(e) => setPositionBrief(e.target.value)}
             />
@@ -311,6 +318,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
               label={`${t("bewauto.employerFacts")} · ${t("bewauto.positionOptional")}`}
               hint={t("bewauto.employerFactsHint")}
               rows={2}
+              className="max-sm:text-base"
               value={employerFacts}
               onChange={(e) => setEmployerFacts(e.target.value)}
             />
@@ -383,19 +391,26 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
           </div>
         </div>
 
-        {/* Stepper */}
+        {/* Stepper
+            Phones (<sm): the five chips wrap 3 + 2 and stack the number
+            ABOVE the label — five chips across clipped and overlapped
+            labels like "Anschreiben" at 320 px. From sm up the classes
+            (sm:grid-cols-5, sm:flex-row, sm:justify-center, sm:gap-0 +
+            the span's sm:mr-1.5) reproduce the original five-across inline
+            layout exactly; step order, gating and the desktop appearance
+            are unchanged. */}
         <nav aria-label={t("bewauto.stepsAria")} className="mb-6">
-          <ol className="grid grid-cols-5 gap-2">
+          <ol className="grid grid-cols-3 gap-2 sm:grid-cols-5">
             {STEPS.map((s) => {
               const done = gates[s] && s < step;
               const active = s === step;
               return (
-                <li key={s}>
+                <li key={s} className="min-w-0">
                   <button
                     type="button"
                     disabled={!gates[s]}
                     onClick={() => setStep(s)}
-                    className={`w-full rounded-2xl border px-2 py-2.5 text-center text-xs font-semibold transition sm:text-sm ${
+                    className={`flex min-w-0 w-full flex-col items-center gap-1.5 break-words rounded-2xl border px-1.5 py-2 text-center text-xs font-semibold transition sm:flex-row sm:justify-center sm:gap-0 sm:px-2 sm:py-2.5 sm:text-sm ${
                       active
                         ? "border-accent bg-accent-soft text-accent"
                         : done
@@ -405,7 +420,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
                             : "cursor-not-allowed border-line bg-surface/40 text-faint"
                     }`}
                   >
-                    <span className="mr-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-surface-2 text-[11px] font-bold">
+                    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[11px] font-bold sm:mr-1.5">
                       {s}
                     </span>
                     {t(`bewauto.step${s}`)}
