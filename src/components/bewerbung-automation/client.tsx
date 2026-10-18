@@ -35,6 +35,7 @@ import {
   bewErrorCode,
   hasRequiredDocuments,
   type BewApplicationDTO,
+  type BewCampaignDTO,
   type BewViewDTO,
   type Step,
 } from "./types";
@@ -206,6 +207,19 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
         ...v,
         applications: v.applications.map((a) => (a.id === appId ? { ...a, ...fields } : a)),
       };
+    });
+  }, []);
+
+  /**
+   * Apply fields to the CAMPAIGN in the current view (the company-TARGET
+   * optimistic patch / rollback). Guarded by campaign id: a refresh or a
+   * "+ New series" swap that moved on meanwhile must never absorb a stale
+   * patch into the wrong campaign.
+   */
+  const patchCampaign = useCallback((campaignId: string, fields: Partial<BewCampaignDTO>) => {
+    setView((v) => {
+      if (!v || v.campaign.id !== campaignId) return v;
+      return { ...v, campaign: { ...v.campaign, ...fields } };
     });
   }, []);
 
@@ -574,6 +588,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
             creatingSeries={creatingSeries}
             seriesConfirmation={seriesConfirmation}
             patchApplication={patchApplication}
+            patchCampaign={patchCampaign}
           />
         </div>
         {step === 2 && <DocumentsStep view={view} refresh={refresh} />}

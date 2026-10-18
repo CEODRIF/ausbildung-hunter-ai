@@ -2382,6 +2382,16 @@ const de = {
     step1Body:
       "Gib für jede Bewerbung eine Firma mit E-Mail-Adresse an – einzeln bearbeiten oder per Datei importieren. Ansprechpartner und Adresse sind optional und werden nie erfunden.",
     manageTitle: "Einträge",
+    /* Firmen-Ziel (user-controlled company count) */
+    countTargetLabel: "Unternehmens-Ziel",
+    countTargetHint:
+      "Wie viele Unternehmen die Serie umfassen soll. Mindestens 1, maximal 100 (Plattform-Limit pro Serie).",
+    countDecreaseAria: "Unternehmens-Ziel verringern",
+    countIncreaseAria: "Unternehmens-Ziel erhöhen",
+    countInputAria: "Gewünschte Anzahl an Unternehmen (Ziel)",
+    enteredOf: "{entered} von {target} Unternehmen eingegeben",
+    targetReached: "Ziel erreicht",
+    countMaxHint: "Maximal 100 Unternehmen pro Serie (Plattform-Limit).",
     importTitle: "Datei-Import (CSV, Excel, PDF)",
     importHint:
       "Die Datei wird zuerst als Vorschau geprüft: doppelte und ungültige Einträge werden angezeigt, nichts wird stillschweigend verworfen.",
@@ -4984,6 +4994,16 @@ const en: Dict = {
     step1Body:
       "Enter a company with an e-mail address for each application — edit individually or import a file. Contact person and address are optional and are never invented.",
     manageTitle: "Entries",
+    /* Company target (user-controlled company count) */
+    countTargetLabel: "Company target",
+    countTargetHint:
+      "How many companies the series should cover. Minimum 1, maximum 100 (platform limit per series).",
+    countDecreaseAria: "Decrease company target",
+    countIncreaseAria: "Increase company target",
+    countInputAria: "Desired number of companies (target)",
+    enteredOf: "{entered} of {target} companies entered",
+    targetReached: "Target reached",
+    countMaxHint: "Maximum of 100 companies per series (platform limit).",
     importTitle: "File import (CSV, Excel, PDF)",
     importHint:
       "The file is checked as a preview first: duplicate and invalid entries are shown, nothing is silently discarded.",
@@ -7587,6 +7607,16 @@ const fr: Dict = {
     step1Body:
       "Saisissez une entreprise avec une adresse e-mail pour chaque candidature — modifier individuellement ou importer un fichier. La personne de contact et l'adresse sont facultatives et ne sont jamais inventées.",
     manageTitle: "Entrées",
+    /* Objectif d'entreprises (nombre d'entreprises contrôlé par l'utilisateur) */
+    countTargetLabel: "Objectif (entreprises)",
+    countTargetHint:
+      "Nombre d'entreprises que la série doit couvrir. Minimum 1, maximum 100 (limite de la plateforme par série).",
+    countDecreaseAria: "Diminuer l'objectif d'entreprises",
+    countIncreaseAria: "Augmenter l'objectif d'entreprises",
+    countInputAria: "Nombre d'entreprises souhaité (objectif)",
+    enteredOf: "{entered} sur {target} entreprises saisies",
+    targetReached: "Objectif atteint",
+    countMaxHint: "100 entreprises maximum par série (limite de la plateforme).",
     importTitle: "Import de fichier (CSV, Excel, PDF)",
     importHint:
       "Le fichier est d'abord vérifié en aperçu : les doublons et les entrées invalides sont affichés, rien n'est supprimé en silence.",
@@ -10138,6 +10168,16 @@ const ar: Dict = {
     step1Body:
       "أدخل شركة بعنوان بريد إلكتروني لكل طلب — تحرير فردي أو استيراد ملف. الشخص المسؤول والعنوان اختياريان ولا يُختَرعان أبدًا.",
     manageTitle: "السلل",
+    /* هدف الشركات (عدد الشركات الذي يتحكم به المستخدم) */
+    countTargetLabel: "هدف الشركات",
+    countTargetHint:
+      "عدد الشركات التي يجب أن تغطيها السلسلة. الحد الأدنى 1، والحد الأقصى 100 (حد المنصة لكل سلسلة).",
+    countDecreaseAria: "إنقاص هدف الشركات",
+    countIncreaseAria: "زيادة هدف الشركات",
+    countInputAria: "عدد الشركات المطلوب (الهدف)",
+    enteredOf: "تم إدخال {entered} من {target} شركة",
+    targetReached: "تم بلوغ الهدف",
+    countMaxHint: "الحد الأقصى 100 شركة لكل سلسلة (حد المنصة).",
     importTitle: "استيراد ملف (CSV، Excel، PDF)",
     importHint:
       "يُفحص الملف كعينة أولًا: تُعرض السلل المكررة وغير الصالحة، ولا يُحذف شيء بصمت.",

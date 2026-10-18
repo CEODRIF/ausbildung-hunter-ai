@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { utcToLocalParts } from "@/lib/schedule-time";
 
 /**
  * Service-contract + ISOLATION tests for the Bewerbung Automation server
@@ -184,15 +185,22 @@ describe("action → engine argument mapping (service contract)", () => {
   });
 
   it("bewStartSend with schedule fields forwards a server-converted scheduling", async () => {
+    /* Two hours from now, expressed in the TARGET zone's wall clock — via
+       the same inverse (utcToLocalParts) the server converts with. The old
+       version read the MACHINE-local clock but labeled it Europe/Berlin:
+       on a UTC runner that made the "future" schedule land on "now"
+       whenever Berlin was ahead of UTC (SCHEDULE_NOT_FUTURE — CI was red
+       while SGT/other east-of-Berlin machines stayed green). */
     const soon = new Date(Date.now() + 2 * 3600 * 1000);
+    const wall = utcToLocalParts(soon.toISOString(), "Europe/Berlin")!;
     const fd = new FormData();
     fd.set("campaignId", "c1");
     fd.set("selectedSeqs", JSON.stringify([1, 3]));
-    fd.set("scheduleYear", String(soon.getFullYear()));
-    fd.set("scheduleMonth", String(soon.getMonth() + 1));
-    fd.set("scheduleDay", String(soon.getDate()));
-    fd.set("scheduleHour", String(soon.getHours()));
-    fd.set("scheduleMinute", String(soon.getMinutes()));
+    fd.set("scheduleYear", String(wall.year));
+    fd.set("scheduleMonth", String(wall.month));
+    fd.set("scheduleDay", String(wall.day));
+    fd.set("scheduleHour", String(wall.hour));
+    fd.set("scheduleMinute", String(wall.minute));
     fd.set("scheduleTimezone", "Europe/Berlin");
     await actions.bewStartSend(fd);
     const call = engineCalls.find((c) => c.fn === "startBewSend")!;
@@ -205,14 +213,17 @@ describe("action → engine argument mapping (service contract)", () => {
   });
 
   it("bewRescheduleSend forwards (userId, campaignId, scheduling) and refuses without one", async () => {
+    /* Same machine-timezone trap as above — Berlin wall clock via the
+       shared inverse, never the machine-local clock. */
     const soon = new Date(Date.now() + 2 * 3600 * 1000);
+    const wall = utcToLocalParts(soon.toISOString(), "Europe/Berlin")!;
     const fd = new FormData();
     fd.set("campaignId", "c1");
-    fd.set("scheduleYear", String(soon.getFullYear()));
-    fd.set("scheduleMonth", String(soon.getMonth() + 1));
-    fd.set("scheduleDay", String(soon.getDate()));
-    fd.set("scheduleHour", String(soon.getHours()));
-    fd.set("scheduleMinute", String(soon.getMinutes()));
+    fd.set("scheduleYear", String(wall.year));
+    fd.set("scheduleMonth", String(wall.month));
+    fd.set("scheduleDay", String(wall.day));
+    fd.set("scheduleHour", String(wall.hour));
+    fd.set("scheduleMinute", String(wall.minute));
     fd.set("scheduleTimezone", "Europe/Berlin");
     await actions.bewRescheduleSend(fd);
     const call = engineCalls.find((c) => c.fn === "rescheduleBewSend")!;

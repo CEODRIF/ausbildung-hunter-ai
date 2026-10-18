@@ -316,6 +316,7 @@ vi.mock("@/app/bewerbung-automation/actions", () => ({
   bewCancelSend: vi.fn(async () => ({ cancelled: 0 })),
   bewCreateCampaign: vi.fn(async () => ({ campaignId: "c", count: 10 })),
   bewGetView: vi.fn(async () => null),
+  bewSetCompanyCount: vi.fn(async () => ({ campaignId: "c1", requestedCount: 1 })),
 }));
 
 const React = await import("react");
@@ -381,6 +382,7 @@ function renderStep(appsList: BewApplicationDTO[], campaign: { status?: string }
         creatingSeries: false,
         seriesConfirmation: null,
         patchApplication: () => undefined,
+        patchCampaign: () => undefined,
       }),
     ),
   );
