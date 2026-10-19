@@ -19,6 +19,7 @@ export type IconName =
   | "settings"
   | "help"
   | "menu"
+  | "more"
   | "bell"
   | "mail"
   | "spark"
@@ -131,6 +132,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
+  more: (
+    <>
+      <circle cx="5" cy="12" r="1" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+    </>
+  ),
   bell: (
     <>
       <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />

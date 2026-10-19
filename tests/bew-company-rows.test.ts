@@ -400,7 +400,6 @@ function renderStep(appsList: BewApplicationDTO[], campaign: { status?: string }
         seriesConfirmation: null,
         patchApplication: () => undefined,
         appendApplication: () => undefined,
-        patchCampaign: () => undefined,
       }),
     ),
   );
@@ -458,7 +457,7 @@ describe("CompaniesStep render: red X delete per row (Bug 2)", () => {
       appDto(2, { status: "excluded" }),
     ]);
     expect(html).toContain("Keine Einträge mehr vorhanden.");
-    expect(html).toContain("Importiere eine Datei oben oder starte eine neue Kampagne");
+    expect(html).toContain("Füge oben ein komplettes Stellenangebot oder Firmendaten in die Smart-Eingabe ein");
     expect(deleteButtonCount(html)).toBe(0);
     expect(plain(html)).toContain("Einträge (0)");
   });

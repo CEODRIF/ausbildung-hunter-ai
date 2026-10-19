@@ -432,7 +432,6 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
           seriesConfirmation: null,
           patchApplication: () => undefined,
           appendApplication: () => undefined,
-          patchCampaign: () => undefined,
         }),
       ),
     );
@@ -506,7 +505,6 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
             seriesConfirmation: null,
             patchApplication: () => undefined,
             appendApplication: () => undefined,
-            patchCampaign: () => undefined,
           }),
         ),
       );

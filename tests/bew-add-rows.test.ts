@@ -14,9 +14,9 @@
  *      terminal/sending/ownership locks hold, and a failed insert surfaces
  *      SAVE_FAILED with nothing written,
  *   B. the server action contract (re-auth, FormData mapping, stable codes),
- *   C. the SSR first paint — the add-rows control renders with the correct
- *      remaining room, the 100/100 cap hint renders instead of controls,
- *      and a send in flight locks the control.
+ *   C. the SSR first paint — the add-rows control is REMOVED from the
+ *      simplified workflow (no batch input, no Add button, no cap hint),
+ *      while the engine/action contract above (A/B) is unchanged.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -575,33 +575,23 @@ function renderWizard(rows: number, campaign: { status?: string; requested?: num
   return renderToString(tree);
 }
 
-describe("C. SSR — the add-rows control", () => {
-  it("offers the control with the correct remaining room (12 rows → max 88)", () => {
+describe("C. SSR — the add-rows control is removed from the workflow", () => {
+  it("no longer offers the batch control (any number of rows)", () => {
     const html = renderWizard(12);
-    expect(html).toContain("Zeilen hinzufügen");
-    // The Add button (its label is a substring of the group label — check
-    // the closing tag to be exact).
-    expect(html).toContain("Hinzufügen</button>");
-    // The batch input is bounded by the room, not by an arbitrary value.
-    const inputTag =
-      html.match(/<input[^>]*Anzahl der hinzuzufügenden Zeilen[^>]*>/)?.[0] ?? "";
-    expect(inputTag).toContain('max="88"');
-    expect(inputTag).toContain('min="1"');
-  });
-
-  it("shows the 100/100 cap hint instead of controls when the campaign is full", () => {
-    const html = renderWizard(100);
-    expect(html).toContain("Zeilen hinzufügen");
-    expect(html).toContain("100 / 100");
-    // No batch input, no Add button at the cap.
-    expect(html).not.toContain("Anzahl der hinzuzufügenden Zeilen");
+    expect(html).not.toContain("Zeilen hinzufügen");
     expect(html).not.toContain("Hinzufügen</button>");
+    expect(html).not.toContain("Anzahl der hinzuzufügenden Zeilen");
   });
 
-  it("locks the control while a send is in flight", () => {
+  it("stays removed at the 100-row cap (no cap hint either)", () => {
+    const html = renderWizard(100);
+    expect(html).not.toContain("Zeilen hinzufügen");
+    expect(html).not.toContain("100 / 100");
+  });
+
+  it("stays removed while a send is in flight", () => {
     const html = renderWizard(12, { status: "sending" });
-    const inputTag =
-      html.match(/<input[^>]*Anzahl der hinzuzufügenden Zeilen[^>]*>/)?.[0] ?? "";
-    expect(inputTag).toContain("disabled");
+    expect(html).not.toContain("Zeilen hinzufügen");
+    expect(html).not.toContain("Anzahl der hinzuzufügenden Zeilen");
   });
 });

@@ -198,6 +198,7 @@ const LUCIDE: Record<IconName, LucideIcon> = {
   settings: Settings,
   help: CircleHelp,
   menu: Menu,
+  more: MoreHorizontal,
   bell: Bell,
   mail: Mail,
   spark: Sparkles,
