@@ -742,12 +742,18 @@ export const CompaniesStep = memo(function CompaniesStep({
           </a>
         </div>
 
-        {/* Smart input: paste a complete advertisement → one independent row */}
+        {/* Smart input: paste a complete advertisement → one independent row.
+            SERIES-DECOUPLED: the series state (terminal / sending) does NOT
+            disable this control — adding a company works on any owned series
+            (the server agrees: `addBewCompany` has no state guard; a
+            terminal series is reopened by receiving a row). Only an in-
+            flight series CREATION (placeholder ids) and the step-wide busy
+            flag wait. */}
         <div className="mb-4">
           <SmartCompanyInput
             campaignId={view.campaign.id}
             view={view}
-            disabled={creatingSeries || lockApp || busy}
+            disabled={creatingSeries || busy}
             onRowAdded={appendApplication}
             onRefresh={refresh}
             t={t}

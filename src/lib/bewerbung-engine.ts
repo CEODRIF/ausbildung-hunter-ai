@@ -702,6 +702,16 @@ export async function saveBewCompanies(
  *     with the SAME deterministic parser the preview uses;
  *   - only stable error codes are thrown (the client maps them to localized
  *     messages; there is no generic failure path here).
+ *
+ * SERIES DECOUPLING: the campaign STATE is deliberately NOT a prerequisite
+ * for this path — adding a company works on ANY owned campaign (draft,
+ * generating, sending, even terminal). The series state still governs every
+ * OTHER operation (full-replace import, target count, empty rows, letter
+ * generation, send start) through its own unchanged guards. A TERMINAL
+ * campaign that receives new work is reopened (status → draft) before the
+ * counter refresh, which then re-derives the exact state from the rows —
+ * "terminal" is a derived invariant (every application done), and a fresh
+ * pending row makes the series active again. Historical rows are untouched.
  */
 export async function addBewCompany(
   userId: string,
@@ -709,9 +719,11 @@ export async function addBewCompany(
   rawText: string,
 ): Promise<BewApplicationRow> {
   const { admin, campaign } = await requireOwnedCampaign(userId, campaignId);
-  // Terminal campaigns are immutable; a send in flight locks the list.
-  if (BEW_TERMINAL_CAMPAIGN.has(campaign.status)) throw new Error("CAMPAIGN_CLOSED");
-  if (campaign.status === "sending") throw new Error("CAMPAIGN_SENDING");
+  // A terminal series is reopened by receiving new work (see doc); a send in
+  // flight is left alone — the appended row simply stays `pending` (it is not
+  // claimed by the in-flight batch; it can be queued in a later, explicit
+  // start).
+  const wasTerminal = BEW_TERMINAL_CAMPAIGN.has(campaign.status);
 
   const text = (rawText ?? "").trim();
   if (!text || text.length > BEW_AD_INPUT_MAX) throw new Error("INVALID_PAYLOAD");
@@ -785,6 +797,15 @@ export async function addBewCompany(
     // Stable code (never the raw DB text): the UI maps it locally.
     console.error("[bew] addBewCompany: insert failed", insertError?.message);
     throw new Error("SAVE_FAILED");
+  }
+  // A terminal series that just received new work is reopened: the counter
+  // refresh below then re-derives the exact state from the rows (generating
+  // / sending / …) and clears the stale completed_at.
+  if (wasTerminal) {
+    await admin
+      .from("bew_campaigns")
+      .update({ status: "draft" })
+      .eq("id", campaignId);
   }
   // The row count/validity changed → the campaign counters must follow
   // (valid_count is derived from the rows, so it can never drift).

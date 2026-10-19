@@ -100,14 +100,14 @@ const SERVER_ROW: SmartAddRow = {
   employer_facts: null,
 };
 
-function makeView(apps: BewApplicationDTO[]): BewViewDTO {
+function makeView(apps: BewApplicationDTO[], campaignStatus = "draft"): BewViewDTO {
   return {
     campaign: {
       id: "c1",
       user_id: "user-1",
       email_account_id: "acct-1",
       purpose: "ausbildung",
-      status: "draft",
+      status: campaignStatus,
       requested_count: apps.length,
       valid_count: 0,
       total_count: apps.length,
@@ -489,6 +489,41 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
     expect(html).toContain("Überprüfte Unternehmens-Fakten");
     // Continue-to-documents is still the footer action.
     expect(html).toContain("Zu den Dokumenten");
+  });
+
+  it("REGRESSION: Smart-Eingabe is ENABLED even when the series is completed or sending (series decoupled)", () => {
+    const renderWith = (status: string) =>
+      renderToString(
+        React.createElement(
+          I18nProvider,
+          null,
+          React.createElement(CompaniesStep, {
+            view: makeView([appDto(1, { company_name: "A", company_email: "a@a.de" })], status),
+            refresh: async () => null,
+            onNext: () => undefined,
+            nextBlockedReason: null,
+            creatingSeries: false,
+            seriesConfirmation: null,
+            patchApplication: () => undefined,
+            appendApplication: () => undefined,
+            patchCampaign: () => undefined,
+          }),
+        ),
+      );
+
+    for (const status of ["completed", "sending"]) {
+      const html = renderWith(status);
+      // The Auto-organize button exists…
+      expect(html, status).toContain("Automatisch organisieren");
+      // …and is NOT disabled: the opening tag carries no `disabled`
+      // ATTRIBUTE (the Tailwind `disabled:*` classes in the class list are
+      // variants, present on every button, and must not count).
+      const openTag = html.match(/<button[^>]*>(?=[\s\S]{0,400}?Automatisch organisieren)/);
+      expect(openTag, status).not.toBeNull();
+      expect(openTag![0], status).not.toMatch(/\sdisabled(?=[\s>])/);
+      // And no terminal-series blocker text is shown.
+      expect(html, status).not.toContain("abgeschlossen");
+    }
   });
 
   it("REGRESSION: on an expired session the component NAVIGATES to /login instead of showing a generic error", async () => {
