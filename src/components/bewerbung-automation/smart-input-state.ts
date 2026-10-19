@@ -70,6 +70,65 @@ export function precheckSmartAdd(
 }
 
 /**
+ * The "Check information" step — parse + validate WITHOUT any persistence.
+ *
+ * Unlike `precheckSmartAdd` (which stops at the FIRST blocking code), this
+ * returns the FULL issue list, so the review panel can tell the user EXACTLY
+ * which fields need attention (e.g. "company name missing" AND "e-mail
+ * invalid" at once). The field rules mirror `adAutoAddGate` (the server's
+ * gate) one-to-one; the duplicate / cap checks run only when the field rules
+ * pass — the same order `precheckSmartAdd` and the server apply.
+ *
+ * Pure and side-effect free: it never calls the persistence layer and never
+ * mutates the input. The server re-runs the identical rules when the user
+ * CONFIRMS (see `runSmartAdd` / `addBewCompany`).
+ */
+export interface SmartCheckResult {
+  /** The parse of the checked text (null for empty input) — the review panel's fields. */
+  parsed: ParsedAdvertisement | null;
+  /** true = every required field is present and valid (safe to confirm). */
+  ok: boolean;
+  /** ALL blocking problems (empty when `ok`), in stable-code form. */
+  issues: SmartAddFailCode[];
+}
+
+export function checkSmartAdd(
+  text: string,
+  applications: Array<Pick<BewApplicationDTO, "status" | "company_email">>,
+): SmartCheckResult {
+  if (!text.trim()) {
+    return { parsed: null, ok: false, issues: ["EMPTY_INPUT"] };
+  }
+  const parsed = parseAdvertisement(text);
+  const issues: SmartAddFailCode[] = [];
+  if (parsed.tooLongInput) issues.push("INVALID_PAYLOAD");
+  // The SAME field rules the server gate applies (mirror of adAutoAddGate),
+  // but ALL of them are reported — not just the first.
+  if (!parsed.companyName.value.trim()) issues.push("PARSE_NO_COMPANY");
+  const email = parsed.companyEmail.value.trim();
+  if (!email) issues.push("PARSE_NO_EMAIL");
+  else if (!isValidEmail(email)) issues.push("PARSE_INVALID_EMAIL");
+  if (
+    parsed.positionTitle.problem === "too_long" ||
+    parsed.positionBrief.problem === "too_long"
+  ) {
+    issues.push("POSITION_TOO_LONG");
+  }
+  if (issues.length === 0) {
+    const active = applications.filter(
+      (a) => a.status !== "excluded" && a.status !== "cancelled",
+    );
+    const normalized = normalizeEmail(email);
+    if (active.some((a) => normalizeEmail(a.company_email ?? "") === normalized)) {
+      issues.push("DUPLICATE_COMPANY");
+    } else if (active.length >= BEW_MAX_COUNT) {
+      issues.push("COUNT_EXCEEDED");
+    }
+  }
+  return { parsed, ok: issues.length === 0, issues };
+}
+
+/**
  * The row the server action returns (the persisted `bew_applications` row,
  * serialized across the RSC→client boundary). Structurally typed so the
  * client never imports the server-only engine module.

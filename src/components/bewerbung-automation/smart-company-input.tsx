@@ -3,17 +3,27 @@
 /**
  * Step 1 — "Add companies (smart input)".
  *
- * Paste a company block or a complete German job advertisement → the shared
- * deterministic parser (`@/lib/bew-ad-parser`) extracts the supported fields
- * LIVE next to the input (with extracted / needs-review / missing / invalid
- * states) → "Auto-organize" sends the RAW text to the `bewAddCompany` server
- * action, which re-parses, re-validates and appends ONE independent row.
+ * The guided two-step workflow:
  *
- * The input is cleared ONLY after the server has persisted the row; on any
- * failure the pasted text is kept, so nothing the user typed can be lost.
- * The component is memoized and the parse is debounced (the textarea itself
- * stays fully controlled and instant), so the surrounding 100-row table does
- * not re-render on every keystroke.
+ *   1. the user pastes company information or a job advertisement; the
+ *      shared deterministic parser (`@/lib/bew-ad-parser`) extracts the
+ *      supported fields LIVE next to the input (with extracted /
+ *      needs-review / missing / invalid states);
+ *   2. "Check information" freezes the analysis of the EXACT pasted text:
+ *      every blocking problem is listed (exactly which fields need
+ *      attention), and when the check passes the "Confirm and add" button
+ *      appears — NOTHING is persisted by the check itself;
+ *   3. "Confirm and add" sends the RAW text to the `bewAddCompany` server
+ *      action, which re-parses, re-validates and appends ONE independent
+ *      row to the CURRENT series (the DUPLICATE_COMPANY check is the final
+ *      backstop — repeated submissions never create duplicate rows).
+ *
+ * The input is cleared ONLY after the server has persisted the confirmed
+ * row; on any failure the pasted text is kept, so nothing the user typed
+ * can be lost. Clearing the input never touches already-created rows. The
+ * component is memoized and the parse is debounced (the textarea itself
+ * stays fully controlled and instant), so the surrounding 100-row table
+ * does not re-render on every keystroke.
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -26,11 +36,11 @@ import {
   type ParsedAdField,
 } from "@/lib/bew-ad-parser";
 import {
-  precheckSmartAdd,
+  checkSmartAdd,
   runSmartAdd,
-  type SmartAddFailCode,
   type SmartAddOutcome,
   type SmartAddRow,
+  type SmartCheckResult,
 } from "./smart-input-state";
 import { isNextRedirectError } from "./types";
 import type { BewApplicationDTO, BewViewDTO } from "./types";
@@ -66,6 +76,15 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [briefExpanded, setBriefExpanded] = useState(false);
+  /**
+   * The "Check information" result — a frozen analysis of the EXACT text at
+   * check time (the review surface). `snapshot` keeps it honest: the moment
+   * the textarea drifts from the checked text the review is INVALID (see
+   * `activeReview` below) — re-checking is required before another confirm,
+   * because the fields the user reviewed must be the fields that get
+   * persisted.
+   */
+  const [review, setReview] = useState<(SmartCheckResult & { snapshot: string }) | null>(null);
   // Synchronous duplicate-click guard (state updates are batched — only a
   // ref claim is race-free between two rapid clicks; the server's
   // DUPLICATE_COMPANY check is the final backstop).
@@ -79,16 +98,21 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
     return () => clearTimeout(id);
   }, [text, debounced]);
 
+  /** A check is only valid for the EXACT text it was run on — derived at
+   *  render time (a stale snapshot is inert; no effect sync needed). */
+  const activeReview = review && review.snapshot === text ? review : null;
+
   /** Live preview (debounced) — the SAME parser the server runs. */
   const parsed = useMemo(
     () => (debounced.trim() ? parseAdvertisement(debounced) : null),
     [debounced],
   );
 
-  /** Precheck for the preview hint (client only — the server re-runs it). */
-  const precheck = useMemo(
-    () => precheckSmartAdd(parsed, view.applications),
-    [parsed, view.applications],
+  /** Live check for the preview panel (client only — the server re-runs the
+   *  same rules on confirm): ALL blocking issues, not just the first. */
+  const liveCheck = useMemo(
+    () => (debounced.trim() ? checkSmartAdd(debounced, view.applications) : null),
+    [debounced, view.applications],
   );
 
   const errText = useCallback(
@@ -100,21 +124,44 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
     [t],
   );
 
+  /** Clear the INPUT only — already-created rows are never touched. */
   const clear = useCallback(() => {
     setText("");
     setDebounced("");
     setNotice(null);
     setError(null);
+    setReview(null);
     setBriefExpanded(false);
   }, []);
 
-  const submit = useCallback(async () => {
-    if (disabled) return;
+  /**
+   * "Check information" — the analysis step (synchronous, NO request, NO
+   * write): the shared deterministic parser runs on the EXACT pasted text
+   * and the result becomes the review surface. When something is missing
+   * or invalid, EVERY blocking problem is listed (exactly which fields need
+   * attention); only when the check passes does the "Confirm and add"
+   * button appear. Nothing is persisted until the user confirms.
+   */
+  const onCheck = useCallback(() => {
     setError(null);
     setNotice(null);
-    // The pure orchestration (runSmartAdd) owns the safety contract:
-    // precheck before any request, onRowAdded (→ input clear) only after
-    // the server confirmed, claim guard against rapid double clicks.
+    setReview({ ...checkSmartAdd(text, view.applications), snapshot: text });
+  }, [text, view.applications]);
+
+  /**
+   * "Confirm and add" — the persistence step. Only reachable while the
+   * review is `ok` (the button is not rendered otherwise), and the pure
+   * orchestration (runSmartAdd) owns the safety contract: precheck before
+   * any request, onRowAdded (→ input clear) only after the server
+   * confirmed, claim guard against rapid double clicks. The server
+   * re-parses and re-validates the RAW text and appends ONE row to the
+   * current series; DUPLICATE_COMPANY is the final backstop.
+   */
+  const onConfirm = useCallback(async () => {
+    if (disabled || inFlightRef.current) return;
+    if (!activeReview || !activeReview.ok) return; // the button only exists when ok
+    setError(null);
+    setNotice(null);
     let outcome: SmartAddOutcome;
     try {
       outcome = await runSmartAdd(text, view.applications, {
@@ -161,6 +208,7 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
       return;
     }
     if (outcome.ok) {
+      setReview(null); // the confirmed snapshot is consumed
       setNotice(t("bewauto.smartSuccess", { n: outcome.row.seq, company: outcome.row.company_name }));
       // Best-effort re-sync (the server truth wins; the append above is the
       // instant feedback). A refresh failure must not hide the success.
@@ -172,7 +220,7 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
       // the single existing fallback, no new generic path.)
       setError(errText(outcome.code));
     }
-  }, [text, view.applications, disabled, campaignId, onRowAdded, onRefresh, t, errText, router]);
+  }, [text, activeReview, view.applications, disabled, campaignId, onRowAdded, onRefresh, t, errText, router]);
 
   return (
     <div className="rounded-2xl border border-accent/25 bg-surface-2/40 p-4">
@@ -201,23 +249,37 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
             className="mt-2 min-h-32 w-full resize-y rounded-2xl border border-line-strong bg-surface px-3 py-2.5 text-sm leading-5 text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 max-sm:text-base disabled:opacity-50"
           />
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            {/* Step 1 of the workflow — analyze (no write). Becomes
+                secondary once the check passed and the confirm is the
+                active step. */}
             <Button
+              variant={activeReview?.ok ? "secondary" : "primary"}
               disabled={disabled || inFlight}
-              onClick={() => void submit()}
-              aria-busy={inFlight || undefined}
+              onClick={onCheck}
             >
-              {inFlight ? (
-                <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-              ) : (
-                <Icon name="spark" size={16} />
-              )}
-              {t("bewauto.autoOrganize")}
-              <Icon name="arrowRight" size={16} />
+              <Icon name="spark" size={16} />
+              {t("bewauto.checkInformation")}
             </Button>
+            {/* Step 2 — persist. Rendered ONLY when the check passed for
+                the exact current text; the server still re-validates. */}
+            {activeReview?.ok && (
+              <Button
+                disabled={disabled || inFlight}
+                onClick={() => void onConfirm()}
+                aria-busy={inFlight || undefined}
+              >
+                {inFlight ? (
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                ) : (
+                  <Icon name="check" size={16} />
+                )}
+                {t("bewauto.confirmAdd")}
+              </Button>
+            )}
             <Button
               variant="secondary"
               onClick={clear}
-              disabled={disabled || (!text && !notice && !error)}
+              disabled={disabled || (!text && !notice && !error && !activeReview)}
             >
               <Icon name="trash" size={15} />
               {t("bewauto.clearInput")}
@@ -226,6 +288,31 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
               {t("bewauto.smartHint")}
             </span>
           </div>
+          {/* The check result — exactly which fields need attention. */}
+          {activeReview && !activeReview.ok && (
+            <div
+              role="alert"
+              className="mt-2.5 rounded-xl border border-warning/30 bg-warning-soft px-3 py-2.5"
+            >
+              <p className="text-xs font-semibold text-warning">
+                {t("bewauto.reviewIssues")}
+              </p>
+              <ul className="mt-1 list-disc space-y-0.5 ps-4 text-xs leading-5 text-warning">
+                {activeReview.issues.map((code) => (
+                  <li key={code}>{errText(code)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {activeReview?.ok && (
+            <p
+              role="status"
+              className="mt-2.5 flex items-start gap-2 text-xs font-medium text-success"
+            >
+              <Icon name="check" size={14} className="mt-0.5 shrink-0" />
+              <span>{t("bewauto.reviewReady")}</span>
+            </p>
+          )}
           {notice && (
             <p
               role="status"
@@ -315,12 +402,17 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
             )}
           </div>
 
-          {/* Precheck hint (client only; the server re-checks everything). */}
+          {/* Live check (client only; the server re-checks everything on
+              confirm) — ALL blocking issues are listed, not just the
+              first, so the exact fields needing attention are visible
+              before "Check information" is even clicked. */}
           {!parsed && <p className="mt-3 text-xs text-faint">{t("bewauto.smartBody")}</p>}
-          {parsed && !precheck.ok && (
-            <p className="mt-3 text-xs font-medium text-warning">
-              {errText(precheck.code as SmartAddFailCode)}
-            </p>
+          {liveCheck && !liveCheck.ok && (
+            <ul className="mt-3 list-disc space-y-0.5 ps-4 text-xs font-medium text-warning">
+              {liveCheck.issues.map((code) => (
+                <li key={code}>{errText(code)}</li>
+              ))}
+            </ul>
           )}
         </div>
       </div>
