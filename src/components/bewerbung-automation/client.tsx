@@ -16,17 +16,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   bewCancelSend,
-  bewCreateCampaignView,
   bewGetView,
   bewRefreshSend,
 } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
-import {
-  BEW_MAX_COUNT,
-  BEW_MIN_COUNT,
-  isValidEmail,
-} from "@/lib/bewerbung-automation";
-import { Button, Card, Input, Textarea } from "@/components/ui";
+import { isValidEmail } from "@/lib/bewerbung-automation";
+import { Card } from "@/components/ui";
 import { GradientMesh } from "@/components/ui/surfaces";
 import { StatusPill } from "@/components/ui/feedback";
 import { Icon } from "@/components/icon";
@@ -38,10 +33,6 @@ import {
   type BewViewDTO,
   type Step,
 } from "./types";
-import {
-  buildPendingView,
-  isPendingCampaignId,
-} from "./pending-series";
 import { appendRowToView } from "./smart-input-state";
 import { CompaniesStep } from "./companies-step";
 import { DocumentsStep } from "./documents-step";
@@ -120,20 +111,14 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
   const { t } = useI18n();
   const [view, setView] = useState<BewViewDTO | null>(initialView);
   const [step, setStep] = useState<Step>(1);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /* "+ New series" — the PENDING flow (instant UI, confirmed persistence):
-     the interface opens on a locally-built placeholder view SYNCHRONOUSLY
-     with the click; the single create+view server action runs in the
-     background and either confirms (the real view replaces the placeholder)
-     or rolls back (the previous view is restored, error shown). */
-  const [creatingSeries, setCreatingSeries] = useState(false);
-  const [seriesConfirmation, setSeriesConfirmation] = useState<{ id: string; token: number } | null>(null);
-  /** Synchronous duplicate-click guard (state updates are batched — only a
-      ref claim is race-free between two rapid clicks). */
-  const creatingRef = useRef(false);
-  const confirmTokenRef = useRef(0);
+  /* Series creation is deliberately NOT part of this page: the page always
+     works on the CURRENT series (the initial view resolved by the server
+     component) and never creates, switches or redirects series on load.
+     The CompaniesStep `creatingSeries` / `seriesConfirmation` props are
+     kept (defensive, always inert here) so the step's row-save/delete
+     guards stay intact. */
 
   /* Latest view for the STABLE callbacks (refresh/pump/patch) — a callback
      that depends on `view` would be recreated on every poll and re-render
@@ -166,13 +151,6 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
       return next;
     });
   }, []);
-
-  // Setup form (only used while there is no campaign yet).
-  const [count, setCount] = useState("10");
-  const [purpose, setPurpose] = useState("ausbildung");
-  const [positionTitle, setPositionTitle] = useState("");
-  const [positionBrief, setPositionBrief] = useState("");
-  const [employerFacts, setEmployerFacts] = useState("");
 
   /** Fresh campaign view (the caller may use the returned server truth;
    *  the displayed view is updated as a side effect). */
@@ -259,83 +237,16 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
 
   const run = useCallback(
     async <T,>(fn: () => Promise<T>): Promise<T | null> => {
-      setBusy(true);
       setError(null);
       try {
         return await fn();
       } catch (e) {
         setError(errText(e));
         return null;
-      } finally {
-        setBusy(false);
       }
     },
     [errText],
   );
-
-  /**
-   * "+ New series" / setup "Start" — INSTANT interface, confirmed
-   * persistence:
-   *
-   *   click → (synchronous, one render) the NEW SERIES UI is open: step 1
-   *           on a locally-built placeholder view (the exact rows the
-   *           engine seeds — `count` empty pending rows) with a visible
-   *           "being created" indicator
-   *         → ONE server action (create + view in a single authenticated
-   *           request; previously two actions re-authenticating each)
-   *           ├─ confirmed: the REAL view replaces the placeholder, the
-   *           │             placeholder drafts are remapped to the real row
-   *           │             ids (by seed seq) and the setup fields reset
-   *           └─ failed:    the PREVIOUS view is restored as-is and the
-   *                         localized error is shown (the placeholder
-   *                         drafts are inert and purged by the next
-   *                         confirmed creation)
-   *
-   * The seeding of `count` empty rows happens exactly as before (server
-   * side, `createBewCampaignView` = same engine call) — nothing extra is
-   * written, nothing is skipped. A second click while the creation is in
-   * flight is a no-op (synchronous ref claim).
-   */
-  const startNewSeries = useCallback(() => {
-    if (creatingRef.current) return; // duplicate-click guard
-    const countNum = Number(count);
-    if (!Number.isInteger(countNum) || countNum < BEW_MIN_COUNT || countNum > BEW_MAX_COUNT)
-      return; // the setup form is already gated on this; the server re-checks
-    creatingRef.current = true;
-    setError(null);
-    const previousView = viewRef.current;
-    // The interface opens NOW — before any network round trip.
-    setView(buildPendingView(previousView, countNum, purpose));
-    setStep(1);
-    setCreatingSeries(true);
-    void (async () => {
-      try {
-        const fd = new FormData();
-        fd.set("count", String(countNum));
-        fd.set("purpose", purpose);
-        fd.set("positionTitle", positionTitle);
-        fd.set("positionBrief", positionBrief);
-        fd.set("employerFacts", employerFacts);
-        const fresh = await bewCreateCampaignView(fd);
-        confirmTokenRef.current += 1;
-        setSeriesConfirmation({ id: fresh.campaign.id, token: confirmTokenRef.current });
-        setView(fresh);
-        setDeselected(new Set());
-        setCount("10");
-        setPositionTitle("");
-        setPositionBrief("");
-        setEmployerFacts("");
-      } catch (e) {
-        // Roll back: only undo the pending swap if the view is still the
-        // placeholder (never clobber a view that moved on meanwhile).
-        setView((v) => (v && isPendingCampaignId(v.campaign.id) ? previousView : v));
-        setError(errText(e));
-      } finally {
-        creatingRef.current = false;
-        setCreatingSeries(false);
-      }
-    })();
-  }, [count, purpose, positionTitle, positionBrief, employerFacts, errText]);
 
   const cancelCurrentSend = useCallback(
     () =>
@@ -369,13 +280,11 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
     );
   }
 
-  /* -------- setup (no campaign yet) -------- */
+  /* -------- no series yet --------
+     This page is a pure entry point for the CURRENT series: it never creates
+     a series, never seeds rows and never redirects anywhere. When no series
+     exists, it simply says so (no controls, no forms, no hidden menus). */
   if (!view) {
-    const countNum = Number(count);
-    const countOk =
-      Number.isInteger(countNum) &&
-      countNum >= BEW_MIN_COUNT &&
-      countNum <= BEW_MAX_COUNT;
     return (
       <div className="relative mx-auto max-w-3xl px-4 py-6">
         <GradientMesh />
@@ -383,96 +292,12 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
           <h1 className="text-2xl font-extrabold tracking-tight text-ink">
             {t("bewauto.title")}
           </h1>
-          <p className="mt-2 text-sm leading-6 text-muted">
-            {t("bewauto.setupBody")} {userName}
+          <p className="mt-3 text-sm leading-6 text-muted">
+            {t("bewauto.noSeriesTitle")}
           </p>
-
-          <div className="mt-6 grid gap-5 sm:grid-cols-2">
-            <Input
-              id="bew-count"
-              label={t("bewauto.countQuestion")}
-              hint={t("bewauto.countHint")}
-              type="number"
-              min={BEW_MIN_COUNT}
-              max={BEW_MAX_COUNT}
-              step={1}
-              value={count}
-              error={count && !countOk ? t("bewauto.countError") : undefined}
-              onChange={(e) => setCount(e.target.value)}
-            />
-            <label className="block">
-              <span className="mb-2 block text-sm font-semibold text-ink-soft">
-                {t("bewauto.purposeLabel")}
-              </span>
-              <select
-                value={purpose}
-                onChange={(e) => setPurpose(e.target.value)}
-                className="h-10 w-full rounded-2xl border border-line-strong bg-surface px-3 text-base text-ink outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10 lg:text-sm"
-              >
-                <option value="ausbildung">{t("bewauto.purposeAusbildung")}</option>
-                <option value="arbeit">{t("bewauto.purposeArbeit")}</option>
-                <option value="praktikum">{t("bewauto.purposePraktikum")}</option>
-              </select>
-            </label>
-          </div>
-
-          <div className="mt-2 grid gap-4">
-            <div className="text-sm font-semibold text-ink-soft">
-              {t("bewauto.positionSection")}
-            </div>
-            <Input
-              id="bew-position-title"
-              label={`${t("bewauto.positionTitle")} · ${t("bewauto.positionOptional")}`}
-              hint={t("bewauto.positionTitleHint")}
-              value={positionTitle}
-              onChange={(e) => setPositionTitle(e.target.value)}
-            />
-            <Textarea
-              id="bew-position-brief"
-              label={`${t("bewauto.positionBrief")} · ${t("bewauto.positionOptional")}`}
-              hint={t("bewauto.positionBriefHint")}
-              rows={3}
-              /* 16 px on phones (iOS Safari zooms in on <16 px inputs).
-                 The shared Textarea hard-codes text-sm; a plain text-base
-                 here would LOSE the cascade (text-sm is emitted later in
-                 the utility sheet), so the mobile-only max-sm variant —
-                 emitted after both — wins below 640 px and desktop keeps
-                 the component's original 14 px untouched. */
-              className="max-sm:text-base"
-              value={positionBrief}
-              onChange={(e) => setPositionBrief(e.target.value)}
-            />
-            <Textarea
-              id="bew-employer-facts"
-              label={`${t("bewauto.employerFacts")} · ${t("bewauto.positionOptional")}`}
-              hint={t("bewauto.employerFactsHint")}
-              rows={2}
-              className="max-sm:text-base"
-              value={employerFacts}
-              onChange={(e) => setEmployerFacts(e.target.value)}
-            />
-          </div>
-
-          {error && <ErrorLine message={error} />}
-
-          <div className="mt-8">
-            {/* Same instant flow as the header button: on the click the new
-                series UI opens (placeholder rows) and the single
-                create+view action confirms it in the background. */}
-            <Button
-              size="lg"
-              disabled={busy || creatingSeries || !countOk}
-              onClick={startNewSeries}
-              aria-busy={creatingSeries || undefined}
-            >
-              {creatingSeries ? (
-                <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-              ) : (
-                <Icon name="spark" size={18} />
-              )}
-              {creatingSeries ? t("bewauto.newSeriesCreating") : t("bewauto.setupStart")}
-            </Button>
-          </div>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            {t("bewauto.noSeriesBody")}
+          </p>
         </Card>
       </div>
     );
@@ -521,32 +346,9 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
               tone={usageTone(view)}
               label={t("bewauto.usageLeft", { n: view.usage.remaining })}
             />
-            {/* Series management is a DELIBERATE SECONDARY action (menu),
-                not the page's primary control — the primary entry point is
-                the Smart Input on step 1. Creating a series stays possible
-                (same instant-open placeholder flow); it just no longer
-                competes with the main workflow for attention. */}
-            <details id="bew-series-menu" className="relative">
-              <summary
-                aria-label={t("bewauto.seriesMenuAria")}
-                title={t("bewauto.seriesMenuAria")}
-                className="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-xl border border-line-strong bg-surface text-ink-soft transition hover:border-faint hover:bg-surface-2 [&::-webkit-details-marker]:hidden"
-              >
-                <Icon name="more" size={16} />
-              </summary>
-              <div className="absolute end-0 top-full z-20 mt-1 w-52 rounded-2xl border border-line bg-surface p-1 shadow-[var(--shadow-float)]">
-                <button
-                  type="button"
-                  onClick={startNewSeries}
-                  disabled={busy || creatingSeries}
-                  aria-busy={creatingSeries || undefined}
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-start text-sm font-semibold text-ink-soft transition hover:bg-surface-2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Icon name={creatingSeries ? "refresh" : "plus"} size={15} className={creatingSeries ? "animate-spin" : undefined} />
-                  {creatingSeries ? t("bewauto.newSeriesCreating") : t("bewauto.newCampaign")}
-                </button>
-              </div>
-            </details>
+            {/* No series management here on purpose: the primary entry point
+                is the Smart Input on step 1, and series creation has no UI
+                entry point on this page at all. */}
           </div>
         </div>
 
@@ -602,8 +404,10 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
             refresh={refresh}
             onNext={goToDocuments}
             nextBlockedReason={companiesBlockedReason}
-            creatingSeries={creatingSeries}
-            seriesConfirmation={seriesConfirmation}
+            /* Series creation is not possible from this page — the guards
+               the step applies while a creation is in flight are inert. */
+            creatingSeries={false}
+            seriesConfirmation={null}
             patchApplication={patchApplication}
             appendApplication={appendApplication}
           />

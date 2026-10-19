@@ -33,6 +33,7 @@ vi.mock("next/navigation", () => ({
 
 import {
   appendRowToView,
+  checkSmartAdd,
   precheckSmartAdd,
   runSmartAdd,
   toApplicationDTO,
@@ -346,6 +347,164 @@ describe("precheckSmartAdd — mirrors the server rules client-side", () => {
   });
 });
 
+describe("checkSmartAdd — the 'Check information' step (analysis without persistence)", () => {
+  it("empty input → EMPTY_INPUT, no parse, not ok", () => {
+    for (const text of ["", "   \n  "]) {
+      expect(checkSmartAdd(text, [])).toEqual({
+        parsed: null,
+        ok: false,
+        issues: ["EMPTY_INPUT"],
+      });
+    }
+  });
+
+  it("clean input → ok, no issues, the parse is returned for the review panel", () => {
+    const result = checkSmartAdd(AD, []);
+    expect(result.ok).toBe(true);
+    expect(result.issues).toEqual([]);
+    expect(result.parsed?.companyName.value).toBe("Amberger Kühltechnik GmbH");
+    expect(result.parsed?.companyEmail.value).toBe("bernklaustefanie@amberger-kuehltechnik.de");
+  });
+
+  it("missing company → exactly PARSE_NO_COMPANY is flagged", () => {
+    const result = checkSmartAdd("jobs@nowhere.de", []);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContain("PARSE_NO_COMPANY");
+  });
+
+  it("missing e-mail → exactly PARSE_NO_EMAIL is flagged", () => {
+    const result = checkSmartAdd("NoMail GmbH\nKein Kontakt.", []);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContain("PARSE_NO_EMAIL");
+  });
+
+  it("invalid e-mail → PARSE_INVALID_EMAIL is flagged", () => {
+    const result = checkSmartAdd("Bad GmbH\nE-Mail: info@bad", []);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContain("PARSE_INVALID_EMAIL");
+  });
+
+  it("over-limit brief → POSITION_TOO_LONG is flagged", () => {
+    const text = `Big GmbH\nbig@big.de\nBeschreibung: ${"x".repeat(4001)}`;
+    const result = checkSmartAdd(text, []);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContain("POSITION_TOO_LONG");
+  });
+
+  it("oversized paste → INVALID_PAYLOAD is flagged", () => {
+    const result = checkSmartAdd("A".repeat(20_001), []);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContain("INVALID_PAYLOAD");
+  });
+
+  it("lists ALL blocking fields at once (company AND e-mail missing)", () => {
+    const result = checkSmartAdd("Wir freuen uns auf dich.", []);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContain("PARSE_NO_COMPANY");
+    expect(result.issues).toContain("PARSE_NO_EMAIL");
+  });
+
+  it("duplicate e-mail on an ACTIVE row → DUPLICATE_COMPANY (fields pass first)", () => {
+    const apps = [appDto(1, { company_email: "same@same.de" })];
+    const result = checkSmartAdd("Dup GmbH\nsame@same.de", apps);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual(["DUPLICATE_COMPANY"]);
+  });
+
+  it("the same e-mail on an EXCLUDED row is not an issue (restorable rows don't block)", () => {
+    const apps = [appDto(1, { company_email: "same@same.de", status: "excluded" })];
+    expect(checkSmartAdd("Dup GmbH\nsame@same.de", apps).ok).toBe(true);
+  });
+
+  it("the 100-row cap → COUNT_EXCEEDED", () => {
+    const apps = Array.from({ length: 100 }, (_, i) =>
+      appDto(i + 1, { company_email: `r${i}@r.de` }),
+    );
+    const result = checkSmartAdd("Full GmbH\nfull@full.de", apps);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContain("COUNT_EXCEEDED");
+  });
+
+  it("REQUIRED WORKFLOW: check (ok) → confirm → exactly ONE row in the view", async () => {
+    // Step 2 of the workflow: the user checks the information…
+    const check = checkSmartAdd(AD, []);
+    expect(check.ok).toBe(true);
+    // …reviews the extracted fields (the parse is the review surface)…
+    expect(check.parsed?.companyName.value).toBeTruthy();
+    // …then confirms: the RAW text goes to the persistence layer ONCE and
+    // the confirmed row lands in the view as ONE new entry.
+    let view = makeView([]);
+    const { deps, calls } = makeDeps({
+      onRowAdded: (dto) => {
+        view = appendRowToView(view, dto);
+        calls.push(`onRowAdded:${dto.id}`);
+      },
+    });
+    const outcome = await runSmartAdd(AD, [], deps);
+    expect(outcome).toMatchObject({ ok: true, row: { id: "app-new" } });
+    expect(calls).toEqual(["add", "onRowAdded:app-new"]);
+    expect(view.applications).toHaveLength(1);
+    expect(view.applications[0]).toMatchObject({
+      company_name: "Amberger Kühltechnik GmbH",
+      company_email: "bernklaustefanie@amberger-kuehltechnik.de",
+    });
+  });
+
+  it("REQUIRED WORKFLOW: invalid information creates NO row (check blocks, confirm never runs)", async () => {
+    for (const [text, code] of [
+      ["jobs@nowhere.de", "PARSE_NO_COMPANY"],
+      ["NoMail GmbH\nKein Kontakt.", "PARSE_NO_EMAIL"],
+      ["Bad GmbH\nE-Mail: info@bad", "PARSE_INVALID_EMAIL"],
+      ["", "EMPTY_INPUT"],
+    ] as const) {
+      const check = checkSmartAdd(text, []);
+      expect(check.ok, text).toBe(false);
+      expect(check.issues, text).toContain(code);
+      // The confirm button is only rendered for an ok review (component
+      // contract, pinned statically below) — so with a failed check there
+      // is nothing to confirm: the persistence layer is never reached.
+      const { deps, calls } = makeDeps();
+      // Simulating a direct (impossible in the UI) confirm call still
+      // proves the precheck backstop: no add, no row.
+      const outcome = await runSmartAdd(text, [], deps);
+      expect(outcome.ok).toBe(false);
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it("REQUIRED WORKFLOW: repeated submission of the same company creates no duplicate", async () => {
+    let view = makeView([]);
+    const first = await runSmartAdd(
+      AD,
+      [],
+      makeDeps({ onRowAdded: (dto) => (view = appendRowToView(view, dto)) }).deps,
+    );
+    expect(first.ok).toBe(true);
+    expect(view.applications).toHaveLength(1);
+    // Second paste of the SAME advertisement: the check flags the
+    // duplicate (the active row now carries the e-mail)…
+    const recheck = checkSmartAdd(AD, view.applications);
+    expect(recheck.ok).toBe(false);
+    expect(recheck.issues).toEqual(["DUPLICATE_COMPANY"]);
+    // …and even a forced confirm persists nothing (server backstop).
+    const { deps, calls } = makeDeps();
+    const outcome = await runSmartAdd(AD, view.applications, deps);
+    expect(outcome).toEqual({ ok: false, code: "DUPLICATE_COMPANY", busy: false });
+    expect(calls).toEqual([]);
+    expect(view.applications).toHaveLength(1); // still exactly ONE row
+  });
+
+  it("is pure: the check never calls a persistence layer (no deps argument exists)", () => {
+    // checkSmartAdd's signature takes only (text, applications) — there is
+    // no hook to reach the server. The parse result is a fresh object each
+    // call; the input and the row list are never mutated.
+    const apps = [appDto(1, { company_name: "A", company_email: "a@a.de" })];
+    const before = apps.map((a) => ({ ...a }));
+    checkSmartAdd(AD, apps);
+    expect(apps).toEqual(before);
+  });
+});
+
 describe("appendRowToView — the append is the ONLY mutation", () => {
   it("appends the new row and re-derives the counters (test 13: previous rows untouched)", () => {
     const view = makeView([
@@ -437,13 +596,18 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
     );
   }
 
-  it("renders the labelled smart input, the preview panel and both action buttons", () => {
+  it("renders the labelled smart input, the preview panel and the 'Check information' step", () => {
     const html = renderStep([appDto(1, { company_name: "A", company_email: "a@a.de" })]);
     expect(html).toContain("Firmen hinzufügen (Smart-Eingabe)");
     expect(html).toContain("die verfügbaren Firmen- und Stellendetails");
     expect(html).toContain("Erkannte Informationen");
     expect(html).toContain("Live-Vorschau");
-    expect(html).toContain("Automatisch organisieren");
+    // The workflow starts with the analysis step (renamed from the old
+    // one-shot "Auto-organize", which is gone)…
+    expect(html).toContain("Informationen prüfen");
+    expect(html).not.toContain("Automatisch organisieren");
+    // …and the confirm step does NOT exist before a check passes.
+    expect(html).not.toContain("Bestätigen und hinzufügen");
     expect(html).toContain("Eingabe leeren");
     // The textarea is a real, labelled, length-capped input (not a static mock).
     expect(html).toContain('id="bew-smart-input"');
@@ -511,17 +675,46 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
 
     for (const status of ["completed", "sending"]) {
       const html = renderWith(status);
-      // The Auto-organize button exists…
-      expect(html, status).toContain("Automatisch organisieren");
+      // The 'Check information' button exists…
+      expect(html, status).toContain("Informationen prüfen");
       // …and is NOT disabled: the opening tag carries no `disabled`
       // ATTRIBUTE (the Tailwind `disabled:*` classes in the class list are
       // variants, present on every button, and must not count).
-      const openTag = html.match(/<button[^>]*>(?=[\s\S]{0,400}?Automatisch organisieren)/);
+      const openTag = html.match(/<button[^>]*>(?=[\s\S]{0,400}?Informationen prüfen)/);
       expect(openTag, status).not.toBeNull();
       expect(openTag![0], status).not.toMatch(/\sdisabled(?=[\s>])/);
       // And no terminal-series blocker text is shown.
       expect(html, status).not.toContain("abgeschlossen");
     }
+  });
+
+  it("REQUIRED WORKFLOW (static contract): the two-step check → confirm is wired as specified", async () => {
+    // The confirm button is rendered ONLY when the check passed for the
+    // current text (review.ok) — invalid information can never reach the
+    // persistence step from the UI; onConfirm is additionally guarded by
+    // the same condition (defense in depth).
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(
+      join(process.cwd(), "src/components/bewerbung-automation/smart-company-input.tsx"),
+      "utf8",
+    );
+    // 1. Check = pure analysis (no request, no write): the button calls
+    //    onCheck, which only freezes the checkSmartAdd result.
+    expect(src).toContain("onClick={onCheck}");
+    expect(src).toContain("checkSmartAdd(text, view.applications)");
+    // 2. Confirm is conditional on a passed check…
+    expect(src).toContain("{activeReview?.ok && (");
+    // …and the handler re-checks the same condition before persisting.
+    expect(src).toContain("if (!activeReview || !activeReview.ok) return; // the button only exists when ok");
+    // 3. A check is only valid for the EXACT text it was run on — derived
+    //    at render time, so a stale confirm is impossible.
+    expect(src).toContain("const activeReview = review && review.snapshot === text ? review : null;");
+    // 4. Clearing the input never touches created rows: it only resets the
+    //    local component state (no server action is called).
+    const clearBody = src.slice(src.indexOf("const clear = useCallback("), src.indexOf("const onCheck"));
+    expect(clearBody).toContain('setText("")');
+    expect(clearBody).not.toMatch(/bew[A-Z][a-zA-Z]*\(/); // no server action inside clear
   });
 
   it("REGRESSION: on an expired session the component NAVIGATES to /login instead of showing a generic error", async () => {

@@ -193,79 +193,42 @@ describe("remapPendingDrafts", () => {
 });
 
 /* ------------------------------------------------------------------ *
- * C. client.tsx wiring (static contract): the UI opens BEFORE the network
- * ------------------------------------------------------------------ */
+ * C. client.tsx wiring (static contract): NO series creation on this page
+ * ------------------------------------------------------------------
+ *
+ * The "New series" action was removed from the Application Automation page
+ * entirely (no header button, no three-dot/overflow menu, no setup form):
+ * the page works on the CURRENT series only, and a load never creates or
+ * switches series. The pending-series helpers (A/B) remain unit-tested as
+ * the engine-level mechanism; the step keeps its defensive guards, which
+ * the client now feeds with inert constants.
+ */
 
-describe("client wiring (static contract): instant open, one action, safe rollback", () => {
-  it("the pending view is set SYNCHRONOUSLY before the single create+view action", async () => {
+describe("client wiring (static contract): series creation is gone from the page", () => {
+  it("client.tsx imports no creation action and has no creation logic or menu", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const src = readFileSync(
       join(process.cwd(), "src/components/bewerbung-automation/client.tsx"),
       "utf8",
     );
-    const start = src.indexOf("const startNewSeries = useCallback(");
-    const end = src.indexOf("}, [count, purpose, positionTitle, positionBrief, employerFacts, errText]);");
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const body = src.slice(start, end);
-
-    // 1. Synchronous duplicate-click guard — the first thing in the flow.
-    expect(body).toContain("if (creatingRef.current) return; // duplicate-click guard");
-    const armed = body.indexOf("creatingRef.current = true;");
-    const open = body.indexOf("setView(buildPendingView(previousView, countNum, purpose));");
-    const network = body.indexOf("await bewCreateCampaignView(fd)");
-    // 2. The interface opens (and the input is locked) BEFORE any network
-    //    round trip — this is the "instant" requirement.
-    expect(armed).toBeGreaterThan(-1);
-    expect(open).toBeGreaterThan(armed);
-    expect(network).toBeGreaterThan(-1);
-    expect(open).toBeLessThan(network);
-
-    // 3. Confirmation: a one-shot token + the CONFIRMED view replaces the
-    //    placeholder view (and the setup fields are reset to defaults).
-    expect(body).toContain("confirmTokenRef.current += 1;");
-    expect(body).toContain("setSeriesConfirmation({ id: fresh.campaign.id, token: confirmTokenRef.current });");
-    expect(body).toContain("setView(fresh);");
-    expect(body).toContain("setCount(\"10\");");
-
-    // 4. Failure: the previous view is restored ONLY while the pending view
-    //    is still on screen (a newer campaign must never be clobbered).
-    expect(body).toContain("isPendingCampaignId(v.campaign.id) ? previousView : v");
-
-    // 5. The guard is always released.
-    expect(body).toContain("creatingRef.current = false;");
-    expect(body).toContain("setCreatingSeries(false);");
-  });
-
-  it("the old two-action creation sequence is gone (one action, one auth)", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const src = readFileSync(
-      join(process.cwd(), "src/components/bewerbung-automation/client.tsx"),
-      "utf8",
-    );
-    // The client imports the COMBINED create+view action only.
-    expect(src).toContain("bewCreateCampaignView");
-    // The bare create action (the first half of the old sequence) is no
-    // longer referenced anywhere — word-boundary match, so
-    // `bewCreateCampaignView` does not count.
+    // No creation entry point in any form — the previous instant-open
+    // orchestration (pending view + create+view action) is not referenced.
+    expect(src).not.toContain("startNewSeries");
+    expect(src).not.toContain("bewCreateCampaignView");
+    // Word-boundary match, so `bewCreateCampaignView` does not count.
     expect(src).not.toMatch(/\bbewCreateCampaign\b/);
-    // The step receives the confirmation signal + the row-patch callback.
-    expect(src).toContain("creatingSeries={creatingSeries}");
-    expect(src).toContain("seriesConfirmation={seriesConfirmation}");
+    expect(src).not.toContain("buildPendingView");
+    expect(src).not.toContain("bew-series-menu");
+    expect(src).not.toContain("seriesMenuAria");
+    expect(src).not.toContain("newSeriesCreating");
+    expect(src).not.toContain("setupStart");
+    // The no-series state is a neutral notice (no controls).
+    expect(src).toContain("noSeriesTitle");
+    expect(src).toContain("noSeriesBody");
+    // The step receives the inert guard constants + the row-patch callback.
+    expect(src).toContain("creatingSeries={false}");
+    expect(src).toContain("seriesConfirmation={null}");
     expect(src).toContain("patchApplication={patchApplication}");
-  });
-
-  it("the header button is disabled + labelled while a series is being created", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const src = readFileSync(
-      join(process.cwd(), "src/components/bewerbung-automation/client.tsx"),
-      "utf8",
-    );
-    expect(src).toContain("onClick={startNewSeries}");
-    expect(src).toContain("disabled={busy || creatingSeries}");
-    expect(src).toContain("t(\"bewauto.newSeriesCreating\")");
   });
 });

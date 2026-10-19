@@ -2376,6 +2376,9 @@ const de = {
     newSeriesCreating: "Serie wird erstellt …",
     seriesCreatingHint:
       "Die neue Serie wird gespeichert — du kannst bereits Einträge erfassen, Speichern und Löschen sind bis zur Bestätigung kurz gesperrt.",
+    noSeriesTitle: "Keine Bewerbungsserie vorhanden",
+    noSeriesBody:
+      "Aktuell ist keine Bewerbungsserie vorhanden. Sobald eine Serie existiert, fügst du hier über die Smart-Eingabe Firmen hinzu und gehst die fünf Schritte durch.",
     savedFlash: "Gespeichert",
     emailSettingsLink: "E-Mail-Konto verwalten",
     /* Schritt 1 — Firmendaten */
@@ -2388,8 +2391,12 @@ const de = {
       "Füge Firmendaten oder eine komplette Stellenanzeige im beliebigen Format ein. Wir extrahieren automatisch die verfügbaren Firmen- und Stellendetails.",
     smartPlaceholder: "Firmenblock oder komplette Stellenanzeige hier einfügen …",
     smartHint:
-      "Die Informationen werden als neue Zeile hinzugefügt und die Eingabe wird danach geleert.",
-    autoOrganize: "Automatisch organisieren",
+      "Zuerst prüfen, dann bestätigen — erst nach der Bestätigung wird die Zeile zu dieser Serie hinzugefügt.",
+    checkInformation: "Informationen prüfen",
+    confirmAdd: "Bestätigen und hinzufügen",
+    reviewIssues: "Bitte prüfe folgende Felder:",
+    reviewReady:
+      "Alle Pflichtfelder sind vorhanden und gültig — bestätige, um die Zeile hinzuzufügen.",
     clearInput: "Eingabe leeren",
     smartSuccess: "Eintrag {n} hinzugefügt: {company}.",
     detectedTitle: "Erkannte Informationen",
@@ -5043,6 +5050,9 @@ const en: Dict = {
     newSeriesCreating: "Creating series…",
     seriesCreatingHint:
       "The new series is being saved — you can already enter entries; saving and deleting rows are briefly locked until it is confirmed.",
+    noSeriesTitle: "No application series available",
+    noSeriesBody:
+      "There is currently no series. As soon as a series exists, add companies here via the smart input and work through the five steps.",
     savedFlash: "Saved",
     emailSettingsLink: "Manage e-mail account",
     /* Step 1 — company data */
@@ -5055,8 +5065,12 @@ const en: Dict = {
       "Paste company information or a complete job advertisement in any format. We'll automatically extract the available company and job details.",
     smartPlaceholder: "Paste a company block or a complete job advertisement …",
     smartHint:
-      "The information will be added as a new row and the input will be cleared.",
-    autoOrganize: "Auto-organize",
+      "Check first, then confirm — the row is added to this series only after you confirm.",
+    checkInformation: "Check information",
+    confirmAdd: "Confirm and add",
+    reviewIssues: "The following fields need attention:",
+    reviewReady:
+      "All required fields are present and valid — confirm to add the row.",
     clearInput: "Clear input",
     smartSuccess: "Entry {n} added: {company}.",
     detectedTitle: "Detected information",
@@ -7710,6 +7724,9 @@ const fr: Dict = {
     newSeriesCreating: "Création de la série…",
     seriesCreatingHint:
       "La nouvelle série est en cours d'enregistrement — vous pouvez déjà saisir des entrées ; l'enregistrement et la suppression des lignes sont brièvement verrouillés jusqu'à confirmation.",
+    noSeriesTitle: "Aucune série de candidatures disponible",
+    noSeriesBody:
+      "Il n'existe actuellement aucune série. Dès qu'une série est disponible, ajoutez des entreprises ici via la saisie intelligente et suivez les cinq étapes.",
     savedFlash: "Enregistré",
     emailSettingsLink: "Gérer le compte e-mail",
     /* Étape 1 — données entreprises */
@@ -7722,8 +7739,12 @@ const fr: Dict = {
       "Collez des informations d'entreprise ou une annonce complète dans n'importe quel format. Nous extrayons automatiquement les détails d'entreprise et de poste disponibles.",
     smartPlaceholder: "Collez un bloc d'entreprise ou une annonce complète …",
     smartHint:
-      "Les informations seront ajoutées comme nouvelle ligne, puis la saisie sera effacée.",
-    autoOrganize: "Organiser automatiquement",
+      "Vérifiez d'abord, puis confirmez — la ligne n'est ajoutée à cette série qu'après votre confirmation.",
+    checkInformation: "Vérifier les informations",
+    confirmAdd: "Confirmer et ajouter",
+    reviewIssues: "Les champs suivants nécessitent une attention :",
+    reviewReady:
+      "Tous les champs requis sont présents et valides — confirmez pour ajouter la ligne.",
     clearInput: "Effacer la saisie",
     smartSuccess: "Entrée {n} ajoutée : {company}.",
     detectedTitle: "Informations détectées",
@@ -10326,6 +10347,9 @@ const ar: Dict = {
     newSeriesCreating: "جارٍ إنشاء السلسلة…",
     seriesCreatingHint:
       "جاري حفظ السلسلة الجديدة — يمكنك إدخال البيانات بالفعل؛ الحفظ والحذف مقفَّلان مؤقتًا حتى التأكيد.",
+    noSeriesTitle: "لا توجد سلسلة طلبات متاحة",
+    noSeriesBody:
+      "لا توجد حاليًا أي سلسلة. ما إن توجد سلسلة حتى يمكنك إضافة الشركات من هنا عبر الإدخال الذكي والعب خلال الخطوات الخمس.",
     savedFlash: "تم الحفظ",
     emailSettingsLink: "إدارة حساب البريد",
     /* الخطوة 1 — بيانات الشركات */
@@ -10337,8 +10361,12 @@ const ar: Dict = {
     smartBody:
       "الصق معلومات الشركة أو إعلان وظيفة كامل بأي صيغة. سنستخرج تلقائيًا تفاصيل الشركة والوظيفة المتوفرة.",
     smartPlaceholder: "الصق معلومات الشركة أو إعلان الوظيفة الكامل هنا …",
-    smartHint: "سيتم إضافة المعلومات كسجل جديد ثم مسح حقل الإدخال.",
-    autoOrganize: "تنظيم تلقائي",
+    smartHint:
+      "افحص المعلومات أولاً ثم أكّد — يضاف السجل إلى هذه السلسلة فقط بعد التأكيد.",
+    checkInformation: "فحص المعلومات",
+    confirmAdd: "تأكيد وإضافة",
+    reviewIssues: "الحقول التالية تحتاج إلى مراجعة:",
+    reviewReady: "جميع الحقول المطلوبة موجودة وصحيحة — أكّد لإضافة السجل.",
     clearInput: "مسح الإدخال",
     smartSuccess: "تمت إضافة السجل {n}: {company}.",
     detectedTitle: "المعلومات المكتشفة",
