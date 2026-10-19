@@ -21,7 +21,7 @@ import type { BewViewDTO } from "./types";
 
 interface Props {
   view: BewViewDTO;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<unknown>;
 }
 
 export const GenerateStep = memo(function GenerateStep({ view, refresh }: Props) {

@@ -375,12 +375,13 @@ function renderStep(appsList: BewApplicationDTO[], campaign: { status?: string }
       null,
       React.createElement(CompaniesStep, {
         view,
-        refresh: async () => undefined,
+        refresh: async () => null,
         onNext: () => undefined,
         nextBlockedReason: null,
         creatingSeries: false,
         seriesConfirmation: null,
         patchApplication: () => undefined,
+        appendApplication: () => undefined,
       }),
     ),
   );

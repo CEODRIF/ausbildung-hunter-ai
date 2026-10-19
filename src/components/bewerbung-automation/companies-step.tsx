@@ -19,12 +19,14 @@ import {
 } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
 import {
+  BEW_POSITION_BRIEF_MAX,
   isValidEmail,
   recordsFromCsvMatrix,
 } from "@/lib/bewerbung-automation";
-import { Button, Card } from "@/components/ui";
+import { Button, Card, Modal, Textarea } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { StatusPill } from "@/components/ui/feedback";
+import { SmartCompanyInput } from "./smart-company-input";
 import {
   initialMapping,
   parseImportFile,
@@ -138,7 +140,7 @@ async function importPdfViaRoute(
 
 interface Props {
   view: BewViewDTO;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<BewViewDTO | null>;
   /** Wizard navigation: advance from Companies to Documents (step 2). */
   onNext: () => void;
   /** Exact reason advancing is blocked right now (null = ready to go). */
@@ -155,6 +157,9 @@ interface Props {
   /** Apply fields to ONE application row in the parent's view (the
    *  optimistic/confirmed/rollback row patches). Stable reference. */
   patchApplication: (appId: string, fields: RowSaveFields) => void;
+  /** Append ONE persisted row (the smart-input "Auto-organize" path).
+   *  Stable reference; the row comes back from the server action. */
+  appendApplication: (row: BewApplicationDTO) => void;
 }
 
 type ImportPhase = "idle" | "preview";
@@ -194,6 +199,7 @@ export const CompaniesStep = memo(function CompaniesStep({
   creatingSeries,
   seriesConfirmation,
   patchApplication,
+  appendApplication,
 }: Props) {
   const { t } = useI18n();
   /* Stable-id row view: the manual table is driven by these (draft-aware),
@@ -232,6 +238,11 @@ export const CompaniesStep = memo(function CompaniesStep({
   const [notice, setNotice] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Drafts>({});
   const fileRef = useRef<HTMLInputElement>(null);
+  /** The row whose job description is being inspected/edited (full-text
+   *  modal — the table cell itself is a compact ellipsis preview). */
+  const [briefEditId, setBriefEditId] = useState<string | null>(null);
+  const openBrief = useCallback((appId: string) => setBriefEditId(appId), []);
+  const closeBrief = useCallback(() => setBriefEditId(null), []);
 
   /* Optimistic deletion: rows hidden on the first click, before the
      ownership-checked server exclusion answers. */
@@ -621,6 +632,18 @@ export const CompaniesStep = memo(function CompaniesStep({
           </a>
         </div>
 
+        {/* Smart input: paste a complete advertisement → one independent row */}
+        <div className="mb-4">
+          <SmartCompanyInput
+            campaignId={view.campaign.id}
+            view={view}
+            disabled={creatingSeries || lockApp || busy}
+            onRowAdded={appendApplication}
+            onRefresh={refresh}
+            t={t}
+          />
+        </div>
+
         {/* Import wizard */}
         <div className="rounded-2xl border border-dashed border-line-strong bg-surface-2/40 p-4">
           {importState.phase === "idle" ? (
@@ -724,7 +747,7 @@ export const CompaniesStep = memo(function CompaniesStep({
              callbacks), so the full list stays instant at 100 rows. */
           ) : (
           <div className="bew-cards max-h-96 overflow-auto rounded-2xl border border-line max-sm:max-h-none max-sm:overflow-visible max-sm:border-0">
-            <table className="w-full min-w-[800px] border-collapse text-sm max-sm:min-w-0">
+            <table className="w-full min-w-[1120px] border-collapse text-sm max-sm:min-w-0">
               <thead className="sticky top-0 z-10 bg-surface-2 text-xs uppercase tracking-wide text-muted">
                 <tr>
                   <Th>{t("bewauto.colRow")}</Th>
@@ -732,6 +755,8 @@ export const CompaniesStep = memo(function CompaniesStep({
                   <Th>{t("bewauto.colEmail")}</Th>
                   <Th>{t("bewauto.colContact")}</Th>
                   <Th>{t("bewauto.colAddress")}</Th>
+                  <Th>{t("bewauto.colPositionTitle")}</Th>
+                  <Th>{t("bewauto.colJobDescription")}</Th>
                   <Th>{t("bewauto.colStatus")}</Th>
                   <Th><span className="sr-only">{t("bewauto.deleteCol")}</span></Th>
                 </tr>
@@ -756,13 +781,14 @@ export const CompaniesStep = memo(function CompaniesStep({
                       saving={saveState.pending.has(app.id)}
                       saved={saveState.saved.has(app.id)}
                       deletePending={deleteView.pending.has(app.id)}
-                      creatingSeries={creatingSeries}
-                      lockApp={lockApp}
-                      onFieldChange={onFieldChange}
-                      onSaveRow={onSaveRow}
-                      onDeleteRow={onDeleteRow}
-                      t={t}
-                    />
+                       creatingSeries={creatingSeries}
+                       lockApp={lockApp}
+                       onFieldChange={onFieldChange}
+                       onSaveRow={onSaveRow}
+                       onDeleteRow={onDeleteRow}
+                       onOpenBrief={openBrief}
+                       t={t}
+                     />
                   );
                 })}
               </tbody>
@@ -770,6 +796,55 @@ export const CompaniesStep = memo(function CompaniesStep({
           </div>
           )}
         </div>
+
+        {/* Full-text job-description editor (the table cell is a compact
+            ellipsis; the stored value is always the complete text). Edits
+            go through the SAME draft + per-row Save as every other field. */}
+        {(() => {
+          const briefRow = briefEditId ? rowsById.get(briefEditId) : undefined;
+          if (!briefRow) return null;
+          const briefValues =
+            drafts[briefRow.id] ?? serverRecords.get(briefRow.id);
+          if (!briefValues) return null;
+          const briefDirty =
+            drafts[briefRow.id] ? rowDirtyOf(drafts[briefRow.id], briefRow) : false;
+          return (
+            <Modal
+              open
+              onClose={closeBrief}
+              title={`${t("bewauto.positionBrief")} · ${briefRow.companyName || `#${briefRow.seq}`}`}
+            >
+              <div>
+                <Textarea
+                  id="bew-brief-modal"
+                  rows={12}
+                  maxLength={BEW_POSITION_BRIEF_MAX}
+                  disabled={lockApp || creatingSeries}
+                  value={briefValues.positionBrief ?? ""}
+                  placeholder={t("bewauto.positionBrief")}
+                  onChange={(e) => onFieldChange(briefRow.id, "positionBrief", e.target.value)}
+                  className="whitespace-pre-wrap"
+                />
+                <p className="mt-2 text-xs leading-5 text-muted">
+                  {t("bewauto.briefModalHint")}
+                </p>
+                <div className="mt-5 flex justify-end gap-2">
+                  <Button
+                    size="sm"
+                    disabled={creatingSeries || lockApp || !briefDirty || saveState.pending.has(briefRow.id)}
+                    onClick={() => onSaveRow(briefRow, briefValues)}
+                    aria-busy={saveState.pending.has(briefRow.id) || undefined}
+                  >
+                    {t("bewauto.save")}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={closeBrief}>
+                    {t("bewauto.close")}
+                  </Button>
+                </div>
+              </div>
+            </Modal>
+          );
+        })()}
 
         {/* Wizard footer — the explicit, always-visible way forward.
             (Previously the ONLY navigation was the small stepper chip at the
@@ -849,6 +924,8 @@ interface CompanyRowProps {
   onFieldChange: (appId: string, field: keyof CompanyRecord, value: string) => void;
   onSaveRow: (app: CompanyRowView, values: CompanyRecord) => void;
   onDeleteRow: (app: CompanyRowView) => void;
+  /** Open the full-text job-description editor for this row. */
+  onOpenBrief: (appId: string) => void;
   t: (k: string, v?: Record<string, string | number>) => string;
 }
 
@@ -865,6 +942,7 @@ const CompanyRow = memo(function CompanyRow({
   onFieldChange,
   onSaveRow,
   onDeleteRow,
+  onOpenBrief,
   t,
 }: CompanyRowProps) {
   const emailOk = isValidEmail(values.companyEmail);
@@ -908,6 +986,39 @@ const CompanyRow = memo(function CompanyRow({
           onChange={setField("companyAddress")}
         />
       </td>
+      <td data-label={t("bewauto.colPositionTitle")} className="px-2 py-1.5">
+        <MiniInput
+          value={values.positionTitle ?? ""}
+          disabled={lockApp}
+          placeholder={t("bewauto.phPositionTitle")}
+          onChange={setField("positionTitle")}
+        />
+      </td>
+      {/* Compact ellipsis preview; the FULL text is edited in the modal
+          (same draft, same per-row Save — nothing is truncated anywhere). */}
+      <td data-label={t("bewauto.colJobDescription")} className="px-2 py-1.5">
+        <button
+          type="button"
+          onClick={() => onOpenBrief(app.id)}
+          disabled={lockApp}
+          aria-label={`${t("bewauto.viewFullText")} · ${app.seq}`}
+          title={values.positionBrief || undefined}
+          className="group flex w-full min-w-36 items-center gap-1.5 rounded-xl border border-line-strong bg-surface px-2.5 py-1.5 text-left transition hover:border-faint disabled:opacity-50"
+        >
+          <span className="min-w-0 flex-1 truncate text-base text-ink lg:text-sm">
+            {values.positionBrief ? (
+              values.positionBrief
+            ) : (
+              <span className="text-faint">{t("bewauto.phPositionBrief")}</span>
+            )}
+          </span>
+          <Icon
+            name="file"
+            size={13}
+            className="shrink-0 text-faint transition group-hover:text-accent"
+          />
+        </button>
+      </td>
       <td data-label={t("bewauto.colStatus")} className="px-3 py-2.5">
         <div className="flex flex-col items-start gap-2">
           <RowStatus app={app} emailOk={emailOk} nameOk={nameOk} t={t} />
@@ -940,18 +1051,10 @@ const CompanyRow = memo(function CompanyRow({
                 {t("bewauto.perCompanyPosition")}
               </summary>
               <div className="mt-2 flex flex-col gap-1.5">
-                <MiniInput
-                  value={values.positionTitle ?? ""}
-                  disabled={lockApp}
-                  placeholder={t("bewauto.positionTitle")}
-                  onChange={setField("positionTitle")}
-                />
-                <MiniInput
-                  value={values.positionBrief ?? ""}
-                  disabled={lockApp}
-                  placeholder={t("bewauto.positionBrief")}
-                  onChange={setField("positionBrief")}
-                />
+                {/* Position title + job description are now dedicated table
+                    columns (the job description in the full-text editor);
+                    only the verified employer facts stay in this block —
+                    they are user-verified facts and are never auto-filled. */}
                 <MiniInput
                   value={values.employerFacts ?? ""}
                   disabled={lockApp}

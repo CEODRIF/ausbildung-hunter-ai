@@ -299,7 +299,7 @@ export interface RowDeleteDeps {
   /** ONE authoritative view sync AFTER confirmation — never on the
    *  click→visual path, so no artificial delay or polling. Best-effort: a
    *  failure here must not undo the committed exclusion. */
-  refresh: () => Promise<void>;
+  refresh: () => Promise<unknown>;
   onSuccess: (seq: number) => void;
   onError: (error: unknown) => void;
 }
@@ -515,7 +515,7 @@ export interface RowSaveDeps {
    *  confirmation (null = the row no longer exists). */
   update: () => Promise<RowSaveFields | null>;
   /** ONE best-effort view resync when the row vanished mid-flight. */
-  resync: () => Promise<void>;
+  resync: () => Promise<unknown>;
   onSaved: (seq: number) => void;
   onError: (error: unknown) => void;
 }

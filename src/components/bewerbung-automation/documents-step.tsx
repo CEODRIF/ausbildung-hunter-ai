@@ -48,7 +48,7 @@ async function uploadDocumentViaRoute(
 
 interface Props {
   view: BewViewDTO;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<unknown>;
 }
 
 interface LibraryDoc {
