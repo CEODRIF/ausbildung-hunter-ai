@@ -499,7 +499,9 @@ describe("C. action bewSetCompanyCount", () => {
 });
 
 /* ------------------------------------------------------------------ *\
- * D. SSR first paint — the stepper shows persisted target + actual gap
+ * D. SSR first paint — the target stepper is REMOVED from the workflow
+ *    (Smart Input is the entry point; requested_count stays in the data
+ *    but drives no control)
  * ------------------------------------------------------------------ */
 
 /* Section D mocks the ACTION MODULE for the client (the SSR render must not
@@ -590,34 +592,21 @@ function renderWizard(
   return renderToString(tree);
 }
 
-describe("D. SSR — the user-controlled target on the Companies step", () => {
-  it("shows the stepper with the PERSISTED target (50) and the actual gap (12 entered)", () => {
+describe("D. SSR — the Company target control is removed from the workflow", () => {
+  it("no longer renders the user-controlled target (stepper + gap chips)", () => {
     const html = renderWizard(
       Array.from({ length: 12 }, (_, i) => appRow(i + 1)),
       { requestedCount: 50 },
     );
-    expect(html).toContain("Unternehmens-Ziel");
-    // The −/+ stepper and the direct-entry input (value = persisted target).
-    expect(html).toContain("Unternehmens-Ziel verringern");
-    expect(html).toContain("Unternehmens-Ziel erhöhen");
-    expect(html).toContain('value="50"');
-    // Target ≠ actual → the difference is explicit.
-    expect(html).toContain("12 von 50 Unternehmen eingegeben");
-    // The platform cap is explained as the ONLY maximum.
-    expect(html).not.toContain("Maximal 10 Unternehmen");
-  });
-
-  it("shows 'Ziel erreicht' when actual and target agree (12 of 12)", () => {
-    const html = renderWizard(
-      Array.from({ length: 12 }, (_, i) => appRow(i + 1)),
-      { requestedCount: 12 },
-    );
-    expect(html).toContain('value="12"');
-    expect(html).toContain("Ziel erreicht");
+    // The stepper, its direct-entry input and its aria labels are gone…
+    expect(html).not.toContain("Unternehmens-Ziel");
+    expect(html).not.toContain("Gewünschte Anzahl an Unternehmen");
+    // …and the target-vs-actual gap chips ("Ziel erreicht" / "…eingegeben").
+    expect(html).not.toContain("Ziel erreicht");
     expect(html).not.toContain("Unternehmen eingegeben");
   });
 
-  it("keeps the real total in the campaign summary (data-driven, not 10)", () => {
+  it("keeps the real total in the campaign summary (data-driven, not the target)", () => {
     const html = renderWizard(
       Array.from({ length: 12 }, (_, i) => appRow(i + 1)),
       { requestedCount: 50 },
@@ -626,26 +615,12 @@ describe("D. SSR — the user-controlled target on the Companies step", () => {
     expect(html).toContain("Alle: 12");
   });
 
-  it("locks the stepper while a send is in flight (disabled, no gap confusion)", () => {
+  it("stays removed while a send is in flight (no locked control either)", () => {
     const html = renderWizard(
       Array.from({ length: 12 }, (_, i) => appRow(i + 1, { status: "queued" })),
       { requestedCount: 50, status: "sending" },
     );
-    expect(html).toContain("Unternehmens-Ziel");
-    // The input + both buttons are present but disabled.
-    const inputTag =
-      html.match(/<input[^>]*Gewünschte Anzahl an Unternehmen \(Ziel\)[^>]*>/)?.[0] ?? "";
-    expect(inputTag).toContain('value="50"');
-    expect(inputTag).toContain("disabled");
-    const buttons = html.match(/Unternehmens-Ziel (verringern|erhöhen)/g) ?? [];
-    expect(buttons).toHaveLength(2);
-  });
-
-  it("counts only ACTIVE rows as entered (excluded rows do not count)", () => {
-    const rows = Array.from({ length: 12 }, (_, i) =>
-      i < 7 ? appRow(i + 1) : appRow(i + 1, { status: "excluded" }),
-    );
-    const html = renderWizard(rows, { requestedCount: 50 });
-    expect(html).toContain("7 von 50 Unternehmen eingegeben");
+    expect(html).not.toContain("Unternehmens-Ziel");
+    expect(html).not.toContain("Gewünschte Anzahl an Unternehmen");
   });
 });

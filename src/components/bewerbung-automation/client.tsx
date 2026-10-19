@@ -35,7 +35,6 @@ import {
   bewErrorCode,
   hasRequiredDocuments,
   type BewApplicationDTO,
-  type BewCampaignDTO,
   type BewViewDTO,
   type Step,
 } from "./types";
@@ -224,19 +223,6 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
         ...v,
         applications: v.applications.map((a) => (a.id === appId ? { ...a, ...fields } : a)),
       };
-    });
-  }, []);
-
-  /**
-   * Apply fields to the CAMPAIGN in the current view (the company-TARGET
-   * optimistic patch / rollback). Guarded by campaign id: a refresh or a
-   * "+ New series" swap that moved on meanwhile must never absorb a stale
-   * patch into the wrong campaign.
-   */
-  const patchCampaign = useCallback((campaignId: string, fields: Partial<BewCampaignDTO>) => {
-    setView((v) => {
-      if (!v || v.campaign.id !== campaignId) return v;
-      return { ...v, campaign: { ...v.campaign, ...fields } };
     });
   }, []);
 
@@ -535,18 +521,32 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
               tone={usageTone(view)}
               label={t("bewauto.usageLeft", { n: view.usage.remaining })}
             />
-            {/* The new series opens INSTANTLY on the click (placeholder
-                view); this button only reflects the in-flight creation. */}
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={startNewSeries}
-              disabled={busy || creatingSeries}
-              aria-busy={creatingSeries || undefined}
-            >
-              <Icon name={creatingSeries ? "refresh" : "plus"} size={15} className={creatingSeries ? "animate-spin" : undefined} />
-              {creatingSeries ? t("bewauto.newSeriesCreating") : t("bewauto.newCampaign")}
-            </Button>
+            {/* Series management is a DELIBERATE SECONDARY action (menu),
+                not the page's primary control — the primary entry point is
+                the Smart Input on step 1. Creating a series stays possible
+                (same instant-open placeholder flow); it just no longer
+                competes with the main workflow for attention. */}
+            <details id="bew-series-menu" className="relative">
+              <summary
+                aria-label={t("bewauto.seriesMenuAria")}
+                title={t("bewauto.seriesMenuAria")}
+                className="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-xl border border-line-strong bg-surface text-ink-soft transition hover:border-faint hover:bg-surface-2 [&::-webkit-details-marker]:hidden"
+              >
+                <Icon name="more" size={16} />
+              </summary>
+              <div className="absolute end-0 top-full z-20 mt-1 w-52 rounded-2xl border border-line bg-surface p-1 shadow-[var(--shadow-float)]">
+                <button
+                  type="button"
+                  onClick={startNewSeries}
+                  disabled={busy || creatingSeries}
+                  aria-busy={creatingSeries || undefined}
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-start text-sm font-semibold text-ink-soft transition hover:bg-surface-2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Icon name={creatingSeries ? "refresh" : "plus"} size={15} className={creatingSeries ? "animate-spin" : undefined} />
+                  {creatingSeries ? t("bewauto.newSeriesCreating") : t("bewauto.newCampaign")}
+                </button>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -606,7 +606,6 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
             seriesConfirmation={seriesConfirmation}
             patchApplication={patchApplication}
             appendApplication={appendApplication}
-            patchCampaign={patchCampaign}
           />
         </div>
         {step === 2 && <DocumentsStep view={view} refresh={refresh} />}

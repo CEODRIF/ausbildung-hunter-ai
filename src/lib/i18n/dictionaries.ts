@@ -2372,6 +2372,7 @@ const de = {
     campaignSummary: "Gesendet: {sent} · Fehlgeschlagen: {failed} · Alle: {total}",
     usageLeft: "{n} Sends heute übrig",
     newCampaign: "Neue Serie",
+    seriesMenuAria: "Serien-Optionen",
     newSeriesCreating: "Serie wird erstellt …",
     seriesCreatingHint:
       "Die neue Serie wird gespeichert — du kannst bereits Einträge erfassen, Speichern und Löschen sind bis zur Bestätigung kurz gesperrt.",
@@ -2480,7 +2481,7 @@ const de = {
     rowDeleted: "Zeile {n} wurde entfernt.",
     entriesEmpty: "Keine Einträge mehr vorhanden.",
     entriesEmptyHint:
-      "Importiere eine Datei oben oder starte eine neue Kampagne, um weitere Unternehmen hinzuzufügen.",
+      "Füge oben ein komplettes Stellenangebot oder Firmendaten in die Smart-Eingabe ein oder importiere eine Datei, um weitere Unternehmen hinzuzufügen.",
     duplicateEmail: "Doppelte E-Mail-Adresse",
     select: "Auswählen",
     selectRow: "Bewerbung {n} auswählen",
@@ -5038,6 +5039,7 @@ const en: Dict = {
     campaignSummary: "Sent: {sent} · Failed: {failed} · Total: {total}",
     usageLeft: "{n} sends left today",
     newCampaign: "New series",
+    seriesMenuAria: "Series options",
     newSeriesCreating: "Creating series…",
     seriesCreatingHint:
       "The new series is being saved — you can already enter entries; saving and deleting rows are briefly locked until it is confirmed.",
@@ -5146,7 +5148,7 @@ const en: Dict = {
     rowDeleted: "Row {n} was removed.",
     entriesEmpty: "No entries left.",
     entriesEmptyHint:
-      "Import a file above or start a new campaign to add more companies.",
+      "Paste a complete job advertisement or company details into the smart input above, or import a file, to add more companies.",
     duplicateEmail: "Duplicate e-mail address",
     select: "Select",
     selectRow: "Select application {n}",
@@ -7704,6 +7706,7 @@ const fr: Dict = {
     campaignSummary: "Envoyées : {sent} · Échouées : {failed} · Total : {total}",
     usageLeft: "{n} envois restants aujourd'hui",
     newCampaign: "Nouvelle série",
+    seriesMenuAria: "Options de série",
     newSeriesCreating: "Création de la série…",
     seriesCreatingHint:
       "La nouvelle série est en cours d'enregistrement — vous pouvez déjà saisir des entrées ; l'enregistrement et la suppression des lignes sont brièvement verrouillés jusqu'à confirmation.",
@@ -7812,7 +7815,7 @@ const fr: Dict = {
     rowDeleted: "La ligne {n} a été supprimée.",
     entriesEmpty: "Plus aucune entrée.",
     entriesEmptyHint:
-      "Importez un fichier ci-dessus ou créez une nouvelle campagne pour ajouter des entreprises.",
+      "Collez une annonce complète ou des données d'entreprise dans la saisie intelligente ci-dessus, ou importez un fichier, pour ajouter des entreprises.",
     duplicateEmail: "Adresse e-mail en double",
     select: "Sélectionner",
     selectRow: "Sélectionner la candidature {n}",
@@ -10319,6 +10322,7 @@ const ar: Dict = {
     campaignSummary: "المُرسل: {sent} · الفاشل: {failed} · الإجمالي: {total}",
     usageLeft: "{n} إرسال متبقٍ اليوم",
     newCampaign: "سلسلة جديدة",
+    seriesMenuAria: "خيارات السلسلة",
     newSeriesCreating: "جارٍ إنشاء السلسلة…",
     seriesCreatingHint:
       "جاري حفظ السلسلة الجديدة — يمكنك إدخال البيانات بالفعل؛ الحفظ والحذف مقفَّلان مؤقتًا حتى التأكيد.",
@@ -10425,7 +10429,7 @@ const ar: Dict = {
     rowDeleted: "تمت إزالة الصف {n}.",
     entriesEmpty: "لا توجد إدخالات متبقية.",
     entriesEmptyHint:
-      "استورد ملفًا من الأعلى أو ابدأ حملة جديدة لإضافة شركات.",
+      "الصق إعلان وظيفة كاملًا أو بيانات شركة في حقل الإدخال الذكي أعلاه، أو استورد ملفًا، لإضافة شركات أخرى.",
     duplicateEmail: "عنوان بريد إلكتروني مكرر",
     select: "تحديد",
     selectRow: "تحديد الطلب {n}",
