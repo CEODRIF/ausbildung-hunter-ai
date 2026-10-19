@@ -724,9 +724,9 @@ export const CompaniesStep = memo(function CompaniesStep({
   const advanceReason = busy ? t("bewauto.continueDocsSaving") : nextBlockedReason;
 
   return (
-    <div className="grid gap-6">
-      <Card className="p-6">
-        <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+    <div className="grid gap-4">
+      <Card className="p-5">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-lg font-bold text-ink">{t("bewauto.step1Title")}</h2>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
@@ -868,14 +868,14 @@ export const CompaniesStep = memo(function CompaniesStep({
         )}
 
         {/* Manual table */}
-        <div className="mt-6">
+        <div className="mt-4">
           <p className="mb-2 text-sm font-semibold text-ink-soft">
             {t("bewauto.manageTitle")} ({visibleRows.length})
           </p>
           {visibleRows.length === 0 ? (
             /* Every row was deleted — the user can still continue: import
                companies above (or restore a row later from the review step). */
-            <div className="rounded-2xl border border-dashed border-line-strong bg-surface-2/40 px-4 py-8 text-center">
+            <div className="rounded-2xl border border-dashed border-line-strong bg-surface-2/40 px-4 py-6 text-center">
               <p className="text-sm font-semibold text-ink-soft">{t("bewauto.entriesEmpty")}</p>
               <p className="mx-auto mt-1 max-w-md text-xs leading-5 text-muted">
                 {t("bewauto.entriesEmptyHint")}
@@ -892,7 +892,18 @@ export const CompaniesStep = memo(function CompaniesStep({
              callbacks), so the full list stays instant at 100 rows. */
           ) : (
           <div className="bew-cards max-h-96 overflow-auto rounded-2xl border border-line max-sm:max-h-none max-sm:overflow-visible max-sm:border-0">
-            <table className="w-full min-w-[1120px] border-collapse text-sm max-sm:min-w-0">
+            <table className="w-full min-w-[960px] table-fixed border-collapse text-sm max-sm:min-w-0">
+              <colgroup>
+                <col className="w-10" />
+                <col className="w-[15%]" />
+                <col className="w-[16%]" />
+                <col className="w-[14%]" />
+                <col className="w-[16%]" />
+                <col className="w-[12%]" />
+                <col className="w-[15%]" />
+                <col className="w-[10%]" />
+                <col className="w-10" />
+              </colgroup>
               <thead className="sticky top-0 z-10 bg-surface-2 text-xs uppercase tracking-wide text-muted">
                 <tr>
                   <Th>{t("bewauto.colRow")}</Th>
@@ -962,7 +973,7 @@ export const CompaniesStep = memo(function CompaniesStep({
               <div>
                 <Textarea
                   id="bew-brief-modal"
-                  rows={12}
+                  rows={10}
                   maxLength={BEW_POSITION_BRIEF_MAX}
                   disabled={lockApp || creatingSeries}
                   value={briefValues.positionBrief ?? ""}
@@ -973,7 +984,7 @@ export const CompaniesStep = memo(function CompaniesStep({
                 <p className="mt-2 text-xs leading-5 text-muted">
                   {t("bewauto.briefModalHint")}
                 </p>
-                <div className="mt-5 flex justify-end gap-2">
+                <div className="mt-4 flex justify-end gap-2">
                   <Button
                     size="sm"
                     disabled={creatingSeries || lockApp || !briefDirty || saveState.pending.has(briefRow.id)}
@@ -995,7 +1006,7 @@ export const CompaniesStep = memo(function CompaniesStep({
             (Previously the ONLY navigation was the small stepper chip at the
             top; when its counter gate had not caught up it rendered disabled
             and unexplained, so users saw no way to reach Documents.) */}
-        <div className="mt-6 flex flex-col-reverse gap-2 border-t border-line pt-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-5 flex flex-col-reverse gap-2 border-t border-line pt-4 sm:flex-row sm:items-center sm:justify-between">
           {advanceBlocked && (
             <p
               id="bew-continue-blocked"
@@ -1038,7 +1049,7 @@ function matrixRecords(
 }
 
 function Th({ children }: { children?: React.ReactNode }) {
-  return <th className="px-3 py-2.5 text-start font-semibold">{children}</th>;
+  return <th className="px-2.5 py-2 text-start font-semibold">{children}</th>;
 }
 
 /**
@@ -1096,8 +1107,8 @@ const CompanyRow = memo(function CompanyRow({
     onFieldChange(app.id, field, v);
   return (
     <tr className="border-t border-line align-top">
-      <td data-label={t("bewauto.colRow")} className="px-3 py-2.5 text-xs font-semibold text-faint">{app.seq}</td>
-      <td data-label={t("bewauto.colCompany")} className="px-2 py-1.5">
+      <td data-label={t("bewauto.colRow")} className="px-2.5 py-2 text-xs font-semibold text-faint">{app.seq}</td>
+      <td data-label={t("bewauto.colCompany")} className="px-1.5 py-1.5">
         <MiniInput
           value={values.companyName}
           disabled={lockApp}
@@ -1106,7 +1117,7 @@ const CompanyRow = memo(function CompanyRow({
           onChange={setField("companyName")}
         />
       </td>
-      <td data-label={t("bewauto.colEmail")} className="px-2 py-1.5">
+      <td data-label={t("bewauto.colEmail")} className="px-1.5 py-1.5">
         <MiniInput
           value={values.companyEmail}
           disabled={lockApp}
@@ -1115,7 +1126,7 @@ const CompanyRow = memo(function CompanyRow({
           onChange={setField("companyEmail")}
         />
       </td>
-      <td data-label={t("bewauto.colContact")} className="px-2 py-1.5">
+      <td data-label={t("bewauto.colContact")} className="px-1.5 py-1.5">
         <MiniInput
           value={values.contactName}
           disabled={lockApp}
@@ -1123,7 +1134,7 @@ const CompanyRow = memo(function CompanyRow({
           onChange={setField("contactName")}
         />
       </td>
-      <td data-label={t("bewauto.colAddress")} className="px-2 py-1.5">
+      <td data-label={t("bewauto.colAddress")} className="px-1.5 py-1.5">
         <MiniInput
           value={values.companyAddress}
           disabled={lockApp}
@@ -1131,7 +1142,7 @@ const CompanyRow = memo(function CompanyRow({
           onChange={setField("companyAddress")}
         />
       </td>
-      <td data-label={t("bewauto.colPositionTitle")} className="px-2 py-1.5">
+      <td data-label={t("bewauto.colPositionTitle")} className="px-1.5 py-1.5">
         <MiniInput
           value={values.positionTitle ?? ""}
           disabled={lockApp}
@@ -1141,14 +1152,14 @@ const CompanyRow = memo(function CompanyRow({
       </td>
       {/* Compact ellipsis preview; the FULL text is edited in the modal
           (same draft, same per-row Save — nothing is truncated anywhere). */}
-      <td data-label={t("bewauto.colJobDescription")} className="px-2 py-1.5">
+      <td data-label={t("bewauto.colJobDescription")} className="px-1.5 py-1.5">
         <button
           type="button"
           onClick={() => onOpenBrief(app.id)}
           disabled={lockApp}
           aria-label={`${t("bewauto.viewFullText")} · ${app.seq}`}
           title={values.positionBrief || undefined}
-          className="group flex w-full min-w-36 items-center gap-1.5 rounded-xl border border-line-strong bg-surface px-2.5 py-1.5 text-left transition hover:border-faint disabled:opacity-50"
+          className="group flex w-full min-w-28 items-center gap-1.5 rounded-xl border border-line-strong bg-surface px-2 py-1.5 text-left transition hover:border-faint disabled:opacity-50"
         >
           <span className="min-w-0 flex-1 truncate text-base text-ink lg:text-sm">
             {values.positionBrief ? (
@@ -1164,8 +1175,8 @@ const CompanyRow = memo(function CompanyRow({
           />
         </button>
       </td>
-      <td data-label={t("bewauto.colStatus")} className="px-3 py-2.5">
-        <div className="flex flex-col items-start gap-2">
+      <td data-label={t("bewauto.colStatus")} className="px-2.5 py-2">
+        <div className="flex flex-col items-start gap-1.5">
           <RowStatus app={app} emailOk={emailOk} nameOk={nameOk} t={t} />
           {isDup && (
             <span className="text-xs text-danger">{t("bewauto.duplicateEmail")}</span>
@@ -1249,7 +1260,7 @@ function MiniInput({
       disabled={disabled}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
-      className={`w-full min-w-40 rounded-xl border bg-surface px-2.5 py-1.5 text-base text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-2 focus:ring-accent/10 disabled:opacity-50 lg:text-sm ${
+      className={`w-full min-w-32 rounded-xl border bg-surface px-2 py-1.5 text-base text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-2 focus:ring-accent/10 disabled:opacity-50 lg:text-sm ${
         error ? "border-danger" : "border-line-strong"
       }`}
     />
@@ -1390,14 +1401,14 @@ function ImportPreview({
               return (
                 <tr key={row.seq} className="border-t border-line align-top">
                   <td className="px-3 py-2 text-xs font-semibold text-faint">{row.seq}</td>
-                  <td className="px-2 py-1.5">
+                  <td className="px-1.5 py-1.5">
                     <MiniInput
                       value={row.companyName}
                       placeholder={t("bewauto.phCompany")}
                       onChange={(v) => onChangeRecord(i, { companyName: v })}
                     />
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className="px-1.5 py-1.5">
                     <MiniInput
                       value={row.companyEmail}
                       error={!row.valid && row.problems.some((p) => p.startsWith("company_email"))}

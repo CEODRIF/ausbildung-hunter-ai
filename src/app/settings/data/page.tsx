@@ -17,7 +17,7 @@ export default async function DataSettingsPage() {
   return (
     <div className="px-4 py-6 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-3xl">
-        <Card className="p-6">
+        <Card className="p-5">
           <h2 className="font-bold text-ink-soft">{t("account.exportTitle")}</h2>
           <p className="mt-2 text-sm leading-6 text-muted">
             {t("account.exportBody")}

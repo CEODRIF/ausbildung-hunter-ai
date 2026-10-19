@@ -41,9 +41,9 @@ export function Button({
   ...props
 }: ButtonProps) {
   const sizes = {
-    sm: "h-9 px-3.5 text-xs",
-    md: "h-11 px-4.5 text-sm",
-    lg: "h-12 px-5 text-sm",
+    sm: "h-8 px-3 text-xs",
+    md: "h-10 px-4 text-sm",
+    lg: "h-11 px-5 text-sm",
   };
   return (
     <button
@@ -82,7 +82,7 @@ export function Input({
   return (
     <label className="block" htmlFor={id}>
       {label && (
-        <span className="mb-2 block text-sm font-semibold text-ink-soft">
+        <span className="mb-1.5 block text-sm font-semibold text-ink-soft">
           {label}
           {labelSuffix && (
             <span className="ms-1.5 text-xs font-normal text-faint">
@@ -93,13 +93,13 @@ export function Input({
       )}
       <span className="relative block">
         {leading && (
-          <span className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 text-faint">
+          <span className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-faint">
             {leading}
           </span>
         )}
         <input
           id={id}
-          className={`h-12 w-full rounded-2xl border bg-surface px-3.5 text-sm text-ink shadow-[var(--shadow-card)] outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 ${leading ? "ps-10" : ""} ${error ? "border-danger" : "border-line-strong"} ${className}`}
+          className={`h-10 w-full rounded-2xl border bg-surface px-3 text-sm text-ink shadow-[var(--shadow-card)] outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 ${leading ? "ps-9" : ""} ${error ? "border-danger" : "border-line-strong"} ${className}`}
           {...props}
         />
       </span>
@@ -132,13 +132,13 @@ export function Textarea({
   return (
     <label className="block" htmlFor={id}>
       {label && (
-        <span className="mb-2 block text-sm font-semibold text-ink-soft">
+        <span className="mb-1.5 block text-sm font-semibold text-ink-soft">
           {label}
         </span>
       )}
       <textarea
         id={id}
-          className={`min-h-28 w-full resize-y rounded-2xl border bg-surface px-3.5 py-3 text-sm leading-6 text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 ${error ? "border-danger" : "border-line-strong"} ${className}`}
+          className={`min-h-24 w-full resize-y rounded-2xl border bg-surface px-3 py-2.5 text-sm leading-5 text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 ${error ? "border-danger" : "border-line-strong"} ${className}`}
         {...props}
       />
       {error ? (
@@ -203,8 +203,8 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
         aria-label={t("common.close")}
         onClick={onClose}
       />
-      <div className="relative z-10 w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl">
-        <div className="mb-5 flex items-start justify-between gap-4">
+      <div className="relative z-10 w-full max-w-md rounded-2xl border border-line bg-surface p-5 shadow-2xl">
+        <div className="mb-4 flex items-start justify-between gap-4">
           <h2 className="text-lg font-bold text-ink">{title}</h2>
           <button
             className="rounded-lg p-1.5 text-faint hover:bg-surface-2 hover:text-ink"

@@ -136,7 +136,7 @@ export function EmailMessageCard({ view, refresh, applicantName }: Props) {
   }
 
   return (
-    <Card className="p-6">
+    <Card className="p-5">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-ink">{t("bewauto.emailTitle")}</h2>

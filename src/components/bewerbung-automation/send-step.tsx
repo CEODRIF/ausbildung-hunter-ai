@@ -202,7 +202,7 @@ export const SendStep = memo(function SendStep({ view, refresh, pump, selectedId
   const attention = view.applications.filter((a) => a.status === "needs_attention").length;
 
   return (
-    <Card className="p-6">
+    <Card className="p-5">
       <div className="mb-5">
         <h2 className="text-lg font-bold text-ink">{t("bewauto.step5Title")}</h2>
         <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">{t("bewauto.step5Body")}</p>
@@ -356,7 +356,7 @@ export const SendStep = memo(function SendStep({ view, refresh, pump, selectedId
             if (e.target === e.currentTarget) setConfirmOpen(false);
           }}
         >
-          <div className="w-full max-w-lg rounded-t-3xl bg-surface p-6 shadow-2xl sm:rounded-3xl">
+          <div className="w-full max-w-lg rounded-t-3xl bg-surface p-5 shadow-2xl sm:rounded-3xl">
             <h3 className="text-lg font-bold text-ink">{t("bewauto.confirmTitle")}</h3>
             <dl className="mt-4 space-y-2.5 text-sm">
               <ConfirmRow label={t("bewauto.confirmRecipients", { n })} />
@@ -412,7 +412,7 @@ export const SendStep = memo(function SendStep({ view, refresh, pump, selectedId
             if (e.target === e.currentTarget) setScheduleOpen(false);
           }}
         >
-          <div className="max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-6 shadow-2xl sm:rounded-3xl">
+          <div className="max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-5 shadow-2xl sm:rounded-3xl">
             <h3 className="text-lg font-bold text-ink">{t("bewauto.scheduleTitle")}</h3>
             <p className="mt-1 text-sm leading-6 text-muted">{t("bewauto.scheduleBody", { n })}</p>
             {scheduleError && (
@@ -449,7 +449,7 @@ export const SendStep = memo(function SendStep({ view, refresh, pump, selectedId
             if (e.target === e.currentTarget) setRescheduleOpen(false);
           }}
         >
-          <div className="max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-6 shadow-2xl sm:rounded-3xl">
+          <div className="max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-5 shadow-2xl sm:rounded-3xl">
             <h3 className="text-lg font-bold text-ink">{t("bewauto.rescheduleTitle")}</h3>
             <p className="mt-1 text-sm leading-6 text-muted">{t("bewauto.rescheduleBody")}</p>
             {scheduleError && (
