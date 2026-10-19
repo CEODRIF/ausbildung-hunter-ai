@@ -371,9 +371,9 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
 
   if (!schemaOk) {
     return (
-      <div className="relative mx-auto max-w-3xl px-4 py-10">
+      <div className="relative mx-auto max-w-3xl px-4 py-6">
         <GradientMesh />
-        <Card className="relative p-5 text-center sm:p-8">
+        <Card className="relative p-5 text-center sm:p-6">
           <h1 className="text-xl font-bold text-ink">{t("bewauto.title")}</h1>
           <p className="mt-3 text-sm leading-6 text-muted">
             {t("bewauto.schemaPending")}
@@ -391,9 +391,9 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
       countNum >= BEW_MIN_COUNT &&
       countNum <= BEW_MAX_COUNT;
     return (
-      <div className="relative mx-auto max-w-3xl px-4 py-10">
+      <div className="relative mx-auto max-w-3xl px-4 py-6">
         <GradientMesh />
-        <Card className="relative p-5 sm:p-8">
+        <Card className="relative p-5 sm:p-6">
           <h1 className="text-2xl font-extrabold tracking-tight text-ink">
             {t("bewauto.title")}
           </h1>
@@ -401,7 +401,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
             {t("bewauto.setupBody")} {userName}
           </p>
 
-          <div className="mt-8 grid gap-6 sm:grid-cols-2">
+          <div className="mt-6 grid gap-5 sm:grid-cols-2">
             <Input
               id="bew-count"
               label={t("bewauto.countQuestion")}
@@ -421,7 +421,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
               <select
                 value={purpose}
                 onChange={(e) => setPurpose(e.target.value)}
-                className="h-12 w-full rounded-2xl border border-line-strong bg-surface px-3.5 text-base text-ink outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10 lg:text-sm"
+                className="h-10 w-full rounded-2xl border border-line-strong bg-surface px-3 text-base text-ink outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10 lg:text-sm"
               >
                 <option value="ausbildung">{t("bewauto.purposeAusbildung")}</option>
                 <option value="arbeit">{t("bewauto.purposeArbeit")}</option>
@@ -513,11 +513,11 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
         : null;
 
   return (
-    <div className="relative mx-auto max-w-6xl px-4 py-8">
+    <div className="relative mx-auto max-w-5xl px-4 py-6">
       <GradientMesh />
       <div className="relative">
         {/* Header row */}
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-extrabold tracking-tight text-ink">
               {t("bewauto.title")}

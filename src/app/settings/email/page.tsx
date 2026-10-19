@@ -293,7 +293,7 @@ function ProviderSectionCard({
   }
 
   return (
-    <Card className="p-6">
+    <Card className="p-5">
       {head}
       <h3 className="mt-7 text-lg font-bold text-ink-soft">{title}</h3>
       <p className="mt-2 min-h-12 text-sm leading-6 text-muted">

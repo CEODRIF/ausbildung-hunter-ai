@@ -397,7 +397,8 @@ describe("CV / cover-letter builders: mobile is a full-width single column", () 
   it("CV inner form fields stay 100% wide until sm (no desktop 2-col leak)", () => {
     expect(cv).toContain("grid gap-3.5 sm:grid-cols-2");
     // Inputs are w-full by the shared Input primitive (audit the primitive).
+    // Compact contract (2026-10 UI refinement): 40px single-line inputs.
     const ui = read("src/components/ui.tsx");
-    expect(ui).toContain("h-12 w-full rounded-2xl");
+    expect(ui).toContain("h-10 w-full rounded-2xl");
   });
 });

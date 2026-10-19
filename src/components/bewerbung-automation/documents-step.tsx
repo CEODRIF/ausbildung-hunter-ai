@@ -151,7 +151,7 @@ export const DocumentsStep = memo(function DocumentsStep({ view, refresh }: Prop
   );
 
   return (
-    <Card className="p-6">
+    <Card className="p-5">
       <div className="mb-5">
         <h2 className="text-lg font-bold text-ink">{t("bewauto.step2Title")}</h2>
         <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">{t("bewauto.step2Body")}</p>

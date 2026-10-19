@@ -192,15 +192,15 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
             ref={textareaRef}
             id="bew-smart-input"
             value={text}
-            rows={7}
+            rows={6}
             maxLength={BEW_AD_INPUT_MAX}
             disabled={disabled}
             placeholder={t("bewauto.smartPlaceholder")}
             aria-describedby="bew-smart-input-hint"
             onChange={(e) => setText(e.target.value)}
-            className="mt-2.5 min-h-40 w-full resize-y rounded-2xl border border-line-strong bg-surface px-3.5 py-3 text-sm leading-6 text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 max-sm:text-base disabled:opacity-50"
+            className="mt-2 min-h-32 w-full resize-y rounded-2xl border border-line-strong bg-surface px-3 py-2.5 text-sm leading-5 text-ink outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10 max-sm:text-base disabled:opacity-50"
           />
-          <div className="mt-3 flex flex-wrap items-center gap-2.5">
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <Button
               disabled={disabled || inFlight}
               onClick={() => void submit()}
@@ -287,7 +287,7 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
                 <div
                   className={`mt-1.5 whitespace-pre-wrap rounded-xl border border-line bg-surface-2/60 p-2.5 text-xs leading-5 text-ink ${
                     briefExpanded
-                      ? "max-h-64 overflow-y-auto"
+                      ? "max-h-48 overflow-y-auto"
                       : "line-clamp-5"
                   }`}
                 >

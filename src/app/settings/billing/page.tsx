@@ -47,7 +47,7 @@ export default async function BillingSettingsPage() {
           </Card>
         )}
 
-        <Card className="p-6">
+        <Card className="p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.1em] text-faint">
