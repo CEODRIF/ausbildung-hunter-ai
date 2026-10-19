@@ -212,22 +212,76 @@ export async function bewSaveCompanies(
   };
 }
 
+/** The smart-add result — a JSON-safe union, never a thrown raw error. */
+export type BewAddCompanyCode =
+  | "INVALID_PAYLOAD"
+  | "PARSE_NO_COMPANY"
+  | "PARSE_NO_EMAIL"
+  | "PARSE_INVALID_EMAIL"
+  | "POSITION_TOO_LONG"
+  | "DUPLICATE_COMPANY"
+  | "COUNT_EXCEEDED"
+  | "CAMPAIGN_CLOSED"
+  | "CAMPAIGN_SENDING"
+  | "NOT_FOUND"
+  | "SAVE_FAILED";
+
+export type BewAddCompanyResult =
+  | { ok: true; row: BewApplicationRow }
+  | { ok: false; code: BewAddCompanyCode };
+
+const BEW_STABLE_ADD_CODES = new Set<string>([
+  "INVALID_PAYLOAD",
+  "PARSE_NO_COMPANY",
+  "PARSE_NO_EMAIL",
+  "PARSE_INVALID_EMAIL",
+  "POSITION_TOO_LONG",
+  "DUPLICATE_COMPANY",
+  "COUNT_EXCEEDED",
+  "CAMPAIGN_CLOSED",
+  "CAMPAIGN_SENDING",
+  "NOT_FOUND",
+  "SAVE_FAILED",
+]);
+
 /**
  * Add ONE company to the campaign from a pasted advertisement (the
  * smart-input "Auto-organize"). The pasted text is re-parsed and re-validated
  * SERVER-side — the client's live preview is advisory only, and the returned
- * row is the persisted truth the client appends to its list. Stable error
- * codes: INVALID_PAYLOAD (empty/too long), PARSE_NO_COMPANY, PARSE_NO_EMAIL,
- * PARSE_INVALID_EMAIL, POSITION_TOO_LONG, COUNT_EXCEEDED, DUPLICATE_COMPANY,
- * CAMPAIGN_CLOSED, CAMPAIGN_SENDING, NOT_FOUND, SAVE_FAILED.
+ * row is the persisted truth the client appends to its list.
+ *
+ * Error contract — the two sources of the generic "Something went wrong"
+ * are closed here:
+ *   1. An expired/absent session STILL redirects to /login (the
+ *      NEXT_REDIRECT error deliberately PROPAGATES, so the client
+ *      re-authenticates instead of showing a misleading message);
+ *   2. Every other failure RESOLVES with a stable code (a plain object —
+ *      a thrown error can be re-wrapped by the framework and lose its code
+ *      across the RSC→client boundary). Known engine codes pass through
+ *      untouched; anything unexpected is mapped to SAVE_FAILED, so the UI
+ *      always shows an actionable localized message and the user keeps
+ *      their pasted text. `row` is set exactly when the insert persisted.
  */
 export async function bewAddCompany(
   formData: FormData,
-): Promise<BewApplicationRow> {
-  const { userId } = await requireUser();
+): Promise<BewAddCompanyResult> {
+  const { userId } = await requireUser(); // redirect on purpose when signed out
   const campaignId = readString(formData, "campaignId");
   const text = readString(formData, "text");
-  return await addBewCompany(userId, campaignId, text);
+  try {
+    const row = await addBewCompany(userId, campaignId, text);
+    return { ok: true, row };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "";
+    const code: BewAddCompanyCode = BEW_STABLE_ADD_CODES.has(message)
+      ? (message as BewAddCompanyCode)
+      : "SAVE_FAILED";
+    if (code === "SAVE_FAILED" && message) {
+      // An unexpected (non-engine) failure: keep the internals server-side.
+      console.error("[bew] bewAddCompany: unexpected failure", message);
+    }
+    return { ok: false, code };
+  }
 }
 
 /**

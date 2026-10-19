@@ -222,6 +222,21 @@ export type BewErrorCode =
    | "CAMPAIGN_SENDING"
    | "UNKNOWN";
 
+/**
+ * True for the Next.js navigation error a server action rejects with when it
+ * calls `redirect()` — here: the session expired mid-flow and the action
+ * bounced the caller to /login. Such an error must NOT be swallowed into an
+ * error message (that was the "Something went wrong" bug); the component
+ * navigates instead (re-authentication).
+ */
+export function isNextRedirectError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message === "NEXT_REDIRECT" ||
+    (error as Error & { digest?: unknown }).digest === "NEXT_REDIRECT"
+  );
+}
+
 export function bewErrorCode(error: unknown): BewErrorCode {
   const message = error instanceof Error ? error.message : "";
   if (

@@ -33,6 +33,22 @@
  * component is SSR-rendered (renderToString) exactly as first paint.
  */
 import { describe, expect, it, vi } from "vitest";
+
+// The smart input (rendered inside CompaniesStep) calls useRouter() for the
+// expired-session /login navigation; the bare node SSR below has no
+// app-router context, so the hook is stubbed (same as the action-contract
+// test stubs redirect()).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
+
 import {
   applyDraftPatch,
   filterActiveRows,

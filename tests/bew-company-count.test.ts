@@ -399,6 +399,16 @@ vi.mock("next/navigation", () => ({
   redirect: () => {
     throw new Error("NEXT_REDIRECT");
   },
+  // The smart input (inside the wizard) calls useRouter() for the
+  // expired-session /login navigation; stub it for the bare node SSR.
+  useRouter: () => ({
+    push: () => {},
+    replace: () => {},
+    back: () => {},
+    forward: () => {},
+    refresh: () => {},
+    prefetch: () => {},
+  }),
 }));
 vi.mock("@/lib/auth", () => ({
   getCurrentUserAndProfile: async () => ({

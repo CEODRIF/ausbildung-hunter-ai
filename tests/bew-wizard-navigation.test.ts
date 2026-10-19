@@ -400,6 +400,22 @@ vi.mock("@/app/bewerbung-automation/actions", () => ({
   bewCreateCampaign: vi.fn(async () => ({ campaignId: "c", count: 10 })),
   bewGetView: vi.fn(async () => null),
 }));
+vi.mock("next/navigation", () => ({
+  redirect: () => {
+    throw new Error("NEXT_REDIRECT");
+  },
+  // The smart input (inside the wizard) calls useRouter() for the
+  // expired-session /login navigation; the bare node SSR below has no
+  // app-router context, so the hook is stubbed.
+  useRouter: () => ({
+    push: () => {},
+    replace: () => {},
+    back: () => {},
+    forward: () => {},
+    refresh: () => {},
+    prefetch: () => {},
+  }),
+}));
 vi.mock("next/link", async () => {
   const React = await import("react");
   return { default: (props: any) => React.createElement("a", props, props.children) };

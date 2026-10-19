@@ -22,6 +22,7 @@ import {
 import { adAutoAddGate, parseAdvertisement, type ParsedAdvertisement } from "@/lib/bew-ad-parser";
 import {
   bewErrorCode,
+  isNextRedirectError,
   type BewApplicationDTO,
   type BewErrorCode,
   type BewViewDTO,
@@ -194,6 +195,12 @@ export interface SmartAddDeps {
  *   - the claim guard makes rapid repeated clicks no-ops (busy: true)
  *     instead of double inserts; the server's DUPLICATE_COMPANY check is
  *     the final backstop for races between separate requests.
+ *
+ * RE-THROWS ONE exception: the NEXT_REDIRECT error the action rejects with
+ * when the session expired mid-flow (the server's `requireUser` bounced the
+ * call to /login). That is re-authentication, not a smart-add failure —
+ * swallowing it here as "UNKNOWN" was the reported generic-error bug. The
+ * caller (the component) catches it and navigates.
  */
 export async function runSmartAdd(
   text: string,
@@ -209,6 +216,9 @@ export async function runSmartAdd(
     deps.onRowAdded(toApplicationDTO(row));
     return { ok: true, row };
   } catch (e) {
+    // Session expired mid-flow → the action asked for re-authentication.
+    // Re-throw so the component can navigate (never an error message here).
+    if (isNextRedirectError(e)) throw e;
     // Stable server codes pass through untouched; anything else is the
     // single existing fallback (err.UNKNOWN) — no NEW generic path.
     return { ok: false, code: bewErrorCode(e), busy: false };

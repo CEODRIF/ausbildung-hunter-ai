@@ -344,3 +344,141 @@ describe("parseAdvertisement — robustness", () => {
     expect(p.positionBrief.value).toBe("Ein Satz hier.");
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Regression: the REAL Seco Kältetechnik GmbH advertisement.
+ *
+ * The reported failure: after pasting this ad and clicking "Auto-organize"
+ * the UI showed the generic "Something went wrong" while the live preview
+ * held a prefixed company name ("Unternehmensdarstellung: Seco …") and
+ * "not found" contact/address. This block pins the exact extraction.
+ * Keep the text verbatim (it mirrors the user's paste).
+ * ------------------------------------------------------------------ */
+
+const SECO_CONTACT_BLOCK = [
+  "Kontaktadresse",
+  "Seco Kältetechnik GmbH",
+  "Frau Christina Brandenburg – Personalreferentin",
+  "Herzogstr. 28",
+  "44807 Bochum",
+  "",
+  "Telefon: +49 234 90437014",
+  "E-Mail: christina.brandenburg@secokaelte.de",
+].join("\n");
+
+const SECO_FULL_AD = [
+  "Mechatroniker:in Kältetechnik (m/w/d)",
+  "",
+  "Unternehmensdarstellung: Seco Kältetechnik GmbH",
+  "",
+  "Stellenbeschreibung",
+  "Seco Kältetechnik sucht engagierte Auszubildende für das Handwerk der Kälte- und Klimatechnik.",
+  "Du montierst, wartest und reparierst Kälteanlagen bei Kunden und im Außendienst.",
+  "",
+  "Wir bieten",
+  "Rabatte für Mitarbeitende",
+  "Weiterbildungen",
+  "Betriebliche Altersvorsorge",
+  "Dienstwagen",
+  "Parkmöglichkeiten",
+  "Gute Verkehrsanbindung",
+  "Moderne technische Ausstattung",
+  "Die aufgeführten Vorteile für Mitarbeitende können je nach Abteilung und Position variieren.",
+  "Alle Stellen anzeigen in neuem Tab öffnen",
+  "Webseiten",
+  "Webpage",
+  "Homepage",
+  "Social Media Seiten",
+  "",
+  SECO_CONTACT_BLOCK,
+].join("\n");
+
+describe("parseAdvertisement — Seco Kältetechnik real advertisement (regression)", () => {
+  it("full ad: company WITHOUT the Unternehmensdarstellung prefix, contact + combined address + exact e-mail", () => {
+    const p = parseAdvertisement(SECO_FULL_AD);
+    expect(p.companyName.value).toBe("Seco Kältetechnik GmbH");
+    expect(p.companyName.status).toBe("extracted");
+    expect(p.companyName.value).not.toContain("Unternehmensdarstellung");
+    expect(p.contactName.value).toBe("Frau Christina Brandenburg – Personalreferentin");
+    expect(p.contactName.status).toBe("suggested"); // conservative, never "verified"
+    expect(p.companyAddress.value).toBe("Herzogstr. 28, 44807 Bochum");
+    expect(p.companyAddress.status).toBe("suggested");
+    expect(p.companyEmail.value).toBe("christina.brandenburg@secokaelte.de");
+    expect(p.companyEmail.status).toBe("extracted");
+  });
+
+  it("full ad: the meaningful description (tasks + benefits) is preserved, navigation text is not", () => {
+    const brief = parseAdvertisement(SECO_FULL_AD).positionBrief;
+    expect(brief.status).toBe("extracted");
+    // Preserved content:
+    expect(brief.value).toContain("Stellenbeschreibung");
+    expect(brief.value).toContain(
+      "Seco Kältetechnik sucht engagierte Auszubildende für das Handwerk der Kälte- und Klimatechnik.",
+    );
+    expect(brief.value).toContain("Du montierst, wartest und reparierst Kälteanlagen bei Kunden und im Außendienst.");
+    expect(brief.value).toContain("Wir bieten");
+    expect(brief.value).toContain("Rabatte für Mitarbeitende");
+    expect(brief.value).toContain("Betriebliche Altersvorsorge");
+    expect(brief.value).toContain(
+      "Die aufgeführten Vorteile für Mitarbeitende können je nach Abteilung und Position variieren.",
+    );
+    // Excluded: portal navigation + the contact block (it is metadata, not description):
+    for (const forbidden of [
+      "Alle Stellen anzeigen",
+      "Webseiten",
+      "Webpage",
+      "Homepage",
+      "Social Media",
+      "Kontaktadresse",
+      "Herzogstr",
+      "44807",
+      "christina.brandenburg@secokaelte.de",
+      "Telefon:",
+      "Frau Christina",
+    ]) {
+      expect(brief.value, `brief must not contain: ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it("full ad: the auto-add gate PASSES (company + valid e-mail present)", () => {
+    expect(adAutoAddGate(parseAdvertisement(SECO_FULL_AD))).toEqual({ ok: true });
+  });
+
+  it("contact block ALONE: all four fields extracted, no description invented", () => {
+    const p = parseAdvertisement(SECO_CONTACT_BLOCK);
+    expect(p.companyName.value).toBe("Seco Kältetechnik GmbH");
+    expect(p.companyName.status).toBe("extracted");
+    expect(p.contactName.value).toBe("Frau Christina Brandenburg – Personalreferentin");
+    expect(p.companyAddress.value).toBe("Herzogstr. 28, 44807 Bochum");
+    expect(p.companyEmail.value).toBe("christina.brandenburg@secokaelte.de");
+    expect(p.companyEmail.status).toBe("extracted");
+    expect(p.positionTitle.status).toBe("missing");
+    expect(p.positionBrief.status).toBe("missing"); // nothing invented
+    expect(adAutoAddGate(p)).toEqual({ ok: true });
+  });
+
+  it("strips company-profile label prefixes (Unternehmensdarstellung / -profil / Firmenprofil / -beschreibung)", () => {
+    for (const label of [
+      "Unternehmensdarstellung",
+      "Unternehmensprofil",
+      "Firmenprofil",
+      "Unternehmensbeschreibung",
+    ]) {
+      const p = parseAdvertisement(`${label}: Seco Kältetechnik GmbH\ninfo@seco.de`);
+      expect(p.companyName.value, label).toBe("Seco Kältetechnik GmbH");
+      expect(p.companyName.status, label).toBe("extracted");
+    }
+  });
+
+  it("a VALID e-mail that is only suggested (unverified) is NOT rejected by the gate", () => {
+    const text = [
+      "Seco Kältetechnik GmbH",
+      "Beschreibung: Wir suchen Verstärkung im Außendienst für die Wartung von Kälteanlagen.",
+      "Bewerbung per Mail an christina.brandenburg@secokaelte.de",
+    ].join("\n");
+    const p = parseAdvertisement(text);
+    expect(p.companyEmail.value).toBe("christina.brandenburg@secokaelte.de");
+    expect(p.companyEmail.status).toBe("suggested"); // found, not externally verified
+    expect(adAutoAddGate(p)).toEqual({ ok: true }); // must NOT be auto-rejected
+  });
+});

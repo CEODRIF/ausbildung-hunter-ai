@@ -451,3 +451,82 @@ describe("addBewCompany — position-brief probe", () => {
     expect(row.company_name).toBe("Beta GmbH");
   });
 });
+
+/* ------------------- Regression: the real Seco Kältetechnik ad ------------------- */
+
+// Keep in sync with SECO_FULL_AD in tests/bew-ad-parser.test.ts — the exact
+// advertisement that triggered the reported bug (prefix on the company,
+// contact/address "not found", navigation text inside the description).
+const SECO_AD = [
+  "Mechatroniker:in Kältetechnik (m/w/d)",
+  "",
+  "Unternehmensdarstellung: Seco Kältetechnik GmbH",
+  "",
+  "Stellenbeschreibung",
+  "Seco Kältetechnik sucht engagierte Auszubildende für das Handwerk der Kälte- und Klimatechnik.",
+  "Du montierst, wartest und reparierst Kälteanlagen bei Kunden und im Außendienst.",
+  "",
+  "Wir bieten",
+  "Rabatte für Mitarbeitende",
+  "Weiterbildungen",
+  "Betriebliche Altersvorsorge",
+  "Dienstwagen",
+  "Parkmöglichkeiten",
+  "Gute Verkehrsanbindung",
+  "Moderne technische Ausstattung",
+  "Die aufgeführten Vorteile für Mitarbeitende können je nach Abteilung und Position variieren.",
+  "Alle Stellen anzeigen in neuem Tab öffnen",
+  "Webseiten",
+  "Webpage",
+  "Homepage",
+  "Social Media Seiten",
+  "",
+  "Kontaktadresse",
+  "Seco Kältetechnik GmbH",
+  "Frau Christina Brandenburg – Personalreferentin",
+  "Herzogstr. 28",
+  "44807 Bochum",
+  "",
+  "Telefon: +49 234 90437014",
+  "E-Mail: christina.brandenburg@secokaelte.de",
+].join("\n");
+
+describe("addBewCompany — Seco Kältetechnik real ad (regression, MOCKED DB)", () => {
+  it("persists exactly ONE new row with the clean fields (no prefix, contact, combined address, exact e-mail)", async () => {
+    seedCampaign();
+
+    const row = await addBewCompany(USER, CAMPAIGN, SECO_AD);
+
+    // Exactly one row created, nothing deleted.
+    expect(db.bew_applications).toHaveLength(1);
+    expect(db.appDeletes).toBe(0);
+    // The persisted values (the server re-parse is the source of truth):
+    expect(row.company_name).toBe("Seco Kältetechnik GmbH"); // NO "Unternehmensdarstellung:" prefix
+    expect(row.company_email).toBe("christina.brandenburg@secokaelte.de");
+    expect(row.contact_name).toBe("Frau Christina Brandenburg – Personalreferentin");
+    expect(row.company_address).toBe("Herzogstr. 28, 44807 Bochum");
+    expect(row.status).toBe("pending");
+    expect(row.employer_facts).toBeNull(); // never auto-filled
+    // The meaningful description (tasks + benefits) is preserved…
+    expect(row.position_brief).toContain("Rabatte für Mitarbeitende");
+    expect(row.position_brief).toContain("Betriebliche Altersvorsorge");
+    // …portal navigation and the contact block are NOT description text.
+    expect(row.position_brief).not.toContain("Alle Stellen anzeigen");
+    expect(row.position_brief).not.toContain("Kontaktadresse");
+    expect(row.position_brief).not.toContain("christina.brandenburg@secokaelte.de");
+  });
+
+  it("a valid e-mail that is only SUGGESTED (unverified) is persisted — not auto-rejected", async () => {
+    seedCampaign();
+    const text = [
+      "Seco Kältetechnik GmbH",
+      "Beschreibung: Wir suchen Verstärkung im Außendienst für die Wartung von Kälteanlagen.",
+      "Bewerbung per Mail an christina.brandenburg@secokaelte.de",
+    ].join("\n");
+
+    const row = await addBewCompany(USER, CAMPAIGN, text);
+
+    expect(row.company_email).toBe("christina.brandenburg@secokaelte.de");
+    expect(db.bew_applications).toHaveLength(1);
+  });
+});
