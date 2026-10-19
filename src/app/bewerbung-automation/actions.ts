@@ -212,7 +212,11 @@ export async function bewSaveCompanies(
   };
 }
 
-/** The smart-add result — a JSON-safe union, never a thrown raw error. */
+/** The smart-add result — a JSON-safe union, never a thrown raw error.
+ *  NOTE: the campaign STATE is not among these — company entry is decoupled
+ *  from the series lifecycle (a terminal series is reopened by receiving a
+ *  row); CAMPAIGN_CLOSED / CAMPAIGN_SENDING still apply to the OTHER
+ *  series-scoped operations. */
 export type BewAddCompanyCode =
   | "INVALID_PAYLOAD"
   | "PARSE_NO_COMPANY"
@@ -221,8 +225,6 @@ export type BewAddCompanyCode =
   | "POSITION_TOO_LONG"
   | "DUPLICATE_COMPANY"
   | "COUNT_EXCEEDED"
-  | "CAMPAIGN_CLOSED"
-  | "CAMPAIGN_SENDING"
   | "NOT_FOUND"
   | "SAVE_FAILED";
 
@@ -238,8 +240,6 @@ const BEW_STABLE_ADD_CODES = new Set<string>([
   "POSITION_TOO_LONG",
   "DUPLICATE_COMPANY",
   "COUNT_EXCEEDED",
-  "CAMPAIGN_CLOSED",
-  "CAMPAIGN_SENDING",
   "NOT_FOUND",
   "SAVE_FAILED",
 ]);

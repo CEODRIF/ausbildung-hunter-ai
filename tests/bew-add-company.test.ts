@@ -368,24 +368,29 @@ describe("addBewCompany — duplicates, caps, gates", () => {
     expect(db.bew_applications).toHaveLength(100);
   });
 
-  it("rejects terminal campaigns (CAMPAIGN_CLOSED)", async () => {
+  it("ACCEPTS terminal campaigns (series state is decoupled from company entry)", async () => {
+    // The old contract rejected these (CAMPAIGN_CLOSED); now a new company
+    // can be appended to any owned series — a terminal one is reopened and
+    // the counter re-derives the active state from the rows.
     for (const status of ["completed", "partially_failed", "cancelled"]) {
       db = freshDb();
       resetBewPositionColumnsProbe();
       seedCampaign(status);
-      await expectCode(
-        () => addBewCompany(USER, CAMPAIGN, KAELTE_AD),
-        "CAMPAIGN_CLOSED",
-      );
+      const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
+      expect(row.seq, status).toBe(1);
+      expect(row.status, status).toBe("pending");
+      expect(db.bew_campaigns[0].status, status).toBe("generating"); // reopened
+      expect(db.bew_campaigns[0].total_count, status).toBe(1);
     }
   });
 
-  it("rejects while a send is in flight (CAMPAIGN_SENDING)", async () => {
+  it("ACCEPTS a campaign while a send is in flight (row stays pending, send untouched)", async () => {
     seedCampaign("sending");
-    await expectCode(
-      () => addBewCompany(USER, CAMPAIGN, KAELTE_AD),
-      "CAMPAIGN_SENDING",
-    );
+    seedApp(1, { company_name: "Alpha GmbH", company_email: "jobs@alpha.de", status: "queued" });
+    const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
+    expect(row.seq).toBe(2);
+    expect(row.status).toBe("pending"); // not claimed by the in-flight batch
+    expect(db.bew_campaigns[0].status).toBe("sending"); // in-flight state preserved
   });
 
   it("rejects a foreign / unknown campaign (NOT_FOUND)", async () => {
@@ -528,5 +533,93 @@ describe("addBewCompany — Seco Kältetechnik real ad (regression, MOCKED DB)",
 
     expect(row.company_email).toBe("christina.brandenburg@secokaelte.de");
     expect(db.bew_applications).toHaveLength(1);
+  });
+});
+
+/* ------------------- Regression: company entry is decoupled from the series state ------------------- */
+
+describe("addBewCompany — series state is NOT a prerequisite (regression, MOCKED DB)", () => {
+  it("COMPLETED series: a new company is appended at the BOTTOM, history untouched, series reopened", async () => {
+    seedCampaign("completed");
+    db.bew_campaigns[0].completed_at = NOW(); // a terminal series carries its stamp
+    seedApp(1, {
+      company_name: "Alpha GmbH",
+      company_email: "jobs@alpha.de",
+      status: "sent",
+      sent_at: NOW(),
+      body_html: "<p>Letter A</p>",
+    });
+    seedApp(2, { company_name: "Beta GmbH", company_email: "jobs@beta.de", status: "sent", sent_at: NOW() });
+    const historyBefore = JSON.stringify(db.bew_applications.slice());
+
+    const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
+
+    // The new row lands at the bottom (max seq + 1) as a plain pending row…
+    expect(row.seq).toBe(3);
+    expect(row.status).toBe("pending");
+    expect(db.bew_applications).toHaveLength(3);
+    // …every historical row stays byte-identical (no delete, no rewrite)…
+    const historyAfter = db.bew_applications.filter((r) => r.id !== row.id);
+    expect(JSON.stringify(historyAfter)).toBe(historyBefore);
+    expect(db.appDeletes).toBe(0);
+    // …and the terminal state is REOPENED: the counter re-derives the
+    // exact state from the rows (a fresh pending row → "generating") and
+    // the stale completion stamp is cleared.
+    const campaign = db.bew_campaigns[0];
+    expect(campaign.status).toBe("generating");
+    expect(campaign.completed_at).toBeNull();
+    expect(campaign.total_count).toBe(3);
+    expect(campaign.sent_count).toBe(2); // history intact in the counters too
+  });
+
+  it("SENDING series: a new company is appended, the in-flight send keeps its state", async () => {
+    seedCampaign("sending");
+    seedApp(1, { company_name: "Alpha GmbH", company_email: "jobs@alpha.de", status: "queued" });
+    seedApp(2, { company_name: "Beta GmbH", company_email: "jobs@beta.de", status: "sent", sent_at: NOW() });
+
+    const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
+
+    // Appended at the bottom, NOT pulled into the in-flight batch…
+    expect(row.seq).toBe(3);
+    expect(row.status).toBe("pending");
+    // …and the counter keeps "sending" while a row is in flight.
+    const campaign = db.bew_campaigns[0];
+    expect(campaign.status).toBe("sending");
+    expect(campaign.total_count).toBe(3);
+    expect(db.appDeletes).toBe(0);
+  });
+
+  it("PARTIALLY_FAILED series: reopened by new work (same contract as completed)", async () => {
+    seedCampaign("partially_failed");
+    db.bew_campaigns[0].completed_at = NOW();
+    seedApp(1, { company_name: "Alpha GmbH", company_email: "jobs@alpha.de", status: "sent", sent_at: NOW() });
+    seedApp(2, { company_name: "Beta GmbH", company_email: "jobs@beta.de", status: "failed" });
+
+    await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
+
+    const campaign = db.bew_campaigns[0];
+    expect(campaign.status).toBe("generating"); // the pending row re-activates it
+    expect(campaign.completed_at).toBeNull();
+    expect(db.bew_applications).toHaveLength(3);
+  });
+
+  it("authentication and ownership stay enforced (a foreign COMPLETED series is still NOT_FOUND)", async () => {
+    seedCampaign("completed");
+    await expectCode(() => addBewCompany(OTHER, CAMPAIGN, KAELTE_AD), "NOT_FOUND");
+    expect(db.bew_applications).toHaveLength(0); // nothing was written
+    // A nonexistent campaign id is still NOT_FOUND as well.
+    await expectCode(() => addBewCompany(USER, "nope", KAELTE_AD), "NOT_FOUND");
+  });
+
+  it("duplicate protection and the 100-row cap still hold on a COMPLETED series", async () => {
+    seedCampaign("completed");
+    seedApp(1, { company_name: "Amberger Kühltechnik GmbH", company_email: "bernklaustefanie@amberger-kuehltechnik.de", status: "sent", sent_at: NOW() });
+    await expectCode(() => addBewCompany(USER, CAMPAIGN, KAELTE_AD), "DUPLICATE_COMPANY");
+
+    for (let i = 2; i <= 100; i++) {
+      seedApp(i, { company_name: `GmbH ${i}`, company_email: `jobs${i}@x.de`, status: "sent", sent_at: NOW() });
+    }
+    await expectCode(() => addBewCompany(USER, CAMPAIGN, "Gamma GmbH\ninfo@gamma.de\nBeschreibung: Test."), "COUNT_EXCEEDED");
+    expect(db.bew_applications).toHaveLength(100); // nothing appended past the cap
   });
 });
