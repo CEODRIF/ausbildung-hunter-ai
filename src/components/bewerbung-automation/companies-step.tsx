@@ -13,16 +13,21 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  bewAddCompanyRows,
   bewExcludeApplication,
   bewSaveCompanies,
+  bewSetCompanyCount,
   bewUpdateCompany,
 } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
 import {
   BEW_POSITION_BRIEF_MAX,
+  isBewCampaignTerminal,
   isValidEmail,
   recordsFromCsvMatrix,
 } from "@/lib/bewerbung-automation";
+import { AddRowsControl } from "./add-rows";
+import { CompanyCountStepper } from "./company-count";
 import { Button, Card, Modal, Textarea } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { StatusPill } from "@/components/ui/feedback";
@@ -65,7 +70,12 @@ import {
   isPendingCampaignId,
   remapPendingDrafts,
 } from "./pending-series";
-import type { BewApplicationDTO, BewViewDTO, CompanyRecord } from "./types";
+import type {
+  BewApplicationDTO,
+  BewCampaignDTO,
+  BewViewDTO,
+  CompanyRecord,
+} from "./types";
 
 /** How long the per-row "Saved" chip stays visible after confirmation. */
 const SAVED_FLASH_MS = 2500;
@@ -160,6 +170,9 @@ interface Props {
   /** Append ONE persisted row (the smart-input "Auto-organize" path).
    *  Stable reference; the row comes back from the server action. */
   appendApplication: (row: BewApplicationDTO) => void;
+  /** Apply fields to the CAMPAIGN in the parent's view (the company-TARGET
+   *  optimistic patch/rollback). Guarded by campaign id. Stable reference. */
+  patchCampaign: (campaignId: string, fields: Partial<BewCampaignDTO>) => void;
 }
 
 type ImportPhase = "idle" | "preview";
@@ -200,6 +213,7 @@ export const CompaniesStep = memo(function CompaniesStep({
   seriesConfirmation,
   patchApplication,
   appendApplication,
+  patchCampaign,
 }: Props) {
   const { t } = useI18n();
   /* Stable-id row view: the manual table is driven by these (draft-aware),
@@ -266,6 +280,9 @@ export const CompaniesStep = memo(function CompaniesStep({
   const purposeRef = useRef(view.campaign.purpose);
   const campaignStatusRef = useRef(view.campaign.status);
   const creatingRef = useRef(creatingSeries);
+  /* Campaign identity + persisted target for the STABLE count callback. */
+  const campaignIdRef = useRef(view.campaign.id);
+  const requestedCountRef = useRef(view.campaign.requested_count);
   useEffect(() => {
     rowsByIdRef.current = rowsById;
   }, [rowsById]);
@@ -275,6 +292,10 @@ export const CompaniesStep = memo(function CompaniesStep({
     campaignStatusRef.current = view.campaign.status;
     creatingRef.current = creatingSeries;
   }, [view.applications, view.campaign.purpose, view.campaign.status, creatingSeries]);
+  useEffect(() => {
+    campaignIdRef.current = view.campaign.id;
+    requestedCountRef.current = view.campaign.requested_count;
+  }, [view.campaign.id, view.campaign.requested_count]);
 
   /* Clear any pending "Saved" chip timers on unmount. */
   useEffect(() => {
@@ -512,6 +533,95 @@ export const CompaniesStep = memo(function CompaniesStep({
     [refresh, t],
   );
 
+  /* Company TARGET (requested_count) — one small optimistic round trip:
+      click/entry → the view's target patches NOW → the ownership-checked
+      server action confirms (the returned value is authoritative) or the
+      previous target is restored and the localized error is shown. Only
+      the target column moves — no application row is ever created.
+
+      Direct entry commits per valid keystroke ("5", then "50"), so a newer
+      value can arrive WHILE a write is in flight: it is coalesced (kept in
+      pendingCountRef) and written once the in-flight one settles — the
+      LATEST user intent always wins, no request is lost, no request is
+      doubled for the same value. */
+  const [countBusy, setCountBusy] = useState(false);
+  const inFlightCount = useRef(false);
+  const pendingCountRef = useRef<number | null>(null);
+  const onCommitCount = useCallback(
+    async (count: number): Promise<number | null> => {
+      if (creatingRef.current) return null; // placeholder campaign — nothing to persist
+      const status = campaignStatusRef.current;
+      if (status === "sending" || isBewCampaignTerminal(status)) return null;
+      if (inFlightCount.current) {
+        pendingCountRef.current = count; // coalesce behind the in-flight write
+        return null;
+      }
+      inFlightCount.current = true;
+      setCountBusy(true);
+      const write = async (value: number): Promise<number | null> => {
+        const campaignId = campaignIdRef.current;
+        const prev = requestedCountRef.current;
+        patchCampaign(campaignId, { requested_count: value }); // optimistic
+        requestedCountRef.current = value; // keep the rollback target current
+        try {
+          const fd = new FormData();
+          fd.set("campaignId", campaignId);
+          fd.set("count", String(value));
+          const res = await bewSetCompanyCount(fd);
+          patchCampaign(campaignId, { requested_count: res.requestedCount });
+          requestedCountRef.current = res.requestedCount;
+          return res.requestedCount;
+        } catch (e) {
+          patchCampaign(campaignId, { requested_count: prev }); // rollback
+          requestedCountRef.current = prev;
+          setError(errMessage(e, t));
+          return null;
+        }
+      };
+      try {
+        let result = await write(count);
+        while (pendingCountRef.current !== null) {
+          const next = pendingCountRef.current;
+          pendingCountRef.current = null;
+          if (next === result) continue; // already the persisted value
+          result = await write(next);
+        }
+        return result;
+      } finally {
+        inFlightCount.current = false;
+        setCountBusy(false);
+      }
+    },
+    [patchCampaign, t],
+  );
+
+  /* ADD REAL ROWS — grow the campaign beyond its seeded rows (up to the
+      100 platform cap). The server does one atomic insert of empty pending
+      rows and recomputes the counters; then the plain refresh brings the
+      new rows (and totals) into the view — they are DB rows from here on,
+      so they survive reload, step navigation, imports and the send flow. */
+  const [addRowsBusy, setAddRowsBusy] = useState(false);
+  const onAddRows = useCallback(
+    async (count: number) => {
+      if (creatingRef.current) return;
+      const status = campaignStatusRef.current;
+      if (status === "sending" || isBewCampaignTerminal(status)) return;
+      setAddRowsBusy(true);
+      try {
+        const fd = new FormData();
+        fd.set("campaignId", campaignIdRef.current);
+        fd.set("count", String(count));
+        await bewAddCompanyRows(fd);
+        await refresh();
+      } catch (e) {
+        setError(errMessage(e, t));
+      } finally {
+        setAddRowsBusy(false);
+      }
+    },
+    [refresh, t],
+  );
+
   async function handleFile(file: File) {
     setBusy(true);
     setError(null);
@@ -640,6 +750,35 @@ export const CompaniesStep = memo(function CompaniesStep({
             disabled={creatingSeries || lockApp || busy}
             onRowAdded={appendApplication}
             onRefresh={refresh}
+            t={t}
+          />
+        </div>
+
+        {/* Company TARGET (user-controlled goal) + ADD ROWS (grow the real
+            row list to 100). The persisted target (requested_count), the
+            actual entries and the row capacity stay visible side by side. */}
+        <div className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-2xl border border-line bg-surface-2/40 px-4 py-3">
+          <CompanyCountStepper
+            target={view.campaign.requested_count}
+            actual={visibleRows.length}
+            disabled={
+              creatingSeries ||
+              lockApp ||
+              isBewCampaignTerminal(view.campaign.status)
+            }
+            busy={countBusy}
+            onCommit={onCommitCount}
+            t={t}
+          />
+          <AddRowsControl
+            total={view.applications.length}
+            disabled={
+              creatingSeries ||
+              lockApp ||
+              isBewCampaignTerminal(view.campaign.status)
+            }
+            busy={addRowsBusy}
+            onAdd={onAddRows}
             t={t}
           />
         </div>
