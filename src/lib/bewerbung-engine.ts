@@ -213,7 +213,22 @@ const BEW_TERMINAL_CAMPAIGN = new Set<string>(BEW_TERMINAL_CAMPAIGN_STATUSES);
 /** App states from which a letter can be generated / regenerated. */
 const BEW_GENERATABLE = ["pending", "failed"];
 /** App states that are part of the send queue (must not be edited). */
-const BEW_IN_FLIGHT = new Set(["queued", "sending", "sent"]);
+/**
+ * The row states that are TRULY in flight — a send is using the row right
+ * now: `queued` (enqueued for the current batch) and `sending` (the
+ * provider call is running). These — and ONLY these — lock row-level
+ * mutations (edit / letter edit / exclude): changing a row mid-send could
+ * diverge the outgoing letter from the stored one.
+ *
+ * Terminal states are deliberately NOT in this set: `sent` (the e-mail
+ * already went out — the campaign record can safely be edited or excluded
+ * afterwards), and `failed` / `needs_attention` / `cancelled` / `excluded`
+ * (retryable / restorable). The previous set included `sent`, which locked
+ * every successfully-sent row from deletion and editing forever while the
+ * table pill displayed it as "Ready" — the reported "stuck in processing"
+ * row that could never be deleted.
+ */
+const BEW_IN_FLIGHT = new Set(["queued", "sending"]);
 
 /* ------------------------------------------------------------------ *
  * Schema probe (manual-migration safety contract)
@@ -990,12 +1005,18 @@ export async function updateBewApplicationFields(
   // (cold, process-first) round trip overlaps the ownership select instead of
   // queueing after it.
   const positionProbe = hasBewPositionColumns();
-  const { data: existing } = await admin
+  const { data: existing, error: selectError } = await admin
     .from("bew_applications")
     .select("*")
     .eq("id", applicationId)
     .eq("user_id", userId)
     .maybeSingle();
+  if (selectError) {
+    // A real read failure is NOT "row not found" — surface it (the client
+    // rolls the edit back and shows the localized SAVE_FAILED message).
+    console.error("[bew] updateBewApplicationFields: lookup failed", selectError.message);
+    throw new Error("SAVE_FAILED");
+  }
   const app = existing as BewApplicationRow | null;
   if (!app) return null;
   if (BEW_IN_FLIGHT.has(app.status)) throw new Error("APPLICATION_LOCKED");
@@ -1021,7 +1042,7 @@ export async function updateBewApplicationFields(
   ).rows[0];
 
   const positionSupportedUpdate = await positionProbe;
-  const { data: updated } = await admin
+  const { data: updated, error: updateError } = await admin
     .from("bew_applications")
     .update({
       company_name: validated.companyName,
@@ -1050,6 +1071,10 @@ export async function updateBewApplicationFields(
     .eq("user_id", userId)
     .select("*")
     .maybeSingle();
+  if (updateError) {
+    console.error("[bew] updateBewApplicationFields: update failed", updateError.message);
+    throw new Error("SAVE_FAILED");
+  }
   // The row's validity changed → the campaign counters must follow
   // (otherwise valid_count drifts from the rows, e.g. a fixed row is not
   // counted, a broken one still is).
@@ -1451,6 +1476,55 @@ export async function reclaimStaleGenerating(
   return reclaimed;
 }
 
+/** How long a 'sending' row may sit on its claim lease before it is stale. */
+const BEW_SEND_STALE_MS = 15 * 60 * 1000;
+
+/**
+ * Reclaim application rows stuck in 'sending' (the process died between the
+ * atomic claim and the final status write — a serverless timeout, a deploy
+ * or a crash mid-batch). `bew_cancel_queued` deliberately leaves `sending`
+ * rows "to the worker to finalize"; when there is no worker, only THIS
+ * re-claim settles them. Safe + idempotent, mirroring
+ * `reclaimStaleGenerating`:
+ *  - only rows STILL 'sending' whose claim lease (`updated_at`, stamped by
+ *    `claim_next_bew_application`) is older than the window AND with no
+ *    `sent_at` are touched;
+ *  - they settle to `needs_attention` (the established "ambiguous — NO
+ *    auto-retry" state: the provider call may or may not have reached the
+ *    recipient, so re-queuing would risk a double-send) — the row becomes
+ *    visible as an error again, editable and excludable, and the campaign
+ *    counters settle (the campaign can leave "sending");
+ *  - sent / failed / needs_attention / excluded rows are NEVER touched.
+ * Returns the number of reclaimed rows.
+ */
+export async function reclaimStaleSending(
+  admin: Admin,
+  userId: string,
+  campaignId: string,
+  staleMs: number = BEW_SEND_STALE_MS,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - staleMs).toISOString();
+  const { data, error } = await admin
+    .from("bew_applications")
+    .update({
+      status: "needs_attention",
+      error_code: "send_stale",
+      error_message: null,
+    })
+    .eq("campaign_id", campaignId)
+    .eq("user_id", userId)
+    .eq("status", "sending")
+    .is("sent_at", null)
+    .lt("updated_at", cutoff)
+    .select("id");
+  if (error) throw error;
+  const reclaimed = (data ?? []).length;
+  if (reclaimed > 0) {
+    await refreshCampaignCounters(admin, campaignId);
+  }
+  return reclaimed;
+}
+
 /* ---------------- Optional model-based quality eval ---------------- */
 
 /**
@@ -1769,12 +1843,16 @@ export async function updateBewLetter(
   payload: { subject?: string; bodyHtml: string },
 ): Promise<BewApplicationRow | null> {
   const admin = createAdminClient();
-  const { data: existing } = await admin
+  const { data: existing, error: selectError } = await admin
     .from("bew_applications")
     .select("*")
     .eq("id", applicationId)
     .eq("user_id", userId)
     .maybeSingle();
+  if (selectError) {
+    console.error("[bew] updateBewLetter: lookup failed", selectError.message);
+    throw new Error("SAVE_FAILED");
+  }
   const app = existing as BewApplicationRow | null;
   if (!app) return null;
   if (BEW_IN_FLIGHT.has(app.status) || app.status === "pending")
@@ -1782,7 +1860,7 @@ export async function updateBewLetter(
 
   const bodyHtml = sanitizeEmailHtml(payload.bodyHtml ?? "");
   const bodyText = htmlToText(bodyHtml);
-  const { data } = await admin
+  const { data, error: updateError } = await admin
     .from("bew_applications")
     .update({
       body_html: bodyHtml,
@@ -1796,6 +1874,10 @@ export async function updateBewLetter(
      .eq("user_id", userId)
      .select("*")
      .maybeSingle();
+  if (updateError) {
+    console.error("[bew] updateBewLetter: update failed", updateError.message);
+    throw new Error("SAVE_FAILED");
+  }
   const updated = (data as BewApplicationRow | null) ?? null;
   // The letter changed → regenerate THIS application's PDF (force). The
   // letter save stands regardless; the send path re-ensures as a last resort.
@@ -1834,7 +1916,10 @@ export async function updateBewLetter(
  * Returns the excluded row on success, null when nothing was found.
  *
  * Stable codes:
- *   - "APPLICATION_LOCKED" — the row is in flight (queued/sending/sent);
+ *   - "APPLICATION_LOCKED" — the row is truly in flight (queued/sending —
+ *     the send is using it right now). Terminal states (sent, failed,
+ *     needs_attention, …) are NOT locked: a sent e-mail cannot be
+ *     re-sent, so the row can safely be excluded afterwards;
  *   - "DELETE_FAILED"      — a real persistence failure (lookup or update
  *     error). A read failure is deliberately NOT collapsed into "not found":
  *     the row exists, the user must be able to retry.
@@ -1885,19 +1970,23 @@ export async function restoreBewApplication(
   applicationId: string,
 ): Promise<BewApplicationRow | null> {
   const admin = createAdminClient();
-  const { data: existing } = await admin
+  const { data: existing, error: selectError } = await admin
     .from("bew_applications")
     .select("*")
     .eq("id", applicationId)
     .eq("user_id", userId)
     .maybeSingle();
+  if (selectError) {
+    console.error("[bew] restoreBewApplication: lookup failed", selectError.message);
+    throw new Error("SAVE_FAILED");
+  }
   const app = existing as BewApplicationRow | null;
   if (!app) return null;
   if (app.status !== "excluded") throw new Error("APPLICATION_LOCKED");
   const complete =
     Boolean(app.body_html && app.body_html.trim()) &&
     isValidEmail(app.company_email);
-  const { data } = await admin
+  const { data, error: updateError } = await admin
     .from("bew_applications")
     .update({
       status: complete ? "generated" : "pending",
@@ -1909,8 +1998,12 @@ export async function restoreBewApplication(
       .eq("status", "excluded")
       .select("*")
       .maybeSingle();
-    await refreshCampaignCounters(admin, app.campaign_id);
-    return (data as BewApplicationRow | null) ?? null;
+  if (updateError) {
+    console.error("[bew] restoreBewApplication: update failed", updateError.message);
+    throw new Error("SAVE_FAILED");
+  }
+  await refreshCampaignCounters(admin, app.campaign_id);
+  return (data as BewApplicationRow | null) ?? null;
   }
 
 /**
@@ -2348,6 +2441,18 @@ export async function processBewSendBatch(
   // or sending: rows stay queued, no quota moves, nothing is mutated.
   if (!isApplicantComplete(applicant))
     return { processed: 0, sent: 0, failed: 0, uncertain: 0, slotBusy: false, stop: "profile-incomplete" };
+
+  // Best-effort, before claiming: settle rows a crashed drain left stuck in
+  // 'sending' (claim lease expired). Mirrors the generation re-claim — a
+  // failure here must never block the drain of the real queue.
+  try {
+    await reclaimStaleSending(admin, userId, campaignId);
+  } catch (err) {
+    console.error(
+      "[bew] reclaimStaleSending failed (best effort, drain continues)",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
   try {
     for (let i = 0; i < max; i += 1) {

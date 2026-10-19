@@ -13,6 +13,7 @@
  * and the save path re-escapes every part on the server.
  */
 import { memo, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   bewExcludeApplication,
   bewRestoreApplication,
@@ -39,6 +40,7 @@ import { EmailMessageCard } from "./email-message";
 import {
   appSendFlags,
   hasRequiredDocuments,
+  resolveBewError,
   type BewApplicationDTO,
   type BewViewDTO,
 } from "./types";
@@ -80,6 +82,7 @@ export const ReviewStep = memo(function ReviewStep({
   applicantEmail,
 }: Props) {
   const { t } = useI18n();
+  const router = useRouter();
   const [modal, setModal] = useState<ModalState>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +108,9 @@ export const ReviewStep = memo(function ReviewStep({
       await fn();
       await refresh();
     } catch (e) {
-      setError(errMessage(e, t));
+      // `null` = session expired → navigating to /login (no error shown).
+      const msg = resolveBewError(e, t, (p) => router.replace(p));
+      if (msg !== null) setError(msg);
     } finally {
       setBusy(false);
     }
@@ -115,7 +120,12 @@ export const ReviewStep = memo(function ReviewStep({
     void run(async () => {
       const fd = new FormData();
       fd.set("applicationId", app.id);
-      await bewExcludeApplication(fd);
+      // The action RESOLVES with a stable code on failure (a thrown error
+      // can be re-wrapped in transit). Treating `ok: false` as success was
+      // a fake-success hole: the row got deselected although the server
+      // kept it. Throw so run() shows the localized message.
+      const res = await bewExcludeApplication(fd);
+      if (!res.ok) throw new Error(res.code);
       onToggle(app.id, false);
     });
   }
@@ -350,6 +360,33 @@ export function LetterModal({
         .filter(Boolean),
     [body],
   );
+  const router = useRouter();
+  /** Own save guard: the parent's `busy` does not cover this async path, so
+   *  without it a double-click fired two concurrent letter saves. */
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  async function save() {
+    if (busy || saving || bodyParagraphs.length === 0) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(
+        subject.trim(),
+        letterParagraphsToHtml(letter.greeting, bodyParagraphs, letter.closing, letter.signature),
+      );
+      // Success: the parent closes the modal (and refreshes).
+    } catch (e) {
+      // Failure: the modal stays OPEN with the edits intact and shows the
+      // localized reason (the old `void onSave(...)` swallowed the rejection
+      // — the user never learned that the letter was NOT saved). An expired
+      // session navigates to /login instead of showing an error.
+      const msg = resolveBewError(e, t, (p) => router.replace(p));
+      if (msg !== null) setSaveError(msg);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div
@@ -455,24 +492,26 @@ export function LetterModal({
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-line px-5 py-4">
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            {t("bewauto.close")}
-          </Button>
-          {mode === "edit" && (
-            <Button
-              size="sm"
-              disabled={busy || bodyParagraphs.length === 0}
-              onClick={() =>
-                void onSave(
-                  subject.trim(),
-                  letterParagraphsToHtml(letter.greeting, bodyParagraphs, letter.closing, letter.signature),
-                )
-              }
-            >
-              {t("bewauto.saveLetter")}
-            </Button>
+        <div className="flex items-center gap-3 border-t border-line px-5 py-4">
+          {saveError && (
+            <p role="alert" className="min-w-0 flex-1 text-sm text-danger">
+              {saveError}
+            </p>
           )}
+          <div className="ml-auto flex items-center gap-3">
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              {t("bewauto.close")}
+            </Button>
+            {mode === "edit" && (
+              <Button
+                size="sm"
+                disabled={busy || saving || bodyParagraphs.length === 0}
+                onClick={() => void save()}
+              >
+                {saving ? t("bewauto.saving") : t("bewauto.saveLetter")}
+              </Button>
+            )}
+          </div>
         </div>
         {/* iPhone safe area: on phones the sheet is bottom-anchored
             (items-end, no backdrop padding), so reserve the home-indicator
@@ -649,9 +688,6 @@ function Th({ children }: { children?: React.ReactNode }) {
   return <th className="px-3 py-2.5 text-start font-semibold">{children}</th>;
 }
 
-function errMessage(e: unknown, t: (k: string, v?: Record<string, string | number>) => string): string {
-  const code = e instanceof Error ? e.message : "";
-  const key = `bewauto.err.${code}`;
-  const translated = t(key);
-  return translated === key ? t("bewauto.err.UNKNOWN") : translated;
-}
+/* Error mapping lives in `resolveBewError` (./types) — the per-step copies
+   were removed so re-authentication and digest re-wrapping are handled in
+   exactly one place. */

@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   bewCancelSend,
   bewGetView,
@@ -27,8 +28,9 @@ import { StatusPill } from "@/components/ui/feedback";
 import { Icon } from "@/components/icon";
 import {
   appSendFlags,
-  bewErrorCode,
   hasRequiredDocuments,
+  isNextRedirectError,
+  resolveBewError,
   type BewApplicationDTO,
   type BewViewDTO,
   type Step,
@@ -109,6 +111,7 @@ function lettersReady(view: BewViewDTO | null): boolean {
 
 export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail }: Props) {
   const { t } = useI18n();
+  const router = useRouter();
   const [view, setView] = useState<BewViewDTO | null>(initialView);
   const [step, setStep] = useState<Step>(1);
   const [error, setError] = useState<string | null>(null);
@@ -220,20 +223,15 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
         .then((fresh) => {
           if (fresh) setView(fresh);
         })
-        .catch(() => undefined);
+        .catch((e) => {
+          // A silent poll must not mask an expired session: when the action
+          // asked for re-authentication, navigate (the page state is stale
+          // anyway) instead of swallowing the error forever.
+          if (isNextRedirectError(e)) router.replace("/login");
+        });
     }, 3000);
     return () => clearInterval(id);
-  }, [campaignId, sending]);
-
-  const errText = useCallback(
-    (e: unknown) => {
-      const code = bewErrorCode(e);
-      const key = `bewauto.err.${code}`;
-      const translated = t(key);
-      return translated === key ? t("bewauto.err.UNKNOWN") : translated;
-    },
-    [t],
-  );
+  }, [campaignId, sending, router]);
 
   const run = useCallback(
     async <T,>(fn: () => Promise<T>): Promise<T | null> => {
@@ -241,11 +239,15 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
       try {
         return await fn();
       } catch (e) {
-        setError(errText(e));
+        // `null` = the session expired mid-flow: the user is navigated to
+        // /login and NOTHING is shown (re-authentication is not an operation
+        // failure — the generic message was part of the recurring bug).
+        const message = resolveBewError(e, t, (p) => router.replace(p));
+        if (message !== null) setError(message);
         return null;
       }
     },
-    [errText],
+    [t, router],
   );
 
   const cancelCurrentSend = useCallback(
@@ -392,7 +394,14 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
           </ol>
         </nav>
 
-        {error && <ErrorLine message={error} className="mb-4" />}
+        {error && (
+          <ErrorLine
+            message={error}
+            className="mb-4"
+            onDismiss={() => setError(null)}
+            dismissLabel={t("bewauto.dismissError")}
+          />
+        )}
 
         {/* Step 1 stays MOUNTED (hidden) while the user works on later steps:
             unsaved row edits and an in-flight import preview must survive the
@@ -454,14 +463,40 @@ function usageTone(view: BewViewDTO): "success" | "unverified" | "blocked" {
   return "success";
 }
 
-function ErrorLine({ message, className = "" }: { message: string; className?: string }) {
+/**
+ * The page-level error banner. Dismissible: an error that already happened
+ * (the state it describes is gone) must not stay pinned above the workflow —
+ * the previous permanent banner is half of the "persistent error message"
+ * complaint. `onDismiss` is optional so other usages can render it read-only.
+ */
+export function ErrorLine({
+  message,
+  className = "",
+  onDismiss,
+  dismissLabel,
+}: {
+  message: string;
+  className?: string;
+  onDismiss?: () => void;
+  dismissLabel?: string;
+}) {
   return (
     <div
       role="alert"
       className={`flex items-start gap-2.5 rounded-2xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger ${className}`}
     >
       <Icon name="alert" size={16} className="mt-0.5 shrink-0" />
-      <span>{message}</span>
+      <span className="min-w-0 flex-1">{message}</span>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={dismissLabel ?? "Dismiss"}
+          className="-m-1 shrink-0 rounded-lg p-1 transition hover:bg-danger/10"
+        >
+          <Icon name="x" size={14} />
+        </button>
+      )}
     </div>
   );
 }

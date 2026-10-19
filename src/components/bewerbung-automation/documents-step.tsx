@@ -11,6 +11,7 @@
  * reference table (see storage-reconcile BUCKETS).
  */
 import { memo, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   bewAttachDocument,
   bewDetachDocument,
@@ -21,7 +22,12 @@ import type { DocumentKind } from "@/lib/bewerbung-automation";
 import { Button, Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { StatusPill } from "@/components/ui/feedback";
-import type { BewCampaignDocumentDTO, BewViewDTO } from "./types";
+import {
+  isNextRedirectError,
+  resolveBewError,
+  type BewCampaignDocumentDTO,
+  type BewViewDTO,
+} from "./types";
 
 /**
  * Upload via the /api/bew/documents route (NOT a server action — server
@@ -66,6 +72,7 @@ function formatBytes(n: number): string {
 
 export const DocumentsStep = memo(function DocumentsStep({ view, refresh }: Props) {
   const { t } = useI18n();
+  const router = useRouter();
   const [library, setLibrary] = useState<LibraryDoc[] | null>(null);
   const [kind, setKind] = useState<DocumentKind>("cv");
   const [attachKind, setAttachKind] = useState<DocumentKind>("cv");
@@ -76,11 +83,15 @@ export const DocumentsStep = memo(function DocumentsStep({ view, refresh }: Prop
 
   /* Initial library load — the setState happens in the promise callbacks,
      i.e. when the external fetch settles, not synchronously in the effect. */
-  useEffect(() => {
+   useEffect(() => {
     bewListDocuments()
       .then((docs) => setLibrary(docs))
-      .catch(() => setLibrary([]));
-  }, []);
+      .catch((e) => {
+        // An expired session is not "an empty library": re-authenticate.
+        if (isNextRedirectError(e)) router.replace("/login");
+        else setLibrary([]);
+      });
+  }, [router]);
 
   async function reloadLibrary() {
     try {
@@ -99,7 +110,10 @@ export const DocumentsStep = memo(function DocumentsStep({ view, refresh }: Prop
       await refresh();
       await reloadLibrary();
     } catch (e) {
-      setError(errMessage(e, t));
+      // `null` = session expired → navigating to /login (no error shown);
+      // the finally clears busy either way.
+      const msg = resolveBewError(e, t, (p) => router.replace(p));
+      if (msg !== null) setError(msg);
     } finally {
       setBusy(false);
     }
@@ -305,13 +319,4 @@ function KindSelect({
   );
 }
 
-/** Map a thrown error to a localized, user-safe message (stable codes only). */
-export function errMessage(
-  e: unknown,
-  t: (k: string, v?: Record<string, string | number>) => string,
-): string {
-  const code = e instanceof Error ? e.message : "";
-  const key = `bewauto.err.${code}`;
-  const translated = t(key);
-  return translated === key ? t("bewauto.err.UNKNOWN") : translated;
-}
+/* Error mapping lives in `resolveBewError` (./types). */

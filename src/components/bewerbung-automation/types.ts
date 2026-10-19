@@ -181,7 +181,7 @@ export function isEligibleForSend(
   return docs.cv && docs.certs;
 }
 
-/** Stable error codes the server actions throw (mapped to i18n by the UI). */
+/** Stable error codes the server actions surface (mapped to i18n by the UI). */
 export type BewErrorCode =
   | "INVALID_COUNT"
   | "INVALID_PURPOSE"
@@ -194,6 +194,8 @@ export type BewErrorCode =
   | "DOCUMENT_EMPTY"
   | "APPLICATION_LOCKED"
   | "CAMPAIGN_CLOSED"
+  | "CAMPAIGN_FULL"
+  | "CAMPAIGN_SENDING"
   | "NOT_FOUND"
   | "NO_SENDER"
   | "SENDER_NOT_READY"
@@ -207,11 +209,17 @@ export type BewErrorCode =
    | "QUEUE_FAILED"
    | "INVALID_PAYLOAD"
    | "SAVE_FAILED"
+   | "DELETE_FAILED"
    | "DOC_UPLOAD_FAILED"
    | "DOC_SAVE_FAILED"
    | "DOC_ATTACH_FAILED"
-   /* Smart-input "Auto-organize" (addBewCompany) — stable server codes; the
-      EMPTY_INPUT code is produced client-side by the precheck. */
+   | "INVALID_TIMEZONE"
+   | "INVALID_SCHEDULE"
+   | "SCHEDULE_NOT_FUTURE"
+   | "CANNOT_RESCHEDULE"
+   | "RESCHEDULE_FAILED"
+   /* Smart-input (addBewCompany) — stable server codes; the EMPTY_INPUT
+      code is produced client-side by the precheck. */
    | "EMPTY_INPUT"
    | "PARSE_NO_COMPANY"
    | "PARSE_NO_EMAIL"
@@ -219,8 +227,52 @@ export type BewErrorCode =
    | "DUPLICATE_COMPANY"
    | "COUNT_EXCEEDED"
    | "POSITION_TOO_LONG"
-   | "CAMPAIGN_SENDING"
    | "UNKNOWN";
+
+const BEW_CODE_SET: ReadonlySet<string> = new Set<string>([
+  "INVALID_COUNT",
+  "INVALID_PURPOSE",
+  "INVALID_RECORDS",
+  "INVALID_KIND",
+  "NO_FILE",
+  "PDF_REQUIRED",
+  "DOCUMENT_UNSUPPORTED",
+  "DOCUMENT_TOO-LARGE",
+  "DOCUMENT_EMPTY",
+  "APPLICATION_LOCKED",
+  "CAMPAIGN_CLOSED",
+  "CAMPAIGN_FULL",
+  "CAMPAIGN_SENDING",
+  "NOT_FOUND",
+  "NO_SENDER",
+  "SENDER_NOT_READY",
+  "DOCUMENTS_MISSING",
+  "EMAIL_INCOMPLETE",
+  "EMAIL_LOCKED",
+  "CANDIDATE_NAME_MISSING",
+  "PROFILE_INCOMPLETE",
+  "NOTHING_TO_SEND",
+  "QUOTA_EXHAUSTED",
+  "QUEUE_FAILED",
+  "INVALID_PAYLOAD",
+  "SAVE_FAILED",
+  "DELETE_FAILED",
+  "DOC_UPLOAD_FAILED",
+  "DOC_SAVE_FAILED",
+  "DOC_ATTACH_FAILED",
+  "INVALID_TIMEZONE",
+  "INVALID_SCHEDULE",
+  "SCHEDULE_NOT_FUTURE",
+  "CANNOT_RESCHEDULE",
+  "RESCHEDULE_FAILED",
+  "EMPTY_INPUT",
+  "PARSE_NO_COMPANY",
+  "PARSE_NO_EMAIL",
+  "PARSE_INVALID_EMAIL",
+  "DUPLICATE_COMPANY",
+  "COUNT_EXCEEDED",
+  "POSITION_TOO_LONG",
+]);
 
 /**
  * True for the Next.js navigation error a server action rejects with when it
@@ -237,43 +289,61 @@ export function isNextRedirectError(error: unknown): boolean {
   );
 }
 
+/**
+ * Extract the stable error code a server action threw, if there is one.
+ *
+ * Two places are checked:
+ *   1. the message — `withStableError` re-throws `Error(code)`, so the code
+ *      IS the message on the normal path;
+ *   2. the digest — across the RSC→client boundary a thrown error can be
+ *      re-wrapped by the framework (the message becomes a generic string),
+ *      while the digest keeps the original code. Without this fallback the
+ *      re-wrapped error degraded to `UNKNOWN` ("Something went wrong") even
+ *      though the server had told us exactly what happened.
+ *
+ * `UNKNOWN` is reserved for errors that are genuinely not mapped (the
+ * localized message stays actionable and the internals never leak).
+ */
 export function bewErrorCode(error: unknown): BewErrorCode {
-  const message = error instanceof Error ? error.message : "";
-  if (
-    message === "INVALID_COUNT" ||
-    message === "INVALID_PURPOSE" ||
-    message === "INVALID_RECORDS" ||
-    message === "INVALID_KIND" ||
-    message === "NO_FILE" ||
-    message === "PDF_REQUIRED" ||
-    message === "APPLICATION_LOCKED" ||
-    message === "CAMPAIGN_CLOSED" ||
-    message === "NOT_FOUND" ||
-     message === "NO_SENDER" ||
-     message === "SENDER_NOT_READY" ||
-     message === "DOCUMENTS_MISSING" ||
-     message === "EMAIL_INCOMPLETE" ||
-     message === "EMAIL_LOCKED" ||
-     message === "CANDIDATE_NAME_MISSING" ||
-     message === "PROFILE_INCOMPLETE" ||
-     message === "NOTHING_TO_SEND" ||
-     message === "QUOTA_EXHAUSTED" ||
-     message === "QUEUE_FAILED" ||
-     message === "INVALID_PAYLOAD" ||
-     message === "SAVE_FAILED" ||
-     message === "DOC_UPLOAD_FAILED" ||
-     message === "DOC_SAVE_FAILED" ||
-     message === "DOC_ATTACH_FAILED" ||
-     message === "EMPTY_INPUT" ||
-     message === "PARSE_NO_COMPANY" ||
-     message === "PARSE_NO_EMAIL" ||
-     message === "PARSE_INVALID_EMAIL" ||
-     message === "DUPLICATE_COMPANY" ||
-     message === "COUNT_EXCEEDED" ||
-     message === "POSITION_TOO_LONG" ||
-     message === "CAMPAIGN_SENDING"
-   )
-     return message as BewErrorCode;
+  if (!(error instanceof Error)) return "UNKNOWN";
+  const message = error.message;
+  if (BEW_CODE_SET.has(message)) return message as BewErrorCode;
   if (message.startsWith("DOCUMENT_")) return message as BewErrorCode;
+  const digest = (error as Error & { digest?: unknown }).digest;
+  if (typeof digest === "string" && BEW_CODE_SET.has(digest))
+    return digest as BewErrorCode;
+  if (typeof digest === "string" && digest.startsWith("DOCUMENT_"))
+    return digest as BewErrorCode;
   return "UNKNOWN";
+}
+
+/**
+ * The ONE client-side error resolution for this page — it replaces the six
+ * per-step copies of `errMessage`, which all had the same two holes:
+ *
+ *   1. a NEXT_REDIRECT (session expired mid-flow) was rendered as a generic
+ *      error message instead of triggering re-authentication;
+ *   2. the re-wrapped-error case (code moved into the digest) degraded to
+ *      the generic message.
+ *
+ * Behavior:
+ *   - expired session → `navigate("/login")` (when given) and return `null`.
+ *     An expired session is NOT an operation failure — callers treat `null`
+ *     as "handled, show nothing";
+ *   - stable code (message or digest) → its localized `bewauto.err.{code}`;
+ *   - anything else → the localized `bewauto.err.UNKNOWN`.
+ */
+export function resolveBewError(
+  error: unknown,
+  t: (k: string, v?: Record<string, string | number>) => string,
+  navigate?: (path: string) => void,
+): string | null {
+  if (isNextRedirectError(error)) {
+    if (navigate) navigate("/login");
+    return null;
+  }
+  const code = bewErrorCode(error);
+  const key = `bewauto.err.${code}`;
+  const translated = t(key);
+  return translated === key ? t("bewauto.err.UNKNOWN") : translated;
 }
