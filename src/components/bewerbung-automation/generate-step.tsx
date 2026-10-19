@@ -11,13 +11,14 @@
  * letters are never duplicated.
  */
 import { memo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { bewGenerateLetters } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
 import { BEW_MAX_COUNT } from "@/lib/bewerbung-automation";
 import { Button, Card } from "@/components/ui";
 import { Icon } from "@/components/icon";
 import { StatusPill } from "@/components/ui/feedback";
-import type { BewViewDTO } from "./types";
+import { resolveBewError, type BewViewDTO } from "./types";
 
 interface Props {
   view: BewViewDTO;
@@ -26,6 +27,7 @@ interface Props {
 
 export const GenerateStep = memo(function GenerateStep({ view, refresh }: Props) {
   const { t } = useI18n();
+  const router = useRouter();
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +74,11 @@ export const GenerateStep = memo(function GenerateStep({ view, refresh }: Props)
         if (result.generated === 0 && result.failed === 0) break;
       }
     } catch (e) {
-      setError(errMessage(e, t));
+      // The finally block always clears running/progress — a failure can
+      // never leave the button in its loading state. `null` = session
+      // expired → navigating to /login instead of showing an error.
+      const msg = resolveBewError(e, t, (p) => router.replace(p));
+      if (msg !== null) setError(msg);
     } finally {
       setRunning(false);
       setProgress(null);
@@ -136,9 +142,4 @@ export const GenerateStep = memo(function GenerateStep({ view, refresh }: Props)
   );
 });
 
-function errMessage(e: unknown, t: (k: string, v?: Record<string, string | number>) => string): string {
-  const code = e instanceof Error ? e.message : "";
-  const key = `bewauto.err.${code}`;
-  const translated = t(key);
-  return translated === key ? t("bewauto.err.UNKNOWN") : translated;
-}
+/* Error mapping lives in `resolveBewError` (./types). */

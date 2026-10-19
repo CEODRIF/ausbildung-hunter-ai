@@ -317,7 +317,7 @@ describe("deleteCompanyRow: the optimistic flow", () => {
   it("in-flight sending protections still work (the engine rejects, the row is restored)", async () => {
     const h = makeHarness();
     const task = deleteCompanyRow(h.deps);
-    // queued/sending/sent rows are locked server-side (BEW_IN_FLIGHT) →
+    // queued/sending rows are locked server-side (BEW_IN_FLIGHT) →
     // the exclusion throws APPLICATION_LOCKED and NOTHING is mutated.
     h.rejectExclude(new Error("APPLICATION_LOCKED"));
     await task;

@@ -67,7 +67,7 @@ import {
   remapPendingDrafts,
 } from "./pending-series";
 import {
-  isNextRedirectError,
+  resolveBewError,
   type BewApplicationDTO,
   type BewViewDTO,
   type CompanyRecord,
@@ -431,10 +431,15 @@ export const CompaniesStep = memo(function CompaniesStep({
         update: () => updateCompanyRow(app.id, values),
         resync: refresh,
         onSaved: () => undefined, // the "Saved" chip is driven by saveState.saved
-        onError: (e) => setError(errMessage(e, t)),
+        onError: (e) => {
+          // `null` = session expired → already navigating to /login; no
+          // error message is shown for re-authentication.
+          const msg = resolveBewError(e, t, (p) => router.replace(p));
+          if (msg !== null) setError(msg);
+        },
       });
     },
-    [patchApplication, refresh, scheduleSavedClear, t],
+    [patchApplication, refresh, scheduleSavedClear, t, router],
   );
 
   /**
@@ -453,8 +458,10 @@ export const CompaniesStep = memo(function CompaniesStep({
    *     whole list is never replaced with stale server data,
    *   - a second click for the same row while the request is in flight is
    *     a no-op (synchronous ref claim — no duplicate requests), and
-   *     in-flight rows (queued/sending/sent) stay locked: the engine
-   *     rejects the exclusion and the row is restored with an error.
+    *     in-flight rows (queued/sending) stay locked: the engine
+    *     rejects the exclusion and the row is restored with an error.
+    *     (`sent` is terminal — since the BEW_IN_FLIGHT fix it can be
+    *     excluded again; that is how a finished row leaves the list.)
     * No confirmation dialog: a single unsent draft row should not be
     * interrupted for, and the action is restorable from step 4.
     */
@@ -475,8 +482,10 @@ export const CompaniesStep = memo(function CompaniesStep({
    *     whole list is never replaced with stale server data,
    *   - a second click for the same row while the request is in flight is
    *     a no-op (synchronous ref claim — no duplicate requests), and
-   *     in-flight rows (queued/sending/sent) stay locked: the engine
-   *     rejects the exclusion and the row is restored with an error.
+    *     in-flight rows (queued/sending) stay locked: the engine
+    *     rejects the exclusion and the row is restored with an error.
+    *     (`sent` is terminal — since the BEW_IN_FLIGHT fix it can be
+    *     excluded again; that is how a finished row leaves the list.)
    * No confirmation dialog: a single unsent draft row should not be
    * interrupted for, and the action is restorable from step 4.
    */
@@ -525,16 +534,13 @@ export const CompaniesStep = memo(function CompaniesStep({
          refresh,
          onSuccess: (seq) => setNotice(t("bewauto.rowDeleted", { n: seq })),
          onError: (error) => {
-           if (isNextRedirectError(error)) {
-             // Session expired mid-flow: the server asked for
-             // re-authentication. Navigate instead of showing a (misleading)
-             // generic error — swallowing this redirect into err.UNKNOWN was
-             // the "Something went wrong. Please try again." delete bug (the
-             // same fix the smart-input flow received).
-             router.replace("/login");
-             return;
-           }
-           setError(errMessage(error, t));
+           // A session that expired mid-flow redirects to /login instead of
+           // showing an error (swallowing the NEXT_REDIRECT into err.UNKNOWN
+           // was the "Something went wrong. Please try again." delete bug).
+           // Everything else becomes a localized stable-code message and the
+           // row is restored with its latest values (deleteCompanyRow).
+           const msg = resolveBewError(error, t, (p) => router.replace(p));
+           if (msg !== null) setError(msg);
          },
        });
      },
@@ -589,7 +595,9 @@ export const CompaniesStep = memo(function CompaniesStep({
         });
       }
     } catch (e) {
-      setImportState({ ...IDLE_IMPORT, fileName: file.name, error: errMessage(e, t) });
+      // Parsing happens in the browser (or via the fetch-based PDF route),
+      // so no NEXT_REDIRECT can reach this handler — always a message.
+      setImportState({ ...IDLE_IMPORT, fileName: file.name, error: resolveBewError(e, t) });
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -627,7 +635,10 @@ export const CompaniesStep = memo(function CompaniesStep({
         }),
       );
     } catch (e) {
-      setError(errMessage(e, t));
+      // The preview is kept on failure (no data loss); an expired session
+      // navigates to /login instead of showing a generic error.
+      const msg = resolveBewError(e, t, (p) => router.replace(p));
+      if (msg !== null) setError(msg);
     } finally {
       setBusy(false);
     }
@@ -1157,7 +1168,8 @@ function MiniInput({
   );
 }
 
-function RowStatus({
+/** Exported for the SSR regression tests (renderToString assertions). */
+export function RowStatus({
   app,
   emailOk,
   nameOk,
@@ -1168,7 +1180,13 @@ function RowStatus({
   nameOk: boolean;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
-  if (app.status === "generated" || app.status === "sent")
+  /* `sent` is TERMINAL — it got its own label long ago in the review step,
+     but here it shared `rowReady` with `generated`. "Ready" on a sent row
+     was misleading (there was nothing left to do) and, combined with the
+     engine's old sent-lock, it displayed as a row stuck in processing. */
+  if (app.status === "sent")
+    return <StatusPill tone="success" label={t("bewauto.rowSent")} />;
+  if (app.status === "generated")
     return <StatusPill tone="success" label={t("bewauto.rowReady")} />;
   if (app.status === "failed" || app.status === "needs_attention")
     return <StatusPill tone="blocked" label={t("bewauto.rowError")} />;
@@ -1354,9 +1372,6 @@ function InfoLine({ message }: { message: string }) {
   );
 }
 
-function errMessage(e: unknown, t: (k: string, v?: Record<string, string | number>) => string): string {
-  const code = e instanceof Error ? e.message : "";
-  const key = `bewauto.err.${code}`;
-  const translated = t(key);
-  return translated === key ? t("bewauto.err.UNKNOWN") : translated;
-}
+/* Error mapping lives in `resolveBewError` (./types) — the per-step copies
+   were removed so re-authentication and digest re-wrapping are handled in
+   exactly one place. */

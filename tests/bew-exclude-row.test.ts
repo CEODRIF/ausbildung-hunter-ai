@@ -25,8 +25,10 @@
  *   - a successful deletion excludes exactly the targeted row (the current
  *     series, addressed by the stable entry id) — a soft delete, all other
  *     rows byte-identical, counters refreshed;
- *   - an in-flight row (queued/sending/sent) is rejected with
- *     APPLICATION_LOCKED and left untouched;
+ *   - an in-flight row (queued/sending) is rejected with
+ *     APPLICATION_LOCKED and left untouched. `sent` is TERMINAL (not in
+ *     BEW_IN_FLIGHT) — a finished row can be excluded again (that is how a
+ *     completed row leaves the list; the old sent-lock made it permanent);
  *   - a missing/stale id AND a foreign (other user's) id both resolve to
  *     NOT_FOUND with nothing changed (no data leak, no fake success);
  *   - a real persistence failure (lookup or update error) surfaces as
@@ -563,11 +565,13 @@ describe("companies-step wiring (static contract): no swallowed server error", (
     expect(src).toContain("if (!res.ok) throw new Error(res.code); // → localized below");
     // 2. A re-authentication redirect NAVIGATES to /login (the
     //    "Something went wrong" fix — the same contract the smart-input
-    //    flow received) instead of being swallowed into err.UNKNOWN.
-    expect(src).toContain("if (isNextRedirectError(error)) {");
-    expect(src).toContain('router.replace("/login")');
-    // 3. Every other failure is localized through the stable-code map.
-    expect(src).toContain("setError(errMessage(error, t));");
+    //    flow received) instead of being swallowed into err.UNKNOWN. Since
+    //    the page repair the whole step routes errors through the shared
+    //    resolveBewError(e, t, navigate) — which navigates on NEXT_REDIRECT
+    //    (pinned by the unit tests in bew-page-repair) and localizes stable
+    //    codes (message or digest) — so the delete wiring is asserted as:
+    expect(src).toContain("resolveBewError(error, t, (p) => router.replace(p))");
+    expect(src).toContain("if (msg !== null) setError(msg);");
   });
 });
 

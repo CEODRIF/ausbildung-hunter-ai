@@ -383,6 +383,18 @@ vi.mock("@/lib/ai-service", () => ({
   storagePath: (userId: string, filename: string) => `${userId}/doc-${filename}`,
 }));
 vi.mock("mammoth", () => ({ default: { extractRawText: async () => ({ value: "docx" }) } }));
+vi.mock("next/navigation", () => ({
+  // LetterModal calls useRouter() for re-authentication navigation — under
+  // renderToString there is no mounted app router.
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
 vi.mock("@/app/bewerbung-automation/actions", () => ({
   bewExcludeApplication: vi.fn(),
   bewRestoreApplication: vi.fn(),

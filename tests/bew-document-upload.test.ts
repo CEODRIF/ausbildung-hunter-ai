@@ -356,7 +356,7 @@ const {
   listBewDocuments,
   uploadBewDocument,
 } = await import("@/lib/bewerbung-engine");
-const { errMessage } = await import("@/components/bewerbung-automation/documents-step");
+const { resolveBewError: errMessage } = await import("@/components/bewerbung-automation/types");
 const { translate } = await import("@/lib/i18n");
 const { DEFAULT_LANGUAGE } = await import("@/lib/i18n/dictionaries");
 
@@ -559,5 +559,21 @@ describe("client errMessage: stable codes map to localized text", () => {
   it("an unknown/garbage error falls back to the generic message", () => {
     expect(errMessage(new Error("weird-raw-text"), t)).toBe(t("bewauto.err.UNKNOWN"));
     expect(errMessage("not even an Error", t)).toBe(t("bewauto.err.UNKNOWN"));
+  });
+
+  it("a re-wrapped error keeps its stable code via the digest fallback", () => {
+    // The RSC→client boundary can move the code into the digest.
+    const wrapped = new Error("An error occurred on the server.");
+    (wrapped as Error & { digest?: string }).digest = "DOC_UPLOAD_FAILED";
+    expect(errMessage(wrapped, t)).not.toBe(t("bewauto.err.UNKNOWN"));
+  });
+
+  it("a re-authentication redirect navigates and shows nothing", () => {
+    const nav = vi.fn();
+    const redirect = new Error("NEXT_REDIRECT");
+    (redirect as Error & { digest?: string }).digest = "NEXT_REDIRECT;replace;/login;307;";
+    const msg = errMessage(redirect, t, nav);
+    expect(msg).toBeNull();
+    expect(nav).toHaveBeenCalledWith("/login");
   });
 });

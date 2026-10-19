@@ -11,6 +11,7 @@
  * a message is "sent" only because the provider answered success.
  */
 import { memo, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   bewRescheduleSend,
   bewStartSend,
@@ -34,6 +35,7 @@ import { ScheduleForm, type ScheduleDefaults } from "@/components/schedule-form"
 import {
   appSendFlags,
   hasRequiredDocuments,
+  resolveBewError,
   type BewViewDTO,
 } from "./types";
 
@@ -51,6 +53,7 @@ interface Props {
 
 export const SendStep = memo(function SendStep({ view, refresh, pump, selectedIds, onCancelSend, sending }: Props) {
   const { t, lang } = useI18n();
+  const router = useRouter();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,11 +113,14 @@ export const SendStep = memo(function SendStep({ view, refresh, pump, selectedId
       const result = await bewStartSend(fd);
       setConfirmOpen(false);
       if (!result.ok) {
-        setError(result.error ? errCodeMessage(result.error, t) : t("bewauto.err.UNKNOWN"));
+        // A resolved result error (stable code, e.g. NO_SENDER /
+        // NOTHING_TO_SEND) is not a throw — map it like one.
+        setError(codeMessage(result.error, t));
       }
       await refresh();
     } catch (e) {
-      setError(errMessage(e, t));
+      const msg = resolveBewError(e, t, (p) => router.replace(p));
+      if (msg !== null) setError(msg);
     } finally {
       setBusy(false);
     }
@@ -154,15 +160,11 @@ export const SendStep = memo(function SendStep({ view, refresh, pump, selectedId
     setScheduleError(null);
     try {
       const result = (await fn(fd)) as { ok?: boolean; error?: string } | null;
-      if (result && !result.ok)
-        setScheduleError(
-          result.error
-            ? errCodeMessage(result.error, t)
-            : t("bewauto.err.UNKNOWN"),
-        );
+      if (result && !result.ok) setScheduleError(codeMessage(result.error, t));
       else closeOnSuccess();
     } catch (e) {
-      setScheduleError(errMessage(e, t));
+      const msg = resolveBewError(e, t, (p) => router.replace(p));
+      if (msg !== null) setScheduleError(msg);
     } finally {
       await refresh();
     }
@@ -188,7 +190,8 @@ export const SendStep = memo(function SendStep({ view, refresh, pump, selectedId
       if (ok) setRefreshNotice(t("bewauto.refreshed"));
       else setRefreshError(t("bewauto.refreshFailed"));
     } catch (e) {
-      setRefreshError(errMessage(e, t));
+      const msg = resolveBewError(e, t, (p) => router.replace(p));
+      if (msg !== null) setRefreshError(msg);
     } finally {
       setRefreshing(false);
     }
@@ -485,14 +488,11 @@ function ConfirmRow({ label }: { label: string }) {
   );
 }
 
-function errMessage(e: unknown, t: (k: string, v?: Record<string, string | number>) => string): string {
-  const code = e instanceof Error ? e.message : "";
-  const key = `bewauto.err.${code}`;
-  const translated = t(key);
-  return translated === key ? t("bewauto.err.UNKNOWN") : translated;
-}
-
-function errCodeMessage(code: string, t: (k: string, v?: Record<string, string | number>) => string): string {
-  const translated = t(`bewauto.err.${code}`);
-  return translated === `bewauto.err.${code}` ? t("bewauto.err.UNKNOWN") : translated;
+/** A resolved `result.error` (stable code) mapped to its localized message —
+ *  the same rules `resolveBewError` applies to thrown errors. */
+function codeMessage(
+  code: string | undefined,
+  t: (k: string, v?: Record<string, string | number>) => string,
+): string {
+  return resolveBewError(new Error(code ?? ""), t) ?? t("bewauto.err.UNKNOWN");
 }

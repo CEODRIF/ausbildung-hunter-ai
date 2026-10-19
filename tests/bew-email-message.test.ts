@@ -883,6 +883,19 @@ describe("getBewCampaignView — exposes the campaign e-mail", () => {
  * G. UI (SSR) — the dedicated e-mail editor + the review separation
  * ------------------------------------------------------------------ */
 
+// The components call useRouter() for re-authentication navigation — under
+// renderToString there is no mounted app router (stub like the smart-input
+// contract test does).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
 const React = await import("react");
 const { renderToString } = await import("react-dom/server");
 const { I18nProvider, translate } = await import("@/lib/i18n");

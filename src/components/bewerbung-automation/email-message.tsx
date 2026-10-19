@@ -18,6 +18,7 @@
  *     only adopted when the card is clean.
  */
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { bewSaveEmail } from "@/app/bewerbung-automation/actions";
 import { isBewEmailComplete } from "@/lib/bewerbung-automation";
 import {
@@ -29,7 +30,7 @@ import { Icon } from "@/components/icon";
 import { RichEmailEditor, type EmailVariable } from "@/components/rich-email-editor";
 import { useI18n } from "@/lib/i18n";
 import { bewEmailTemplateFor } from "./email-templates";
-import type { BewApplicationDTO, BewViewDTO } from "./types";
+import { resolveBewError, type BewApplicationDTO, type BewViewDTO } from "./types";
 
 interface Props {
   view: BewViewDTO;
@@ -55,6 +56,7 @@ function previewRecipients(view: BewViewDTO): BewApplicationDTO[] {
 
 export function EmailMessageCard({ view, refresh, applicantName }: Props) {
   const { t } = useI18n();
+  const router = useRouter();
   const locked =
     view.campaign.status === "sending" || BEW_TERMINAL.has(view.campaign.status);
 
@@ -117,7 +119,10 @@ export function EmailMessageCard({ view, refresh, applicantName }: Props) {
       await refresh();
       setNotice(t("bewauto.emailSaved"));
     } catch (e) {
-      setError(errMessage(e, t));
+      // `null` = session expired → navigating to /login (no error shown);
+      // the draft (subject/body) is kept in local state either way.
+      const msg = resolveBewError(e, t, (p) => router.replace(p));
+      if (msg !== null) setError(msg);
     } finally {
       setBusy(false);
     }
@@ -374,9 +379,4 @@ function completeLocal(subject: string, bodyHtml: string): boolean {
   return isBewEmailComplete(subject, bodyHtml);
 }
 
-function errMessage(e: unknown, t: (k: string, v?: Record<string, string | number>) => string): string {
-  const code = e instanceof Error ? e.message : "";
-  const key = `bewauto.err.${code}`;
-  const translated = t(key);
-  return translated === key ? t("bewauto.err.UNKNOWN") : translated;
-}
+/* Error mapping lives in `resolveBewError` (./types). */

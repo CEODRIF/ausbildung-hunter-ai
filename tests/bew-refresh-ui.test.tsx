@@ -26,6 +26,19 @@ vi.mock("@/app/bewerbung-automation/actions", () => ({
   bewStartSend: vi.fn(async () => ({ ok: true })),
   bewRescheduleSend: vi.fn(async () => ({ ok: true })),
 }));
+vi.mock("next/navigation", () => ({
+  // The step components call useRouter() for re-authentication navigation —
+  // under renderToString there is no mounted app router (stub like the
+  // smart-input contract test does).
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
 vi.mock("next/link", async () => {
   const React = await import("react");
   return { default: (props: any) => React.createElement("a", props, props.children) };

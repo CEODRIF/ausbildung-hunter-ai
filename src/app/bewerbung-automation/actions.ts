@@ -141,6 +141,90 @@ type CompanyRecord = {
   employerFacts: string;
 };
 
+/**
+ * Every stable code this page can surface (engine + action level). These
+ * are the ONLY messages that may cross the RSC→client boundary as an
+ * error message — anything else is an internal failure and gets replaced.
+ */
+const BEW_KNOWN_CODES = new Set<string>([
+  // engine
+  "APPLICATION_LOCKED",
+  "CAMPAIGN_CLOSED",
+  "CAMPAIGN_FULL",
+  "CANNOT_RESCHEDULE",
+  "COUNT_EXCEEDED",
+  "DELETE_FAILED",
+  "DOC_ATTACH_FAILED",
+  "DOC_SAVE_FAILED",
+  "DOC_UPLOAD_FAILED",
+  "DUPLICATE_COMPANY",
+  "EMAIL_LOCKED",
+  "INVALID_COUNT",
+  "INVALID_KIND",
+  "INVALID_PAYLOAD",
+  "INVALID_PURPOSE",
+  "NOT_FOUND",
+  "PDF_REQUIRED",
+  "POSITION_TOO_LONG",
+  "PROFILE_INCOMPLETE",
+  "QUOTA_EXHAUSTED",
+  "RESCHEDULE_FAILED",
+  "SAVE_FAILED",
+  "SENDER_NOT_READY",
+  // action level (scheduling / validation / send start)
+  "INVALID_TIMEZONE",
+  "INVALID_SCHEDULE",
+  "SCHEDULE_NOT_FUTURE",
+  "INVALID_RECORDS",
+  "NO_SENDER",
+  "NOTHING_TO_SEND",
+  "QUEUE_FAILED",
+  "CAMPAIGN_SENDING",
+  "DOCUMENTS_MISSING",
+  "EMAIL_INCOMPLETE",
+  "CANDIDATE_NAME_MISSING",
+  // smart-input (re-declared here for the shared guard)
+  "EMPTY_INPUT",
+  "PARSE_NO_COMPANY",
+  "PARSE_NO_EMAIL",
+  "PARSE_INVALID_EMAIL",
+]);
+
+/**
+ * The single error boundary between this page's engine and the client —
+ * the "no generic error" rule (the reported recurring
+ * "Something went wrong. Please try again." came from errors that crossed
+ * this boundary without it):
+ *
+ *   1. A re-authentication redirect PROPAGATES unchanged — the client
+ *      navigates to /login (an expired session must never be shown as an
+ *      operation failure);
+ *   2. a KNOWN stable code is re-thrown as a CLEAN `Error(code)` — the
+ *      code is the whole message, so even if the framework re-wraps the
+ *      error in transit, the client recovers it from the message or the
+ *      digest (see `bewErrorCode`) and localizes it;
+ *   3. anything unexpected is logged server-side (internals — SQL text,
+ *      paths, provider errors — NEVER reach the client) and replaced by
+ *      the action's fallback code, which is always localized.
+ */
+async function withStableError<T>(
+  action: string,
+  fallback: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (isNextRedirectError(e)) throw e; // re-authentication — propagate
+    const message = e instanceof Error ? e.message : "";
+    if (message.startsWith("DOCUMENT_") || BEW_KNOWN_CODES.has(message)) {
+      throw new Error(message);
+    }
+    console.error(`[bew] ${action}: unexpected failure`, message || String(e));
+    throw new Error(fallback);
+  }
+}
+
 /* ------------------------------ Step 0 ------------------------------ */
 
 function readCampaignInput(
@@ -187,30 +271,32 @@ export async function bewCreateCampaignView(
 export async function bewSaveCompanies(
   formData: FormData,
 ): Promise<{ campaignId: string; total: number; valid: number; duplicates: string[] }> {
-  const { userId } = await requireUser();
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
-  const records = readJson<CompanyRecord[]>(formData, "records", []);
-  if (records.length > BEW_MAX_COUNT) throw new Error("INVALID_RECORDS");
-  const { campaign, result } = await saveBewCompanies(
-    userId,
-    campaignId,
-    records.map((r) => ({
-      companyName: r.companyName ?? "",
-      companyEmail: r.companyEmail ?? "",
-      // Contract: optional fields are null (never empty strings) downstream.
-      contactName: r.contactName || null,
-      companyAddress: r.companyAddress || null,
-      positionTitle: r.positionTitle ?? "",
-      positionBrief: r.positionBrief ?? "",
-      employerFacts: r.employerFacts ?? "",
-    })),
-  );
-  return {
-    campaignId: campaign.id,
-    total: result.rows.length,
-    valid: result.validCount,
-    duplicates: result.duplicateEmails,
-  };
+  return withStableError("bewSaveCompanies", "SAVE_FAILED", async () => {
+    const records = readJson<CompanyRecord[]>(formData, "records", []);
+    if (records.length > BEW_MAX_COUNT) throw new Error("INVALID_RECORDS");
+    const { campaign, result } = await saveBewCompanies(
+      userId,
+      campaignId,
+      records.map((r) => ({
+        companyName: r.companyName ?? "",
+        companyEmail: r.companyEmail ?? "",
+        // Contract: optional fields are null (never empty strings) downstream.
+        contactName: r.contactName || null,
+        companyAddress: r.companyAddress || null,
+        positionTitle: r.positionTitle ?? "",
+        positionBrief: r.positionBrief ?? "",
+        employerFacts: r.employerFacts ?? "",
+      })),
+    );
+    return {
+      campaignId: campaign.id,
+      total: result.rows.length,
+      valid: result.validCount,
+      duplicates: result.duplicateEmails,
+    };
+  });
 }
 
 /** The smart-add result — a JSON-safe union, never a thrown raw error.
@@ -295,10 +381,12 @@ export async function bewAddCompany(
 export async function bewSetCompanyCount(
   formData: FormData,
 ): Promise<{ campaignId: string; requestedCount: number }> {
-  const { userId } = await requireUser();
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
   const count = Number(readString(formData, "count"));
-  const campaign = await setBewCompanyCount(userId, campaignId, count);
+  const campaign = await withStableError("bewSetCompanyCount", "SAVE_FAILED", () =>
+    setBewCompanyCount(userId, campaignId, count),
+  );
   return { campaignId: campaign.id, requestedCount: campaign.requested_count };
 }
 
@@ -313,37 +401,49 @@ export async function bewSetCompanyCount(
 export async function bewAddCompanyRows(
   formData: FormData,
 ): Promise<{ campaignId: string; added: number; total: number }> {
-  const { userId } = await requireUser();
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
   const count = Number(readString(formData, "count"));
-  const res = await addBewCompanyRows(userId, campaignId, count);
+  const res = await withStableError("bewAddCompanyRows", "SAVE_FAILED", () =>
+    addBewCompanyRows(userId, campaignId, count),
+  );
   return { campaignId, ...res };
 }
 
-/** Edit a single company row (invalidates a stale generated letter). */
+/**
+ * Edit a single company row (invalidates a stale generated letter).
+ * A missing / stale / foreign entry id is a NOT_FOUND failure (never a
+ * silent null "success" — the client rolls the edit back and shows the
+ * localized message).
+ */
 export async function bewUpdateCompany(
   formData: FormData,
-): Promise<BewApplicationRow | null> {
-  const { userId } = await requireUser();
+): Promise<BewApplicationRow> {
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const applicationId = readString(formData, "applicationId");
-  const payload = readJson<CompanyRecord>(formData, "payload", {
-    companyName: "",
-    companyEmail: "",
-    contactName: null,
-    companyAddress: null,
-    positionTitle: "",
-    positionBrief: "",
-    employerFacts: "",
+  const row = await withStableError("bewUpdateCompany", "SAVE_FAILED", async () => {
+    const payload = readJson<CompanyRecord>(formData, "payload", {
+      companyName: "",
+      companyEmail: "",
+      contactName: null,
+      companyAddress: null,
+      positionTitle: "",
+      positionBrief: "",
+      employerFacts: "",
+    });
+    const updated = await updateBewApplicationFields(userId, applicationId, {
+      companyName: payload.companyName ?? "",
+      companyEmail: payload.companyEmail ?? "",
+      contactName: payload.contactName || null,
+      companyAddress: payload.companyAddress || null,
+      positionTitle: payload.positionTitle ?? "",
+      positionBrief: payload.positionBrief ?? "",
+      employerFacts: payload.employerFacts ?? "",
+    });
+    if (!updated) throw new Error("NOT_FOUND");
+    return updated;
   });
-  return await updateBewApplicationFields(userId, applicationId, {
-    companyName: payload.companyName ?? "",
-    companyEmail: payload.companyEmail ?? "",
-    contactName: payload.contactName || null,
-    companyAddress: payload.companyAddress || null,
-    positionTitle: payload.positionTitle ?? "",
-    positionBrief: payload.positionBrief ?? "",
-    employerFacts: payload.employerFacts ?? "",
-  });
+  return row;
 }
 
 /**
@@ -354,11 +454,13 @@ export async function bewUpdateCompany(
  * (CAMPAIGN_CLOSED); the body is server-sanitized.
  */
 export async function bewSaveEmail(formData: FormData): Promise<{ ok: true }> {
-  const { userId } = await requireUser();
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
   const subject = readString(formData, "subject");
   const bodyHtml = readString(formData, "bodyHtml");
-  await updateBewCampaignEmail(userId, campaignId, { subject, bodyHtml });
+  await withStableError("bewSaveEmail", "SAVE_FAILED", () =>
+    updateBewCampaignEmail(userId, campaignId, { subject, bodyHtml }),
+  );
   return { ok: true };
 }
 
@@ -374,12 +476,14 @@ export async function bewSaveEmail(formData: FormData): Promise<{ ok: true }> {
 export async function bewAttachDocument(
   formData: FormData,
 ): Promise<{ ok: true }> {
-  const { userId } = await requireUser();
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
   const documentId = readString(formData, "documentId");
   const kind = readString(formData, "kind") as DocumentKind;
   if (!isDocumentKind(kind)) throw new Error("INVALID_KIND");
-  await attachBewDocument(userId, campaignId, documentId, kind);
+  await withStableError("bewAttachDocument", "SAVE_FAILED", () =>
+    attachBewDocument(userId, campaignId, documentId, kind),
+  );
   return { ok: true };
 }
 
@@ -387,10 +491,12 @@ export async function bewAttachDocument(
 export async function bewDetachDocument(
   formData: FormData,
 ): Promise<{ ok: true }> {
-  const { userId } = await requireUser();
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
   const documentId = readString(formData, "documentId");
-  await detachBewDocument(userId, campaignId, documentId);
+  await withStableError("bewDetachDocument", "SAVE_FAILED", () =>
+    detachBewDocument(userId, campaignId, documentId),
+  );
   return { ok: true };
 }
 
@@ -398,8 +504,10 @@ export async function bewDetachDocument(
 export async function bewListDocuments(): Promise<
   Array<{ id: string; filename: string; kind: string; sizeBytes: number }>
 > {
-  const { userId } = await requireUser();
-  const docs = await listBewDocuments(userId);
+  const { userId } = await requireUser(); // redirect propagates when signed out
+  const docs = await withStableError("bewListDocuments", "SAVE_FAILED", () =>
+    listBewDocuments(userId),
+  );
   return docs.map((d) => ({
     id: d.id,
     filename: d.filename,
@@ -412,10 +520,12 @@ export async function bewListDocuments(): Promise<
 export async function bewSetSender(
   formData: FormData,
 ): Promise<{ ok: true }> {
-  const { userId } = await requireUser();
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
   const accountId = readString(formData, "accountId");
-  await setCampaignSender(userId, campaignId, accountId);
+  await withStableError("bewSetSender", "SAVE_FAILED", () =>
+    setCampaignSender(userId, campaignId, accountId),
+  );
   return { ok: true };
 }
 
@@ -430,23 +540,35 @@ export async function bewGenerateLetters(
   remaining: number;
   aiQuotaHit: boolean;
 }> {
-  const { userId, profile } = await requireUser();
+  const { userId, profile } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
   const onlyFailed = readString(formData, "onlyFailed") === "1";
-  return await generateBewLetters(userId, campaignId, profile, { onlyFailed });
+  return await withStableError("bewGenerateLetters", "SAVE_FAILED", () =>
+    generateBewLetters(userId, campaignId, profile, { onlyFailed }),
+  );
 }
 
 /* ------------------------------ Step 4 ------------------------------ */
 
-/** Edit a letter (subject + HTML body) before sending. */
+/**
+ * Edit a letter (subject + HTML body) before sending.
+ * A missing / stale / foreign entry id is a NOT_FOUND failure (never a
+ * silent null "success" — the letter editor must keep the draft and show
+ * the localized message instead of closing as if saved).
+ */
 export async function bewUpdateLetter(
   formData: FormData,
-): Promise<BewApplicationRow | null> {
-  const { userId } = await requireUser();
+): Promise<BewApplicationRow> {
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const applicationId = readString(formData, "applicationId");
   const subject = readString(formData, "subject");
   const bodyHtml = readString(formData, "bodyHtml");
-  return await updateBewLetter(userId, applicationId, { subject, bodyHtml });
+  const row = await withStableError("bewUpdateLetter", "SAVE_FAILED", async () => {
+    const updated = await updateBewLetter(userId, applicationId, { subject, bodyHtml });
+    if (!updated) throw new Error("NOT_FOUND");
+    return updated;
+  });
+  return row;
 }
 
 /** The stable codes the exclusion can fail with (never a raw/internal error). */
@@ -484,7 +606,8 @@ const BEW_STABLE_EXCLUDE_CODES = new Set<string>([
  *                               user_id-scoped, so a foreign id is
  *                               indistinguishable from a vanished one and
  *                               yields no data leak);
- *        - APPLICATION_LOCKED — the row is in flight (queued/sending/sent);
+ *        - APPLICATION_LOCKED — the row is in flight (queued/sending);
+ *                               `sent` is terminal and can be excluded;
  *        - DELETE_FAILED      — an unexpected persistence failure (the
  *                               internals are logged server-side only).
  *
@@ -518,14 +641,25 @@ export async function bewExcludeApplication(
   }
 }
 
-/** Restore a previously excluded application (keeps its letter if complete). */
+/**
+ * Restore a previously excluded application (keeps its letter if complete).
+ * The restored row is the confirmation — a missing / stale / foreign id
+ * resolves as a NOT_FOUND failure, never as a fake success (the previous
+ * version ignored the engine's null and reported `ok: true` when nothing
+ * was restored).
+ */
 export async function bewRestoreApplication(
   formData: FormData,
-): Promise<{ ok: true }> {
-  const { userId } = await requireUser();
+): Promise<{ ok: true; restored: boolean }> {
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const applicationId = readString(formData, "applicationId");
-  await restoreBewApplication(userId, applicationId);
-  return { ok: true };
+  const restored = await withStableError("bewRestoreApplication", "SAVE_FAILED", async () => {
+    const row = await restoreBewApplication(userId, applicationId);
+    if (!row) return false; // NOT_FOUND — surfaced below, never a fake success
+    return true;
+  });
+  if (!restored) throw new Error("NOT_FOUND");
+  return { ok: true, restored: true };
 }
 
 /* ------------------------------ Step 5 ------------------------------ */
@@ -536,34 +670,40 @@ export async function bewRestoreApplication(
 export async function bewStartSend(
   formData: FormData,
 ): Promise<StartSendResult> {
-  const { userId } = await requireUser();
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
   const selectedSeqs = readJson<number[]>(formData, "selectedSeqs", []);
-  const scheduling = readScheduling(formData);
-  return await startBewSend(userId, campaignId, {
-    selectedSeqs,
-    ...(scheduling ? { scheduling } : {}),
-  });
+  const scheduling = readScheduling(formData); // stable schedule codes
+  return withStableError("bewStartSend", "QUEUE_FAILED", () =>
+    startBewSend(userId, campaignId, {
+      selectedSeqs,
+      ...(scheduling ? { scheduling } : {}),
+    }),
+  );
 }
 
 /** Reschedule a PENDING scheduled batch to a new future instant. */
 export async function bewRescheduleSend(
   formData: FormData,
 ): Promise<{ ok: true }> {
-  const { userId } = await requireUser();
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
   const scheduling = readScheduling(formData);
   if (!scheduling) throw new Error("INVALID_SCHEDULE");
-  return await rescheduleBewSend(userId, campaignId, scheduling);
+  return withStableError("bewRescheduleSend", "SAVE_FAILED", () =>
+    rescheduleBewSend(userId, campaignId, scheduling),
+  );
 }
 
 /** Cancel all queued (not-yet-sent) applications; releases their quota. */
 export async function bewCancelSend(
   formData: FormData,
 ): Promise<{ cancelled: number }> {
-  const { userId } = await requireUser();
+  const { userId } = await requireUser(); // redirect propagates when signed out
   const campaignId = readString(formData, "campaignId");
-  return await cancelBewSend(userId, campaignId);
+  return withStableError("bewCancelSend", "SAVE_FAILED", () =>
+    cancelBewSend(userId, campaignId),
+  );
 }
 
 /* ------------------------------ Read (poll) ------------------------------ */
