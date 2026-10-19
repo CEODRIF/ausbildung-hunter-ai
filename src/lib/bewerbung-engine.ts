@@ -86,7 +86,6 @@ import {
   type LetterPromptInput,
   type LetterQualityResult,
   type LetterEvalVerdict,
-  BEW_MAX_COUNT,
   BEW_PLATFORM_DAILY_CAP,
 } from "@/lib/bewerbung-automation";
 import {
