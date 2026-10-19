@@ -57,6 +57,23 @@ const drainBehavior: { reject?: Error } = {};
 
 vi.mock("@/lib/bewerbung-engine", () => ({
   BEW_MAX_BATCH: 5,
+  addBewCompany: engineMockFactory("addBewCompany", () => ({
+    id: "app-new",
+    seq: 2,
+    company_name: "Beta GmbH",
+    contact_name: null,
+    company_email: "info@beta.de",
+    company_address: null,
+    subject: "Bewerbung um einen Ausbildungsplatz bei Beta GmbH",
+    body_html: "",
+    body_text: "",
+    status: "pending",
+    error_code: null,
+    error_message: null,
+    attempt_count: 0,
+    provider_message_id: null,
+    sent_at: null,
+  })),
   attachBewDocument: engineMockFactory("attachBewDocument", () => ({ ok: true })),
   cancelBewSend: engineMockFactory("cancelBewSend", () => ({ cancelled: 0 })),
   createBewCampaign: engineMockFactory("createBewCampaign", () => ({
@@ -257,6 +274,46 @@ describe("action → engine argument mapping (service contract)", () => {
     await actions.bewGetView("c9");
     const call = engineCalls.find((c) => c.fn === "getBewCampaignView")!;
     expect(call.args).toEqual(["user-1", "c9"]);
+  });
+
+  it("bewAddCompany forwards the RAW pasted text (server re-parses; client preview is advisory)", async () => {
+    const rawAd = "Beta GmbH\ninfo@beta.de\nBeschreibung: Testtext.";
+    const fd = new FormData();
+    fd.set("campaignId", "c1");
+    fd.set("text", rawAd);
+    const row = await actions.bewAddCompany(fd);
+    expect(row).toMatchObject({ id: "app-new", seq: 2, company_name: "Beta GmbH" });
+    const call = engineCalls.find((c) => c.fn === "addBewCompany")!;
+    expect(call.args).toEqual(["user-1", "c1", rawAd]);
+  });
+
+  it("bewAddCompany re-authenticates before any engine work", async () => {
+    login(null);
+    const fd = new FormData();
+    fd.set("campaignId", "c1");
+    fd.set("text", "Beta GmbH\ninfo@beta.de");
+    await expect(actions.bewAddCompany(fd)).rejects.toThrow("NEXT_REDIRECT");
+    expect(redirectMock).toHaveBeenCalledWith("/login");
+    expect(engineCalls).toHaveLength(0);
+  });
+
+  it("bewAddCompany passes stable server error codes through untouched", async () => {
+    // One-shot override — the factory's base implementation (which records
+    // the call and returns a row) is untouched after this single call.
+    const engine = vi.mocked(await import("@/lib/bewerbung-engine"));
+    (engine.addBewCompany as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (...args: unknown[]) => {
+        // Record the call the way the base factory would, then fail.
+        engineCalls.push({ fn: "addBewCompany", args });
+        throw new Error("DUPLICATE_COMPANY");
+      },
+    );
+    const fd = new FormData();
+    fd.set("campaignId", "c1");
+    fd.set("text", "Beta GmbH\ninfo@beta.de");
+    await expect(actions.bewAddCompany(fd)).rejects.toThrow("DUPLICATE_COMPANY");
+    // The stable code survived the action boundary (no generic mapping).
+    expect(engineCalls.find((c) => c.fn === "addBewCompany")).toBeTruthy();
   });
 
 });

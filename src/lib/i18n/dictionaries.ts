@@ -2381,6 +2381,28 @@ const de = {
     step1Title: "Firmendaten",
     step1Body:
       "Gib für jede Bewerbung eine Firma mit E-Mail-Adresse an – einzeln bearbeiten oder per Datei importieren. Ansprechpartner und Adresse sind optional und werden nie erfunden.",
+    /* Smart input (paste → parse → one independent row) */
+    smartTitle: "Firmen hinzufügen (Smart-Eingabe)",
+    smartBody:
+      "Füge Firmendaten oder eine komplette Stellenanzeige im beliebigen Format ein. Wir extrahieren automatisch die verfügbaren Firmen- und Stellendetails.",
+    smartPlaceholder: "Firmenblock oder komplette Stellenanzeige hier einfügen …",
+    smartHint:
+      "Die Informationen werden als neue Zeile hinzugefügt und die Eingabe wird danach geleert.",
+    autoOrganize: "Automatisch organisieren",
+    clearInput: "Eingabe leeren",
+    smartSuccess: "Eintrag {n} hinzugefügt: {company}.",
+    detectedTitle: "Erkannte Informationen",
+    livePreview: "Live-Vorschau",
+    smartMissing: "nicht gefunden",
+    smartReview: "Prüfung empfohlen",
+    showFullText: "Vollständigen Text anzeigen",
+    collapseText: "Zuklappen",
+    smartJobDescription: "Stellenbeschreibung",
+    previewInvalid: "Ungültiger Wert — bitte prüfen",
+    previewTooLong:
+      "Überschreitet das Limit von {max} Zeichen — bitte kürzen, bevor die Zeile hinzugefügt wird.",
+    briefModalHint:
+      "Änderungen speicherst du mit „Speichern“ in der Zeile. Der vollständige Text wird nie gekürzt.",
     manageTitle: "Einträge",
     /* Firmen-Ziel (user-controlled company count) */
     countTargetLabel: "Unternehmens-Ziel",
@@ -2430,6 +2452,9 @@ const de = {
     colEmail: "E-Mail-Adresse",
     colContact: "Ansprechpartner",
     colAddress: "Adresse",
+    colPositionTitle: "Stellentitel",
+    colJobDescription: "Stellenbeschreibung",
+    viewFullText: "Vollständige Stellenbeschreibung anzeigen",
     colStatus: "Status",
     colLetter: "Anschreiben",
     colAttachments: "Anhänge",
@@ -2438,6 +2463,8 @@ const de = {
     phEmail: "jobs@firma.de",
     phContact: "optional",
     phAddress: "optional",
+    phPositionTitle: "z. B. Mechatroniker:in (m/w/d)",
+    phPositionBrief: "Stellenbeschreibung öffnen",
     save: "Speichern",
     rowSaved: "Eintrag gespeichert.",
     rowOk: "OK",
@@ -2678,6 +2705,23 @@ const de = {
         "Diese Serie kann nicht mehr umgeplant werden — der Versand hat bereits begonnen.",
       RESCHEDULE_FAILED:
         "Der Zeitplan konnte nicht geändert werden. Bitte erneut versuchen.",
+      /* Smart input (Auto-organize) — stable codes, never generic. */
+      EMPTY_INPUT:
+        "Bitte füge zuerst eine Stellenanzeige oder Firmendaten ein.",
+      PARSE_NO_COMPANY:
+        "Kein erkennbarer Firmenname gefunden — bitte trage die Firma im Text ein.",
+      PARSE_NO_EMAIL:
+        "Keine Bewerbungse-Mail-Adresse gefunden — bitte füge eine gültige E-Mail im Text ein.",
+      PARSE_INVALID_EMAIL:
+        "Die erkannte E-Mail-Adresse ist ungültig — bitte in der Eingabe korrigieren.",
+      DUPLICATE_COMPANY:
+        "Diese E-Mail-Adresse ist bereits in der Serie vorhanden — doppelte Einträge werden nicht hinzugefügt.",
+      COUNT_EXCEEDED:
+        "Die Serie hat bereits 100 Einträge — die maximale Anzahl ist erreicht.",
+      POSITION_TOO_LONG:
+        "Der Stellentitel oder die Stellenbeschreibung ist zu lang (max. 160 / 4000 Zeichen) — bitte kürzen. Deine Eingabe bleibt erhalten.",
+      CAMPAIGN_SENDING:
+        "Der Versand läuft — Einträge können erst danach ergänzt werden.",
       UNKNOWN: "Etwas ist schiefgelaufen. Bitte erneut versuchen.",
     },
   },
@@ -5003,6 +5047,28 @@ const en: Dict = {
     step1Title: "Company data",
     step1Body:
       "Enter a company with an e-mail address for each application — edit individually or import a file. Contact person and address are optional and are never invented.",
+    /* Smart input (paste → parse → one independent row) */
+    smartTitle: "Add companies (smart input)",
+    smartBody:
+      "Paste company information or a complete job advertisement in any format. We'll automatically extract the available company and job details.",
+    smartPlaceholder: "Paste a company block or a complete job advertisement …",
+    smartHint:
+      "The information will be added as a new row and the input will be cleared.",
+    autoOrganize: "Auto-organize",
+    clearInput: "Clear input",
+    smartSuccess: "Entry {n} added: {company}.",
+    detectedTitle: "Detected information",
+    livePreview: "Live preview",
+    smartMissing: "not found",
+    smartReview: "needs review",
+    showFullText: "Show full text",
+    collapseText: "Collapse",
+    smartJobDescription: "Job description",
+    previewInvalid: "Invalid value — please check it",
+    previewTooLong:
+      "Exceeds the {max} character limit — shorten it before adding the row.",
+    briefModalHint:
+      "Use “Save” in the row to store changes. The full text is never truncated.",
     manageTitle: "Entries",
     /* Company target (user-controlled company count) */
     countTargetLabel: "Company target",
@@ -5052,6 +5118,9 @@ const en: Dict = {
     colEmail: "E-mail address",
     colContact: "Contact person",
     colAddress: "Address",
+    colPositionTitle: "Position title",
+    colJobDescription: "Job description",
+    viewFullText: "Show full job description",
     colStatus: "Status",
     colLetter: "Cover letter",
     colAttachments: "Attachments",
@@ -5060,6 +5129,8 @@ const en: Dict = {
     phEmail: "jobs@company.de",
     phContact: "optional",
     phAddress: "optional",
+    phPositionTitle: "e.g. Mechatronics Technician (m/f/d)",
+    phPositionBrief: "Open job description",
     save: "Save",
     rowSaved: "Entry saved.",
     rowOk: "OK",
@@ -5300,6 +5371,22 @@ const en: Dict = {
         "This batch can no longer be rescheduled — sending has already started.",
       RESCHEDULE_FAILED:
         "The schedule could not be changed. Please try again.",
+      /* Smart input (Auto-organize) — stable codes, never generic. */
+      EMPTY_INPUT: "Please paste a job advertisement or company details first.",
+      PARSE_NO_COMPANY:
+        "No recognizable company name found — please include the company in the text.",
+      PARSE_NO_EMAIL:
+        "No application e-mail address found — please include a valid e-mail in the text.",
+      PARSE_INVALID_EMAIL:
+        "The detected e-mail address is invalid — please correct it in the input.",
+      DUPLICATE_COMPANY:
+        "This e-mail address is already in the series — duplicates are not added.",
+      COUNT_EXCEEDED:
+        "The series already has 100 entries — the maximum was reached.",
+      POSITION_TOO_LONG:
+        "The position title or job description is too long (max. 160 / 4000 characters) — please shorten the text. Your input is preserved.",
+      CAMPAIGN_SENDING:
+        "A send is in progress — entries can be added afterwards.",
       UNKNOWN: "Something went wrong. Please try again.",
     },
   },
@@ -7626,6 +7713,28 @@ const fr: Dict = {
     step1Title: "Données des entreprises",
     step1Body:
       "Saisissez une entreprise avec une adresse e-mail pour chaque candidature — modifier individuellement ou importer un fichier. La personne de contact et l'adresse sont facultatives et ne sont jamais inventées.",
+    /* Saisie intelligente (coller → analyser → une ligne indépendante) */
+    smartTitle: "Ajouter des entreprises (saisie intelligente)",
+    smartBody:
+      "Collez des informations d'entreprise ou une annonce complète dans n'importe quel format. Nous extrayons automatiquement les détails d'entreprise et de poste disponibles.",
+    smartPlaceholder: "Collez un bloc d'entreprise ou une annonce complète …",
+    smartHint:
+      "Les informations seront ajoutées comme nouvelle ligne, puis la saisie sera effacée.",
+    autoOrganize: "Organiser automatiquement",
+    clearInput: "Effacer la saisie",
+    smartSuccess: "Entrée {n} ajoutée : {company}.",
+    detectedTitle: "Informations détectées",
+    livePreview: "Aperçu en direct",
+    smartMissing: "non trouvé",
+    smartReview: "à vérifier",
+    showFullText: "Afficher le texte complet",
+    collapseText: "Réduire",
+    smartJobDescription: "Description du poste",
+    previewInvalid: "Valeur invalide — veuillez vérifier",
+    previewTooLong:
+      "Dépasse la limite de {max} caractères — veuillez raccourcir avant d'ajouter la ligne.",
+    briefModalHint:
+      "Utilisez « Enregistrer » dans la ligne pour conserver les modifications. Le texte complet n'est jamais tronqué.",
     manageTitle: "Entrées",
     /* Objectif d'entreprises (nombre d'entreprises contrôlé par l'utilisateur) */
     countTargetLabel: "Objectif (entreprises)",
@@ -7675,6 +7784,9 @@ const fr: Dict = {
     colEmail: "Adresse e-mail",
     colContact: "Personne de contact",
     colAddress: "Adresse",
+    colPositionTitle: "Intitulé du poste",
+    colJobDescription: "Description du poste",
+    viewFullText: "Afficher la description complète du poste",
     colStatus: "Statut",
     colLetter: "Lettre de motivation",
     colAttachments: "Pièces jointes",
@@ -7683,6 +7795,8 @@ const fr: Dict = {
     phEmail: "recrutement@entreprise.fr",
     phContact: "facultatif",
     phAddress: "facultatif",
+    phPositionTitle: "p. ex. Technicien en froid (H/F)",
+    phPositionBrief: "Ouvrir la description du poste",
     save: "Enregistrer",
     rowSaved: "Entrée enregistrée.",
     rowOk: "OK",
@@ -7923,6 +8037,23 @@ const fr: Dict = {
         "Cette série ne peut plus être replanifiée — l'envoi a déjà commencé.",
       RESCHEDULE_FAILED:
         "Le planning n'a pas pu être modifié. Veuillez réessayer.",
+      /* Saisie intelligente (organisation auto) — codes stables, jamais génériques. */
+      EMPTY_INPUT:
+        "Veuillez d'abord coller une annonce ou des données d'entreprise.",
+      PARSE_NO_COMPANY:
+        "Aucun nom d'entreprise reconnaissable trouvé — veuillez inclure l'entreprise dans le texte.",
+      PARSE_NO_EMAIL:
+        "Aucune adresse e-mail de candidature trouvée — veuillez inclure une e-mail valide dans le texte.",
+      PARSE_INVALID_EMAIL:
+        "L'adresse e-mail détectée est invalide — veuillez la corriger dans la saisie.",
+      DUPLICATE_COMPANY:
+        "Cette adresse e-mail est déjà présente dans la série — les doublons ne sont pas ajoutés.",
+      COUNT_EXCEEDED:
+        "La série contient déjà 100 entrées — le maximum est atteint.",
+      POSITION_TOO_LONG:
+        "L'intitulé ou la description du poste est trop long (max. 160 / 4000 caractères) — veuillez raccourcir le texte. Votre saisie est conservée.",
+      CAMPAIGN_SENDING:
+        "Un envoi est en cours — les entrées peuvent être ajoutées ensuite.",
       UNKNOWN: "Une erreur est survenue. Veuillez réessayer.",
     },
   },
@@ -10196,7 +10327,27 @@ const ar: Dict = {
     /* الخطوة 1 — بيانات الشركات */
     step1Title: "بيانات الشركات",
     step1Body:
-      "أدخل شركة بعنوان بريد إلكتروني لكل طلب — تحرير فردي أو استيراد ملف. الشخص المسؤول والعنوان اختياريان ولا يُختَرعان أبدًا.",
+      "أدخل شركة بعنوان بريد إلكتروني لكل طلب — تحرير فردي أو استيراد ملف. الشخص المسؤول والعنوان اختياريان ولا يُخترعان أبدًا.",
+    /* الإدخال الذكي (لصق → تحليل → سجل مستقل واحد) */
+    smartTitle: "إضافة شركات (إدخال ذكي)",
+    smartBody:
+      "الصق معلومات الشركة أو إعلان وظيفة كامل بأي صيغة. سنستخرج تلقائيًا تفاصيل الشركة والوظيفة المتوفرة.",
+    smartPlaceholder: "الصق معلومات الشركة أو إعلان الوظيفة الكامل هنا …",
+    smartHint: "سيتم إضافة المعلومات كسجل جديد ثم مسح حقل الإدخال.",
+    autoOrganize: "تنظيم تلقائي",
+    clearInput: "مسح الإدخال",
+    smartSuccess: "تمت إضافة السجل {n}: {company}.",
+    detectedTitle: "المعلومات المكتشفة",
+    livePreview: "معاينة مباشرة",
+    smartMissing: "لم يتم العثور عليه",
+    smartReview: "يتطلب مراجعة",
+    showFullText: "عرض النص الكامل",
+    collapseText: "طيّ",
+    smartJobDescription: "وصف الوظيفة",
+    previewInvalid: "قيمة غير صالحة — يرجى التحقق",
+    previewTooLong: "يتجاوز حد {max} حرفًا — يرجى اختصار النص قبل إضافة السجل.",
+    briefModalHint:
+      "استخدم «حفظ» في السجل لحفظ التغييرات. لا يتم اختصار النص الكامل أبدًا.",
     manageTitle: "السلل",
     /* هدف الشركات (عدد الشركات الذي يتحكم به المستخدم) */
     countTargetLabel: "هدف الشركات",
@@ -10246,14 +10397,19 @@ const ar: Dict = {
     colEmail: "البريد الإلكتروني",
     colContact: "الشخص المسؤول",
     colAddress: "العنوان",
+    colPositionTitle: "مسمى الوظيفة",
+    colJobDescription: "وصف الوظيفة",
+    viewFullText: "عرض وصف الوظيفة الكامل",
     colStatus: "الحالة",
-    colLetter: "خطاب التقديم",
+    colLetter: "خطاب تقديم",
     colAttachments: "المرفقات",
     colActions: "إجراءات",
-    phCompany: "مثال: شركة النموذج",
-    phEmail: "jobs@company.de",
+    phCompany: "مثال: Example GmbH",
+    phEmail: "وظائف@الشركة.دي",
     phContact: "اختياري",
     phAddress: "اختياري",
+    phPositionTitle: "مثال: تقني تبريد (ذكور/إناث)",
+    phPositionBrief: "فتح وصف الوظيفة",
     save: "حفظ",
     rowSaved: "تم حفظ السطر.",
     rowOk: "جيد",
@@ -10481,6 +10637,20 @@ const ar: Dict = {
       CANNOT_RESCHEDULE:
         "لم يعد بإمكانك إعادة جدولة هذه السلسلة — بدأ الإرسال بالفعل.",
       RESCHEDULE_FAILED: "تعذر تغيير الجدول. يرجى المحاولة مرة أخرى.",
+      /* الإدخال الذكي (تنظيم تلقائي) — أكواد مستقرة، لا عامة. */
+      EMPTY_INPUT: "يرجى لصق إعلان وظيفة أو بيانات شركة أولًا.",
+      PARSE_NO_COMPANY:
+        "لم يتم العثور على اسم شركة قابل للتعرف — يرجى تضمين الشركة في النص.",
+      PARSE_NO_EMAIL:
+        "لم يتم العثور على بريد إلكتروني للتقديم — يرجى تضمين بريد صالح في النص.",
+      PARSE_INVALID_EMAIL:
+        "البريد الإلكتروني المكتشف غير صالح — يرجى تصحيحه في حقل الإدخال.",
+      DUPLICATE_COMPANY:
+        "هذا البريد الإلكتروني موجود بالفعل في السلسلة — لا تُضاف العناصر المكررة.",
+      COUNT_EXCEEDED: "تحتوي السلسلة بالفعل على 100 سجل — تم الوصول إلى الحد الأقصى.",
+      POSITION_TOO_LONG:
+        "مسمى الوظيفة أو وصفها طويل جدًا (الحد الأقصى 160 / 4000 حرف) — يرجى اختصار النص. تم الاحتفاظ بإدخالك.",
+      CAMPAIGN_SENDING: "جارٍ إرسال الدفعة — يمكن إضافة السجلات بعد الانتهاء.",
       UNKNOWN: "حدث خطأ ما. يرجى المحاولة مجددًا.",
     },
   },

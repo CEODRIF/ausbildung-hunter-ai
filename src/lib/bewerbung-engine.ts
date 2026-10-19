@@ -64,6 +64,7 @@ import {
   validateApplicantProfile,
   isDocumentKind,
   isValidEmail,
+  normalizeEmail,
   parsePdfCompanyCandidates,
   validateCompanyCount,
   validateDocumentInput,
@@ -81,12 +82,17 @@ import {
   BEW_POSITION_TITLE_MAX,
   BEW_POSITION_BRIEF_MAX,
   BEW_EMPLOYER_FACTS_MAX,
+  BEW_MAX_COUNT,
   type LetterPromptInput,
   type LetterQualityResult,
   type LetterEvalVerdict,
-  BEW_MAX_COUNT,
   BEW_PLATFORM_DAILY_CAP,
 } from "@/lib/bewerbung-automation";
+import {
+  BEW_AD_INPUT_MAX,
+  adAutoAddGate,
+  parseAdvertisement,
+} from "@/lib/bew-ad-parser";
 
 /* ------------------------------------------------------------------ *
  * Row types (mirror the migration)
@@ -677,6 +683,113 @@ export async function saveBewCompanies(
 
   const fresh = await getBewCampaignOwned(admin, userId, campaignId);
   return { campaign: fresh ?? campaign, result };
+}
+
+/**
+ * Add ONE application row to a campaign — the smart-input "Auto-organize"
+ * path.
+ *
+ * Unlike `saveBewCompanies` (a FULL replace: it deletes every row, rewrites
+ * all ids and resets every generated letter), this is a pure APPEND:
+ *
+ *   - no existing row is read-modified or deleted — letters, statuses,
+ *     excluded rows and their seq slots stay byte-identical;
+ *   - the new row gets `seq = max(seq) + 1` over ALL rows (including
+ *     excluded ones — `unique(campaign_id, seq)` covers them), so numbering
+ *     never collides;
+ *   - the pasted text is re-parsed and re-validated HERE (the client's live
+ *     preview is advisory; the server's parse is the single source of truth)
+ *     with the SAME deterministic parser the preview uses;
+ *   - only stable error codes are thrown (the client maps them to localized
+ *     messages; there is no generic failure path here).
+ */
+export async function addBewCompany(
+  userId: string,
+  campaignId: string,
+  rawText: string,
+): Promise<BewApplicationRow> {
+  const { admin, campaign } = await requireOwnedCampaign(userId, campaignId);
+  // Terminal campaigns are immutable; a send in flight locks the list.
+  if (BEW_TERMINAL_CAMPAIGN.has(campaign.status)) throw new Error("CAMPAIGN_CLOSED");
+  if (campaign.status === "sending") throw new Error("CAMPAIGN_SENDING");
+
+  const text = (rawText ?? "").trim();
+  if (!text || text.length > BEW_AD_INPUT_MAX) throw new Error("INVALID_PAYLOAD");
+
+  // Parse + gate with the shared deterministic parser (stable codes).
+  const parsed = parseAdvertisement(text);
+  const gate = adAutoAddGate(parsed);
+  if (!gate.ok) throw new Error(gate.code);
+
+  // One read of the campaign's rows (ANY status): duplicate detection and
+  // the next seq. This is the same single-snapshot style the counters use.
+  const { data: rowsData, error: rowsError } = await admin
+    .from("bew_applications")
+    .select("*")
+    .eq("campaign_id", campaignId);
+  if (rowsError || !rowsData) throw new Error("SAVE_FAILED");
+  const rows = rowsData as unknown as BewApplicationRow[];
+
+  if (rows.length >= BEW_MAX_COUNT) throw new Error("COUNT_EXCEEDED");
+
+  // Duplicate = same normalized e-mail on a row that is still part of the
+  // campaign (excluded/cancelled rows are restorable, so they may be added
+  // again under a new row).
+  const newEmail = normalizeEmail(parsed.companyEmail.value);
+  const duplicated = rows.some(
+    (r) =>
+      r.status !== "excluded" &&
+      r.status !== "cancelled" &&
+      normalizeEmail(r.company_email ?? "") === newEmail,
+  );
+  if (duplicated) throw new Error("DUPLICATE_COMPANY");
+
+  const maxSeq = rows.reduce((m, r) => Math.max(m, r.seq ?? 0), 0);
+  const positionProbe = hasBewPositionColumns();
+
+  const company = parsed.companyName.value.trim();
+  const email = parsed.companyEmail.value.trim();
+  const positionSupported = await positionProbe;
+  const rowPayload = {
+    campaign_id: campaignId,
+    user_id: userId,
+    seq: maxSeq + 1,
+    company_name: company,
+    company_email: email,
+    // Optional fields are null, never empty strings (the existing contract).
+    contact_name: parsed.contactName.value.trim() || null,
+    company_address: parsed.companyAddress.value.trim() || null,
+    subject: buildSubject(campaign.purpose as BewPurpose, company),
+    body_html: "",
+    body_text: "",
+    status: "pending",
+    ...(positionSupported
+      ? {
+          position_title: parsed.positionTitle.value.trim() || null,
+          // The FULL extracted description — the parser never truncates;
+          // over-limit input is rejected upstream (POSITION_TOO_LONG).
+          position_brief: parsed.positionBrief.value.trim() || null,
+          // Never auto-filled: "verified employer facts" are only ever
+          // entered (or verified) by the user.
+          employer_facts: null,
+        }
+      : {}),
+  };
+
+  const { data: inserted, error: insertError } = await admin
+    .from("bew_applications")
+    .insert(rowPayload)
+    .select("*")
+    .single();
+  if (insertError || !inserted) {
+    // Stable code (never the raw DB text): the UI maps it locally.
+    console.error("[bew] addBewCompany: insert failed", insertError?.message);
+    throw new Error("SAVE_FAILED");
+  }
+  // The row count/validity changed → the campaign counters must follow
+  // (valid_count is derived from the rows, so it can never drift).
+  await refreshCampaignCounters(admin, campaignId);
+  return inserted as unknown as BewApplicationRow;
 }
 
 /**

@@ -43,6 +43,7 @@ import {
   buildPendingView,
   isPendingCampaignId,
 } from "./pending-series";
+import { appendRowToView } from "./smart-input-state";
 import { CompaniesStep } from "./companies-step";
 import { DocumentsStep } from "./documents-step";
 import { GenerateStep } from "./generate-step";
@@ -174,11 +175,27 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
   const [positionBrief, setPositionBrief] = useState("");
   const [employerFacts, setEmployerFacts] = useState("");
 
-  const refresh = useCallback(async () => {
+  /** Fresh campaign view (the caller may use the returned server truth;
+   *  the displayed view is updated as a side effect). */
+  const refresh = useCallback(async (): Promise<BewViewDTO | null> => {
     const current = viewRef.current;
-    if (!current) return;
+    if (!current) return null;
     const fresh = await bewGetView(current.campaign.id);
     if (fresh) setView(fresh);
+    return fresh;
+  }, []);
+
+  /**
+   * Append ONE persisted application row to the view (the smart-input
+   * "Auto-organize" success path). The row comes back from the server
+   * action (already validated + persisted); the counters are re-derived
+   * from the rows with the SAME rule the engine uses, so the header and
+   * the step-1→2 gate react immediately. Other rows keep their exact
+   * references (memoized rows are untouched). A later `refresh()`
+   * converges the view to the server truth.
+   */
+  const appendApplication = useCallback((dto: BewApplicationDTO) => {
+    setView((v) => (v ? appendRowToView(v, dto) : v));
   }, []);
 
   /* Step-5 pump: fresh view + one bounded drain of THIS campaign's due
@@ -588,6 +605,7 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
             creatingSeries={creatingSeries}
             seriesConfirmation={seriesConfirmation}
             patchApplication={patchApplication}
+            appendApplication={appendApplication}
             patchCampaign={patchCampaign}
           />
         </div>

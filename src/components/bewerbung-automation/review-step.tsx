@@ -45,7 +45,7 @@ import {
 
 interface Props {
   view: BewViewDTO;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<unknown>;
   selectedIds: Set<string>;
   onToggle: (id: string, selected: boolean) => void;
   /** The applicant's profile name (sender block of the A4 preview). */

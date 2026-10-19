@@ -1,0 +1,346 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  BEW_AD_INPUT_MAX,
+  adAutoAddGate,
+  parseAdvertisement,
+} from "@/lib/bew-ad-parser";
+
+/**
+ * The complete German Kälte- und Klimatechnik Ausbildung advertisement from
+ * the feature design (BA / career-page style paste). Verbatim structure:
+ * contact block first, then labelled role metadata, then the description.
+ */
+const KAELTE_AD = [
+  "Informationen zur Bewerbung",
+  "Amberger Kühltechnik GmbH",
+  "Frau Stefanie Bernklau",
+  "Dr.-Aigner-Str. 15",
+  "92224 Amberg, Oberpfalz",
+  "Telefon: +49 9621 472983",
+  "E-Mail: bernklaustefanie@amberger-kuehltechnik.de",
+  "",
+  "Ausbildung: Mechatroniker/in - Kältetechnik",
+  "Beginn: 01.08.2027",
+  "Ort: Amberg",
+  "Anstellungsart: Vollzeit",
+  "Schulabschluss: Mittlere Reife / Mittlerer Bildungsabschluss",
+  "Beschreibung: Als Mechatroniker für Kältetechnik plant, montierst und wartest du Anlagen der Kälte- und Klimatechnik. Du sorgst dafür, dass die Kälteanlagen beim Kunden einwandfrei funktionieren.",
+].join("\n");
+
+describe("parseAdvertisement — complete German Kälte ad (test 1–3)", () => {
+  const p = parseAdvertisement(KAELTE_AD);
+
+  it("extracts the company name from the legal form line", () => {
+    expect(p.companyName.value).toBe("Amberger Kühltechnik GmbH");
+    expect(p.companyName.status).toBe("extracted");
+  });
+
+  it("extracts the contact person as a suggestion (Frau … line)", () => {
+    expect(p.contactName.value).toBe("Frau Stefanie Bernklau");
+    expect(p.contactName.status).toBe("suggested");
+  });
+
+  it("joins street + postal-code lines into one address", () => {
+    expect(p.companyAddress.value).toBe("Dr.-Aigner-Str. 15, 92224 Amberg, Oberpfalz");
+    expect(p.companyAddress.status).toBe("suggested");
+  });
+
+  it("extracts the labelled e-mail address", () => {
+    expect(p.companyEmail.value).toBe("bernklaustefanie@amberger-kuehltechnik.de");
+    expect(p.companyEmail.status).toBe("extracted");
+  });
+
+  it("extracts the position title SEPARATELY from the description", () => {
+    expect(p.positionTitle.value).toBe("Mechatroniker/in - Kältetechnik");
+    expect(p.positionTitle.status).toBe("extracted");
+  });
+
+  it("extracts the job description from the 'Beschreibung:' content", () => {
+    expect(p.positionBrief.value).toBe(
+      "Als Mechatroniker für Kältetechnik plant, montierst und wartest du Anlagen der Kälte- und Klimatechnik. Du sorgst dafür, dass die Kälteanlagen beim Kunden einwandfrei funktionieren.",
+    );
+    expect(p.positionBrief.status).toBe("extracted");
+    // The title must not leak into the brief and vice versa.
+    expect(p.positionBrief.value).not.toContain("Mechatroniker/in - Kältetechnik");
+    expect(p.positionTitle.value).not.toContain("Als Mechatroniker");
+  });
+
+  it("does not treat 'Informationen zur Bewerbung' as company or contact", () => {
+    expect(p.companyName.value).not.toBe("Informationen zur Bewerbung");
+    expect(p.contactName.value).not.toBe("Informationen zur Bewerbung");
+  });
+
+  it("passes the auto-add gate (company + valid e-mail + within limits)", () => {
+    expect(adAutoAddGate(p)).toEqual({ ok: true });
+  });
+});
+
+describe("parseAdvertisement — sectioned ad with bullets (test 3–4)", () => {
+  const SECTIONED_AD = [
+    "KÜHLO GmbH",
+    "Ausbildungsplatz Mechatronik (m/w/d)",
+    "",
+    "Wir suchen zum 01.09.2027 Verstärkung für unser Team.",
+    "",
+    "Stellenbeschreibung",
+    "Als Mechatroniker (m/w/d) lernst du:",
+    "- Anlagen der Kältetechnik warten",
+    "- Fehler analysieren und beheben",
+    "- Kunden betreuen",
+    "",
+    "Anforderungen",
+    "- Teamfähigkeit",
+    "- Technisches Verständnis",
+    "- Freude am Handwerk",
+    "",
+    "Wir bieten",
+    "- Übernahmemöglichkeit",
+    "- Weiterbildung",
+    "- Team Events",
+    "",
+    "Bewerbung an: karriere@kuehlo-gmbh.de",
+  ].join("\n");
+
+  const p = parseAdvertisement(SECTIONED_AD);
+
+  it("preserves the COMPLETE description including all sections and bullets", () => {
+    expect(p.positionBrief.value).toBe(
+      [
+        "Stellenbeschreibung",
+        "Als Mechatroniker (m/w/d) lernst du:",
+        "- Anlagen der Kältetechnik warten",
+        "- Fehler analysieren und beheben",
+        "- Kunden betreuen",
+        "",
+        "Anforderungen",
+        "- Teamfähigkeit",
+        "- Technisches Verständnis",
+        "- Freude am Handwerk",
+        "",
+        "Wir bieten",
+        "- Übernahmemöglichkeit",
+        "- Weiterbildung",
+        "- Team Events",
+      ].join("\n"),
+    );
+    expect(p.positionBrief.status).toBe("extracted");
+  });
+
+  it("stops the brief at the 'Bewerbung an:' contact section", () => {
+    expect(p.positionBrief.value).not.toContain("Bewerbung an");
+  });
+
+  it("captures the e-mail from the 'Bewerbung an:' line (suggested)", () => {
+    expect(p.companyEmail.value).toBe("karriere@kuehlo-gmbh.de");
+    expect(p.companyEmail.status).toBe("suggested");
+  });
+
+  it("extracts the company from the legal form and leaves the role line as residual header", () => {
+    expect(p.companyName.value).toBe("KÜHLO GmbH");
+    expect(p.companyName.status).toBe("extracted");
+  });
+
+  it("does not invent a position title without a reliable signal", () => {
+    expect(p.positionTitle.status).toBe("missing");
+    expect(p.positionTitle.value).toBe("");
+  });
+});
+
+describe("parseAdvertisement — missing optionals (test 5)", () => {
+  it("keeps absent fields missing instead of guessing", () => {
+    const p = parseAdvertisement("Simple Firma GmbH\njobs@simple-firma.de");
+    expect(p.companyName.value).toBe("Simple Firma GmbH");
+    expect(p.companyEmail.value).toBe("jobs@simple-firma.de");
+    expect(p.contactName.status).toBe("missing");
+    expect(p.companyAddress.status).toBe("missing");
+    expect(p.positionTitle.status).toBe("missing");
+    expect(p.positionBrief.status).toBe("missing");
+  });
+
+  it("returns all-missing for empty / whitespace-only input", () => {
+    for (const text of ["", "   \n\t  \n"]) {
+      const p = parseAdvertisement(text);
+      expect(p.companyName.status).toBe("missing");
+      expect(p.companyEmail.status).toBe("missing");
+      expect(p.contactName.status).toBe("missing");
+      expect(p.companyAddress.status).toBe("missing");
+      expect(p.positionTitle.status).toBe("missing");
+      expect(p.positionBrief.status).toBe("missing");
+      expect(adAutoAddGate(p).ok).toBe(false);
+    }
+  });
+});
+
+describe("parseAdvertisement — invalid e-mail (test 6)", () => {
+  it("flags a malformed labelled e-mail as invalid (never invents one)", () => {
+    const p = parseAdvertisement("ABC GmbH\nE-Mail: info@abc");
+    expect(p.companyEmail.status).toBe("invalid");
+    expect(p.companyEmail.value).toBe("info@abc");
+    expect(adAutoAddGate(p)).toEqual({ ok: false, code: "PARSE_INVALID_EMAIL" });
+  });
+
+  it("flags a malformed bare e-mail as invalid", () => {
+    const p = parseAdvertisement("ABC GmbH\nschreib an: hallo(at)abc.de");
+    // no real token → email stays missing
+    expect(p.companyEmail.status).toBe("missing");
+  });
+
+  it("rejects an ad with no recognizable company (gate)", () => {
+    const p = parseAdvertisement("hallo@nowhere.de");
+    expect(p.companyName.status).toBe("missing");
+    expect(adAutoAddGate(p)).toEqual({ ok: false, code: "PARSE_NO_COMPANY" });
+  });
+
+  it("rejects an ad with a company but no e-mail (gate)", () => {
+    const p = parseAdvertisement("NoMail GmbH\nKeine E-Mail vorhanden.");
+    expect(adAutoAddGate(p)).toEqual({ ok: false, code: "PARSE_NO_EMAIL" });
+  });
+});
+
+describe("parseAdvertisement — misleading navigation labels (test 8)", () => {
+  it("drops cookie/portal noise lines and never uses them as fields", () => {
+    const p = parseAdvertisement(
+      [
+        "Impressum",
+        "Datenschutz",
+        "Cookies",
+        "Zurück zur Liste",
+        "Muster Software Solutions",
+        "Kontakt: Dr. Anna Weber",
+        "info@muster-software.com",
+        "Referenz: 2027-441",
+      ].join("\n"),
+    );
+    expect(p.companyName.value).toBe("Muster Software Solutions");
+    expect(p.companyName.status).toBe("suggested");
+    expect(p.contactName.value).toBe("Dr. Anna Weber");
+    expect(p.contactName.status).toBe("extracted");
+    expect(p.companyEmail.value).toBe("info@muster-software.com");
+    // The short 'Referenz:' metadata line does not pollute the brief.
+    expect(p.positionBrief.status).toBe("missing");
+  });
+
+  it("ignores a 'JETZT BEWERBEN' CTA line (noise) inside the text", () => {
+    const p = parseAdvertisement(
+      [
+        "Beta GmbH",
+        "Stellenbeschreibung",
+        "Du lernst bei uns.",
+        "JETZT BEWERBEN",
+        "Mehr anzeigen",
+      ].join("\n"),
+    );
+    expect(p.positionBrief.value).toBe("Stellenbeschreibung\nDu lernst bei uns.");
+    expect(p.positionBrief.value).not.toContain("BEWERBEN");
+  });
+});
+
+describe("parseAdvertisement — conservative extraction rules", () => {
+  it("uses the all-caps role heading as a SUGGESTED title", () => {
+    const p = parseAdvertisement(
+      [
+        "NORDWIND ELEKTRIK GMBH",
+        "MECHATRONIKER KÄLTEREGELTECHNIK",
+        "jobs@nordwind.de",
+      ].join("\n"),
+    );
+    expect(p.companyName.value).toBe("NORDWIND ELEKTRIK GMBH");
+    expect(p.positionTitle.value).toBe("MECHATRONIKER KÄLTEREGELTECHNIK");
+    expect(p.positionTitle.status).toBe("suggested");
+    expect(p.companyEmail.value).toBe("jobs@nordwind.de");
+  });
+
+  it("recognizes 'Ausbildung als …' title lines", () => {
+    const p = parseAdvertisement(
+      [
+        "Gamma GmbH",
+        "Ausbildung als Fachinformatiker (m/w/d)",
+        "hr@gamma.de",
+      ].join("\n"),
+    );
+    expect(p.positionTitle.value).toBe("Ausbildung als Fachinformatiker (m/w/d)");
+    expect(p.positionTitle.status).toBe("extracted");
+  });
+
+  it("keeps long residual text as the brief (user's own paste, not invention)", () => {
+    const p = parseAdvertisement(
+      [
+        "Delta GmbH",
+        "info@delta.de",
+        "Wir bilden aus und suchen motivierte Azubis, die Technik lieben und sich einbringen wollen.",
+      ].join("\n"),
+    );
+    expect(p.positionBrief.status).toBe("extracted");
+    expect(p.positionBrief.value).toContain("Wir bilden aus");
+  });
+
+  it("does not promote a short residual (e.g. 'HR') to a brief", () => {
+    const p = parseAdvertisement("Epsilon GmbH\nHR\nhr@epsilon.de");
+    expect(p.positionBrief.status).toBe("missing");
+  });
+});
+
+describe("parseAdvertisement — DB-limit rules (no silent truncation)", () => {
+  it("flags a > 4000-char brief as invalid/too_long and keeps the FULL value", () => {
+    const longBrief = "x".repeat(4001);
+    const p = parseAdvertisement(`Long GmbH\ntest@long.de\nBeschreibung: ${longBrief}`);
+    expect(p.positionBrief.status).toBe("invalid");
+    expect(p.positionBrief.problem).toBe("too_long");
+    expect(p.positionBrief.value).toHaveLength(4001); // NOT truncated
+    expect(adAutoAddGate(p)).toEqual({ ok: false, code: "POSITION_TOO_LONG" });
+  });
+
+  it("flags a > 160-char title as invalid/too_long and keeps the FULL value", () => {
+    const longTitle =
+      "Mechatroniker:in für Kälte- und Klimatechnik mit Schwerpunkt Industrieanlagenbau, Instandhaltung und Automatisierungstechnik und Wartung von Industrieanlagen in Vollzeit";
+    expect(longTitle.length).toBeGreaterThan(160);
+    const p = parseAdvertisement(`Long GmbH\ntest@long.de\nAusbildung: ${longTitle}`);
+    expect(p.positionTitle.status).toBe("invalid");
+    expect(p.positionTitle.problem).toBe("too_long");
+    expect(p.positionTitle.value).toBe(longTitle); // NOT truncated
+    expect(adAutoAddGate(p).ok).toBe(false);
+  });
+
+  it("accepts values exactly at the limit", () => {
+    const atMax = "y".repeat(4000);
+    const p = parseAdvertisement(`Max GmbH\ntest@max.de\nBeschreibung: ${atMax}`);
+    expect(p.positionBrief.status).toBe("extracted");
+    expect(adAutoAddGate(p)).toEqual({ ok: true });
+  });
+});
+
+describe("parseAdvertisement — robustness", () => {
+  it("sets tooLongInput for pastes beyond BEW_AD_INPUT_MAX", () => {
+    const p = parseAdvertisement("A".repeat(BEW_AD_INPUT_MAX + 1));
+    expect(p.tooLongInput).toBe(true);
+  });
+
+  it("strips zero-width characters injected by copy from portals", () => {
+    const p = parseAdvertisement("Zeta\u200b GmbH\njobs@zeta\u200b.de");
+    expect(p.companyName.value).toBe("Zeta GmbH");
+    expect(p.companyEmail.value).toBe("jobs@zeta.de");
+  });
+
+  it("collapses runs of blank lines to single paragraph breaks", () => {
+    const p = parseAdvertisement(
+      [
+        "Eta GmbH",
+        "jobs@eta.de",
+        "Stellenbeschreibung",
+        "Erster Absatz.",
+        "",
+        "",
+        "",
+        "Zweiter Absatz.",
+      ].join("\n"),
+    );
+    expect(p.positionBrief.value).toBe("Stellenbeschreibung\nErster Absatz.\n\nZweiter Absatz.");
+  });
+
+  it("normalizes CRLF input from Windows clipboard", () => {
+    const p = parseAdvertisement("Theta GmbH\r\njobs@theta.de\r\nBeschreibung: Ein Satz hier.");
+    expect(p.companyEmail.value).toBe("jobs@theta.de");
+    expect(p.positionBrief.value).toBe("Ein Satz hier.");
+  });
+});

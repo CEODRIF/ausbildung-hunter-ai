@@ -39,7 +39,7 @@ import {
 
 interface Props {
   view: BewViewDTO;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<unknown>;
   /** Pump: fresh persisted view + one bounded drain of THIS campaign's due
    *  queue (the same atomic claim core the cron uses). Resolves true when a
    *  fresh view was received, false when the campaign is gone/not owned. */

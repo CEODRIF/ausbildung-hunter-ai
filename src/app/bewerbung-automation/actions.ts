@@ -26,6 +26,7 @@ import {
 } from "@/lib/bewerbung-automation";
 import {
   BEW_MAX_BATCH,
+  addBewCompany,
   attachBewDocument,
   cancelBewSend,
   createBewCampaign,
@@ -209,6 +210,24 @@ export async function bewSaveCompanies(
     valid: result.validCount,
     duplicates: result.duplicateEmails,
   };
+}
+
+/**
+ * Add ONE company to the campaign from a pasted advertisement (the
+ * smart-input "Auto-organize"). The pasted text is re-parsed and re-validated
+ * SERVER-side — the client's live preview is advisory only, and the returned
+ * row is the persisted truth the client appends to its list. Stable error
+ * codes: INVALID_PAYLOAD (empty/too long), PARSE_NO_COMPANY, PARSE_NO_EMAIL,
+ * PARSE_INVALID_EMAIL, POSITION_TOO_LONG, COUNT_EXCEEDED, DUPLICATE_COMPANY,
+ * CAMPAIGN_CLOSED, CAMPAIGN_SENDING, NOT_FOUND, SAVE_FAILED.
+ */
+export async function bewAddCompany(
+  formData: FormData,
+): Promise<BewApplicationRow> {
+  const { userId } = await requireUser();
+  const campaignId = readString(formData, "campaignId");
+  const text = readString(formData, "text");
+  return await addBewCompany(userId, campaignId, text);
 }
 
 /**

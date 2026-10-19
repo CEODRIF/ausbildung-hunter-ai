@@ -33,7 +33,7 @@ import type { BewApplicationDTO, BewViewDTO } from "./types";
 
 interface Props {
   view: BewViewDTO;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<unknown>;
   /** The applicant's profile name — resolves {{candidate_name}} in the
    *  preview (the real send re-resolves it server-side). */
   applicantName: string;

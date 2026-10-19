@@ -202,15 +202,25 @@ export type BewErrorCode =
   | "EMAIL_LOCKED"
   | "CANDIDATE_NAME_MISSING"
   | "PROFILE_INCOMPLETE"
-  | "NOTHING_TO_SEND"
-  | "QUOTA_EXHAUSTED"
-  | "QUEUE_FAILED"
-  | "INVALID_PAYLOAD"
-  | "SAVE_FAILED"
-  | "DOC_UPLOAD_FAILED"
-  | "DOC_SAVE_FAILED"
-  | "DOC_ATTACH_FAILED"
-  | "UNKNOWN";
+   | "NOTHING_TO_SEND"
+   | "QUOTA_EXHAUSTED"
+   | "QUEUE_FAILED"
+   | "INVALID_PAYLOAD"
+   | "SAVE_FAILED"
+   | "DOC_UPLOAD_FAILED"
+   | "DOC_SAVE_FAILED"
+   | "DOC_ATTACH_FAILED"
+   /* Smart-input "Auto-organize" (addBewCompany) — stable server codes; the
+      EMPTY_INPUT code is produced client-side by the precheck. */
+   | "EMPTY_INPUT"
+   | "PARSE_NO_COMPANY"
+   | "PARSE_NO_EMAIL"
+   | "PARSE_INVALID_EMAIL"
+   | "DUPLICATE_COMPANY"
+   | "COUNT_EXCEEDED"
+   | "POSITION_TOO_LONG"
+   | "CAMPAIGN_SENDING"
+   | "UNKNOWN";
 
 export function bewErrorCode(error: unknown): BewErrorCode {
   const message = error instanceof Error ? error.message : "";
@@ -232,15 +242,23 @@ export function bewErrorCode(error: unknown): BewErrorCode {
      message === "CANDIDATE_NAME_MISSING" ||
      message === "PROFILE_INCOMPLETE" ||
      message === "NOTHING_TO_SEND" ||
-    message === "QUOTA_EXHAUSTED" ||
-    message === "QUEUE_FAILED" ||
-    message === "INVALID_PAYLOAD" ||
-    message === "SAVE_FAILED" ||
-    message === "DOC_UPLOAD_FAILED" ||
-    message === "DOC_SAVE_FAILED" ||
-    message === "DOC_ATTACH_FAILED"
-  )
-    return message as BewErrorCode;
+     message === "QUOTA_EXHAUSTED" ||
+     message === "QUEUE_FAILED" ||
+     message === "INVALID_PAYLOAD" ||
+     message === "SAVE_FAILED" ||
+     message === "DOC_UPLOAD_FAILED" ||
+     message === "DOC_SAVE_FAILED" ||
+     message === "DOC_ATTACH_FAILED" ||
+     message === "EMPTY_INPUT" ||
+     message === "PARSE_NO_COMPANY" ||
+     message === "PARSE_NO_EMAIL" ||
+     message === "PARSE_INVALID_EMAIL" ||
+     message === "DUPLICATE_COMPANY" ||
+     message === "COUNT_EXCEEDED" ||
+     message === "POSITION_TOO_LONG" ||
+     message === "CAMPAIGN_SENDING"
+   )
+     return message as BewErrorCode;
   if (message.startsWith("DOCUMENT_")) return message as BewErrorCode;
   return "UNKNOWN";
 }
