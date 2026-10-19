@@ -15,7 +15,21 @@
  *   columns exist, and the pre-existing delete/count behavior is intact.
  */
 import React from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The smart input navigates to /login when the session expires mid-flow
+// (router.replace); the bare node SSR below has no app-router context, so
+// useRouter() is stubbed exactly as the action-contract test stubs redirect().
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
 
 import {
   appendRowToView,
@@ -251,6 +265,33 @@ describe("runSmartAdd — safety contract", () => {
     expect(outcome).toEqual({ ok: false, code: "UNKNOWN", busy: false });
   });
 
+  it("REGRESSION: an expired session (NEXT_REDIRECT) is RE-THROWN — never swallowed into a generic code", async () => {
+    // This was the reported bug: the session expired while the user had the
+    // real advertisement pasted; the server action's requireUser() bounced
+    // to /login (a NEXT_REDIRECT rejection); runSmartAdd swallowed it into
+    // "UNKNOWN" → the UI showed "Something went wrong. Please try again."
+    const { deps, calls } = makeDeps({
+      add: async () => {
+        calls.push("add");
+        const err = new Error("NEXT_REDIRECT") as Error & { digest?: string };
+        err.digest = "NEXT_REDIRECT";
+        throw err; // what a redirecting server action rejects with
+      },
+    });
+    await expect(runSmartAdd(AD, [], deps)).rejects.toThrow("NEXT_REDIRECT");
+    // add ran, but onRowAdded (the input-clear hook) NEVER fired.
+    expect(calls).toEqual(["add"]);
+  });
+
+  it("a message-only NEXT_REDIRECT (framework variant) is also re-thrown, not mapped to UNKNOWN", async () => {
+    const { deps } = makeDeps({
+      add: async () => {
+        throw new Error("NEXT_REDIRECT");
+      },
+    });
+    await expect(runSmartAdd(AD, [], deps)).rejects.toThrow("NEXT_REDIRECT");
+  });
+
   it("rapid double click: the second call is a silent no-op, add runs ONCE (test 14)", async () => {
     const guard = makeGuard();
     const { deps, calls } = makeDeps({ guard });
@@ -448,6 +489,25 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
     expect(html).toContain("Überprüfte Unternehmens-Fakten");
     // Continue-to-documents is still the footer action.
     expect(html).toContain("Zu den Dokumenten");
+  });
+
+  it("REGRESSION: on an expired session the component NAVIGATES to /login instead of showing a generic error", async () => {
+    // Static contract (same style as the employer-facts guard below): the
+    // re-thrown NEXT_REDIRECT must be caught in submit() and turned into a
+    // re-authentication — never into the err.UNKNOWN fallback.
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(
+      join(
+        process.cwd(),
+        "src/components/bewerbung-automation/smart-company-input.tsx",
+      ),
+      "utf8",
+    );
+    expect(src).toContain("isNextRedirectError");
+    expect(src).toContain('router.replace("/login")');
+    // And the action's JSON-safe result is consumed (not a bare row cast).
+    expect(src).toContain("if (!res.ok) throw new Error(res.code)");
   });
 
   it("the verified employer facts field is NOT auto-filled and stays user-only", async () => {

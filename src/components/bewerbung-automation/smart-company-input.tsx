@@ -16,6 +16,7 @@
  * not re-render on every keystroke.
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { bewAddCompany } from "@/app/bewerbung-automation/actions";
 import { Button } from "@/components/ui";
 import { Icon, type IconName } from "@/components/icon";
@@ -28,8 +29,10 @@ import {
   precheckSmartAdd,
   runSmartAdd,
   type SmartAddFailCode,
+  type SmartAddOutcome,
   type SmartAddRow,
 } from "./smart-input-state";
+import { isNextRedirectError } from "./types";
 import type { BewApplicationDTO, BewViewDTO } from "./types";
 
 type T = (k: string, v?: Record<string, string | number>) => string;
@@ -68,6 +71,7 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
   // DUPLICATE_COMPANY check is the final backstop).
   const inFlightRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const router = useRouter();
 
   useEffect(() => {
     if (text === debounced) return;
@@ -111,31 +115,51 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
     // The pure orchestration (runSmartAdd) owns the safety contract:
     // precheck before any request, onRowAdded (→ input clear) only after
     // the server confirmed, claim guard against rapid double clicks.
-    const outcome = await runSmartAdd(text, view.applications, {
-      claim: () => {
-        if (inFlightRef.current) return false;
-        inFlightRef.current = true;
-        setInFlight(true);
-        return true;
-      },
-      release: () => {
-        inFlightRef.current = false;
-        setInFlight(false);
-      },
-      add: async (raw) => {
-        const fd = new FormData();
-        fd.set("campaignId", campaignId);
-        fd.set("text", raw);
-        return (await bewAddCompany(fd)) as SmartAddRow;
-      },
-      onRowAdded: (dto) => {
-        // SUCCESS — the row lands in the view FIRST, then the input clears.
-        // The pasted text is never discarded before the record exists.
-        onRowAdded(dto);
-        setText("");
-        setBriefExpanded(false);
-      },
-    });
+    let outcome: SmartAddOutcome;
+    try {
+      outcome = await runSmartAdd(text, view.applications, {
+        claim: () => {
+          if (inFlightRef.current) return false;
+          inFlightRef.current = true;
+          setInFlight(true);
+          return true;
+        },
+        release: () => {
+          inFlightRef.current = false;
+          setInFlight(false);
+        },
+        add: async (raw) => {
+          const fd = new FormData();
+          fd.set("campaignId", campaignId);
+          fd.set("text", raw);
+          // The action resolves with a JSON-safe result (a thrown error can
+          // be re-wrapped by the framework and lose its stable code).
+          const res = await bewAddCompany(fd);
+          if (!res.ok) throw new Error(res.code); // → localized below
+          return res.row as SmartAddRow;
+        },
+        onRowAdded: (dto) => {
+          // SUCCESS — the row lands in the view FIRST, then the input clears.
+          // The pasted text is never discarded before the record exists.
+          onRowAdded(dto);
+          setText("");
+          setBriefExpanded(false);
+        },
+      });
+    } catch (e) {
+      if (isNextRedirectError(e)) {
+        // Session expired mid-flow: the server asked for re-authentication.
+        // Navigate instead of showing a (misleading) error — the pasted
+        // text survives until the user returns. Swallowing this redirect
+        // into "UNKNOWN" was the reported generic-error bug.
+        router.replace("/login");
+        return;
+      }
+      // Anything else that escaped runSmartAdd is the single existing
+      // fallback — the input stays intact either way.
+      setError(errText("UNKNOWN"));
+      return;
+    }
     if (outcome.ok) {
       setNotice(t("bewauto.smartSuccess", { n: outcome.row.seq, company: outcome.row.company_name }));
       // Best-effort re-sync (the server truth wins; the append above is the
@@ -148,7 +172,7 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
       // the single existing fallback, no new generic path.)
       setError(errText(outcome.code));
     }
-  }, [text, view.applications, disabled, campaignId, onRowAdded, onRefresh, t, errText]);
+  }, [text, view.applications, disabled, campaignId, onRowAdded, onRefresh, t, errText, router]);
 
   return (
     <div className="rounded-2xl border border-accent/25 bg-surface-2/40 p-4">

@@ -276,13 +276,15 @@ describe("action → engine argument mapping (service contract)", () => {
     expect(call.args).toEqual(["user-1", "c9"]);
   });
 
-  it("bewAddCompany forwards the RAW pasted text (server re-parses; client preview is advisory)", async () => {
+  it("bewAddCompany forwards the RAW pasted text and resolves the persisted row (server re-parses; client preview is advisory)", async () => {
     const rawAd = "Beta GmbH\ninfo@beta.de\nBeschreibung: Testtext.";
     const fd = new FormData();
     fd.set("campaignId", "c1");
     fd.set("text", rawAd);
-    const row = await actions.bewAddCompany(fd);
-    expect(row).toMatchObject({ id: "app-new", seq: 2, company_name: "Beta GmbH" });
+    const res = await actions.bewAddCompany(fd);
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("unreachable: expected ok result");
+    expect(res.row).toMatchObject({ id: "app-new", seq: 2, company_name: "Beta GmbH" });
     const call = engineCalls.find((c) => c.fn === "addBewCompany")!;
     expect(call.args).toEqual(["user-1", "c1", rawAd]);
   });
@@ -297,7 +299,7 @@ describe("action → engine argument mapping (service contract)", () => {
     expect(engineCalls).toHaveLength(0);
   });
 
-  it("bewAddCompany passes stable server error codes through untouched", async () => {
+  it("bewAddCompany passes stable server error codes through untouched (as a RESULT, not a throw)", async () => {
     // One-shot override — the factory's base implementation (which records
     // the call and returns a row) is untouched after this single call.
     const engine = vi.mocked(await import("@/lib/bewerbung-engine"));
@@ -311,9 +313,37 @@ describe("action → engine argument mapping (service contract)", () => {
     const fd = new FormData();
     fd.set("campaignId", "c1");
     fd.set("text", "Beta GmbH\ninfo@beta.de");
-    await expect(actions.bewAddCompany(fd)).rejects.toThrow("DUPLICATE_COMPANY");
-    // The stable code survived the action boundary (no generic mapping).
+    // The stable code survives the action boundary as a plain JSON-safe
+    // result (a thrown error can be re-wrapped by the framework and lose
+    // its code — that was the generic-"Something went wrong" path).
+    const res = await actions.bewAddCompany(fd);
+    expect(res).toEqual({ ok: false, code: "DUPLICATE_COMPANY" });
     expect(engineCalls.find((c) => c.fn === "addBewCompany")).toBeTruthy();
+  });
+
+  it("bewAddCompany maps an UNEXPECTED engine failure to the stable SAVE_FAILED code (never a raw throw)", async () => {
+    const engine = vi.mocked(await import("@/lib/bewerbung-engine"));
+    (engine.addBewCompany as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (...args: unknown[]) => {
+        engineCalls.push({ fn: "addBewCompany", args });
+        throw new Error("boom: 57014: deadlock detected"); // raw, non-stable
+      },
+    );
+    const fd = new FormData();
+    fd.set("campaignId", "c1");
+    fd.set("text", "Beta GmbH\ninfo@beta.de");
+    const res = await actions.bewAddCompany(fd);
+    expect(res).toEqual({ ok: false, code: "SAVE_FAILED" }); // localized on the client
+  });
+
+  it("bewAddCompany NEVER converts the auth redirect into a result (the client must navigate)", async () => {
+    login(null); // expired/absent session → requireUser() redirects
+    const fd = new FormData();
+    fd.set("campaignId", "c1");
+    fd.set("text", "Beta GmbH\ninfo@beta.de");
+    // The redirect error PROPAGATES (swallowing it here would have been the bug).
+    await expect(actions.bewAddCompany(fd)).rejects.toThrow("NEXT_REDIRECT");
+    expect(engineCalls).toHaveLength(0);
   });
 
 });

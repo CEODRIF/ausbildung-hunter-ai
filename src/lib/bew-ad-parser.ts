@@ -126,6 +126,29 @@ const NOISE_LINES = new Set([
   "nächste seite",
   "vorherige seite",
   "seite 1 von 1",
+  /* Portal navigation / link lists (Seco Kältetechnik regression — the
+     "Alle Stellen anzeigen … Webseiten / Webpage / Homepage" tail). */
+  "alle stellen anzeigen",
+  "alle stellen anzeigen in neuem tab öffnen",
+  "im neuen tab öffnen",
+  "webseiten",
+  "webpage",
+  "homepage",
+  "social media seiten",
+  "social media links",
+  "collapse",
+  "ausklappen",
+  "zuklappen",
+  /* Standalone company-profile section labels — the VALUE follows on the
+     next lines; the label itself is structure, not content. */
+  "unternehmensdarstellung",
+  "unternehmensbeschreibung",
+  "unternehmensprofil",
+  "firmenprofil",
+  "firmenbeschreibung",
+  "über das unternehmen",
+  "über die firma",
+  "über uns",
 ]);
 
 /** Description sections — the first of these starts the preserved brief. */
@@ -178,6 +201,7 @@ const STOP_HEADINGS = [
   /^senden sie\b/i,
   /^sendet uns\b/i,
   /^kontaktdaten\b/i,
+  /^kontaktadresse\b/i,
   /^kontakt$/,
   /^ansprechpartner(?:in)?$/,
   /^apply\b/i,
@@ -262,7 +286,8 @@ function findEmailToken(line: string): string | null {
  * ------------------------------------------------------------------ */
 
 const LABEL_EMAIL = /^(e-?mail|email|mail|kontakte?)\s*[:\-–]\s*(.*)$/i;
-const LABEL_COMPANY = /^(firma|unternehmen|arbeitgeber|company|employer)\s*[:\-–]\s*(.+)$/i;
+const LABEL_COMPANY =
+  /^(firma|unternehmen|arbeitgeber|company|employer|unternehmensdarstellung|unternehmensbeschreibung|unternehmensprofil|firmenprofil|firmenbeschreibung)\s*[:\-–]\s*(.+)$/i;
 const LABEL_CONTACT = /^(ansprechpartner(?:in)?|kontaktperson)\s*[:\-–]\s*(.+)$/i;
 const LABEL_ADDRESS = /^(adresse|anschrift|address)\s*[:\-–]\s*(.+)$/i;
 const LABEL_TITLE =
@@ -307,10 +332,13 @@ function fieldFrom(
  * Parse a pasted company block / complete German job advertisement.
  *
  * The text is split into a HEADER region (up to the first description /
- * requirements / benefits heading) and a BRIEF region (from that heading on,
- * until a closing/contact heading). Header lines feed the company fields;
- * the brief region is preserved VERBATIM (paragraph breaks and bullets
- * intact) as the job description.
+ * requirements / benefits heading), a BRIEF region (from that heading on,
+ * until a closing/contact heading) and — when the contact block sits at the
+ * END of the ad, as most German portals render it — a trailing CONTACT
+ * section (from the last closing/contact heading on). Header and contact
+ * lines feed the company fields (header findings win); the brief region is
+ * preserved VERBATIM (paragraph breaks and bullets intact) as the job
+ * description, portal navigation text excluded.
  */
 export function parseAdvertisement(text: string): ParsedAdvertisement {
   const result: ParsedAdvertisement = {
@@ -350,15 +378,20 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
   }
   const headerStop = headerEnd >= 0 ? headerEnd : rawLines.length;
 
-  /* --- pass 2: header region → company fields (explicit labels win) */
-  for (let i = 0; i < headerStop; i++) {
+  /* --- pass 2: header region → company fields (explicit labels win) ---
+     The same rules are reused for the trailing contact section (pass 2b).
+     `overwriteLabels` keeps the header-pass semantics (an explicit label
+     replaces an earlier value of the same field) while the contact pass
+     only fills fields that are still missing — findings from the header
+     region always take precedence (first-wins, nothing re-guessed). */
+  function applyLineRules(i: number, overwriteLabels: boolean): void {
     const line = rawLines[i];
     if (isNoise(line)) {
       consumed[i] = true;
-      continue;
+      return;
     }
     const t = line.trim();
-    if (!t) continue;
+    if (!t) return;
 
     // 1) explicit e-mail label
     const mEmail = t.match(LABEL_EMAIL);
@@ -366,64 +399,78 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       const rest = mEmail[2].trim();
       const token = findEmailToken(rest);
       if (token) {
-        email = isValidEmail(token)
-          ? fieldFrom(token, "extracted")
-          : { value: token, status: "invalid" };
+        if (overwriteLabels || email.status === "missing") {
+          email = isValidEmail(token)
+            ? fieldFrom(token, "extracted")
+            : { value: token, status: "invalid" };
+        }
       } else if (rest && (NAME_PREFIX.test(rest) || NAME_WORDS.test(rest))) {
         // "Kontakt: Frau Müller" — a labelled contact person, not an e-mail.
         if (contact.status === "missing") contact = fieldFrom(rest, "extracted", 120);
       } else if (rest) {
         // Labelled but not a parseable address → flag it, never invent one.
-        email = { value: rest, status: "invalid" };
+        if (overwriteLabels || email.status === "missing") {
+          email = { value: rest, status: "invalid" };
+        }
       }
       consumed[i] = true;
-      continue;
+      return;
     }
 
     // 2) explicit company label
     const mCompany = t.match(LABEL_COMPANY);
     if (mCompany) {
-      company = fieldFrom(mCompany[2], "extracted", 200);
+      if (overwriteLabels || company.status === "missing") {
+        company = fieldFrom(mCompany[2], "extracted", 200);
+      }
       consumed[i] = true;
-      continue;
+      return;
     }
 
     // 3) explicit contact label
     const mContact = t.match(LABEL_CONTACT);
     if (mContact) {
-      contact = fieldFrom(mContact[2], "extracted", 120);
+      if (overwriteLabels || contact.status === "missing") {
+        contact = fieldFrom(mContact[2], "extracted", 120);
+      }
       consumed[i] = true;
-      continue;
+      return;
     }
 
     // 4) explicit address label
     const mAddress = t.match(LABEL_ADDRESS);
     if (mAddress) {
-      address = fieldFrom(mAddress[2], "extracted", 200);
+      if (overwriteLabels || address.status === "missing") {
+        address = fieldFrom(mAddress[2], "extracted", 200);
+      }
       consumed[i] = true;
-      continue;
+      return;
     }
 
     // 5) explicit position-title label ("Ausbildung: Mechatroniker/in …")
     const mTitle = t.match(LABEL_TITLE);
     if (mTitle) {
-      title = fieldFrom(mTitle[2], "extracted", BEW_POSITION_TITLE_MAX);
+      if (overwriteLabels || title.status === "missing") {
+        title = fieldFrom(mTitle[2], "extracted", BEW_POSITION_TITLE_MAX);
+      }
       consumed[i] = true;
-      continue;
+      return;
     }
 
     // 6) "Ausbildung als …" / "Praktikum bei …" style title line
     const mAs = t.match(TITLE_AS);
     if (mAs && wordCount(t) <= 10) {
-      title = fieldFrom(t, "extracted", BEW_POSITION_TITLE_MAX);
+      if (overwriteLabels || title.status === "missing") {
+        title = fieldFrom(t, "extracted", BEW_POSITION_TITLE_MAX);
+      }
       consumed[i] = true;
-      continue;
+      return;
     }
 
     // 7) phone label — recognized so it is never mistaken for other fields
     if (LABEL_PHONE.test(t)) {
       consumed[i] = true;
-      continue;
+      return;
     }
 
     // 8) postal-code line → address (street line above it, when present)
@@ -440,14 +487,16 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
         !PHONE_LINE.test(prevT) &&
         !PLZ_LINE.test(prevT) &&
         (STREET_HINT.test(prevT) || HOUSE_NO.test(prevT));
-      address = fieldFrom(
-        prevIsStreet ? `${prevT}, ${t}` : t,
-        "suggested",
-        200,
-      );
+      if (overwriteLabels || address.status === "missing") {
+        address = fieldFrom(
+          prevIsStreet ? `${prevT}, ${t}` : t,
+          "suggested",
+          200,
+        );
+      }
       consumed[i] = true;
       if (prevIsStreet && i > 0) consumed[i - 1] = true;
-      continue;
+      return;
     }
 
     // 9) bare e-mail token (header region)
@@ -459,14 +508,14 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
           : { value: token, status: "invalid" };
       }
       consumed[i] = true;
-      continue;
+      return;
     }
 
     // 10) legal form → company name (the line is company metadata either way)
     if (LEGAL_FORM.test(t) && t.length <= 80 && wordCount(t) <= 12) {
       if (company.status === "missing") company = fieldFrom(t, "extracted", 200);
       consumed[i] = true;
-      continue;
+      return;
     }
 
     // 11) "Frau …" / "Herr …" / "Dr. …" → contact person (name metadata
@@ -481,10 +530,11 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
     ) {
       if (contact.status === "missing") contact = fieldFrom(t, "suggested", 120);
       consumed[i] = true;
-      continue;
+      return;
     }
 
-    // 12) STOP heading inside the header (rare, e.g. "Kontaktdaten")
+    // 12) STOP heading (e.g. "Kontaktdaten", "Kontaktadresse") — its inline
+    //     content may carry the e-mail; the heading line itself is consumed.
     const h = classifyHeading(t);
     if (h && h.kind === "stop") {
       const rest = h.inline ?? "";
@@ -496,6 +546,31 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       }
       consumed[i] = true;
     }
+  }
+
+  for (let i = 0; i < headerStop; i++) applyLineRules(i, true);
+
+  /* --- pass 2b: the trailing contact section → still-missing fields ---
+     German portals frequently put the contact block (company, contact
+     person, street, postal code, phone, e-mail) AFTER the description —
+     below the last closing/contact heading ("Kontaktadresse", "Kontaktdaten",
+     …). Pass 2 only sees the header region, so that block was silently lost
+     (the Seco Kältetechnik regression: contact + address "not found"). Run
+     the SAME conservative rules over the final contact section, first-wins:
+     header findings are never overwritten. A stop heading that lies BEFORE
+     the description is already covered by pass 2, so this only applies when
+     the last stop heading is at/after the end of the header region. */
+  let contactStart = -1;
+  for (let i = rawLines.length - 1; i >= 0; i--) {
+    if (isNoise(rawLines[i])) continue;
+    const h = classifyHeading(rawLines[i]);
+    if (h && h.kind === "stop") {
+      contactStart = i;
+      break;
+    }
+  }
+  if (contactStart >= headerStop) {
+    for (let i = contactStart; i < rawLines.length; i++) applyLineRules(i, false);
   }
 
   /* --- pass 3: conservative company heuristic (only if still missing) */
