@@ -53,6 +53,7 @@ import {
   wallClockToUtc,
   type DstResolution,
 } from "@/lib/schedule-time";
+import { isNextRedirectError } from "@/components/bewerbung-automation/types";
 import type {
   BewApplicationRow,
   BewCampaignView,
@@ -448,14 +449,73 @@ export async function bewUpdateLetter(
   return await updateBewLetter(userId, applicationId, { subject, bodyHtml });
 }
 
-/** Exclude an application from the campaign. */
+/** The stable codes the exclusion can fail with (never a raw/internal error). */
+export type BewExcludeApplicationCode =
+  | "NOT_FOUND"
+  | "APPLICATION_LOCKED"
+  | "DELETE_FAILED";
+
+export type BewExcludeApplicationResult =
+  | { ok: true }
+  | { ok: false; code: BewExcludeApplicationCode };
+
+const BEW_STABLE_EXCLUDE_CODES = new Set<string>([
+  "NOT_FOUND",
+  "APPLICATION_LOCKED",
+  "DELETE_FAILED",
+]);
+
+/**
+ * Exclude (soft-delete) ONE company row — the red X on step 1.
+ *
+ * Error contract — the same "no generic error" rules as `bewAddCompany`,
+ * because the previous version of this action had exactly two generic-error
+ * holes (the reported "Something went wrong. Please try again." on delete):
+ *   1. An expired/absent session STILL redirects to /login (the
+ *      NEXT_REDIRECT error deliberately PROPAGATES, so the client
+ *      re-authenticates instead of swallowing the redirect into
+ *      err.UNKNOWN — the same bug class the smart-input flow already
+ *      received a fix for);
+ *   2. Every other failure RESOLVES with a stable code (a plain object —
+ *      a thrown error can be re-wrapped by the framework and lose its code
+ *      across the RSC→client boundary):
+ *        - NOT_FOUND          — the id is missing, stale or another
+ *                               user's (ownership: the engine query is
+ *                               user_id-scoped, so a foreign id is
+ *                               indistinguishable from a vanished one and
+ *                               yields no data leak);
+ *        - APPLICATION_LOCKED — the row is in flight (queued/sending/sent);
+ *        - DELETE_FAILED      — an unexpected persistence failure (the
+ *                               internals are logged server-side only).
+ *
+ * `ok` is true EXACTLY when the exclusion persisted. The previous version
+ * ignored the engine's null result, so a missing/stale id was reported as a
+ * success: the UI hid the row while nothing was deleted server-side (the row
+ * then "came back" on the next refresh).
+ */
 export async function bewExcludeApplication(
   formData: FormData,
-): Promise<{ ok: true }> {
-  const { userId } = await requireUser();
+): Promise<BewExcludeApplicationResult> {
+  const { userId } = await requireUser(); // redirect on purpose when signed out
   const applicationId = readString(formData, "applicationId");
-  await excludeBewApplication(userId, applicationId);
-  return { ok: true };
+  try {
+    const row = await excludeBewApplication(userId, applicationId);
+    if (!row) return { ok: false, code: "NOT_FOUND" };
+    return { ok: true };
+  } catch (e) {
+    // A re-authentication request must never be mapped into a delete error —
+    // propagate it so the client navigates to /login.
+    if (isNextRedirectError(e)) throw e;
+    const message = e instanceof Error ? e.message : "";
+    const code: BewExcludeApplicationCode = BEW_STABLE_EXCLUDE_CODES.has(message)
+      ? (message as BewExcludeApplicationCode)
+      : "DELETE_FAILED";
+    if (code === "DELETE_FAILED" && message) {
+      // An unexpected (non-engine) failure: keep the internals server-side.
+      console.error("[bew] bewExcludeApplication: unexpected failure", message);
+    }
+    return { ok: false, code };
+  }
 }
 
 /** Restore a previously excluded application (keeps its letter if complete). */

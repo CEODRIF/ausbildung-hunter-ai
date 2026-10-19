@@ -12,6 +12,7 @@
  *      "Apply" — and the server re-validates the identical rules.
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   bewExcludeApplication,
   bewSaveCompanies,
@@ -65,10 +66,11 @@ import {
   isPendingCampaignId,
   remapPendingDrafts,
 } from "./pending-series";
-import type {
-  BewApplicationDTO,
-  BewViewDTO,
-  CompanyRecord,
+import {
+  isNextRedirectError,
+  type BewApplicationDTO,
+  type BewViewDTO,
+  type CompanyRecord,
 } from "./types";
 
 /** How long the per-row "Saved" chip stays visible after confirmation. */
@@ -206,6 +208,9 @@ export const CompaniesStep = memo(function CompaniesStep({
    appendApplication,
  }: Props) {
   const { t } = useI18n();
+  /** Re-authentication navigation (a server action that redirects to
+   *  /login mid-flow must not be swallowed into a generic error). */
+  const router = useRouter();
   /* Stable-id row view: the manual table is driven by these (draft-aware),
      so every field edit and the per-row delete operate on the same identity. */
   const rows: CompanyRowView[] = useMemo(
@@ -503,18 +508,38 @@ export const CompaniesStep = memo(function CompaniesStep({
             delete next[id];
             return next;
           }),
-        exclude: async (id) => {
-          const fd = new FormData();
-          fd.set("applicationId", id);
-          await bewExcludeApplication(fd);
-        },
-        refresh,
-        onSuccess: (seq) => setNotice(t("bewauto.rowDeleted", { n: seq })),
-        onError: (error) => setError(errMessage(error, t)),
-      });
-    },
-    [refresh, t],
-  );
+         exclude: async (id) => {
+           const fd = new FormData();
+           fd.set("applicationId", id);
+           // The action resolves with a JSON-safe result (a thrown error can
+           // be re-wrapped by the framework and lose its stable code across
+           // the RSC→client boundary). `ok` is true exactly when the
+           // exclusion persisted; a missing/stale/foreign id now fails with
+           // NOT_FOUND instead of being reported as a success (the row is
+           // kept, the error is localized). A re-authentication redirect
+           // still PROPAGATES (it is not an `ok:false` result) so the
+           // onError below can navigate instead of showing a message.
+           const res = await bewExcludeApplication(fd);
+           if (!res.ok) throw new Error(res.code); // → localized below
+         },
+         refresh,
+         onSuccess: (seq) => setNotice(t("bewauto.rowDeleted", { n: seq })),
+         onError: (error) => {
+           if (isNextRedirectError(error)) {
+             // Session expired mid-flow: the server asked for
+             // re-authentication. Navigate instead of showing a (misleading)
+             // generic error — swallowing this redirect into err.UNKNOWN was
+             // the "Something went wrong. Please try again." delete bug (the
+             // same fix the smart-input flow received).
+             router.replace("/login");
+             return;
+           }
+           setError(errMessage(error, t));
+         },
+       });
+     },
+     [refresh, t, router],
+   );
 
   async function handleFile(file: File) {
     setBusy(true);

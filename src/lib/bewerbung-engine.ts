@@ -1825,28 +1825,49 @@ export async function updateBewLetter(
   return updated;
 }
 
-/** Exclude an application from the campaign (blocked once in flight). */
+/**
+ * Exclude (soft-delete) ONE application row — the red X on step 1.
+ *
+ * Ownership is enforced by the user_id-scoped query: a missing id, a STALE id
+ * (the row vanished) or a FOREIGN id (another user's row) all resolve to the
+ * same indistinguishable "not found" — the caller maps that to NOT_FOUND.
+ * Returns the excluded row on success, null when nothing was found.
+ *
+ * Stable codes:
+ *   - "APPLICATION_LOCKED" — the row is in flight (queued/sending/sent);
+ *   - "DELETE_FAILED"      — a real persistence failure (lookup or update
+ *     error). A read failure is deliberately NOT collapsed into "not found":
+ *     the row exists, the user must be able to retry.
+ */
 export async function excludeBewApplication(
   userId: string,
   applicationId: string,
 ): Promise<BewApplicationRow | null> {
   const admin = createAdminClient();
-  const { data: existing } = await admin
+  const { data: existing, error: selectError } = await admin
     .from("bew_applications")
     .select("*")
     .eq("id", applicationId)
     .eq("user_id", userId)
     .maybeSingle();
+  if (selectError) {
+    console.error("[bew] excludeBewApplication: lookup failed", selectError.message);
+    throw new Error("DELETE_FAILED");
+  }
   const app = existing as BewApplicationRow | null;
-  if (!app) return null;
+  if (!app) return null; // missing / stale / foreign id
   if (BEW_IN_FLIGHT.has(app.status)) throw new Error("APPLICATION_LOCKED");
-  const { data } = await admin
+  const { data, error: updateError } = await admin
     .from("bew_applications")
     .update({ status: "excluded", error_code: null, error_message: null })
     .eq("id", applicationId)
     .eq("user_id", userId)
     .select("*")
     .maybeSingle();
+  if (updateError) {
+    console.error("[bew] excludeBewApplication: update failed", updateError.message);
+    throw new Error("DELETE_FAILED");
+  }
   await refreshCampaignCounters(admin, app.campaign_id);
   return (data as BewApplicationRow | null) ?? null;
 }

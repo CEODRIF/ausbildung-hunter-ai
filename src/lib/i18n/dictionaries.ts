@@ -2697,6 +2697,8 @@ const de = {
       INVALID_PAYLOAD: "Ungültige Daten.",
       SAVE_FAILED:
         "Speichern fehlgeschlagen — deine Daten sind möglicherweise unvollständig. Bitte erneut versuchen.",
+      DELETE_FAILED:
+        "Der Eintrag konnte nicht gelöscht werden — bitte erneut versuchen.",
       DOC_UPLOAD_FAILED:
         "Die Datei konnte nicht hochgeladen werden. Bitte erneut versuchen.",
       DOC_SAVE_FAILED:
@@ -5371,6 +5373,8 @@ const en: Dict = {
       INVALID_PAYLOAD: "Invalid data.",
       SAVE_FAILED:
         "Saving failed — your data may be incomplete. Please try again.",
+      DELETE_FAILED:
+        "The entry could not be deleted — please try again.",
       DOC_UPLOAD_FAILED:
         "The file could not be uploaded. Please try again.",
       DOC_SAVE_FAILED:
@@ -8045,6 +8049,8 @@ const fr: Dict = {
       INVALID_PAYLOAD: "Données invalides.",
       SAVE_FAILED:
         "Échec de l'enregistrement — vos données peuvent être incomplètes. Veuillez réessayer.",
+      DELETE_FAILED:
+        "La ligne n'a pas pu être supprimée — veuillez réessayer.",
       DOC_UPLOAD_FAILED:
         "Le fichier n'a pas pu être téléversé. Veuillez réessayer.",
       DOC_SAVE_FAILED:
@@ -10659,6 +10665,7 @@ const ar: Dict = {
       INVALID_PAYLOAD: "بيانات غير صالحة.",
       SAVE_FAILED:
         "فشل الحفظ — قد تكون بياناتك غير مكتملة. يرجى المحاولة مرة أخرى.",
+      DELETE_FAILED: "تعذّر حذف السجل — يرجى المحاولة مرة أخرى.",
       DOC_UPLOAD_FAILED: "تعذر رفع الملف. يرجى المحاولة مرة أخرى.",
       DOC_SAVE_FAILED: "تم رفع الملف لكنه لم يتم تسجيله. يرجى المحاولة مرة أخرى.",
       DOC_ATTACH_FAILED: "تعذر إرفاق المستند بالسلسلة. يرجى المحاولة مرة أخرى.",
