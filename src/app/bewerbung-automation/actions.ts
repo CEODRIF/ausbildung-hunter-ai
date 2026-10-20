@@ -29,6 +29,7 @@ import {
   addBewCompany,
   attachBewDocument,
   cancelBewSend,
+  checkBewSmartInput,
   createBewCampaign,
   createBewCampaignView,
   detachBewDocument,
@@ -47,6 +48,10 @@ import {
   updateBewApplicationFields,
   updateBewCampaignEmail,
   updateBewLetter,
+  type BewApplicationRow,
+  type BewCampaignView,
+  type CreateBewCampaignInput,
+  type StartSendResult,
 } from "@/lib/bewerbung-engine";
 import {
   isSupportedTimezone,
@@ -54,12 +59,8 @@ import {
   type DstResolution,
 } from "@/lib/schedule-time";
 import { isNextRedirectError } from "@/components/bewerbung-automation/types";
-import type {
-  BewApplicationRow,
-  BewCampaignView,
-  CreateBewCampaignInput,
-  StartSendResult,
-} from "@/lib/bewerbung-engine";
+import type { SmartAddFailCode } from "@/components/bewerbung-automation/smart-input-state";
+import type { ParsedAdvertisement } from "@/lib/bew-ad-parser";
 
 /** Re-authenticate on every action; redirect unauthenticated callers. */
 async function requireUser(): Promise<{ userId: string; profile: Profile }> {
@@ -188,6 +189,7 @@ const BEW_KNOWN_CODES = new Set<string>([
   "PARSE_NO_COMPANY",
   "PARSE_NO_EMAIL",
   "PARSE_INVALID_EMAIL",
+  "CHECK_UNAVAILABLE",
 ]);
 
 /**
@@ -299,6 +301,66 @@ export async function bewSaveCompanies(
   });
 }
 
+/**
+ * The smart-input "Check information" step — the ANALYSIS of the pasted text
+ * (NO persistence, ever). Server-side because the AI enhancement runs with
+ * the DEDICATED GEMINI_SMART_INPUT_API_KEY, which must never reach the
+ * browser:
+ *
+ *   - the extraction is the AI-enhanced one (deterministic parse + Gemini
+ *     when configured; any AI failure degrades to the deterministic parse,
+ *     so the Check → Review → Confirm workflow NEVER breaks on AI
+ *     availability);
+ *   - the issues are the SAME shared rule set the client's live check uses,
+ *     evaluated against the campaign's DB rows (server truth);
+ *   - the returned `parsed` is the FROZEN review surface: the exact fields
+ *     the user then sees and confirms.
+ *
+ * Result contract (JSON-safe, like `bewAddCompany` — a plain object, never a
+ * thrown raw error):
+ *   - `ok: true`  — every required field present/valid (the "Confirm and
+ *                   add" button may appear);
+ *   - `ok: false` — `issues` carries ALL stable blocking codes (localized
+ *     client-side) and `parsed` is the (partial) review — EXCEPT the two
+ *     terminal cases `EMPTY_INPUT` (no parse exists) and
+ *     `NOT_FOUND` / `CHECK_UNAVAILABLE` (`parsed: null`, the check itself
+ *     could not run — the pasted text is kept, the user retries).
+ */
+export type BewCheckSmartResult = {
+  ok: boolean;
+  /**
+   * Stable blocking codes (the shared SmartAddFailCode set). The two terminal
+   * codes NOT_FOUND / CHECK_UNAVAILABLE are present ONLY in the `parsed: null`
+   * failure cases (the check itself could not run).
+   */
+  issues: Array<SmartAddFailCode | "NOT_FOUND" | "CHECK_UNAVAILABLE">;
+  parsed: ParsedAdvertisement | null;
+};
+
+export async function bewCheckSmartInput(
+  formData: FormData,
+): Promise<BewCheckSmartResult> {
+  const { userId } = await requireUser(); // redirect on purpose when signed out
+  const campaignId = readString(formData, "campaignId");
+  const text = readString(formData, "text");
+  if (!text.trim()) {
+    return { ok: false, issues: ["EMPTY_INPUT"], parsed: null };
+  }
+  try {
+    const { parsed, issues } = await checkBewSmartInput(userId, campaignId, text);
+    return { ok: issues.length === 0, issues, parsed };
+  } catch (e) {
+    if (isNextRedirectError(e)) throw e; // re-authentication — propagate
+    const message = e instanceof Error ? e.message : "";
+    const code = message === "NOT_FOUND" ? "NOT_FOUND" : "CHECK_UNAVAILABLE";
+    if (code === "CHECK_UNAVAILABLE" && message) {
+      // Internals stay server-side; the user only sees the stable code.
+      console.error("[bew] bewCheckSmartInput: unexpected failure", message);
+    }
+    return { ok: false, issues: [code], parsed: null };
+  }
+}
+
 /** The smart-add result — a JSON-safe union, never a thrown raw error.
  *  NOTE: the campaign STATE is not among these — company entry is decoupled
  *  from the series lifecycle (a terminal series is reopened by receiving a
@@ -355,8 +417,14 @@ export async function bewAddCompany(
   const { userId } = await requireUser(); // redirect on purpose when signed out
   const campaignId = readString(formData, "campaignId");
   const text = readString(formData, "text");
+  // The FROZEN reviewed extraction (from the check step) — the exact fields
+  // the user reviewed and confirmed. The engine re-validates and re-grounds
+  // every value against the raw text before persisting it (a tampered or
+  // drifted payload falls back to the deterministic re-parse; malformed
+  // JSON is the stable INVALID_PAYLOAD code).
+  const reviewed = readJson<unknown>(formData, "reviewed", undefined);
   try {
-    const row = await addBewCompany(userId, campaignId, text);
+    const row = await addBewCompany(userId, campaignId, text, reviewed);
     return { ok: true, row };
   } catch (e) {
     const message = e instanceof Error ? e.message : "";

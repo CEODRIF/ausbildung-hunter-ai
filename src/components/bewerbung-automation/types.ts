@@ -48,6 +48,10 @@ export interface BewApplicationDTO {
   position_title?: string | null;
   position_brief?: string | null;
   employer_facts?: string | null;
+  /** Smart-input extracted phone (20261117000000); verbatim, never invented. */
+  company_phone?: string | null;
+  /** Smart-input industry classification (20261117000000). */
+  company_industry?: string | null;
 }
 
 export interface BewCampaignDTO {

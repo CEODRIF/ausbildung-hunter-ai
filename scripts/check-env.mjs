@@ -97,6 +97,10 @@ const CHECKS = [
   { name: "AI_VISION_MODEL", required: false, kind: "id" },
   { name: "ARBEITSAGENTUR_API_KEY", required: false, kind: "id" },
   { name: "TAVILY_API_KEY", required: false, kind: "secret" },
+  // Smart Input AI extraction (bewerbung-automation): DEDICATED Gemini key —
+  // optional; without it the deterministic parser carries the flow.
+  { name: "GEMINI_SMART_INPUT_API_KEY", required: false, kind: "secret" },
+  { name: "GEMINI_SMART_INPUT_MODEL", required: false, kind: "id" },
   // Community voice (Phase 4 + 6B eviction seam): server-side only.
   { name: "LIVEKIT_URL", required: "production", kind: "wsUrl" },
   { name: "LIVEKIT_API_KEY", required: "production", kind: "id" },

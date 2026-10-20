@@ -9,13 +9,19 @@
  *      shared deterministic parser (`@/lib/bew-ad-parser`) extracts the
  *      supported fields LIVE next to the input (with extracted /
  *      needs-review / missing / invalid states);
- *   2. "Check information" freezes the analysis of the EXACT pasted text:
- *      every blocking problem is listed (exactly which fields need
- *      attention), and when the check passes the "Confirm and add" button
- *      appears — NOTHING is persisted by the check itself;
- *   3. "Confirm and add" sends the RAW text to the `bewAddCompany` server
- *      action, which re-parses, re-validates and appends ONE independent
- *      row to the CURRENT series (the DUPLICATE_COMPANY check is the final
+ *   2. "Check information" freezes the analysis of the EXACT pasted text
+ *      SERVER-side (`bewCheckSmartInput` — the deterministic parse plus the
+ *      AI enhancement when the dedicated GEMINI_SMART_INPUT_API_KEY is
+ *      configured): every blocking problem is listed (exactly which fields
+ *      need attention), and when the check passes the "Confirm and add"
+ *      button appears — NOTHING is persisted by the check itself. The
+ *      frozen server result (the AI-enhanced fields) becomes the review
+ *      surface shown in the panel while the text is unchanged;
+ *   3. "Confirm and add" sends the RAW text AND the frozen reviewed fields
+ *      to the `bewAddCompany` server action, which re-validates and
+ *      re-grounds every value (the deterministic re-parse is the fallback
+ *      for anything that does not ground) and appends ONE independent row
+ *      to the CURRENT series (the DUPLICATE_COMPANY check is the final
  *      backstop — repeated submissions never create duplicate rows).
  *
  * The input is cleared ONLY after the server has persisted the confirmed
@@ -27,7 +33,10 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { bewAddCompany } from "@/app/bewerbung-automation/actions";
+import {
+  bewAddCompany,
+  bewCheckSmartInput,
+} from "@/app/bewerbung-automation/actions";
 import { Button } from "@/components/ui";
 import { Icon, type IconName } from "@/components/icon";
 import {
@@ -73,6 +82,8 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
   const [text, setText] = useState("");
   const [debounced, setDebounced] = useState("");
   const [inFlight, setInFlight] = useState(false);
+  /** The server "Check information" round trip is in flight. */
+  const [checking, setChecking] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [briefExpanded, setBriefExpanded] = useState(false);
@@ -102,14 +113,24 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
    *  render time (a stale snapshot is inert; no effect sync needed). */
   const activeReview = review && review.snapshot === text ? review : null;
 
-  /** Live preview (debounced) — the SAME parser the server runs. */
+  /** Live preview (debounced) — the SAME deterministic parser the server
+   *  floor runs. */
   const parsed = useMemo(
     () => (debounced.trim() ? parseAdvertisement(debounced) : null),
     [debounced],
   );
 
+  /** The fields the review panel shows: while a check is ACTIVE, the FROZEN
+   *  server result (the reviewed truth, possibly AI-enhanced); otherwise the
+   *  live deterministic preview. Reviewing what will be persisted — and only
+   *  that — is the point of the two-step flow. */
+  const panelParsed = activeReview?.parsed ?? parsed;
+
   /** Live check for the preview panel (client only — the server re-runs the
-   *  same rules on confirm): ALL blocking issues, not just the first. */
+   *  same rules on check): ALL blocking issues, not just the first. Suppressed
+   *  while a review is active (the review's own issue list is the source of
+   *  truth then — the server check may legitimately differ from the
+   *  deterministic preview, e.g. an e-mail only the AI found). */
   const liveCheck = useMemo(
     () => (debounced.trim() ? checkSmartAdd(debounced, view.applications) : null),
     [debounced, view.applications],
@@ -135,18 +156,65 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
   }, []);
 
   /**
-   * "Check information" — the analysis step (synchronous, NO request, NO
-   * write): the shared deterministic parser runs on the EXACT pasted text
-   * and the result becomes the review surface. When something is missing
-   * or invalid, EVERY blocking problem is listed (exactly which fields need
-   * attention); only when the check passes does the "Confirm and add"
-   * button appear. Nothing is persisted until the user confirms.
+   * "Check information" — the analysis step (NO write, ever): the server
+   * runs the full extraction on the EXACT pasted text (deterministic parse +
+   * the AI enhancement when the dedicated GEMINI_SMART_INPUT_API_KEY is
+   * configured) and the frozen result becomes the review surface. When
+   * something is missing or invalid, EVERY blocking problem is listed
+   * (exactly which fields need attention); only when the check passes does
+   * the "Confirm and add" button appear. Nothing is persisted until the
+   * user confirms.
+   *
+   * Empty or over-limit input fails the SAME way as before, instantly and
+   * WITHOUT a round trip (the deterministic rules already decide it).
+   * A session expiry mid-check navigates to /login (never a generic error);
+   * any other failure shows the stable CHECK_UNAVAILABLE code and keeps the
+   * pasted text for a retry.
    */
   const onCheck = useCallback(() => {
+    if (disabled || checking || inFlight) return;
     setError(null);
     setNotice(null);
-    setReview({ ...checkSmartAdd(text, view.applications), snapshot: text });
-  }, [text, view.applications]);
+    const local = checkSmartAdd(text, view.applications);
+    if (!text.trim() || local.parsed?.tooLongInput) {
+      setReview({ ...local, snapshot: text });
+      return;
+    }
+    setReview(null);
+    setChecking(true);
+    const checkedText = text; // the snapshot is captured BEFORE the call
+    (async () => {
+      try {
+        const fd = new FormData();
+        fd.set("campaignId", campaignId);
+        fd.set("text", checkedText);
+        const res = await bewCheckSmartInput(fd);
+        if (res.parsed === null) {
+          // The check itself could not run (foreign campaign / internal
+          // failure) — stable code, localized, text kept for the retry.
+          setError(errText(res.issues[0] ?? "CHECK_UNAVAILABLE"));
+          return;
+        }
+        // parsed !== null ⇒ the terminal codes are absent (action contract) —
+        // the issues are plain SmartAddFailCodes the review surface expects.
+        setReview({
+          ok: res.ok,
+          issues: res.issues as SmartCheckResult["issues"],
+          parsed: res.parsed,
+          snapshot: checkedText,
+        });
+      } catch (e) {
+        if (isNextRedirectError(e)) {
+          // Session expired mid-check: re-authenticate, keep the text.
+          router.replace("/login");
+          return;
+        }
+        setError(errText("CHECK_UNAVAILABLE"));
+      } finally {
+        setChecking(false);
+      }
+    })();
+  }, [text, view.applications, campaignId, disabled, checking, inFlight, errText, router]);
 
   /**
    * "Confirm and add" — the persistence step. Only reachable while the
@@ -175,10 +243,15 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
           inFlightRef.current = false;
           setInFlight(false);
         },
-        add: async (raw) => {
+        add: async (raw, reviewed) => {
           const fd = new FormData();
           fd.set("campaignId", campaignId);
           fd.set("text", raw);
+          // The frozen reviewed extraction (the exact fields the user saw at
+          // check time) — the server re-validates and re-grounds every value
+          // before persisting it; legacy clients omit it and get the
+          // deterministic re-parse.
+          if (reviewed) fd.set("reviewed", JSON.stringify(reviewed));
           // The action resolves with a JSON-safe result (a thrown error can
           // be re-wrapped by the framework and lose its stable code).
           const res = await bewAddCompany(fd);
@@ -252,14 +325,19 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
             {/* Step 1 of the workflow — analyze (no write). Becomes
                 secondary once the check passed and the confirm is the
                 active step. */}
-            <Button
-              variant={activeReview?.ok ? "secondary" : "primary"}
-              disabled={disabled || inFlight}
-              onClick={onCheck}
-            >
-              <Icon name="spark" size={16} />
-              {t("bewauto.checkInformation")}
-            </Button>
+             <Button
+               variant={activeReview?.ok ? "secondary" : "primary"}
+               disabled={disabled || inFlight || checking}
+               aria-busy={checking || undefined}
+               onClick={onCheck}
+             >
+               {checking ? (
+                 <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+               ) : (
+                 <Icon name="spark" size={16} />
+               )}
+               {t("bewauto.checkInformation")}
+             </Button>
             {/* Step 2 — persist. Rendered ONLY when the check passed for
                 the exact current text; the server still re-validates. */}
             {activeReview?.ok && (
@@ -344,11 +422,13 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
             </span>
           </div>
           <dl className="mt-3 space-y-2.5">
-            <PreviewRow icon="briefcase" label={t("bewauto.colCompany")} field={parsed?.companyName} t={t} />
-            <PreviewRow icon="user" label={t("bewauto.colContact")} field={parsed?.contactName} t={t} />
-            <PreviewRow icon="pin" label={t("bewauto.colAddress")} field={parsed?.companyAddress} t={t} />
-            <PreviewRow icon="mail" label={t("bewauto.colEmail")} field={parsed?.companyEmail} t={t} />
-            <PreviewRow icon="target" label={t("bewauto.positionTitle")} field={parsed?.positionTitle} t={t} />
+            <PreviewRow icon="briefcase" label={t("bewauto.colCompany")} field={panelParsed?.companyName} t={t} />
+            <PreviewRow icon="user" label={t("bewauto.colContact")} field={panelParsed?.contactName} t={t} />
+            <PreviewRow icon="pin" label={t("bewauto.colAddress")} field={panelParsed?.companyAddress} t={t} />
+            <PreviewRow icon="phone" label={t("bewauto.colPhone")} field={panelParsed?.companyPhone} t={t} maxLen={80} />
+            <PreviewRow icon="mail" label={t("bewauto.colEmail")} field={panelParsed?.companyEmail} t={t} />
+            <PreviewRow icon="target" label={t("bewauto.positionTitle")} field={panelParsed?.positionTitle} t={t} />
+            <PreviewRow icon="building" label={t("bewauto.colIndustry")} field={panelParsed?.companyIndustry} t={t} maxLen={120} />
           </dl>
 
           {/* Dedicated job-description area (multi-line, expandable). */}
@@ -358,18 +438,18 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
               <span className="text-xs font-semibold text-muted">
                 {t("bewauto.smartJobDescription")}
               </span>
-              {parsed?.positionBrief.status === "suggested" && (
+              {panelParsed?.positionBrief.status === "suggested" && (
                 <span className="rounded-full bg-warning-soft px-2 py-0.5 text-[10px] font-semibold text-warning">
                   {t("bewauto.smartReview")}
                 </span>
               )}
-              {parsed?.positionBrief.status === "invalid" && (
+              {panelParsed?.positionBrief.status === "invalid" && (
                 <span className="rounded-full bg-danger-soft px-2 py-0.5 text-[10px] font-semibold text-danger">
                   {t("bewauto.previewInvalid")}
                 </span>
               )}
             </div>
-            {parsed?.positionBrief.value ? (
+            {panelParsed?.positionBrief.value ? (
               <>
                 <div
                   className={`mt-1.5 whitespace-pre-wrap rounded-xl border border-line bg-surface-2/60 p-2.5 text-xs leading-5 text-ink ${
@@ -378,14 +458,14 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
                       : "line-clamp-5"
                   }`}
                 >
-                  {parsed.positionBrief.value}
+                  {panelParsed.positionBrief.value}
                 </div>
-                {parsed.positionBrief.problem === "too_long" && (
+                {panelParsed.positionBrief.problem === "too_long" && (
                   <p className="mt-1 text-[11px] font-medium text-danger">
                     {t("bewauto.previewTooLong", { max: 4000 })}
                   </p>
                 )}
-                {parsed.positionBrief.value.length > 220 && (
+                {panelParsed.positionBrief.value.length > 220 && (
                   <button
                     type="button"
                     onClick={() => setBriefExpanded((v) => !v)}
@@ -397,17 +477,19 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
               </>
             ) : (
               <p className="mt-1.5 text-xs text-faint">
-                — {parsed ? t("bewauto.smartMissing") : t("bewauto.smartPlaceholder")}
+                — {panelParsed ? t("bewauto.smartMissing") : t("bewauto.smartPlaceholder")}
               </p>
             )}
           </div>
 
           {/* Live check (client only; the server re-checks everything on
-              confirm) — ALL blocking issues are listed, not just the
+              check/confirm) — ALL blocking issues are listed, not just the
               first, so the exact fields needing attention are visible
-              before "Check information" is even clicked. */}
-          {!parsed && <p className="mt-3 text-xs text-faint">{t("bewauto.smartBody")}</p>}
-          {liveCheck && !liveCheck.ok && (
+              before "Check information" is even clicked. Suppressed while a
+              review is active: the frozen server result (and its issue
+              list, shown under the input) is the source of truth then. */}
+          {!panelParsed && <p className="mt-3 text-xs text-faint">{t("bewauto.smartBody")}</p>}
+          {!activeReview && liveCheck && !liveCheck.ok && (
             <ul className="mt-3 list-disc space-y-0.5 ps-4 text-xs font-medium text-warning">
               {liveCheck.issues.map((code) => (
                 <li key={code}>{errText(code)}</li>
@@ -427,14 +509,20 @@ function PreviewRow({
   label,
   field,
   t,
+  maxLen,
 }: {
   icon: IconName;
   label: string;
   field: ParsedAdField | undefined;
   t: T;
+  /** DB column cap for the "too long" hint (falls back to the position-title
+   *  / brief rule when the row is one of those). */
+  maxLen?: number;
 }) {
   const status = field?.status ?? "missing";
   const value = field?.value ?? "";
+  const limit =
+    maxLen ?? (label === t("bewauto.positionTitle") ? 160 : 4000);
   return (
     <div className="flex items-start gap-2.5">
       <Icon name={icon} size={14} className="mt-0.5 shrink-0 text-accent" />
@@ -464,11 +552,9 @@ function PreviewRow({
         )}
         {status === "invalid" && (
           <span className="mt-1 block text-[11px] font-medium text-danger">
-            {field?.problem === "too_long"
-              ? t("bewauto.previewTooLong", {
-                  max: label === t("bewauto.positionTitle") ? 160 : 4000,
-                })
-              : t("bewauto.previewInvalid")}
+             {field?.problem === "too_long"
+               ? t("bewauto.previewTooLong", { max: limit })
+               : t("bewauto.previewInvalid")}
           </span>
         )}
       </dd>

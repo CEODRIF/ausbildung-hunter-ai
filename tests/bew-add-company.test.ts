@@ -11,7 +11,7 @@
  *     re-added; the 100-row cap holds;
  *   - the position-brief schema probe degrades gracefully (no position keys).
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -21,6 +21,8 @@ interface DB {
   bew_campaigns: Row[];
   bew_applications: Row[];
   positionColumnsBroken: boolean;
+  /** Simulates the pending 20261117000000 migration (no smart columns). */
+  smartColumnsBroken: boolean;
   /** Records every delete issued on bew_applications (must stay empty). */
   appDeletes: number;
 }
@@ -35,6 +37,7 @@ function freshDb(): DB {
     bew_campaigns: [],
     bew_applications: [],
     positionColumnsBroken: false,
+    smartColumnsBroken: false,
     appDeletes: 0,
   };
 }
@@ -83,6 +86,14 @@ function makeFrom(table: string) {
       db.positionColumnsBroken &&
       table === "bew_campaigns" &&
       state.selectCols === "position_title"
+    ) {
+      return { data: null, error: { message: "42703: column does not exist" } };
+    }
+    // select — simulate the pending 20261117000000 migration state.
+    if (
+      db.smartColumnsBroken &&
+      table === "bew_applications" &&
+      state.selectCols === "company_phone"
     ) {
       return { data: null, error: { message: "42703: column does not exist" } };
     }
@@ -151,9 +162,12 @@ vi.doMock("@/lib/contact-name-support", () => ({
   hasApplicantProfileColumns: () => Promise.resolve(true),
 }));
 
-const { addBewCompany, resetBewPositionColumnsProbe } = await import(
-  "@/lib/bewerbung-engine"
-);
+const {
+  addBewCompany,
+  checkBewSmartInput,
+  resetBewPositionColumnsProbe,
+  resetBewSmartColumnsProbe,
+} = await import("@/lib/bewerbung-engine");
 
 /* ------------------- Seeds ------------------- */
 
@@ -225,6 +239,7 @@ async function expectCode(fn: () => Promise<unknown>, code: string) {
 beforeEach(() => {
   db = freshDb();
   resetBewPositionColumnsProbe();
+  resetBewSmartColumnsProbe();
 });
 
 /* ------------------- Happy path ------------------- */
@@ -621,5 +636,196 @@ describe("addBewCompany — series state is NOT a prerequisite (regression, MOCK
     }
     await expectCode(() => addBewCompany(USER, CAMPAIGN, "Gamma GmbH\ninfo@gamma.de\nBeschreibung: Test."), "COUNT_EXCEEDED");
     expect(db.bew_applications).toHaveLength(100); // nothing appended past the cap
+  });
+});
+
+
+/* ------------------- Reviewed fields (AI-enhanced confirm) ------------------- */
+
+function reviewedFields(over: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+  const f = (value: string, status: string = "extracted") => ({ value, status });
+  return {
+    companyName: f("Amberger Kühltechnik GmbH"),
+    companyEmail: f("bernklaustefanie@amberger-kuehltechnik.de"),
+    contactName: f("Frau Stefanie Bernklau"),
+    companyAddress: f("Dr.-Aigner-Str. 15, 92224 Amberg, Oberpfalz"),
+    companyPhone: f("+49 9621 472983"),
+    companyIndustry: f("HVAC & Refrigeration — Kältetechnik"),
+    positionTitle: f("Mechatroniker/in - Kältetechnik"),
+    positionBrief: f(
+      "Als Mechatroniker für Kältetechnik planst, montierst und wartest du Anlagen der Kälte- und Klimatechnik. Du sorgst dafür, dass die Kälteanlagen beim Kunden einwandfrei funktionieren.",
+    ),
+    tooLongInput: false,
+    ...over,
+  };
+}
+
+describe("addBewCompany — reviewed fields (what was reviewed is persisted)", () => {
+  it("persists the EXACT reviewed values (phone verbatim + industry) when they ground", async () => {
+    seedCampaign();
+    const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD, reviewedFields());
+    expect(row.company_phone).toBe("+49 9621 472983");
+    expect(row.company_industry).toBe("HVAC & Refrigeration — Kältetechnik");
+    expect(row.company_name).toBe("Amberger Kühltechnik GmbH");
+    expect(row.company_email).toBe("bernklaustefanie@amberger-kuehltechnik.de");
+  });
+
+  it("falls back to the deterministic re-parse when a reviewed value does NOT ground", async () => {
+    seedCampaign();
+    // The deterministic parser finds no phone in this text (no label, no
+    // bare number line) — an ungrounded reviewed phone must be dropped.
+    const ad = "Omega GmbH\ninfo@omega.de\nruf mich unter 0151/9876543 an\nBeschreibung: Wir suchen Verstärkung.";
+    const bad = reviewedFields({
+      companyName: f2("Omega GmbH"),
+      companyEmail: f2("info@omega.de"),
+      contactName: f2("", "missing"),
+      companyAddress: f2("", "missing"),
+      companyPhone: f2("+49 9999 000000"),
+      companyIndustry: f2("", "missing"),
+      positionTitle: f2("", "missing"),
+      positionBrief: f2("Wir suchen Verstärkung."),
+    });
+    const row = await addBewCompany(USER, CAMPAIGN, ad, bad);
+    expect(row.company_name).toBe("Omega GmbH");
+    expect(row.company_email).toBe("info@omega.de");
+    expect(row.company_phone ?? null).toBeNull(); // fabricated phone rejected
+    expect(row.company_industry ?? null).toBeNull();
+  });
+
+  it("legacy call (no reviewed) still persists the deterministic phone (no AI needed)", async () => {
+    seedCampaign();
+    const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
+    expect(row.company_phone).toBe("+49 9621 472983"); // labeled, verbatim
+    expect(row.company_industry ?? null).toBeNull(); // deterministic never classifies
+  });
+
+  it("migration pending (no smart columns): degrades gracefully, NO 42703", async () => {
+    db.smartColumnsBroken = true;
+    seedCampaign();
+    const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD, reviewedFields());
+    // The row is persisted WITHOUT the smart columns (keys absent).
+    expect(row.company_name).toBe("Amberger Kühltechnik GmbH");
+    expect(row.company_phone).toBeUndefined();
+    expect(row.company_industry).toBeUndefined();
+  });
+});
+
+function f2(value: string, status: string = "extracted") {
+  return { value, status };
+}
+
+/* ------------------- checkBewSmartInput (the server "Check information") ------------------- */
+
+describe("checkBewSmartInput — server-side analysis, no persistence", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.GEMINI_SMART_INPUT_API_KEY;
+    delete process.env.GEMINI_SMART_INPUT_MODEL;
+  });
+
+  it("no credentials → deterministic parse + issues, and NOTHING is written", async () => {
+    seedCampaign();
+    seedApp(1, { company_name: "Alpha GmbH", company_email: "jobs@alpha.de", status: "pending" });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { parsed, issues } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
+    expect(fetchMock).not.toHaveBeenCalled(); // no AI without the dedicated key
+    expect(parsed.companyName.value).toBe("Amberger Kühltechnik GmbH");
+    expect(parsed.companyPhone.value).toBe("+49 9621 472983");
+    expect(issues).toEqual([]);
+    expect(db.bew_applications).toHaveLength(1); // the check writes nothing
+  });
+
+  it("dedicated key + valid AI response → merged (AI-enhanced) parsed result", async () => {
+    process.env.GEMINI_SMART_INPUT_API_KEY = "test-dedicated-key-0123456789";
+    seedCampaign();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        company_name: "Amberger Kühltechnik GmbH",
+                        contact_name: "Frau Stefanie Bernklau",
+                        contact_role: null,
+                        company_address: "Dr.-Aigner-Str. 15, 92224 Amberg, Oberpfalz",
+                        emails: [
+                          {
+                            value: "bernklaustefanie@amberger-kuehltechnik.de",
+                            context: "employer",
+                          },
+                        ],
+                        phones: [
+                          { value: "+49 9621 472983", context: "employer" },
+                        ],
+                        position_title: "Mechatroniker/in - Kältetechnik",
+                        position_brief:
+                          "Als Mechatroniker für Kältetechnik planst, montierst und wartest du Anlagen der Kälte- und Klimatechnik. Du sorgst dafür, dass die Kälteanlagen beim Kunden einwandfrei funktionieren.",
+                        industry: {
+                          category: "HVAC & Refrigeration",
+                          subcategory: "Kältetechnik",
+                          confidence: "high",
+                        },
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const { parsed, issues } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
+    expect(issues).toEqual([]);
+    // AI-enhanced fields present in the frozen review surface.
+    expect(parsed.companyIndustry.value).toBe("HVAC & Refrigeration — Kältetechnik");
+    expect(parsed.companyIndustry.status).toBe("extracted");
+    expect(parsed.companyPhone.value).toBe("+49 9621 472983");
+    expect(db.bew_applications).toHaveLength(0); // still: no write
+  });
+
+  it("dedicated key + API failure (500) → deterministic fallback, no throw, no write", async () => {
+    process.env.GEMINI_SMART_INPUT_API_KEY = "test-dedicated-key-0123456789";
+    seedCampaign();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 500 })));
+    const { parsed, issues } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
+    expect(issues).toEqual([]);
+    expect(parsed.companyName.value).toBe("Amberger Kühltechnik GmbH");
+    expect(parsed.companyIndustry.status).toBe("missing"); // AI failed → no industry
+    expect(db.bew_applications).toHaveLength(0);
+  });
+
+  it("empty text → INVALID_PAYLOAD issue, over-limit → deterministic rejection without an AI call", async () => {
+    seedCampaign();
+    const empty = await checkBewSmartInput(USER, CAMPAIGN, "   ");
+    expect(empty.issues).toContain("INVALID_PAYLOAD");
+    const longAd = "Gamma GmbH\ninfo@gamma.de\n" + "x".repeat(21_000);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const long = await checkBewSmartInput(USER, CAMPAIGN, longAd);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(long.issues).toContain("INVALID_PAYLOAD");
+  });
+
+  it("duplicate e-mail (active row) → DUPLICATE_COMPANY; foreign campaign → NOT_FOUND", async () => {
+    seedCampaign();
+    seedApp(1, {
+      company_name: "Amberger Kühltechnik GmbH",
+      company_email: "bernklaustefanie@amberger-kuehltechnik.de",
+      status: "pending",
+    });
+    const { issues } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
+    expect(issues).toContain("DUPLICATE_COMPANY");
+
+    await expect(
+      checkBewSmartInput(OTHER, CAMPAIGN, KAELTE_AD),
+    ).rejects.toThrow("NOT_FOUND");
   });
 });

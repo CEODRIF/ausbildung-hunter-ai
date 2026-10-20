@@ -699,10 +699,14 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
       join(process.cwd(), "src/components/bewerbung-automation/smart-company-input.tsx"),
       "utf8",
     );
-    // 1. Check = pure analysis (no request, no write): the button calls
-    //    onCheck, which only freezes the checkSmartAdd result.
+    // 1. Check = analysis WITHOUT any write: the button calls onCheck. Empty
+    //    / over-limit input is settled locally (checkSmartAdd fast-fail);
+    //    everything else goes to the SERVER check action (bewCheckSmartInput)
+    //    — the AI enhancement needs the dedicated key, which never reaches
+    //    the browser. No persistence of any kind happens in the check step.
     expect(src).toContain("onClick={onCheck}");
     expect(src).toContain("checkSmartAdd(text, view.applications)");
+    expect(src).toContain("const res = await bewCheckSmartInput(fd);");
     // 2. Confirm is conditional on a passed check…
     expect(src).toContain("{activeReview?.ok && (");
     // …and the handler re-checks the same condition before persisting.
@@ -715,6 +719,10 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
     const clearBody = src.slice(src.indexOf("const clear = useCallback("), src.indexOf("const onCheck"));
     expect(clearBody).toContain('setText("")');
     expect(clearBody).not.toMatch(/bew[A-Z][a-zA-Z]*\(/); // no server action inside clear
+    // 5. The confirm sends the FROZEN reviewed extraction (what was checked
+    //    is what gets persisted) — the server re-validates and re-grounds.
+    expect(src).toContain('if (reviewed) fd.set("reviewed", JSON.stringify(reviewed));');
+    expect(src).toContain("await runSmartAdd(text, view.applications, {");
   });
 
   it("REGRESSION: on an expired session the component NAVIGATES to /login instead of showing a generic error", async () => {
