@@ -33,6 +33,12 @@ import "server-only";
  *     detail for the owner: allowlisted error status + redacted message),
  *     non-JSON or schema-invalid model output → the SAME fallback (a logged
  *     controlled message, never the key, never the pasted text).
+ *   - TRANSIENT OVERLOAD (production 2026-10: "HTTP 503 UNAVAILABLE — high
+ *     model demand"): exactly ONE bounded retry after a short backoff. Only
+ *     the clear transient statuses 429/500/503 are retried — a 401 (bad
+ *     key) or 400 (bad request) is never repeated. Total cost stays bounded
+ *     (≤ 2 attempts, ≤ 1 short wait); timeouts/network errors are NOT
+ *     retried (no response = unknown upstream state).
  * The caller therefore always gets a usable ParsedAdvertisement.
  *
  * DECODING: `strict: true` was REMOVED from generationConfig (2026-10-20
@@ -507,6 +513,17 @@ export function mergeAiExtraction(
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 const GEMINI_TIMEOUT_MS = 30_000;
+/**
+ * Bounded overload retry: initial call + at most ONE retry. "Small and
+ * bounded" is the contract — high model demand (the production 2026-10
+ * 503s) clears in seconds, and a second attempt is rarely enough to matter,
+ * so the deterministic floor takes over after the single retry.
+ */
+const GEMINI_MAX_ATTEMPTS = 2;
+/** The one short backoff between attempt 1 and the single retry. */
+const GEMINI_RETRY_DELAY_MS = 1_500;
+/** The transient overload statuses the single retry applies to (nothing else). */
+const GEMINI_RETRYABLE_STATUS = new Set([429, 500, 503]);
 
 /** Diagnostic log budget (mirrors the Tavily pattern; controlled messages). */
 let warnBudget = 3;
@@ -767,10 +784,40 @@ export function sanitizeUpstreamMessage(message: string, key: string): string | 
 }
 
 /**
+ * Extract the safe, owner-actionable detail from a provider error body
+ * (allowlisted error.status + sanitized message fragment). Never throws —
+ * a broken error body must never break the fallback.
+ */
+async function readUpstreamDetail(response: Response, key: string): Promise<string | null> {
+  try {
+    const bodyText = ((await response.text().catch(() => "")) || "").slice(0, 8192);
+    const errBody = bodyText
+      ? (JSON.parse(bodyText) as { error?: { status?: unknown; message?: unknown } })
+      : null;
+    const statusPart =
+      typeof errBody?.error?.status === "string" && GEMINI_ERROR_STATUSES.has(errBody.error.status)
+        ? errBody.error.status
+        : null;
+    const messagePart =
+      typeof errBody?.error?.message === "string"
+        ? sanitizeUpstreamMessage(errBody.error.message, key)
+        : null;
+    return [statusPart, messagePart].filter(Boolean).join(": ") || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Call Gemini with the DEDICATED key and return the schema-validated
  * extraction — or null extraction (→ deterministic fallback) on ANY
- * failure, together with a non-sensitive diagnostic code. One call, no
- * retries (cost-bounded).
+ * failure, together with a non-sensitive diagnostic code.
+ *
+ * COST BOUND: at most GEMINI_MAX_ATTEMPTS (2) requests per call. The ONLY
+ * retry is a single one, for a clear TRANSIENT overload (429/500/503), after
+ * one short backoff (production repro: 503 UNAVAILABLE "high model demand").
+ * 4xx permission/argument errors, timeouts and network failures fail fast —
+ * repeating them would burn quota or hide a real configuration error.
  */
 export async function extractAdWithGemini(text: string): Promise<GeminiExtractionResult> {
   const rawKey = process.env.GEMINI_SMART_INPUT_API_KEY?.trim();
@@ -806,51 +853,46 @@ export async function extractAdWithGemini(text: string): Promise<GeminiExtractio
   };
 
   let response: Response;
-  try {
-    response = await fetch(
-      `${GEMINI_BASE_URL}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "x-goog-api-key": key,
-          "content-type": "application/json",
+  for (let attempt = 1; ; attempt++) {
+    try {
+      response = await fetch(
+        `${GEMINI_BASE_URL}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "x-goog-api-key": key,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+          cache: "no-store",
         },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-        cache: "no-store",
-      },
-    );
-  } catch (e) {
-    const diagnostic: SmartInputDiagnostic =
-      e instanceof Error && e.name === "TimeoutError" ? "timeout" : "network";
-    logSmartInput("warn", diagnostic);
-    return { extraction: null, diagnostic, diagnosticDetail: null };
-  }
-  if (!response.ok) {
+      );
+    } catch (e) {
+      // Timeout / network: NO response was received — the upstream state is
+      // unknown, so there is nothing to retry; fail fast to the fallback.
+      const diagnostic: SmartInputDiagnostic =
+        e instanceof Error && e.name === "TimeoutError" ? "timeout" : "network";
+      logSmartInput("warn", diagnostic);
+      return { extraction: null, diagnostic, diagnosticDetail: null };
+    }
+    if (response.ok) break;
+
     // Read the provider error body for a SAFE, actionable detail
     // (production repro 2026-10-20: the owner saw "http-400" with no idea
     // WHY — key problem? schema problem? quota?). Only the allowlisted
     // error.status and a sanitized message fragment ever leave this
     // function; the key, e-mails, URLs, token-like runs, digit runs and
     // the advertisement text can never leak through.
-    let diagnosticDetail: string | null = null;
-    try {
-      const bodyText = ((await response.text().catch(() => "")) || "").slice(0, 8192);
-      const errBody = bodyText
-        ? (JSON.parse(bodyText) as { error?: { status?: unknown; message?: unknown } })
-        : null;
-      const statusPart =
-        typeof errBody?.error?.status === "string" &&
-        GEMINI_ERROR_STATUSES.has(errBody.error.status)
-          ? errBody.error.status
-          : null;
-      const messagePart =
-        typeof errBody?.error?.message === "string"
-          ? sanitizeUpstreamMessage(errBody.error.message, key)
-          : null;
-      diagnosticDetail = [statusPart, messagePart].filter(Boolean).join(": ") || null;
-    } catch {
-      diagnosticDetail = null; // a broken error body never breaks the fallback
+    const diagnosticDetail = await readUpstreamDetail(response, key);
+    if (GEMINI_RETRYABLE_STATUS.has(response.status) && attempt < GEMINI_MAX_ATTEMPTS) {
+      logSmartInput(
+        "warn",
+        `http ${response.status} transient overload — retry ${attempt + 1}/${GEMINI_MAX_ATTEMPTS} after ${GEMINI_RETRY_DELAY_MS}ms` +
+          (diagnosticDetail ? ` (${diagnosticDetail})` : ""),
+      );
+      await new Promise((r) => setTimeout(r, GEMINI_RETRY_DELAY_MS));
+      continue; // exactly ONE retry; the next iteration is the last attempt
     }
     logSmartInput("warn", `http ${response.status}${diagnosticDetail ? ` ${diagnosticDetail}` : ""}`);
     return {
