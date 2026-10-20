@@ -743,7 +743,9 @@ describe("addBewCompany — reviewed fields (what the user reviewed is persisted
     seedCampaign();
     const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
     expect(row.company_phone).toBe("+49 9621 472983"); // labeled, verbatim
-    expect(row.company_industry ?? null).toBeNull(); // deterministic never classifies
+    // Industry floor (503-fallback fix): the explicit term in the company
+    // name ("Kühltechnik") maps to the closed taxonomy + verbatim subcategory.
+    expect(row.company_industry).toBe("HVAC & Refrigeration — Kühltechnik");
   });
 
   it("migration pending (no smart columns): degrades gracefully, NO 42703", async () => {
@@ -893,7 +895,10 @@ describe("checkBewSmartInput — server-side analysis, no persistence", () => {
     const { parsed, issues, diagnostic } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
     expect(issues).toEqual([]);
     expect(parsed.companyName.value).toBe("Amberger Kühltechnik GmbH");
-    expect(parsed.companyIndustry.status).toBe("missing"); // AI failed → no industry
+    // AI failed (500, retried once) → the deterministic industry floor
+    // applies: explicit company-name term, reviewable ("suggested").
+    expect(parsed.companyIndustry.value).toBe("HVAC & Refrigeration — Kühltechnik");
+    expect(parsed.companyIndustry.status).toBe("suggested");
     expect(db.bew_applications).toHaveLength(0);
     expect(diagnostic).toBe("http-500"); // provider failure surfaced, no internal detail
   });

@@ -143,9 +143,13 @@ describe("parseAdvertisement — sectioned ad with bullets (test 3–4)", () => 
     expect(p.companyName.status).toBe("extracted");
   });
 
-  it("does not invent a position title without a reliable signal", () => {
-    expect(p.positionTitle.status).toBe("missing");
-    expect(p.positionTitle.value).toBe("");
+  it("the bare title heading line IS a reliable signal → suggested title (503-fallback gap)", () => {
+    // The second line of this ad is the ad's own title heading. The old
+    // fallback left the title empty for exactly this shape (no preposition,
+    // no label) — the production 2026-10 stress test reported it; it is now
+    // captured as "suggested" (explicit-looking, reviewable — not invented).
+    expect(p.positionTitle.value).toBe("Ausbildungsplatz Mechatronik (m/w/d)");
+    expect(p.positionTitle.status).toBe("suggested");
   });
 });
 
@@ -654,9 +658,12 @@ describe("NORDSTERN repro — application e-mail ranking, applicant exclusion, d
     expect(p.startDate.status).toBe("missing");
     expect(p.endDate.status).toBe("missing");
     // The position has no recognizable label in this ad → missing (labeled
-    // variants are covered below); industry is AI-layer only → missing.
+    // variants are covered below). The industry floor now classifies from
+    // the explicit term in the COMPANY NAME ("Digitalhandel") — closed
+    // taxonomy + verbatim subcategory, "suggested" (reviewable).
     expect(p.positionTitle.status).toBe("missing");
-    expect(p.companyIndustry.status).toBe("missing");
+    expect(p.companyIndustry.value).toBe("Retail & Wholesale — Digitalhandel");
+    expect(p.companyIndustry.status).toBe("suggested");
   });
 
   it("labeled position + labeled start/end variants are extracted verbatim", () => {
