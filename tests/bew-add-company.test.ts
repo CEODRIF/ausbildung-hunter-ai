@@ -728,12 +728,15 @@ describe("checkBewSmartInput — server-side analysis, no persistence", () => {
     seedApp(1, { company_name: "Alpha GmbH", company_email: "jobs@alpha.de", status: "pending" });
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const { parsed, issues } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
+    const { parsed, issues, diagnostic } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
     expect(fetchMock).not.toHaveBeenCalled(); // no AI without the dedicated key
     expect(parsed.companyName.value).toBe("Amberger Kühltechnik GmbH");
     expect(parsed.companyPhone.value).toBe("+49 9621 472983");
     expect(issues).toEqual([]);
     expect(db.bew_applications).toHaveLength(1); // the check writes nothing
+    // Non-sensitive diagnostic propagates to the action/UI (owner can tell a
+    // production fallback apart from a successful extraction without logs).
+    expect(diagnostic).toBe("no-key");
   });
 
   it("dedicated key + valid AI response → merged (AI-enhanced) parsed result", async () => {
@@ -782,23 +785,44 @@ describe("checkBewSmartInput — server-side analysis, no persistence", () => {
         ),
       ),
     );
-    const { parsed, issues } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
+    const { parsed, issues, diagnostic } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
     expect(issues).toEqual([]);
     // AI-enhanced fields present in the frozen review surface.
     expect(parsed.companyIndustry.value).toBe("HVAC & Refrigeration — Kältetechnik");
     expect(parsed.companyIndustry.status).toBe("extracted");
     expect(parsed.companyPhone.value).toBe("+49 9621 472983");
     expect(db.bew_applications).toHaveLength(0); // still: no write
+    expect(diagnostic).toBe("ai"); // the AI step actually ran (mocked provider)
   });
 
   it("dedicated key + API failure (500) → deterministic fallback, no throw, no write", async () => {
     process.env.GEMINI_SMART_INPUT_API_KEY = "test-dedicated-key-0123456789";
     seedCampaign();
     vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 500 })));
-    const { parsed, issues } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
+    const { parsed, issues, diagnostic } = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
     expect(issues).toEqual([]);
     expect(parsed.companyName.value).toBe("Amberger Kühltechnik GmbH");
     expect(parsed.companyIndustry.status).toBe("missing"); // AI failed → no industry
+    expect(db.bew_applications).toHaveLength(0);
+    expect(diagnostic).toBe("http-500"); // provider failure surfaced, no internal detail
+  });
+
+  it("provider diagnostics propagate: 401 / timeout / placeholder key (never throws, never writes)", async () => {
+    seedCampaign();
+    process.env.GEMINI_SMART_INPUT_API_KEY = "test-dedicated-key-0123456789";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("no", { status: 401 })));
+    expect((await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD)).diagnostic).toBe("http-401");
+    const timeout = Object.assign(new Error("aborted"), { name: "TimeoutError" });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw timeout;
+    }));
+    expect((await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD)).diagnostic).toBe("timeout");
+    process.env.GEMINI_SMART_INPUT_API_KEY = "your-key-placeholder-123";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const out = await checkBewSmartInput(USER, CAMPAIGN, KAELTE_AD);
+    expect(out.diagnostic).toBe("placeholder-key");
+    expect(fetchMock).not.toHaveBeenCalled(); // a placeholder key never costs a call
     expect(db.bew_applications).toHaveLength(0);
   });
 
@@ -806,12 +830,14 @@ describe("checkBewSmartInput — server-side analysis, no persistence", () => {
     seedCampaign();
     const empty = await checkBewSmartInput(USER, CAMPAIGN, "   ");
     expect(empty.issues).toContain("INVALID_PAYLOAD");
+    expect(empty.diagnostic).toBeNull(); // AI step not even attempted
     const longAd = "Gamma GmbH\ninfo@gamma.de\n" + "x".repeat(21_000);
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const long = await checkBewSmartInput(USER, CAMPAIGN, longAd);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(long.issues).toContain("INVALID_PAYLOAD");
+    expect(long.diagnostic).toBeNull();
   });
 
   it("duplicate e-mail (active row) → DUPLICATE_COMPANY; foreign campaign → NOT_FOUND", async () => {

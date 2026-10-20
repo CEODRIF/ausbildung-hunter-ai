@@ -61,6 +61,7 @@ import {
 import { isNextRedirectError } from "@/components/bewerbung-automation/types";
 import type { SmartAddFailCode } from "@/components/bewerbung-automation/smart-input-state";
 import type { ParsedAdvertisement } from "@/lib/bew-ad-parser";
+import type { SmartInputDiagnostic } from "@/lib/bew-ad-ai";
 
 /** Re-authenticate on every action; redirect unauthenticated callers. */
 async function requireUser(): Promise<{ userId: string; profile: Profile }> {
@@ -335,6 +336,13 @@ export type BewCheckSmartResult = {
    */
   issues: Array<SmartAddFailCode | "NOT_FOUND" | "CHECK_UNAVAILABLE">;
   parsed: ParsedAdvertisement | null;
+  /**
+   * Non-sensitive AI-step diagnostic (SmartInputDiagnostic) — `null` when the
+   * AI step was not attempted (empty input) or the check could not run. Used
+   * by the review area to tell the owner WHICH fallback happened in
+   * production (e.g. "no-key" vs "http-401" vs "schema-violation").
+   */
+  diagnostic: SmartInputDiagnostic | null;
 };
 
 export async function bewCheckSmartInput(
@@ -344,11 +352,11 @@ export async function bewCheckSmartInput(
   const campaignId = readString(formData, "campaignId");
   const text = readString(formData, "text");
   if (!text.trim()) {
-    return { ok: false, issues: ["EMPTY_INPUT"], parsed: null };
+    return { ok: false, issues: ["EMPTY_INPUT"], parsed: null, diagnostic: null };
   }
   try {
-    const { parsed, issues } = await checkBewSmartInput(userId, campaignId, text);
-    return { ok: issues.length === 0, issues, parsed };
+    const { parsed, issues, diagnostic } = await checkBewSmartInput(userId, campaignId, text);
+    return { ok: issues.length === 0, issues, parsed, diagnostic };
   } catch (e) {
     if (isNextRedirectError(e)) throw e; // re-authentication — propagate
     const message = e instanceof Error ? e.message : "";
@@ -357,7 +365,7 @@ export async function bewCheckSmartInput(
       // Internals stay server-side; the user only sees the stable code.
       console.error("[bew] bewCheckSmartInput: unexpected failure", message);
     }
-    return { ok: false, issues: [code], parsed: null };
+    return { ok: false, issues: [code], parsed: null, diagnostic: null };
   }
 }
 

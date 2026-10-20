@@ -233,25 +233,35 @@ export function validateGeminiAdPayload(payload: unknown): AiAdExtraction | null
   const phones = asContactList(p.phones, BEW_PHONE_MAX);
   if (emails === null || phones === null) return null;
 
+  // Industry is the ONE non-verbatim field — and a classification the model
+  // sometimes paraphrases (e.g. "E-Commerce and Online-Marketing" instead of
+  // a taxonomy label). An off-taxonomy category must degrade ONLY the
+  // industry field to null, never reject the whole extraction (production
+  // repro 2026-10-20: a full, correct extraction was discarded because of
+  // the industry string alone).
   let industry: AiIndustry | null = null;
   if (p.industry !== null && p.industry !== undefined) {
     const i = p.industry as Record<string, unknown> | null;
-    if (!i || typeof i !== "object") return null;
-    const category = asString(i.category, 60);
-    const confidence = i.confidence;
-    if (
-      !category ||
-      !BEW_INDUSTRY_LABELS.includes(category) ||
-      (confidence !== "high" && confidence !== "medium" && confidence !== "low")
-    ) {
-      return null;
+    if (i && typeof i === "object" && !Array.isArray(i)) {
+      const category = asString(i.category, 60);
+      const confidence = i.confidence;
+      if (
+        category &&
+        BEW_INDUSTRY_LABELS.includes(category) &&
+        (confidence === "high" || confidence === "medium" || confidence === "low")
+      ) {
+        let subcategory: string | null = null;
+        if (i.subcategory !== null && i.subcategory !== undefined) {
+          subcategory = asString(i.subcategory, 60);
+          if (subcategory === null) subcategory = null; // over-length ⇒ drop the refinement only
+        }
+        industry = { category, subcategory, confidence: confidence as "high" | "medium" | "low" };
+      }
+      // else: category/confidence off-contract ⇒ industry = null (rest survives)
     }
-    let subcategory: string | null = null;
-    if (i.subcategory !== null && i.subcategory !== undefined) {
-      subcategory = asString(i.subcategory, 60);
-      if (subcategory === null) return null;
-    }
-    industry = { category, subcategory, confidence: confidence as "high" | "medium" | "low" };
+    // a structurally broken industry (string/number/array) is a schema
+    // violation for the whole payload (strict mode makes this unreachable)
+    if (!i || typeof i !== "object" || Array.isArray(i)) return null;
   }
 
   return {
@@ -272,14 +282,40 @@ export function validateGeminiAdPayload(payload: unknown): AiAdExtraction | null
  * ------------------------------------------------------------------ */
 
 /**
+ * Diacritic fold for the grounding FALLBACK pass ONLY: the German
+ * transliteration convention (ä→ae, ö→oe, ü→ue, ß→ss). Models frequently
+ * normalize "Köln" → "Koeln" while staying 1:1 with the source; the fold
+ * lets such values ground without weakening the anti-fabrication rule
+ * (every other character still has to match, in order).
+ *
+ * Deliberately NOT NFD character-drop (which would fold "Köln" → "Kohn"):
+ * that is a different string, and the drop would let the unrelated name
+ * "Kohn" ground against a source that merely contains "Köln". Conservative
+ * is correct for a rule whose job is "never invented".
+ */
+function foldDiacritics(s: string): string {
+  return s
+    .replace(/ä/g, "ae")
+    .replace(/ö/g, "oe")
+    .replace(/ü/g, "ue")
+    .replace(/ß/g, "ss")
+    .replace(/Ä/g, "Ae")
+    .replace(/Ö/g, "Oe")
+    .replace(/Ü/g, "Ue");
+}
+
+/**
  * A value is GROUNDED when it is a whitespace/zero-width-normalized substring
  * of the pasted text. This is what makes "never invented" verifiable: a phone
  * number, e-mail, name or address that is not in the source cannot be used.
+ * Fallback: the same check with diacritics folded on BOTH sides (transliteration).
  */
 export function isGrounded(value: string, sourceText: string): boolean {
   const needle = normalizeForGrounding(value);
   if (!needle) return false;
-  return normalizeForGrounding(sourceText).includes(needle);
+  const haystack = normalizeForGrounding(sourceText);
+  if (haystack.includes(needle)) return true;
+  return foldDiacritics(haystack).includes(foldDiacritics(needle));
 }
 
 /* ------------------------------------------------------------------ *
@@ -560,22 +596,63 @@ export const SMART_INPUT_RESPONSE_SCHEMA = {
           description: "Classification certainty.",
         },
       },
-      required: ["category", "confidence"],
+      // strict mode: EVERY property must be required (nullable ones may be
+      // null) — that is what makes the enum / types actually enforced.
+      required: ["category", "confidence", "subcategory"],
       description: "Employer's industry (activity-based), null when unreliable.",
     },
   },
-  required: ["emails", "phones"],
+  // STRICT DECODING: with `strict: true` in generationConfig, Gemini
+  // GUARANTEES schema conformance (types, nullables, enums, required).
+  // Without it the schema is only a bias — a paraphrased industry category
+  // or a missing key then depends on our validator alone.
+  required: [
+    "company_name",
+    "contact_name",
+    "contact_role",
+    "company_address",
+    "emails",
+    "phones",
+    "position_title",
+    "position_brief",
+    "industry",
+  ],
 } as const;
 
 /**
- * Call Gemini with the DEDICATED key and return the schema-validated
- * extraction — or null (→ deterministic fallback) on ANY failure: missing/
- * placeholder key, network error, timeout, HTTP error, empty/unparseable
- * output, or a schema violation. One call, no retries (cost-bounded).
+ * WHAT happened in the AI step — a controlled, non-sensitive code (no key,
+ * no headers, no advertisement content, no provider error bodies). Surfaced
+ * to the owner in the review area so production can distinguish
+ * "key not configured" from "provider refused" from "response unusable".
  */
-export async function extractAdWithGemini(text: string): Promise<AiAdExtraction | null> {
-  const key = resolveSmartInputGeminiKey();
-  if (!key) return null; // not configured — deterministic path only
+export type SmartInputDiagnostic =
+  | "ai"
+  | "no-key"
+  | "placeholder-key"
+  | `http-${number}`
+  | "timeout"
+  | "network"
+  | "invalid-envelope"
+  | "empty-output"
+  | "not-json"
+  | "schema-violation";
+
+export interface GeminiExtractionResult {
+  extraction: AiAdExtraction | null;
+  diagnostic: SmartInputDiagnostic;
+}
+
+/**
+ * Call Gemini with the DEDICATED key and return the schema-validated
+ * extraction — or null extraction (→ deterministic fallback) on ANY
+ * failure, together with a non-sensitive diagnostic code. One call, no
+ * retries (cost-bounded).
+ */
+export async function extractAdWithGemini(text: string): Promise<GeminiExtractionResult> {
+  const rawKey = process.env.GEMINI_SMART_INPUT_API_KEY?.trim();
+  if (!rawKey) return { extraction: null, diagnostic: "no-key" }; // deterministic path only
+  if (isPlaceholderValue(rawKey)) return { extraction: null, diagnostic: "placeholder-key" };
+  const key = rawKey;
   const model = resolveSmartInputGeminiModel();
 
   const body = {
@@ -591,6 +668,11 @@ export async function extractAdWithGemini(text: string): Promise<AiAdExtraction 
       maxOutputTokens: 8192,
       responseMimeType: "application/json",
       responseSchema: SMART_INPUT_RESPONSE_SCHEMA,
+      // GUARANTEED schema conformance (types / nullables / enums / required)
+      // — the production repro showed an unconstrained model can answer a
+      // structurally valid but contract-breaking payload (off-enum industry),
+      // which then made the whole extraction unusable.
+      strict: true,
     },
   };
 
@@ -610,12 +692,14 @@ export async function extractAdWithGemini(text: string): Promise<AiAdExtraction 
       },
     );
   } catch (e) {
-    logSmartInput("warn", e instanceof Error && e.name === "TimeoutError" ? "timeout" : "network");
-    return null;
+    const diagnostic: SmartInputDiagnostic =
+      e instanceof Error && e.name === "TimeoutError" ? "timeout" : "network";
+    logSmartInput("warn", diagnostic);
+    return { extraction: null, diagnostic };
   }
   if (!response.ok) {
     logSmartInput("warn", `http ${response.status}`);
-    return null;
+    return { extraction: null, diagnostic: `http-${response.status}` as SmartInputDiagnostic };
   }
 
   let envelope: unknown;
@@ -623,7 +707,7 @@ export async function extractAdWithGemini(text: string): Promise<AiAdExtraction 
     envelope = await response.json();
   } catch {
     logSmartInput("warn", "invalid json envelope");
-    return null;
+    return { extraction: null, diagnostic: "invalid-envelope" };
   }
 
   const candidates = (envelope as { candidates?: unknown })?.candidates;
@@ -638,7 +722,7 @@ export async function extractAdWithGemini(text: string): Promise<AiAdExtraction 
     : "";
   if (!raw) {
     logSmartInput("warn", "empty model output");
-    return null;
+    return { extraction: null, diagnostic: "empty-output" };
   }
 
   let json: unknown;
@@ -646,15 +730,15 @@ export async function extractAdWithGemini(text: string): Promise<AiAdExtraction 
     json = JSON.parse(raw);
   } catch {
     logSmartInput("warn", "model output not json");
-    return null;
+    return { extraction: null, diagnostic: "not-json" };
   }
   const extraction = validateGeminiAdPayload(json);
   if (!extraction) {
     logSmartInput("warn", "schema validation failed");
-    return null;
+    return { extraction: null, diagnostic: "schema-violation" };
   }
   logSmartInput("ok", "");
-  return extraction;
+  return { extraction, diagnostic: "ai" };
 }
 
 /* ------------------------------------------------------------------ *
@@ -665,6 +749,12 @@ export interface SmartAdExtraction {
   parsed: ParsedAdvertisement;
   /** Which layer produced the fields (telemetry/tests, never UI-visible). */
   source: "ai" | "deterministic";
+  /**
+   * Controlled, non-sensitive diagnostic (see SmartInputDiagnostic): "ai" on
+   * success, otherwise the exact fallback category — surfaced to the owner
+   * in the review area so production can be diagnosed without log access.
+   */
+  diagnostic: SmartInputDiagnostic;
 }
 
 /**
@@ -674,9 +764,9 @@ export interface SmartAdExtraction {
  */
 export async function extractSmartAd(text: string): Promise<SmartAdExtraction> {
   const base = parseAdvertisement(text);
-  const ai = await extractAdWithGemini(text);
-  if (!ai) return { parsed: base, source: "deterministic" };
-  return { parsed: mergeAiExtraction(base, ai, text), source: "ai" };
+  const { extraction: ai, diagnostic } = await extractAdWithGemini(text);
+  if (!ai) return { parsed: base, source: "deterministic", diagnostic };
+  return { parsed: mergeAiExtraction(base, ai, text), source: "ai", diagnostic: "ai" };
 }
 
 /* ------------------------------------------------------------------ *

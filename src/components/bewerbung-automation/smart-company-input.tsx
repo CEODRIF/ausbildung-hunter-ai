@@ -44,6 +44,7 @@ import {
   parseAdvertisement,
   type ParsedAdField,
 } from "@/lib/bew-ad-parser";
+import type { SmartInputDiagnostic } from "@/lib/bew-ad-ai";
 import {
   checkSmartAdd,
   runSmartAdd,
@@ -95,7 +96,15 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
    * because the fields the user reviewed must be the fields that get
    * persisted.
    */
-  const [review, setReview] = useState<(SmartCheckResult & { snapshot: string }) | null>(null);
+  /**
+   * The frozen review of the checked text (snapshot rule). `diagnostic` is
+   * the server's NON-SENSITIVE AI-step code (e.g. "no-key", "http-401") —
+   * surfaced in the review area so a production fallback is diagnosable
+   * without server logs. It is shown text-only; it never drives the workflow.
+   */
+  const [review, setReview] = useState<
+    (SmartCheckResult & { snapshot: string; diagnostic?: SmartInputDiagnostic | null }) | null
+  >(null);
   // Synchronous duplicate-click guard (state updates are batched — only a
   // ref claim is race-free between two rapid clicks; the server's
   // DUPLICATE_COMPANY check is the final backstop).
@@ -202,6 +211,7 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
           issues: res.issues as SmartCheckResult["issues"],
           parsed: res.parsed,
           snapshot: checkedText,
+          diagnostic: res.diagnostic,
         });
       } catch (e) {
         if (isNextRedirectError(e)) {
@@ -430,6 +440,17 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
             <PreviewRow icon="target" label={t("bewauto.positionTitle")} field={panelParsed?.positionTitle} t={t} />
             <PreviewRow icon="building" label={t("bewauto.colIndustry")} field={panelParsed?.companyIndustry} t={t} maxLen={120} />
           </dl>
+
+          {/* AI-step status (review only, text-only, non-sensitive code):
+              tells the owner WHICH fallback produced the fields when the
+              dedicated Gemini key was not usable — production diagnosis
+              without server logs. Hidden on the AI-success path ("ai") and
+              before a check exists (live preview). */}
+          {activeReview && activeReview.diagnostic && activeReview.diagnostic !== "ai" && (
+            <p className="mt-2 text-[11px] font-medium text-muted">
+              {t("bewauto.aiStatus", { code: activeReview.diagnostic })}
+            </p>
+          )}
 
           {/* Dedicated job-description area (multi-line, expandable). */}
           <div className="mt-3 border-t border-line pt-3">

@@ -205,13 +205,22 @@ describe("validateGeminiAdPayload (strict schema, untrusted model output)", () =
     ).toBeNull();
   });
 
-  it("rejects: industry outside the closed taxonomy (no invented categories)", () => {
-    expect(
-      validateGeminiAdPayload({
-        ...GOOD_AI,
-        industry: { category: "Klimaanlagen-Fachbetrieb", confidence: "high" },
-      }),
-    ).toBeNull();
+  it("drops an off-taxonomy industry category — but NEVER the whole payload (root-cause contract)", () => {
+    // Production repro 2026-10-20: the full, correct extraction was rejected
+    // because of the industry string alone → deterministic fallback lost the
+    // contact person, address, phone, title and industry. Contract change:
+    // only the off-taxonomy classification degrades to null; every other
+    // field survives (and strict decoding makes this deviation the one that
+    // still reaches the server).
+    const out = validateGeminiAdPayload({
+      ...GOOD_AI,
+      industry: { category: "Klimaanlagen-Fachbetrieb", confidence: "high" },
+    });
+    expect(out).not.toBeNull();
+    expect(out!.industry).toBeNull(); // no invented categories
+    expect(out!.companyName).toBe("KALTENHAUS GmbH & Co. KG");
+    expect(out!.companyAddress).toBe("Industriestraße 12, 96215 Ebermannstadt");
+    expect(out!.positionTitle).toBe("Fachkraft für Kälte- und Klimatechnik (m/w/d)");
     expect(BEW_INDUSTRY_LABELS).toContain("HVAC & Refrigeration");
   });
 });
@@ -317,19 +326,36 @@ describe("grounding and merge (never invented)", () => {
 /* ------------------------- the Gemini call (mocked) ------------------------- */
 
 describe("extractAdWithGemini (mocked — no paid calls)", () => {
-  it("missing credentials → null WITHOUT any network call", async () => {
+  it("missing credentials → null WITHOUT any network call (diagnostic: no-key)", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    expect(await extractAdWithGemini(MESSY_AD)).toBeNull();
+    const out = await extractAdWithGemini(MESSY_AD);
+    expect(out.extraction).toBeNull();
+    expect(out.diagnostic).toBe("no-key");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("placeholder credentials → null WITHOUT any network call", async () => {
+  it("placeholder credentials → null WITHOUT any network call (diagnostic: placeholder-key)", async () => {
     process.env.GEMINI_SMART_INPUT_API_KEY = "your-gemini-smart-input-api-key";
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    expect(await extractAdWithGemini(MESSY_AD)).toBeNull();
+    const out = await extractAdWithGemini(MESSY_AD);
+    expect(out.extraction).toBeNull();
+    expect(out.diagnostic).toBe("placeholder-key");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("request body uses strict decoding (guaranteed schema conformance)", async () => {
+    withKey();
+    const fetchMock = vi.fn(async () => geminiEnvelope(GOOD_AI));
+    vi.stubGlobal("fetch", fetchMock);
+    await extractAdWithGemini(MESSY_AD);
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as {
+      generationConfig: Record<string, unknown>;
+    };
+    expect(body.generationConfig.strict).toBe(true);
+    expect(body.generationConfig.responseMimeType).toBe("application/json");
   });
 
   it("sends ONLY the dedicated key header (never shared keys), to the model override", async () => {
@@ -351,47 +377,50 @@ describe("extractAdWithGemini (mocked — no paid calls)", () => {
   });
 
   it.each([
-    ["401 invalid key", new Response("no", { status: 401 })],
-    ["429 rate limit", new Response("no", { status: 429 })],
-    ["500 server error", new Response("no", { status: 500 })],
-  ])("%s → null (fallback)", async (_label, res) => {
+    ["401 invalid key", new Response("no", { status: 401 }), "http-401"],
+    ["429 rate limit", new Response("no", { status: 429 }), "http-429"],
+    ["500 server error", new Response("no", { status: 500 }), "http-500"],
+  ])("%s → null (fallback, diagnostic %s)", async (_label, res, diagnostic) => {
     withKey();
     vi.stubGlobal("fetch", vi.fn(async () => res));
-    expect(await extractAdWithGemini(MESSY_AD)).toBeNull();
+    const out = await extractAdWithGemini(MESSY_AD);
+    expect(out.extraction).toBeNull();
+    expect(out.diagnostic).toBe(diagnostic);
   });
 
-  it("network error / timeout → null (fallback)", async () => {
+  it("timeout / network error → null (fallback, distinct diagnostics)", async () => {
     withKey();
     const timeout = Object.assign(new Error("aborted"), { name: "TimeoutError" });
     vi.stubGlobal("fetch", vi.fn(async () => {
       throw timeout;
     }));
-    expect(await extractAdWithGemini(MESSY_AD)).toBeNull();
+    expect((await extractAdWithGemini(MESSY_AD)).diagnostic).toBe("timeout");
     vi.stubGlobal("fetch", vi.fn(async () => {
       throw new Error("ECONNRESET");
     }));
-    expect(await extractAdWithGemini(MESSY_AD)).toBeNull();
+    expect((await extractAdWithGemini(MESSY_AD)).diagnostic).toBe("network");
   });
 
-  it("invalid JSON envelope / non-JSON model output / schema-violating output → null", async () => {
+  it("invalid envelope / non-JSON output / schema-violating output → null (distinct diagnostics)", async () => {
     withKey();
     vi.stubGlobal("fetch", vi.fn(async () => new Response("oops", { status: 200 })));
-    expect(await extractAdWithGemini(MESSY_AD)).toBeNull();
+    expect((await extractAdWithGemini(MESSY_AD)).diagnostic).toBe("invalid-envelope");
     vi.stubGlobal("fetch", vi.fn(async () => geminiEnvelope("not json {")));
-    expect(await extractAdWithGemini(MESSY_AD)).toBeNull();
+    expect((await extractAdWithGemini(MESSY_AD)).diagnostic).toBe("not-json");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => geminiEnvelope({ ...GOOD_AI, emails: "nope" })),
     );
-    expect(await extractAdWithGemini(MESSY_AD)).toBeNull();
+    expect((await extractAdWithGemini(MESSY_AD)).diagnostic).toBe("schema-violation");
   });
 
-  it("valid response → schema-validated extraction", async () => {
+  it("valid response → schema-validated extraction (diagnostic: ai)", async () => {
     withKey();
     vi.stubGlobal("fetch", vi.fn(async () => geminiEnvelope(GOOD_AI)));
     const out = await extractAdWithGemini(MESSY_AD);
-    expect(out?.companyName).toBe("KALTENHAUS GmbH & Co. KG");
-    expect(out?.phones[0].value).toBe("+49 9621 472983");
+    expect(out.diagnostic).toBe("ai");
+    expect(out.extraction?.companyName).toBe("KALTENHAUS GmbH & Co. KG");
+    expect(out.extraction?.phones[0].value).toBe("+49 9621 472983");
   });
 });
 
@@ -633,5 +662,179 @@ describe("application-email ranking tie-break (production repro 2026-10-20)", ()
     const merged = mergeAiExtraction(base(), ai, ad2);
     expect(merged.companyPhone.value).toBe("+49 711 555 1234"); // stable text order
     expect(merged.companyPhone.status).toBe("suggested");
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Production runtime fix (2026-10-20): strict decoding, non-fatal
+ * industry, diacritic grounding, diagnostics, Rheinblick reproduction.
+ * All Gemini calls are mocked — no paid API credits.
+ * ------------------------------------------------------------------ */
+
+const RHEINBLICK_AD = [
+  "Rheinblick Digital Solutions GmbH",
+  "Ihre Ausbildung im E-Commerce bei Rheinblick!",
+  "",
+  "Ansprechpartnerin: Lena Hoffmann",
+  "Im Mediapark 7",
+  "50670 Köln",
+  "Telefon: +49 221 555 0192",
+  "kontakt@rheinblick-digital.example",
+  "Bewerbungen bitte an: ausbildung@rheinblick-digital.example",
+  "",
+  "Ausbildung: Kaufmann/-frau im E-Commerce",
+  "Start: 01.09.2027, Bewerbung bis: 30.06.2027",
+  "Wir sind ein Team für E-Commerce und Online-Marketing: Shop-Betreuung, Kampagnen, Content.",
+  "",
+  "Bewirb dich jetzt! Meine Nummer: +49 151 9876 5432",
+].join("\n");
+
+const RHEINBLICK_AI = {
+  company_name: "Rheinblick Digital Solutions GmbH",
+  contact_name: "Lena Hoffmann",
+  contact_role: null,
+  company_address: "Im Mediapark 7, 50670 Köln",
+  emails: [
+    { value: "kontakt@rheinblick-digital.example", context: "other" },
+    { value: "ausbildung@rheinblick-digital.example", context: "employer" },
+  ],
+  phones: [
+    { value: "+49 221 555 0192", context: "employer" },
+    { value: "+49 151 9876 5432", context: "applicant" },
+  ],
+  position_title: "Kaufmann/-frau im E-Commerce",
+  position_brief:
+    "Wir sind ein Team für E-Commerce und Online-Marketing: Shop-Betreuung, Kampagnen, Content.",
+  industry: {
+    category: "Retail & Wholesale",
+    subcategory: "E-Commerce und Online-Marketing",
+    confidence: "high",
+  },
+};
+
+describe("production repro — Rheinblick synthetic advertisement (mocked AI)", () => {
+  it("AI path extracts every field; application e-mail wins; applicant phone excluded", async () => {
+    withKey();
+    vi.stubGlobal("fetch", vi.fn(async () => geminiEnvelope(RHEINBLICK_AI)));
+    const { parsed, source, diagnostic } = await extractSmartAd(RHEINBLICK_AD);
+    expect(source).toBe("ai");
+    expect(diagnostic).toBe("ai");
+    expect(parsed.companyName.value).toBe("Rheinblick Digital Solutions GmbH");
+    expect(parsed.contactName.value).toBe("Lena Hoffmann");
+    expect(parsed.companyAddress.value).toBe("Im Mediapark 7, 50670 Köln");
+    expect(parsed.companyPhone.value).toBe("+49 221 555 0192"); // employer, verbatim
+    expect(parsed.companyPhone.value).not.toBe("+49 151 9876 5432"); // applicant excluded
+    expect(parsed.companyEmail.value).toBe("ausbildung@rheinblick-digital.example");
+    expect(parsed.companyEmail.value).not.toBe("kontakt@rheinblick-digital.example");
+    expect(parsed.positionTitle.value).toBe("Kaufmann/-frau im E-Commerce");
+    expect(parsed.companyIndustry.value).toBe(
+      "Retail & Wholesale — E-Commerce und Online-Marketing",
+    );
+    expect(parsed.companyIndustry.status).toBe("extracted"); // high confidence
+  });
+
+  it("application e-mail wins even when the model tags BOTH as employer", async () => {
+    withKey();
+    const both = {
+      ...RHEINBLICK_AI,
+      emails: [
+        { value: "kontakt@rheinblick-digital.example", context: "employer" },
+        { value: "ausbildung@rheinblick-digital.example", context: "employer" },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => geminiEnvelope(both)));
+    const { parsed, source } = await extractSmartAd(RHEINBLICK_AD);
+    expect(source).toBe("ai");
+    expect(parsed.companyEmail.value).toBe("ausbildung@rheinblick-digital.example");
+    expect(parsed.companyEmail.status).toBe("suggested"); // ambiguity stays reviewable
+  });
+
+  it("deterministic fallback (no key) still carries the flow and keeps dates in the brief", async () => {
+    delete process.env.GEMINI_SMART_INPUT_API_KEY;
+    const { parsed, source, diagnostic } = await extractSmartAd(RHEINBLICK_AD);
+    expect(source).toBe("deterministic");
+    expect(diagnostic).toBe("no-key");
+    expect(parsed.companyName.value).toBe("Rheinblick Digital Solutions GmbH");
+    expect(parsed.companyPhone.value).toBe("+49 221 555 0192"); // labeled line
+    expect(parsed.companyIndustry.status).toBe("missing"); // industry is AI-only
+    // Dates are source content — the preserved brief must not lose them.
+    expect(parsed.positionBrief.value).toContain("01.09.2027");
+    expect(parsed.positionBrief.value).toContain("30.06.2027");
+  });
+
+  it("diagnostics distinguish provider failures (mocked)", async () => {
+    withKey();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("no", { status: 401 })));
+    expect((await extractSmartAd(RHEINBLICK_AD)).diagnostic).toBe("http-401");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("no", { status: 429 })));
+    expect((await extractSmartAd(RHEINBLICK_AD)).diagnostic).toBe("http-429");
+    delete process.env.GEMINI_SMART_INPUT_API_KEY;
+    process.env.GEMINI_SMART_INPUT_API_KEY = "your-key-placeholder-123";
+    expect((await extractSmartAd(RHEINBLICK_AD)).diagnostic).toBe("placeholder-key");
+  });
+});
+
+describe("strict decoding + non-fatal industry (root cause, production repro)", () => {
+  it("an off-enum industry category degrades ONLY the industry field — never the payload", () => {
+    const off = validateGeminiAdPayload({
+      ...RHEINBLICK_AI,
+      industry: { category: "E-Commerce and Online-Marketing", confidence: "high" },
+    });
+    expect(off).not.toBeNull(); // the whole extraction survives
+    expect(off!.industry).toBeNull(); // …but the off-taxonomy classification is dropped
+    expect(off!.companyName).toBe("Rheinblick Digital Solutions GmbH");
+    const merged = mergeAiExtraction(parseAdvertisement(RHEINBLICK_AD), off!, RHEINBLICK_AD);
+    expect(merged.companyEmail.value).toBe("ausbildung@rheinblick-digital.example");
+    expect(merged.companyIndustry.status).toBe("missing"); // deterministic value kept
+  });
+
+  it("an off-taxonomy subcategory is dropped while the label survives (grounded source phrase)", () => {
+    const off = validateGeminiAdPayload({
+      ...RHEINBLICK_AI,
+      industry: {
+        category: "Retail & Wholesale",
+        subcategory: "E-Commerce and Online-Marketing",
+        confidence: "high",
+      },
+    });
+    expect(off).not.toBeNull();
+    const merged = mergeAiExtraction(parseAdvertisement(RHEINBLICK_AD), off!, RHEINBLICK_AD);
+    // The model's ENGLISH echo is NOT grounded in the German source text →
+    // the subcategory is dropped (no translated/invented refinement) and the
+    // closed taxonomy label alone survives.
+    expect(merged.companyIndustry.value).toBe("Retail & Wholesale");
+    expect(merged.companyIndustry.status).toBe("extracted");
+  });
+});
+
+describe("grounding with diacritic folding (models normalize umlauts)", () => {
+  it("accepts a diacritic-normalized value that is otherwise verbatim (German transliteration)", () => {
+    expect(isGrounded("50670 Koeln", "50670 Köln")).toBe(true);
+    expect(isGrounded("Köln", "Koeln")).toBe(true); // both directions
+    expect(isGrounded("Müller", "Mueller")).toBe(true);
+    // Character-DROP style is a DIFFERENT string, not a diacritic variant:
+    // "Kaltetechnik"/"Muller" must NOT ground (conservative — anti-fabrication
+    // wins; NFD dropping would also let an unrelated "Kohn" ground "Köln").
+    expect(isGrounded("Kaltetechnik", "Kältetechnik")).toBe(false);
+    expect(isGrounded("Muller", "Müller")).toBe(false);
+    // ß → ss folding both directions
+    expect(isGrounded("Straßburger Weg", "Strassburger Weg")).toBe(true);
+  });
+
+  it("still rejects fabricated or different content (fold must not weaken grounding)", () => {
+    expect(isGrounded("50670 Bonn", "50670 Köln")).toBe(false);
+    expect(isGrounded("+49 221 555 0000", "+49 221 555 0192")).toBe(false);
+    expect(isGrounded("Lena Schmidt", "Lena Hoffmann")).toBe(false);
+  });
+
+  it("merge accepts an umlaut-normalized address (persisted as the model wrote it)", () => {
+    const ai = validateGeminiAdPayload({
+      ...RHEINBLICK_AI,
+      company_address: "Im Mediapark 7, 50670 Koeln",
+    });
+    expect(ai).not.toBeNull();
+    const merged = mergeAiExtraction(parseAdvertisement(RHEINBLICK_AD), ai!, RHEINBLICK_AD);
+    expect(merged.companyAddress.value).toBe("Im Mediapark 7, 50670 Koeln");
+    expect(merged.companyAddress.status).toBe("extracted");
   });
 });
