@@ -487,7 +487,7 @@ describe("validateReviewedFields (confirm backstop)", () => {
     };
   }
 
-  it("accepts a fully grounded reviewed payload (all 'extracted')", () => {
+  it("accepts a fully user-verified payload (all 'extracted')", () => {
     const out = validateReviewedFields(reviewed({}), MESSY_AD);
     expect(out).not.toBeNull();
     expect(out!.companyPhone.value).toBe("+49 9621 472983");
@@ -495,38 +495,70 @@ describe("validateReviewedFields (confirm backstop)", () => {
     expect(out!.companyIndustry.value).toBe("HVAC & Refrigeration — Kälteanlagen");
   });
 
-  it("rejects: ungrounded values (the client cannot persist what the server never saw)", () => {
-    expect(
-      validateReviewedFields(reviewed({
-        companyPhone: { value: "+49 9999 000000", status: "extracted" },
-      }), MESSY_AD),
-    ).toBeNull();
-    expect(
-      validateReviewedFields(reviewed({
-        companyName: { value: "Gefälscht GmbH", status: "extracted" },
-      }), MESSY_AD),
-    ).toBeNull();
+  it("ACCEPTS user-corrected (ungrounded) values — the form is the source of truth", () => {
+    // Contract change (simplified flow): the user reads the AI/deterministic
+    // pre-fill and may CORRECT it; a corrected value is not a substring of
+    // the pasted text and must still be persisted (same trust model as the
+    // manual row editor). Anti-fabrication still holds where it belongs —
+    // the AI pre-fill is grounded at analysis time.
+    const out = validateReviewedFields(
+      reviewed({
+        companyName: { value: "KALTENHAUS GmbH & Co. KG (neu)", status: "extracted" },
+        companyPhone: { value: "09621 472983 (direkt)", status: "extracted" },
+      }),
+      MESSY_AD,
+    );
+    expect(out).not.toBeNull();
+    expect(out!.companyName.value).toBe("KALTENHAUS GmbH & Co. KG (neu)");
+    expect(out!.companyPhone.value).toBe("09621 472983 (direkt)");
   });
 
-  it("rejects: invalid e-mail, implausible phone, unknown industry, over-length", () => {
+  it("accepts a user-edited industry outside the closed taxonomy (user data)", () => {
+    const out = validateReviewedFields(
+      reviewed({ companyIndustry: { value: "Erfindung — irgendwas", status: "extracted" } }),
+      MESSY_AD,
+    );
+    expect(out).not.toBeNull();
+    expect(out!.companyIndustry.value).toBe("Erfindung — irgendwas");
+  });
+
+  it("accepts user-verified dates (verbatim or corrected)", () => {
+    const out = validateReviewedFields(
+      reviewed({
+        startDate: { value: "01.09.2027", status: "extracted" },
+        endDate: { value: "", status: "missing" },
+        deadline: { value: "30.06.2027", status: "extracted" },
+      }),
+      MESSY_AD,
+    );
+    expect(out).not.toBeNull();
+    expect(out!.startDate.value).toBe("01.09.2027");
+    expect(out!.deadline.value).toBe("30.06.2027");
+    expect(out!.endDate.status).toBe("missing");
+  });
+
+  it("rejects: invalid e-mail (the campaign recipient — never a broken address)", () => {
     expect(
       validateReviewedFields(reviewed({
         companyEmail: { value: "keine@mail", status: "extracted" },
       }), MESSY_AD),
     ).toBeNull();
-    expect(
-      validateReviewedFields(reviewed({
-        companyPhone: { value: "12 34", status: "extracted" },
-      }), MESSY_AD),
-    ).toBeNull();
-    expect(
-      validateReviewedFields(reviewed({
-        companyIndustry: { value: "Erfindung — irgendwas", status: "extracted" },
-      }), MESSY_AD),
-    ).toBeNull();
+  });
+
+  it("rejects: over-length values (DB column limits)", () => {
     expect(
       validateReviewedFields(reviewed({
         positionBrief: { value: "x".repeat(4001), status: "extracted" },
+      }), MESSY_AD),
+    ).toBeNull();
+    expect(
+      validateReviewedFields(reviewed({
+        startDate: { value: "x".repeat(41), status: "extracted" },
+      }), MESSY_AD),
+    ).toBeNull();
+    expect(
+      validateReviewedFields(reviewed({
+        companyPhone: { value: "x".repeat(81), status: "extracted" },
       }), MESSY_AD),
     ).toBeNull();
   });
@@ -705,6 +737,9 @@ const RHEINBLICK_AI = {
   position_title: "Kaufmann/-frau im E-Commerce",
   position_brief:
     "Wir sind ein Team für E-Commerce und Online-Marketing: Shop-Betreuung, Kampagnen, Content.",
+  start_date: "01.09.2027",
+  end_date: null,
+  application_deadline: "30.06.2027",
   industry: {
     category: "Retail & Wholesale",
     subcategory: "E-Commerce und Online-Marketing",
@@ -731,6 +766,26 @@ describe("production repro — Rheinblick synthetic advertisement (mocked AI)", 
       "Retail & Wholesale — E-Commerce und Online-Marketing",
     );
     expect(parsed.companyIndustry.status).toBe("extracted"); // high confidence
+    // Dates: verbatim, grounded; an absent end date stays missing (never invented).
+    expect(parsed.startDate.value).toBe("01.09.2027");
+    expect(parsed.startDate.status).toBe("extracted");
+    expect(parsed.deadline.value).toBe("30.06.2027");
+    expect(parsed.endDate.status).toBe("missing");
+  });
+
+  it("an INVENTED date (not in the source) is dropped by grounding", async () => {
+    withKey();
+    const lying = {
+      ...RHEINBLICK_AI,
+      start_date: "15.03.2028", // not in the advertisement
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => geminiEnvelope(lying)));
+    const { parsed } = await extractSmartAd(RHEINBLICK_AD);
+    // The invented date is grounded out (never persisted as-is); the
+    // deterministic base value from the source stands in its place.
+    expect(parsed.startDate.value).not.toBe("15.03.2028");
+    expect(parsed.startDate.value).toBe("01.09.2027");
+    expect(parsed.deadline.value).toBe("30.06.2027"); // the real one survives
   });
 
   it("application e-mail wins even when the model tags BOTH as employer", async () => {
@@ -749,7 +804,7 @@ describe("production repro — Rheinblick synthetic advertisement (mocked AI)", 
     expect(parsed.companyEmail.status).toBe("suggested"); // ambiguity stays reviewable
   });
 
-  it("deterministic fallback (no key) still carries the flow and keeps dates in the brief", async () => {
+  it("deterministic fallback (no key) extracts the LABELED dates into their fields", async () => {
     delete process.env.GEMINI_SMART_INPUT_API_KEY;
     const { parsed, source, diagnostic } = await extractSmartAd(RHEINBLICK_AD);
     expect(source).toBe("deterministic");
@@ -757,9 +812,14 @@ describe("production repro — Rheinblick synthetic advertisement (mocked AI)", 
     expect(parsed.companyName.value).toBe("Rheinblick Digital Solutions GmbH");
     expect(parsed.companyPhone.value).toBe("+49 221 555 0192"); // labeled line
     expect(parsed.companyIndustry.status).toBe("missing"); // industry is AI-only
-    // Dates are source content — the preserved brief must not lose them.
-    expect(parsed.positionBrief.value).toContain("01.09.2027");
-    expect(parsed.positionBrief.value).toContain("30.06.2027");
+    // "Start: 01.09.2027, Bewerbung bis: 30.06.2027" — ONE line, two labeled
+    // dates: both land in their fields; the metadata line no longer stays in
+    // the residual brief (it is a first-class field now).
+    expect(parsed.startDate.value).toBe("01.09.2027");
+    expect(parsed.deadline.value).toBe("30.06.2027");
+    expect(parsed.endDate.status).toBe("missing");
+    expect(parsed.positionBrief.value).not.toContain("01.09.2027");
+    expect(parsed.positionBrief.value).not.toContain("30.06.2027");
   });
 
   it("diagnostics distinguish provider failures (mocked)", async () => {

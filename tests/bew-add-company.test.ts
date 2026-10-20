@@ -23,6 +23,8 @@ interface DB {
   positionColumnsBroken: boolean;
   /** Simulates the pending 20261117000000 migration (no smart columns). */
   smartColumnsBroken: boolean;
+  /** Simulates the pending 20261121000000 migration (no ad-date columns). */
+  dateColumnsBroken: boolean;
   /** Records every delete issued on bew_applications (must stay empty). */
   appDeletes: number;
 }
@@ -38,6 +40,7 @@ function freshDb(): DB {
     bew_applications: [],
     positionColumnsBroken: false,
     smartColumnsBroken: false,
+    dateColumnsBroken: false,
     appDeletes: 0,
   };
 }
@@ -94,6 +97,14 @@ function makeFrom(table: string) {
       db.smartColumnsBroken &&
       table === "bew_applications" &&
       state.selectCols === "company_phone"
+    ) {
+      return { data: null, error: { message: "42703: column does not exist" } };
+    }
+    // select — simulate the pending 20261121000000 migration state.
+    if (
+      db.dateColumnsBroken &&
+      table === "bew_applications" &&
+      state.selectCols === "start_date"
     ) {
       return { data: null, error: { message: "42703: column does not exist" } };
     }
@@ -167,6 +178,7 @@ const {
   checkBewSmartInput,
   resetBewPositionColumnsProbe,
   resetBewSmartColumnsProbe,
+  resetBewAdDateColumnsProbe,
 } = await import("@/lib/bewerbung-engine");
 
 /* ------------------- Seeds ------------------- */
@@ -240,6 +252,7 @@ beforeEach(() => {
   db = freshDb();
   resetBewPositionColumnsProbe();
   resetBewSmartColumnsProbe();
+  resetBewAdDateColumnsProbe();
 });
 
 /* ------------------- Happy path ------------------- */
@@ -640,7 +653,7 @@ describe("addBewCompany — series state is NOT a prerequisite (regression, MOCK
 });
 
 
-/* ------------------- Reviewed fields (AI-enhanced confirm) ------------------- */
+/* ------------------- Reviewed fields (the user-verified confirm step) ------------------- */
 
 function reviewedFields(over: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
   const f = (value: string, status: string = "extracted") => ({ value, status });
@@ -655,41 +668,75 @@ function reviewedFields(over: Partial<Record<string, unknown>> = {}): Record<str
     positionBrief: f(
       "Als Mechatroniker für Kältetechnik planst, montierst und wartest du Anlagen der Kälte- und Klimatechnik. Du sorgst dafür, dass die Kälteanlagen beim Kunden einwandfrei funktionieren.",
     ),
+    startDate: f("01.09.2027"),
+    endDate: f("31.07.2030"),
+    deadline: f("30.06.2027"),
     tooLongInput: false,
     ...over,
   };
 }
 
-describe("addBewCompany — reviewed fields (what was reviewed is persisted)", () => {
-  it("persists the EXACT reviewed values (phone verbatim + industry) when they ground", async () => {
+describe("addBewCompany — reviewed fields (what the user reviewed is persisted)", () => {
+  it("persists the EXACT reviewed values, incl. the three ad dates", async () => {
     seedCampaign();
     const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD, reviewedFields());
     expect(row.company_phone).toBe("+49 9621 472983");
     expect(row.company_industry).toBe("HVAC & Refrigeration — Kältetechnik");
     expect(row.company_name).toBe("Amberger Kühltechnik GmbH");
     expect(row.company_email).toBe("bernklaustefanie@amberger-kuehltechnik.de");
+    // The user reviewed "01.09.2027" although the source says 01.08.2027 —
+    // the form value is the truth (user-verified contract).
+    expect(row.start_date).toBe("01.09.2027");
+    expect(row.end_date).toBe("31.07.2030");
+    expect(row.application_deadline).toBe("30.06.2027");
   });
 
-  it("falls back to the deterministic re-parse when a reviewed value does NOT ground", async () => {
+  it("USER-CORRECTED values (not in the source) are persisted — the user verified them", async () => {
     seedCampaign();
-    // The deterministic parser finds no phone in this text (no label, no
-    // bare number line) — an ungrounded reviewed phone must be dropped.
     const ad = "Omega GmbH\ninfo@omega.de\nruf mich unter 0151/9876543 an\nBeschreibung: Wir suchen Verstärkung.";
-    const bad = reviewedFields({
-      companyName: f2("Omega GmbH"),
-      companyEmail: f2("info@omega.de"),
+    // None of these values appears in `ad` — the user read the extraction,
+    // corrected it and confirmed. The new contract trusts the form (no
+    // grounding at confirm time; anti-fabrication lives in the AI pre-fill).
+    const corrected = reviewedFields({
+      companyName: f2("Omega Kälte GmbH"),
+      companyEmail: f2("jobs@omega.de"),
       contactName: f2("", "missing"),
       companyAddress: f2("", "missing"),
       companyPhone: f2("+49 9999 000000"),
-      companyIndustry: f2("", "missing"),
+      companyIndustry: f2("Skilled Trades"),
       positionTitle: f2("", "missing"),
       positionBrief: f2("Wir suchen Verstärkung."),
+      startDate: f2("01.09.2027"),
+      endDate: f2("", "missing"),
+      deadline: f2("30.06.2027"),
     });
-    const row = await addBewCompany(USER, CAMPAIGN, ad, bad);
-    expect(row.company_name).toBe("Omega GmbH");
-    expect(row.company_email).toBe("info@omega.de");
-    expect(row.company_phone ?? null).toBeNull(); // fabricated phone rejected
-    expect(row.company_industry ?? null).toBeNull();
+    const row = await addBewCompany(USER, CAMPAIGN, ad, corrected);
+    expect(row.company_name).toBe("Omega Kälte GmbH");
+    expect(row.company_email).toBe("jobs@omega.de");
+    expect(row.company_phone).toBe("+49 9999 000000");
+    expect(row.company_industry).toBe("Skilled Trades");
+    expect(row.start_date).toBe("01.09.2027");
+    expect(row.end_date ?? null).toBeNull();
+    expect(row.application_deadline).toBe("30.06.2027");
+  });
+
+  it("a malformed reviewed payload is rejected with INVALID_PAYLOAD (never a silent re-parse)", async () => {
+    seedCampaign();
+    // An invalid e-mail in the reviewed form (user typo) must be sent back to
+    // the form — not swapped out for a deterministically re-parsed one.
+    const bad = reviewedFields({ companyEmail: f2("not-an-email") });
+    await expectCode(() => addBewCompany(USER, CAMPAIGN, KAELTE_AD, bad), "INVALID_PAYLOAD");
+    expect(db.bew_applications).toHaveLength(0); // nothing was written
+  });
+
+  it("empty text + valid reviewed → the FORM alone is persisted", async () => {
+    seedCampaign();
+    // The user may have cleared the paste box after reviewing — the reviewed
+    // form is the source of truth, the text is only kept for the flag.
+    const row = await addBewCompany(USER, CAMPAIGN, "", reviewedFields());
+    expect(row.company_name).toBe("Amberger Kühltechnik GmbH");
+    expect(row.company_email).toBe("bernklaustefanie@amberger-kuehltechnik.de");
+    expect(row.start_date).toBe("01.09.2027");
   });
 
   it("legacy call (no reviewed) still persists the deterministic phone (no AI needed)", async () => {
@@ -707,6 +754,17 @@ describe("addBewCompany — reviewed fields (what was reviewed is persisted)", (
     expect(row.company_name).toBe("Amberger Kühltechnik GmbH");
     expect(row.company_phone).toBeUndefined();
     expect(row.company_industry).toBeUndefined();
+  });
+
+  it("migration pending (no ad-date columns): dates degrade gracefully, NO 42703", async () => {
+    db.dateColumnsBroken = true;
+    seedCampaign();
+    const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD, reviewedFields());
+    expect(row.company_name).toBe("Amberger Kühltechnik GmbH");
+    // The date keys are ABSENT (not null) — the insert never mentions them.
+    expect(row.start_date).toBeUndefined();
+    expect(row.end_date).toBeUndefined();
+    expect(row.application_deadline).toBeUndefined();
   });
 });
 

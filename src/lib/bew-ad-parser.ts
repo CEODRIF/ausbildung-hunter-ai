@@ -1,10 +1,10 @@
 /**
  * Bewerbung Automation — deterministic German advertisement parser (smart input).
  *
- * Pure module: no React, no I/O, no randomness — the SAME function runs in the
- * client (live "Detected information" preview) and on the server (the single
- * extraction source for the Auto-organize action), so what the user previews
- * is exactly what gets persisted. No AI, no external API.
+ * Pure module: no React, no I/O, no randomness — the SAME function runs on the
+ * server (the deterministic floor of the smart-input "Text analysieren" step)
+ * and in the client tests, so what is extracted is exactly what is offered.
+ * No AI, no external API (the AI enhancement lives in `@/lib/bew-ad-ai`).
  *
  * What it extracts (only fields the existing data model supports):
  *   - companyName    (bew_applications.company_name)
@@ -14,16 +14,22 @@
  *   - companyPhone   (bew_applications.company_phone, optional, verbatim, ≤ 80)
  *   - positionTitle  (bew_applications.position_title, optional, ≤ 160)
  *   - positionBrief  (bew_applications.position_brief, optional, ≤ 4000)
+ *   - startDate      (bew_applications.start_date, optional, verbatim, ≤ 40)
+ *   - endDate        (bew_applications.end_date, optional, verbatim, ≤ 40)
+ *   - deadline       (bew_applications.application_deadline, optional, verbatim, ≤ 40)
  *
  * company_industry (bew_applications, optional) is NOT a deterministic
  * field: it is only ever filled by the AI extraction layer (server-side,
  * `@/lib/bew-ad-ai`) from the advertisement's context. In this module it is
  * always "missing" — the deterministic path never classifies, never guesses.
  *
- * The schema has NO columns for start date / location / employment type /
- * school degree, so those are deliberately NOT extracted fields (they remain
- * part of the original text and, when they appear inside the description
- * section, stay inside the preserved brief).
+ * The dates are ONLY extracted from EXPLICITLY LABELED lines (Bewerbungs-
+ * schluss, Beginn, Ende der Ausbildung, …) that carry a parseable date token —
+ * a bare date elsewhere is never assigned (that would be guessing). The
+ * schema has still NO columns for location / employment type / school degree,
+ * so those are deliberately NOT extracted fields (they remain part of the
+ * original text and, when they appear inside the description section, stay
+ * inside the preserved brief).
  *
  * Honesty contract (mirrors the rest of the feature: "never invented"):
  *   - Every stored value is a verbatim substring (or line-join) of the pasted
@@ -55,6 +61,9 @@ export const BEW_AD_INPUT_MAX = 20_000;
 
 /** Hard cap for a stored phone number (column limit, migration 20261117000000). */
 export const BEW_PHONE_MAX = 80;
+
+/** Hard cap for a stored advertisement date (column limit, migration 20261121000000). */
+export const BEW_DATE_MAX = 40;
 
 /** Hard cap for a stored industry classification (column limit). */
 export const BEW_INDUSTRY_MAX = 120;
@@ -122,6 +131,14 @@ export interface ParsedAdvertisement {
   companyIndustry: ParsedAdField;
   positionTitle: ParsedAdField;
   positionBrief: ParsedAdField;
+  /**
+   * Advertisement dates (verbatim, never normalized or invented):
+   * Ausbildungsbeginn, Ausbildungsende, Bewerbungsschluss.
+   * "missing" when no reliable, LABELED date is found.
+   */
+  startDate: ParsedAdField;
+  endDate: ParsedAdField;
+  deadline: ParsedAdField;
   /** true when the pasted text exceeds BEW_AD_INPUT_MAX (rejected upstream). */
   tooLongInput: boolean;
 }
@@ -451,15 +468,82 @@ const LABEL_PHONE_NOCOLON = /^(tel\.?|telefon|telephone|phone|t\.)\s+(\S.*)$/i;
 /** "Ausbildung als Mechatroniker …" / "Praktikum bei …" style title lines. */
 const TITLE_AS = /^(ausbildung(?:splatz)?|praktikum|stelle)\s+(als|zu|für|bei)\s+(.+)$/i;
 
+/* --- advertisement dates (labeled lines only — never an unlabeled date) --- */
+
+/**
+ * Date token finders, tried in order (most specific first). The token is kept
+ * VERBATIM (original spacing/case) — nothing is completed or normalized.
+ */
+const DATE_TOKENS: RegExp[] = [
+  // 01.09.2027 / 1.9.27
+  /\b(\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4})\b/,
+  // 01. September 2027 / 1. Sep. 2027 (German month name)
+  /\b(\d{1,2}\.\s*[A-Za-zÄÖÜäöüß]{3,9}\.?\s*\d{4})\b/,
+  // 1 September 2027 (English month name)
+  /\b(\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4})\b/i,
+  // 30.06. (year omitted — verbatim, the review form is the disambiguation)
+  /\b(\d{1,2}\.\s*\d{1,2}\.)(?!\d)/,
+];
+
+/** The first (or last, for "… bis X" end-date phrases) date token in `value`. */
+function findDateToken(value: string, pick: "first" | "last"): string | null {
+  for (const base of DATE_TOKENS) {
+    const re = new RegExp(base.source, "g");
+    const matches: RegExpMatchArray[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(value)) !== null) {
+      matches.push(m);
+      if (m.index === re.lastIndex) re.lastIndex += 1; // zero-length guard
+    }
+    if (matches.length === 0) continue;
+    const hit = pick === "first" ? matches[0] : matches[matches.length - 1];
+    return (hit[1] ?? "").replace(/\s+/g, " ").trim() || null;
+  }
+  return null;
+}
+
+/**
+ * Labeled date lines (German-first, conservative). Only EXPLICIT labels are
+ * accepted — a bare date anywhere else is never assigned to a field (that
+ * would be guessing). The labels are SEARCHED in the line (not anchored): one
+ * line may carry several labeled dates (portals render
+ * "Start: 01.09.2027, Bewerbung bis: 30.06.2027" on a single line), and the
+ * token is always taken from the text AFTER the label that claimed it.
+ */
+const DATE_LABEL_RULES: Array<{
+  field: "deadline" | "start" | "end";
+  re: RegExp;
+  /** "first" = the date right after the label; "last" = "… bis X" ranges. */
+  pick: "first" | "last";
+}> = [
+  {
+    field: "deadline",
+    re: /(?:bewerbungsschluss|bewerbungsfrist|frist|stichtag|deadline|apply\s+by|bewerbung(?:en)?\s+(?:bitte\s+)?bis(?:\s+zum)?)\s*[:\-–]?\s+/i,
+    pick: "first",
+  },
+  {
+    field: "start",
+    re: /(?:ausbildungsbeginn|arbeitsbeginn|beginn(?:\s+(?:der\s+ausbildung|zum|ab))?|start(?:datum)?(?:\s+(?:zum|ab))?)\s*[:\-–]?\s+/i,
+    pick: "first",
+  },
+  {
+    field: "end",
+    re: /(?:ausbildungsende|ende\s+(?:der\s+ausbildung|zum)|dauer)\s*[:\-–]?\s+/i,
+    pick: "last",
+  },
+];
+
 /**
  * Known short metadata labels (Beginn, Ort, Anstellungsart, Schulabschluss,
- * Referenz, …). The schema has no columns for these, so in an unstructured
- * paste they are kept out of the residual brief — UNLESS the value is long,
- * which marks it as real advertisement content (then the whole line is
- * preserved).
+ * Referenz, …). These carry no extracted field, so in an unstructured paste
+ * they are kept out of the residual brief — UNLESS the value is long, which
+ * marks it as real advertisement content (then the whole line is preserved).
+ * (Labeled DATE lines are consumed earlier by the date rules when they carry
+ * a parseable token; this list keeps the remaining label lines out of the
+ * brief.)
  */
 const META_LABELS =
-  /^(beginn|start(?:datum)?|arbeitsbeginn|ausbildungsbeginn|ort|standort|arbeitsort|anstellungsart|beschäftigungsart|ausmaß|arbeitszeit|schulabschluss|abschluss|qualifikation|referenz(?:nummer)?|verdienst|gehalt|vergütung|dauer|vertragsart|job-?id|stellen-?id|id)\s*[:\-–]\s*(.*)$/i;
+  /^(beginn|start(?:datum)?|arbeitsbeginn|ausbildungsbeginn|ausbildungsende|bewerbungsschluss|bewerbungsfrist|stichtag|ort|standort|arbeitsort|anstellungsart|beschäftigungsart|ausmaß|arbeitszeit|schulabschluss|abschluss|qualifikation|referenz(?:nummer)?|verdienst|gehalt|vergütung|dauer|vertragsart|job-?id|stellen-?id|id)\s*[:\-–]\s*(.*)$/i;
 
 /* ------------------------------------------------------------------ *
  * Field assembly
@@ -505,6 +589,9 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
     companyIndustry: missing(),
     positionTitle: missing(),
     positionBrief: missing(),
+    startDate: missing(),
+    endDate: missing(),
+    deadline: missing(),
     tooLongInput: text.length > BEW_AD_INPUT_MAX,
   };
 
@@ -521,6 +608,9 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
   let address: ParsedAdField = missing();
   let phone: ParsedAdField = missing();
   let title: ParsedAdField = missing();
+  let startDate: ParsedAdField = missing();
+  let endDate: ParsedAdField = missing();
+  let deadline: ParsedAdField = missing();
 
   /* --- pass 1: locate the first description/requirements/benefit heading */
   let headerEnd = -1; // index of the first "brief" heading line
@@ -659,6 +749,36 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
         consumed[i] = true;
         return;
       }
+    }
+
+    // 7c) labeled advertisement dates — the ONLY dates this parser assigns:
+    //     an explicit label (Bewerbungsschluss / Beginn / Ende / Dauer, …)
+    //     plus a parseable date token on the SAME line. Verbatim, first-wins
+    //     per field. A line WITHOUT a parseable date ("Beginn: ab sofort")
+    //     is deliberately NOT consumed here — META_LABELS keeps it out of
+    //     the residual brief instead.
+    if (
+      deadline.status === "missing" ||
+      startDate.status === "missing" ||
+      endDate.status === "missing"
+    ) {
+      let dateFound = false;
+      for (const rule of DATE_LABEL_RULES) {
+        const target =
+          rule.field === "deadline" ? deadline : rule.field === "start" ? startDate : endDate;
+        if (target.status !== "missing") continue;
+        const m = t.match(rule.re); // first (unanchored) occurrence
+        if (!m || m.index === undefined) continue;
+        const rest = t.slice(m.index + m[0].length);
+        const token = findDateToken(rest, rule.pick);
+        if (!token) continue;
+        const field = fieldFrom(token, "extracted", BEW_DATE_MAX);
+        if (rule.field === "deadline") deadline = field;
+        else if (rule.field === "start") startDate = field;
+        else endDate = field;
+        dateFound = true;
+      }
+      if (dateFound) consumed[i] = true;
     }
 
     // 8) postal-code line → address (street line above it, when present)
@@ -884,6 +1004,9 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
   // Industry is AI-layer only (see module header) — the deterministic parser
   // never classifies, so this stays "missing" here.
   result.positionTitle = title;
+  result.startDate = startDate;
+  result.endDate = endDate;
+  result.deadline = deadline;
   return result;
 }
 

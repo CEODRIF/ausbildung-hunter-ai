@@ -303,7 +303,7 @@ export async function bewSaveCompanies(
 }
 
 /**
- * The smart-input "Check information" step — the ANALYSIS of the pasted text
+ * The smart-input "Text analysieren" step — the ANALYSIS of the pasted text
  * (NO persistence, ever). Server-side because the AI enhancement runs with
  * the DEDICATED GEMINI_SMART_INPUT_API_KEY, which must never reach the
  * browser:
@@ -425,11 +425,11 @@ export async function bewAddCompany(
   const { userId } = await requireUser(); // redirect on purpose when signed out
   const campaignId = readString(formData, "campaignId");
   const text = readString(formData, "text");
-  // The FROZEN reviewed extraction (from the check step) — the exact fields
-  // the user reviewed and confirmed. The engine re-validates and re-grounds
-  // every value against the raw text before persisting it (a tampered or
-  // drifted payload falls back to the deterministic re-parse; malformed
-  // JSON is the stable INVALID_PAYLOAD code).
+  // The values from the user's EDITABLE review form — what the user reviewed
+  // and (possibly) corrected. The engine re-validates every value server-side
+  // (shape, e-mail validity, length caps — NO grounding: a corrected value is
+  // user data and must survive); a malformed/too-long/invalid payload is the
+  // stable INVALID_PAYLOAD code, never a silent substitution.
   const reviewed = readJson<unknown>(formData, "reviewed", undefined);
   try {
     const row = await addBewCompany(userId, campaignId, text, reviewed);

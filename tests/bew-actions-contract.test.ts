@@ -291,7 +291,7 @@ describe("action → engine argument mapping (service contract)", () => {
     expect(call.args).toEqual(["user-1", "c1", rawAd, undefined]);
   });
 
-  it("bewAddCompany forwards the FROZEN reviewed extraction when present (server re-validates + re-grounds)", async () => {
+  it("bewAddCompany forwards the FROZEN reviewed form when present (server re-validates it)", async () => {
     const rawAd = "Beta GmbH\ninfo@beta.de\nTelefon: +49 30 123456";
     const reviewed = {
       companyName: { value: "Beta GmbH", status: "extracted" },
@@ -302,6 +302,9 @@ describe("action → engine argument mapping (service contract)", () => {
       companyIndustry: { value: "Other", status: "extracted" },
       positionTitle: { value: "", status: "missing" },
       positionBrief: { value: "", status: "missing" },
+      startDate: { value: "01.09.2027", status: "extracted" },
+      endDate: { value: "", status: "missing" },
+      deadline: { value: "30.06.2027", status: "extracted" },
       tooLongInput: false,
     };
     const fd = new FormData();
@@ -310,8 +313,10 @@ describe("action → engine argument mapping (service contract)", () => {
     fd.set("reviewed", JSON.stringify(reviewed));
     await actions.bewAddCompany(fd);
     const call = engineCalls.find((c) => c.fn === "addBewCompany")!;
-    // The reviewed payload crosses the boundary as the parsed object (the
-    // engine validates + grounds it; a malformed one falls back to re-parse).
+    // The reviewed payload (user-verified form, incl. the ad dates) crosses
+    // the boundary as the parsed object; the engine validates shape / e-mail
+    // / length and rejects a malformed one with INVALID_PAYLOAD (never a
+    // silent re-parse substitution).
     expect(call.args).toEqual(["user-1", "c1", rawAd, reviewed]);
   });
 

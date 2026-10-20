@@ -155,6 +155,10 @@ export type SmartAddRow = {
   /** Smart-input extras (20261117000000); absent when the migration is pending. */
   company_phone?: string | null;
   company_industry?: string | null;
+  /** Advertisement dates (20261121000000); absent when the migration is pending. */
+  start_date?: string | null;
+  end_date?: string | null;
+  application_deadline?: string | null;
 };
 
 /** Map the persisted row onto the view's DTO (extra server fields dropped). */
@@ -182,6 +186,11 @@ export function toApplicationDTO(row: SmartAddRow): BewApplicationDTO {
     ...(row.employer_facts !== undefined ? { employer_facts: row.employer_facts } : {}),
     ...(row.company_phone !== undefined ? { company_phone: row.company_phone } : {}),
     ...(row.company_industry !== undefined ? { company_industry: row.company_industry } : {}),
+    ...(row.start_date !== undefined ? { start_date: row.start_date } : {}),
+    ...(row.end_date !== undefined ? { end_date: row.end_date } : {}),
+    ...(row.application_deadline !== undefined
+      ? { application_deadline: row.application_deadline }
+      : {}),
   };
 }
 

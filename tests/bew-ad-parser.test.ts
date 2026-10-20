@@ -482,3 +482,91 @@ describe("parseAdvertisement — Seco Kältetechnik real advertisement (regressi
     expect(adAutoAddGate(p)).toEqual({ ok: true }); // must NOT be auto-rejected
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Advertisement dates (start / end / deadline) — labeled lines only
+ * ------------------------------------------------------------------ */
+
+describe("parseAdvertisement — advertisement dates (labeled, verbatim)", () => {
+  const ad = (lines: string[]) =>
+    parseAdvertisement(["Rheinblick Digital Solutions GmbH", "info@rheinblick.de", ...lines].join("\n"));
+
+  it("extracts a labeled start date (Beginn: 01.08.2027)", () => {
+    const p = ad(["Beginn: 01.08.2027"]);
+    expect(p.startDate.value).toBe("01.08.2027");
+    expect(p.startDate.status).toBe("extracted");
+  });
+
+  it("extracts Ausbildungsbeginn with a verbal date, verbatim", () => {
+    const p = ad(["Ausbildungsbeginn: 01. September 2027"]);
+    expect(p.startDate.value).toBe("01. September 2027");
+    expect(p.startDate.status).toBe("extracted");
+  });
+
+  it("extracts the deadline (Bewerbungsschluss / Bewerbungsfrist / Frist)", () => {
+    expect(ad(["Bewerbungsschluss: 30.06.2027"]).deadline.value).toBe("30.06.2027");
+    expect(ad(["Bewerbungsfrist: 30.06.2027"]).deadline.value).toBe("30.06.2027");
+    expect(ad(["Frist: 30.06.2027"]).deadline.value).toBe("30.06.2027");
+  });
+
+  it("extracts 'Bewerbung bis …' without a colon", () => {
+    expect(ad(["Bewerbung bis 30.06.2027"]).deadline.value).toBe("30.06.2027");
+    expect(ad(["Bewerbungen bis zum 30.06.2027"]).deadline.value).toBe("30.06.2027");
+  });
+
+  it("extracts the end date — 'Dauer: X bis Y' takes the SECOND date", () => {
+    const p = ad(["Dauer: 01.09.2027 bis 31.08.2030"]);
+    expect(p.endDate.value).toBe("31.08.2030");
+    expect(p.endDate.status).toBe("extracted");
+  });
+
+  it("extracts 'Ende der Ausbildung: …'", () => {
+    expect(ad(["Ende der Ausbildung: 31.08.2030"]).endDate.value).toBe("31.08.2030");
+  });
+
+  it("extracts a year-less deadline verbatim (30.06.)", () => {
+    expect(ad(["Bewerbungsschluss: 30.06."]).deadline.value).toBe("30.06.");
+  });
+
+  it("a labeled line WITHOUT a parseable date is NOT assigned (never guessed)", () => {
+    const p = ad(["Beginn: ab sofort", "Bewerbungsschluss: offen"]);
+    expect(p.startDate.status).toBe("missing");
+    expect(p.deadline.status).toBe("missing");
+  });
+
+  it("an UNLABELED bare date line is never assigned to any field", () => {
+    const p = ad(["01.09.2027", "30.06.2027"]);
+    expect(p.startDate.status).toBe("missing");
+    expect(p.endDate.status).toBe("missing");
+    expect(p.deadline.status).toBe("missing");
+  });
+
+  it("an ad without dates keeps all three missing (never invented)", () => {
+    const p = parseAdvertisement(KAELTE_AD.split("\n").slice(0, 7).join("\n"));
+    expect(p.startDate.status).toBe("missing");
+    expect(p.endDate.status).toBe("missing");
+    expect(p.deadline.status).toBe("missing");
+  });
+
+  it("the existing Kälte fixture: 'Beginn: 01.08.2027' is now the start date", () => {
+    const p = parseAdvertisement(KAELTE_AD);
+    expect(p.startDate.value).toBe("01.08.2027");
+    expect(p.startDate.status).toBe("extracted");
+  });
+
+  it("labeled date lines do not leak into the residual brief", () => {
+    const p = ad([
+      "Beginn: 01.09.2027",
+      "Bewerbungsschluss: 30.06.2027",
+      "In unserem Team lernst du moderne Softwareentwicklung in einer kreativen Agentur.",
+    ]);
+    expect(p.positionBrief.value).not.toContain("01.09.2027");
+    expect(p.positionBrief.value).not.toContain("30.06.2027");
+    expect(p.positionBrief.value).toContain("moderne Softwareentwicklung");
+  });
+
+  it("a date value is never mistaken for a phone number", () => {
+    const p = ad(["Beginn: 01.09.2027"]);
+    expect(p.companyPhone.status).toBe("missing");
+  });
+});
