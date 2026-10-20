@@ -64,7 +64,22 @@ import {
  * Configuration (dedicated key — see module header)
  * ------------------------------------------------------------------ */
 
-export const GEMINI_SMART_INPUT_DEFAULT_MODEL = "gemini-2.5-flash";
+/**
+ * Default Smart Input model.
+ *
+ * `gemini-2.5-flash` was RETIRED by Google on 2026-10-20 (production error
+ * "gemini-2.5-flash is no longer available to new users"): every call 4xx'd
+ * and Smart Input silently degraded to the deterministic parser, so industry
+ * (AI-layer only) — and sometimes the position title / start date — were never
+ * extracted. `gemini-3.8-flash` is Google's recommended model for NEW projects
+ * (ai.google.dev/gemini-api/docs/models), is on the FREE standard tier (no
+ * billing required) and supports structured output (responseSchema) + system
+ * instructions. If the account's key ever lacks free access to it, override via
+ * env with `gemini-3.5-flash-lite` (also Google-recommended for new projects,
+ * free, highest free RPD) — no code change. The safe upstream diagnostic
+ * (below) re-confirms model availability on every call.
+ */
+export const GEMINI_SMART_INPUT_DEFAULT_MODEL = "gemini-3.8-flash";
 
 /** The model id for the Smart Input extraction (env-overridable). */
 export function resolveSmartInputGeminiModel(): string {
