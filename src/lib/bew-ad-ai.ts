@@ -37,6 +37,7 @@ import "server-only";
 
 import {
   BEW_AD_INPUT_MAX,
+  BEW_DATE_MAX,
   BEW_INDUSTRY_MAX,
   BEW_PHONE_MAX,
   isPlausiblePhone,
@@ -168,6 +169,10 @@ export interface AiAdExtraction {
   /** Verbatim excerpt (description + requirements) or null. */
   positionBrief: string | null;
   industry: AiIndustry | null;
+  /** Verbatim advertisement dates or null (see the schema descriptions). */
+  startDate: string | null;
+  endDate: string | null;
+  applicationDeadline: string | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -221,6 +226,9 @@ export function validateGeminiAdPayload(payload: unknown): AiAdExtraction | null
     "company_address",
     "position_title",
     "position_brief",
+    "start_date",
+    "end_date",
+    "application_deadline",
   ] as const) {
     const v = p[key];
     if (v !== null && v !== undefined && typeof v !== "string") return null;
@@ -274,6 +282,9 @@ export function validateGeminiAdPayload(payload: unknown): AiAdExtraction | null
     positionTitle: asString(p.position_title, BEW_POSITION_TITLE_MAX),
     positionBrief: asString(p.position_brief, BEW_POSITION_BRIEF_MAX),
     industry,
+    startDate: asString(p.start_date, BEW_DATE_MAX),
+    endDate: asString(p.end_date, BEW_DATE_MAX),
+    applicationDeadline: asString(p.application_deadline, BEW_DATE_MAX),
   };
 }
 
@@ -435,6 +446,18 @@ export function mergeAiExtraction(
     );
   }
 
+  // Dates — verbatim, grounded (the model must not convert or invent a date;
+  // "01.09.2027" stays "01.09.2027"). Ungrounded/missing → stays missing.
+  if (ai.startDate && isGrounded(ai.startDate, sourceText)) {
+    next.startDate = aiField(ai.startDate, "extracted", BEW_DATE_MAX);
+  }
+  if (ai.endDate && isGrounded(ai.endDate, sourceText)) {
+    next.endDate = aiField(ai.endDate, "extracted", BEW_DATE_MAX);
+  }
+  if (ai.applicationDeadline && isGrounded(ai.applicationDeadline, sourceText)) {
+    next.deadline = aiField(ai.applicationDeadline, "extracted", BEW_DATE_MAX);
+  }
+
   // Industry — the one classification field: category from the closed
   // taxonomy, subcategory verbatim (grounded), uncertainty → "suggested".
   if (ai.industry) {
@@ -496,6 +519,9 @@ EXTRACT (return null / an empty array for anything absent or unreliable — NEVE
 - phones: EVERY phone number EXACTLY AS WRITTEN (preserve the original formatting and the international country code when present; never add, remove or normalize digits), each with the same context values.
 - position_title: the advertised POSITION's title as written.
 - position_brief: a VERBATIM excerpt of the job description and relevant requirements (contiguous text copied from the source, at most 4000 characters, no rewriting, no translation, no summary). null when there is no description.
+- start_date: the APPRENTICESHIP START date (Ausbildungsbeginn / Beginn) EXACTLY AS WRITTEN (e.g. "01.09.2027", "01. September 2027"). null when absent. NEVER convert the format.
+- end_date: the APPRENTICESHIP END date (Ausbildungsende / "Ende der Ausbildung"). If only a duration or a "… bis X" range is given, X is the end date. null when absent.
+- application_deadline: the APPLICATION DEADLINE (Bewerbungsschluss / Bewerbungsfrist / "Bewerbung bis …"). null when absent.
 - industry: the EMPLOYER'S business sector — derived from the company description, products, services and the nature of the work, NOT from the advertised job title alone (a "Mechatroniker" position at a bakery is "Food & Beverage").
   category: exactly one of the provided enum values (normalized taxonomy).
   subcategory: a SHORT VERBATIM phrase from the text that refines the category (at most 60 characters), or null.
@@ -576,6 +602,21 @@ export const SMART_INPUT_RESPONSE_SCHEMA = {
       nullable: true,
       description: "Verbatim excerpt of description + requirements (max 4000 chars).",
     },
+    start_date: {
+      type: "STRING",
+      nullable: true,
+      description: "Apprenticeship start date exactly as written (max 40 chars), null when absent.",
+    },
+    end_date: {
+      type: "STRING",
+      nullable: true,
+      description: "Apprenticeship end date exactly as written (max 40 chars), null when absent.",
+    },
+    application_deadline: {
+      type: "STRING",
+      nullable: true,
+      description: "Application deadline exactly as written (max 40 chars), null when absent.",
+    },
     industry: {
       type: "OBJECT",
       nullable: true,
@@ -615,6 +656,9 @@ export const SMART_INPUT_RESPONSE_SCHEMA = {
     "phones",
     "position_title",
     "position_brief",
+    "start_date",
+    "end_date",
+    "application_deadline",
     "industry",
   ],
 } as const;
@@ -791,19 +835,26 @@ export function isKnownIndustryValue(value: string): boolean {
 }
 
 /**
- * Validate the FROZEN reviewed fields (from the check step) against the raw
- * text before persisting them — the confirm step's backstop:
+ * Validate the reviewed fields (the user's editable form at confirm time)
+ * before persisting them — the confirm step's backstop:
  *
  *   - strict shape (every field is a { value: string } envelope);
- *   - company + e-mail present, e-mail valid, every value length-capped;
- *   - every non-null value GROUNDED in the raw text (whitespace-normalized
- *     substring) — a client cannot persist a value the server never saw in
- *     the source;
- *   - phone plausible, industry from the closed taxonomy.
+ *   - company + e-mail present, e-mail valid (the e-mail is the campaign's
+ *     recipient — a broken address would break the whole series);
+ *   - every value length-capped (the DB column limits).
  *
- * Returns a normalized ParsedAdvertisement (all "extracted" — server-
- * validated) or null when ANY rule fails (the caller then falls back to the
- * deterministic re-parse — the legacy contract, never a fake success).
+ * NO grounding: since the simplified flow (paste → analyze → EDITABLE form →
+ * confirm), the reviewed values are USER-VERIFIED — the user read the
+ * extraction and may have corrected it (a corrected value is by definition
+ * not a substring of the pasted text, yet it must be persisted). The
+ * anti-fabrication guarantee still holds where it belongs: the AI's
+ * PRE-FILL is grounded server-side at analysis time (mergeAiExtraction), and
+ * what the user types is the user's own data — the same trust model as the
+ * manual row editor.
+ *
+ * Returns a normalized ParsedAdvertisement (all "extracted" — user-verified)
+ * or null when ANY rule fails (the caller then rejects with INVALID_PAYLOAD —
+ * never a silent substitution of different values).
  */
 export function validateReviewedFields(
   reviewed: unknown,
@@ -817,7 +868,6 @@ export function validateReviewedFields(
   if (!companyName || !companyEmail) return null;
   if (companyName.length > 200 || companyEmail.length > 320) return null;
   if (!isValidEmail(companyEmail)) return null;
-  if (!isGrounded(companyName, sourceText) || !isGrounded(companyEmail, sourceText)) return null;
 
   const contactName = fieldValueOf(r.contactName);
   const companyAddress = fieldValueOf(r.companyAddress);
@@ -825,20 +875,19 @@ export function validateReviewedFields(
   const positionTitle = fieldValueOf(r.positionTitle);
   const positionBrief = fieldValueOf(r.positionBrief);
   const companyIndustry = fieldValueOf(r.companyIndustry);
+  const startDate = fieldValueOf(r.startDate);
+  const endDate = fieldValueOf(r.endDate);
+  const applicationDeadline = fieldValueOf(r.deadline);
 
-  if (contactName && (contactName.length > 120 || !isGrounded(contactName, sourceText))) return null;
-  if (companyAddress && (companyAddress.length > 200 || !isGrounded(companyAddress, sourceText))) return null;
-  if (
-    companyPhone &&
-    (!isPlausiblePhone(companyPhone) ||
-      companyPhone.length > BEW_PHONE_MAX ||
-      !isGrounded(companyPhone, sourceText))
-  ) {
-    return null;
-  }
-  if (positionTitle && (positionTitle.length > BEW_POSITION_TITLE_MAX || !isGrounded(positionTitle, sourceText))) return null;
-  if (positionBrief && (positionBrief.length > BEW_POSITION_BRIEF_MAX || !isGrounded(positionBrief, sourceText))) return null;
-  if (companyIndustry && (companyIndustry.length > BEW_INDUSTRY_MAX || !isKnownIndustryValue(companyIndustry))) return null;
+  if (contactName && contactName.length > 120) return null;
+  if (companyAddress && companyAddress.length > 200) return null;
+  if (companyPhone && companyPhone.length > BEW_PHONE_MAX) return null;
+  if (positionTitle && positionTitle.length > BEW_POSITION_TITLE_MAX) return null;
+  if (positionBrief && positionBrief.length > BEW_POSITION_BRIEF_MAX) return null;
+  if (companyIndustry && companyIndustry.length > BEW_INDUSTRY_MAX) return null;
+  if (startDate && startDate.length > BEW_DATE_MAX) return null;
+  if (endDate && endDate.length > BEW_DATE_MAX) return null;
+  if (applicationDeadline && applicationDeadline.length > BEW_DATE_MAX) return null;
 
   const mk = (value: string, max: number): ParsedAdField =>
     aiField(value, "extracted", max);
@@ -853,6 +902,9 @@ export function validateReviewedFields(
       : { value: "", status: "missing" },
     positionTitle: positionTitle ? mk(positionTitle, BEW_POSITION_TITLE_MAX) : { value: "", status: "missing" },
     positionBrief: positionBrief ? mk(positionBrief, BEW_POSITION_BRIEF_MAX) : { value: "", status: "missing" },
+    startDate: startDate ? mk(startDate, BEW_DATE_MAX) : { value: "", status: "missing" },
+    endDate: endDate ? mk(endDate, BEW_DATE_MAX) : { value: "", status: "missing" },
+    deadline: applicationDeadline ? mk(applicationDeadline, BEW_DATE_MAX) : { value: "", status: "missing" },
     tooLongInput: sourceText.length > BEW_AD_INPUT_MAX,
   };
 }

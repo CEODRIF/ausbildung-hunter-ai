@@ -178,28 +178,33 @@ describe("B. the removed row-count controls stay gone from step 1", () => {
   });
 });
 
-describe("C. Smart Input + Check → Review → Confirm is the primary entry point", () => {
-  it("the smart input and the 'Check information' button render BEFORE the company table", () => {
+describe("C. Smart Input — the four-element flow is the primary entry point", () => {
+  it("the smart input and the 'Text analysieren' button render BEFORE the company table", () => {
     const html = renderWizard(12);
     const smart = html.indexOf('id="bew-smart-input"');
-    const preview = html.indexOf("Erkannte Informationen");
-    const check = html.indexOf("Informationen prüfen");
+    const analyze = html.indexOf("Text analysieren");
+    const confirm = html.indexOf("Bestätigen und hinzufügen");
     const table = html.indexOf("Firma</th>");
     expect(smart).toBeGreaterThan(-1);
-    expect(preview).toBeGreaterThan(-1);
-    expect(check).toBeGreaterThan(-1);
+    expect(analyze).toBeGreaterThan(-1);
+    expect(confirm).toBeGreaterThan(-1);
     expect(table).toBeGreaterThan(-1);
     expect(smart).toBeLessThan(table);
-    expect(preview).toBeLessThan(table);
-    expect(check).toBeLessThan(table);
+    expect(analyze).toBeLessThan(table);
+    expect(confirm).toBeLessThan(table);
   });
 
-  it("the old one-shot 'Auto-organize' is gone and 'Confirm and add' does not exist before a check passes", () => {
+  it("the old one-shot 'Auto-organize' and the removed preview/check elements are gone", () => {
     const html = renderWizard(12);
     expect(html).not.toContain("Automatisch organisieren");
-    // The confirm button only appears AFTER a successful check (client
-    // state) — it must not be part of the first paint.
-    expect(html).not.toContain("Bestätigen und hinzufügen");
+    // The simplified flow keeps exactly the four elements (paste box,
+    // analyze, editable form, confirm): the removed live preview panel,
+    // the old 'Check information' two-step and the clear button must not
+    // be part of the first paint.
+    expect(html).not.toContain("Erkannte Informationen");
+    expect(html).not.toContain("Live-Vorschau");
+    expect(html).not.toContain("Informationen prüfen");
+    expect(html).not.toContain("Eingabe leeren");
   });
 });
 

@@ -173,6 +173,10 @@ export type BewApplicationRow = {
   company_phone?: string | null;
   /** Smart-input industry classification (20261117000000). */
   company_industry?: string | null;
+  /** Advertisement dates (20261121000000); verbatim (or user-corrected). */
+  start_date?: string | null;
+  end_date?: string | null;
+  application_deadline?: string | null;
   /** Generation retries used for this letter (capped). */
   quality_attempts?: number;
   /** Lease for stale-generation recovery. */
@@ -727,12 +731,14 @@ export async function saveBewCompanies(
  *   - the pasted text is re-parsed and re-validated HERE (the client's live
  *     preview is advisory; the server's parse is the single source of truth)
  *     with the SAME deterministic parser the preview uses;
- *   - when the check step produced AI-enhanced fields (the `reviewed`
- *     argument — the FROZEN reviewed extraction), those exact values are
- *     persisted: they are re-validated server-side (validity, length caps,
- *     and GROUNDED — whitespace-normalized substrings of the raw text). Any
- *     violation falls back to the deterministic re-parse (the legacy
- *     contract) — never a partial/trusted client payload;
+ *   - when the flow ran through the analyze step (the `reviewed` argument —
+ *     the values in the user's EDITABLE review form), those exact values are
+ *     persisted: they are re-validated server-side (shape, e-mail validity,
+ *     length caps). They are USER-VERIFIED, so grounding against the raw text
+ *     is deliberately NOT required — a corrected value must survive. Any
+ *     violation rejects with INVALID_PAYLOAD (never a silent substitution of
+ *     different values). Without `reviewed` (legacy callers) the pasted text
+ *     is re-parsed deterministically — exactly the old contract;
  *   - only stable error codes are thrown (the client maps them to localized
  *     messages; there is no generic failure path here).
  *
@@ -751,11 +757,13 @@ export async function addBewCompany(
   campaignId: string,
   rawText: string,
   /**
-   * The FROZEN reviewed extraction from the check step (the client's
-   * serialized `ParsedAdvertisement`), when the flow ran through the server
-   * check. Validated + grounded against `rawText` before use; any violation
-   * silently falls back to the deterministic re-parse (the legacy path).
-   * Omitted by legacy callers → deterministic parse, exactly as before.
+   * The values in the user's editable review form (the client's serialized
+   * `ParsedAdvertisement`) when the flow ran through the analyze step.
+   * USER-VERIFIED: validated server-side for shape / e-mail validity / length
+   * caps — NOT grounded against `rawText` (a corrected value must survive).
+   * Any violation rejects with INVALID_PAYLOAD (never a silent substitution).
+   * Omitted by legacy callers → the pasted text is re-parsed deterministically,
+   * exactly as before (and empty/over-limit text is rejected there).
    */
   reviewed?: unknown,
 ): Promise<BewApplicationRow> {
@@ -767,15 +775,19 @@ export async function addBewCompany(
   const wasTerminal = BEW_TERMINAL_CAMPAIGN.has(campaign.status);
 
   const text = (rawText ?? "").trim();
-  if (!text || text.length > BEW_AD_INPUT_MAX) throw new Error("INVALID_PAYLOAD");
-
-  // The checked (possibly AI-enhanced) extraction, re-validated and grounded
-  // server-side; when absent or invalid → the deterministic re-parse (the
-  // legacy single source of truth). The GATE below then applies to whatever
-  // won — reviewed fields that failed validation can never bypass it.
-  const parsed =
-    (reviewed !== undefined ? validateReviewedFields(reviewed, text) : null) ??
-    parseAdvertisement(text);
+  let parsed: ParsedAdvertisement;
+  if (reviewed !== undefined) {
+    // The row is built from the FORM (user-verified values), so the raw text
+    // is not parsed and is not subject to the paste limit here — it is only
+    // kept for the tooLongInput flag on the validated result.
+    const reviewedParsed = validateReviewedFields(reviewed, text);
+    if (!reviewedParsed) throw new Error("INVALID_PAYLOAD");
+    parsed = reviewedParsed;
+  } else {
+    // Legacy path: the pasted text is the single source of truth.
+    if (!text || text.length > BEW_AD_INPUT_MAX) throw new Error("INVALID_PAYLOAD");
+    parsed = parseAdvertisement(text);
+  }
   const gate = adAutoAddGate(parsed);
   if (!gate.ok) throw new Error(gate.code);
 
@@ -805,11 +817,13 @@ export async function addBewCompany(
   const maxSeq = rows.reduce((m, r) => Math.max(m, r.seq ?? 0), 0);
   const positionProbe = hasBewPositionColumns();
   const smartProbe = hasBewSmartColumns();
+  const dateProbe = hasBewAdDateColumns();
 
   const company = parsed.companyName.value.trim();
   const email = parsed.companyEmail.value.trim();
   const positionSupported = await positionProbe;
   const smartSupported = await smartProbe;
+  const dateSupported = await dateProbe;
   const rowPayload = {
     campaign_id: campaignId,
     user_id: userId,
@@ -842,6 +856,16 @@ export async function addBewCompany(
       ? {
           company_phone: parsed.companyPhone.value.trim() || null,
           company_industry: parsed.companyIndustry.value.trim() || null,
+        }
+      : {}),
+    // Advertisement dates (20261121000000): verbatim (or user-corrected)
+    // start / end / deadline. NULL when absent or when the migration is
+    // pending.
+    ...(dateSupported
+      ? {
+          start_date: parsed.startDate.value.trim() || null,
+          end_date: parsed.endDate.value.trim() || null,
+          application_deadline: parsed.deadline.value.trim() || null,
         }
       : {}),
   };
@@ -1538,6 +1562,38 @@ export function hasBewSmartColumns(): Promise<boolean> {
 /** Test hook: drop the cached smart-input columns probe. */
 export function resetBewSmartColumnsProbe(): void {
   bewSmartProbe = null;
+}
+
+/* ---------------- Advertisement-dates columns probe ---------------- */
+
+let bewAdDateProbe: Promise<boolean> | null = null;
+
+/**
+ * Migration-state probe for the 20261121000000 advertisement-date columns
+ * (start_date / end_date / application_deadline). Same contract as the other
+ * probes: a CLEAN READ proves support; any error (e.g. the columns are
+ * missing because the migration is pending) resolves to false, and the
+ * feature degrades to "no date persistence" instead of a 42703 crash.
+ */
+export function hasBewAdDateColumns(): Promise<boolean> {
+  bewAdDateProbe ??= (async () => {
+    try {
+      const admin = createAdminClient();
+      const { error } = await admin
+        .from("bew_applications")
+        .select("start_date")
+        .limit(1);
+      return error === null;
+    } catch {
+      return false;
+    }
+  })();
+  return bewAdDateProbe;
+}
+
+/** Test hook: drop the cached advertisement-dates columns probe. */
+export function resetBewAdDateColumnsProbe(): void {
+  bewAdDateProbe = null;
 }
 
 /* ---------------- Candidate (CV) profile load ---------------- */

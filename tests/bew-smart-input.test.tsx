@@ -1,8 +1,8 @@
 /**
- * Smart-input "Auto-organize" — UI orchestration + render tests.
+ * Smart-input "Paste → Extract → Fill" — UI orchestration + render tests.
  *
- * Part 1 (pure): runSmartAdd / precheckSmartAdd / appendRowToView /
- *   toApplicationDTO — the safety contract:
+ * Part 1 (pure): runSmartAdd / precheckSmartAdd / checkSmartAdd /
+ *   appendRowToView / toApplicationDTO — the safety contract:
  *     - precheck failures never call the persistence layer (no request,
  *       no write, input preserved);
  *     - onRowAdded (the input-clear hook) runs ONLY after a confirmed
@@ -10,9 +10,12 @@
  *     - the claim guard makes rapid double clicks a silent no-op;
  *     - appending a row never mutates the other rows or the previous view.
  *
- * Part 2 (SSR): the smart input section renders inside CompaniesStep with
- *   the expected labels/controls, the new Position title + Job description
- *   columns exist, and the pre-existing delete/count behavior is intact.
+ * Part 2 (SSR): the smart input section renders the EXACT four-element
+ *   flow (big paste box → "Text analysieren" → one editable pre-filled
+ *   form → "Bestätigen und hinzufügen"), the removed elements are gone
+ *   (live preview / "Check information" / clear button), the row table
+ *   keeps its Position title + Job description columns, and the
+ *   pre-existing delete/count behavior is intact.
  */
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -99,6 +102,11 @@ const SERVER_ROW: SmartAddRow = {
   position_brief:
     "Als Mechatroniker für Kältetechnik planst du Anlagen.",
   employer_facts: null,
+  company_phone: "+49 9621 472983",
+  company_industry: "HVAC & Refrigeration — Kältetechnik",
+  start_date: "01.09.2027",
+  end_date: null,
+  application_deadline: "30.06.2027",
 };
 
 function makeView(apps: BewApplicationDTO[], campaignStatus = "draft"): BewViewDTO {
@@ -347,7 +355,7 @@ describe("precheckSmartAdd — mirrors the server rules client-side", () => {
   });
 });
 
-describe("checkSmartAdd — the 'Check information' step (analysis without persistence)", () => {
+describe("checkSmartAdd — the local analysis rules (no persistence, no round trip)", () => {
   it("empty input → EMPTY_INPUT, no parse, not ok", () => {
     for (const text of ["", "   \n  "]) {
       expect(checkSmartAdd(text, [])).toEqual({
@@ -460,9 +468,10 @@ describe("checkSmartAdd — the 'Check information' step (analysis without persi
       const check = checkSmartAdd(text, []);
       expect(check.ok, text).toBe(false);
       expect(check.issues, text).toContain(code);
-      // The confirm button is only rendered for an ok review (component
-      // contract, pinned statically below) — so with a failed check there
-      // is nothing to confirm: the persistence layer is never reached.
+      // The confirm button is only active once the analyzed form carries
+      // the two required fields (component contract, pinned statically
+      // below) — so with a failed analysis there is nothing to confirm:
+      // the persistence layer is never reached.
       const { deps, calls } = makeDeps();
       // Simulating a direct (impossible in the UI) confirm call still
       // proves the precheck backstop: no add, no row.
@@ -561,6 +570,13 @@ describe("toApplicationDTO — the persisted row maps to the view shape", () => 
       position_title: "Mechatroniker/in - Kältetechnik",
       position_brief: "Als Mechatroniker für Kältetechnik planst du Anlagen.",
       employer_facts: null,
+      // The smart-input extras AND the ad dates pass through unchanged
+      // (null end_date stays null — the date is simply absent from the ad).
+      company_phone: "+49 9621 472983",
+      company_industry: "HVAC & Refrigeration — Kältetechnik",
+      start_date: "01.09.2027",
+      end_date: null,
+      application_deadline: "30.06.2027",
     });
     expect("next_attempt_at" in dto).toBe(false);
     expect("created_at" in dto).toBe(false);
@@ -596,23 +612,36 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
     );
   }
 
-  it("renders the labelled smart input, the preview panel and the 'Check information' step", () => {
+  it("renders EXACTLY the four-element flow (paste → analyze → form → confirm)", () => {
     const html = renderStep([appDto(1, { company_name: "A", company_email: "a@a.de" })]);
+    // 1. The big paste box — a real, labelled, length-capped input.
     expect(html).toContain("Firmen hinzufügen (Smart-Eingabe)");
     expect(html).toContain("die verfügbaren Firmen- und Stellendetails");
-    expect(html).toContain("Erkannte Informationen");
-    expect(html).toContain("Live-Vorschau");
-    // The workflow starts with the analysis step (renamed from the old
-    // one-shot "Auto-organize", which is gone)…
-    expect(html).toContain("Informationen prüfen");
-    expect(html).not.toContain("Automatisch organisieren");
-    // …and the confirm step does NOT exist before a check passes.
-    expect(html).not.toContain("Bestätigen und hinzufügen");
-    expect(html).toContain("Eingabe leeren");
-    // The textarea is a real, labelled, length-capped input (not a static mock).
     expect(html).toContain('id="bew-smart-input"');
     expect(html).toContain('maxLength="20000"');
     expect(html).toContain('aria-describedby="bew-smart-input-hint"');
+    // 2. The ONE analysis button.
+    expect(html).toContain("Text analysieren");
+    // 4. The ONE confirm button — present from the start but INACTIVE until
+    //    the analyzed form carries the two required fields (the opening tag
+    //    carries a `disabled` attribute, not just `disabled:*` class variants).
+    expect(html).toContain("Bestätigen und hinzufügen");
+    const confirmTag = html.match(/<button[^>]*>(?=[\s\S]{0,400}?Bestätigen und hinzufügen)/);
+    expect(confirmTag).not.toBeNull();
+    // SSR renders a boolean `disabled` as `disabled=""` — attribute present.
+    expect(confirmTag![0]).toMatch(/\sdisabled(?=[\s=>"'])/);
+    // The REMOVED elements are gone: no live preview panel, no old
+    // "Check information" two-step, no clear button, no auto-organize.
+    expect(html).not.toContain("Erkannte Informationen");
+    expect(html).not.toContain("Live-Vorschau");
+    expect(html).not.toContain("Informationen prüfen");
+    expect(html).not.toContain("Eingabe leeren");
+    expect(html).not.toContain("Automatisch organisieren");
+    // 3. The editable form appears ONLY after the analysis — the initial
+    //    render has no form fields yet.
+    expect(html).not.toContain('id="si-company"');
+    expect(html).not.toContain('id="si-email"');
+    expect(html).not.toContain('id="si-start"');
   });
 
   it("adds the Position title + Job description COLUMNS and the full-text affordance per row", () => {
@@ -675,54 +704,73 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
 
     for (const status of ["completed", "sending"]) {
       const html = renderWith(status);
-      // The 'Check information' button exists…
-      expect(html, status).toContain("Informationen prüfen");
+      // The "Text analysieren" button exists…
+      expect(html, status).toContain("Text analysieren");
       // …and is NOT disabled: the opening tag carries no `disabled`
       // ATTRIBUTE (the Tailwind `disabled:*` classes in the class list are
       // variants, present on every button, and must not count).
-      const openTag = html.match(/<button[^>]*>(?=[\s\S]{0,400}?Informationen prüfen)/);
+      const openTag = html.match(/<button[^>]*>(?=[\s\S]{0,400}?Text analysieren)/);
       expect(openTag, status).not.toBeNull();
-      expect(openTag![0], status).not.toMatch(/\sdisabled(?=[\s>])/);
+      expect(openTag![0], status).not.toMatch(/\sdisabled(?=[\s=>"'])/);
       // And no terminal-series blocker text is shown.
       expect(html, status).not.toContain("abgeschlossen");
     }
   });
 
-  it("REQUIRED WORKFLOW (static contract): the two-step check → confirm is wired as specified", async () => {
-    // The confirm button is rendered ONLY when the check passed for the
-    // current text (review.ok) — invalid information can never reach the
-    // persistence step from the UI; onConfirm is additionally guarded by
-    // the same condition (defense in depth).
+  it("REQUIRED WORKFLOW (static contract): paste → analyze → editable form → confirm", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const src = readFileSync(
       join(process.cwd(), "src/components/bewerbung-automation/smart-company-input.tsx"),
       "utf8",
     );
-    // 1. Check = analysis WITHOUT any write: the button calls onCheck. Empty
-    //    / over-limit input is settled locally (checkSmartAdd fast-fail);
-    //    everything else goes to the SERVER check action (bewCheckSmartInput)
-    //    — the AI enhancement needs the dedicated key, which never reaches
-    //    the browser. No persistence of any kind happens in the check step.
-    expect(src).toContain("onClick={onCheck}");
+    // 1. Analyze = the SINGLE analysis step (NO write, ever). Empty /
+    //    over-limit input fails locally (checkSmartAdd fast-fail, no round
+    //    trip); everything else goes to the SERVER analysis action
+    //    (bewCheckSmartInput) — the AI enhancement needs the dedicated key,
+    //    which never reaches the browser. The result pre-fills the form.
+    expect(src).toContain("onClick={onAnalyze}");
     expect(src).toContain("checkSmartAdd(text, view.applications)");
     expect(src).toContain("const res = await bewCheckSmartInput(fd);");
-    // 2. Confirm is conditional on a passed check…
-    expect(src).toContain("{activeReview?.ok && (");
-    // …and the handler re-checks the same condition before persisting.
-    expect(src).toContain("if (!activeReview || !activeReview.ok) return; // the button only exists when ok");
-    // 3. A check is only valid for the EXACT text it was run on — derived
-    //    at render time, so a stale confirm is impossible.
-    expect(src).toContain("const activeReview = review && review.snapshot === text ? review : null;");
-    // 4. Clearing the input never touches created rows: it only resets the
-    //    local component state (no server action is called).
-    const clearBody = src.slice(src.indexOf("const clear = useCallback("), src.indexOf("const onCheck"));
-    expect(clearBody).toContain('setText("")');
-    expect(clearBody).not.toMatch(/bew[A-Z][a-zA-Z]*\(/); // no server action inside clear
-    // 5. The confirm sends the FROZEN reviewed extraction (what was checked
-    //    is what gets persisted) — the server re-validates and re-grounds.
-    expect(src).toContain('if (reviewed) fd.set("reviewed", JSON.stringify(reviewed));');
+    expect(src).toContain("setForm(formFromParsed(res.parsed));");
+    // 2. The form is the SINGLE review surface: every one of the 11 fields
+    //    (incl. the three ad dates) is a real, editable, labelled input.
+    for (const id of [
+      "si-company",
+      "si-email",
+      "si-contact",
+      "si-address",
+      "si-phone",
+      "si-position",
+      "si-industry",
+      "si-start",
+      "si-end",
+      "si-deadline",
+      "si-brief",
+    ]) {
+      expect(src).toContain(`id="${id}"`);
+    }
+    // 3. AI failure is NEVER a silent success: a clear warning (role=alert)
+    //    with the non-sensitive code + an explicit RETRY, and the pre-fill
+    //    is explicitly labeled standard-analysis, not AI.
+    expect(src).toContain('analysis.diagnostic !== "ai"');
+    expect(src).toContain('t("bewauto.aiFailed"');
+    expect(src).toContain('t("bewauto.retryAnalysis")');
+    expect(src).toContain('role="alert"');
+    // 4. Confirm is active ONLY once the form carries the two required
+    //    fields (the server re-validates everything anyway).
+    expect(src).toContain('form.companyName.trim() !== "" && form.companyEmail.trim() !== ""');
+    // …and the confirm sends the user-verified form values as `reviewed` —
+    // the server validates shape / e-mail / length (it does NOT re-ground
+    // user edits) and rejects a malformed payload with INVALID_PAYLOAD.
+    expect(src).toContain("const reviewed = formToParsed(form);");
+    expect(src).toContain('if (reviewedPayload) fd.set("reviewed", JSON.stringify(reviewedPayload));');
     expect(src).toContain("await runSmartAdd(text, view.applications, {");
+    // 5. The input AND the form clear ONLY after the server persisted the
+    //    confirmed row (inside onRowAdded) — any failure keeps everything.
+    const onRowAddedBody = src.slice(src.indexOf("onRowAdded: (dto) => {"), src.indexOf("onRowAdded: (dto) => {") + 300);
+    expect(onRowAddedBody).toContain('setText("")');
+    expect(onRowAddedBody).toContain("setForm(null)");
   });
 
   it("REGRESSION: on an expired session the component NAVIGATES to /login instead of showing a generic error", async () => {

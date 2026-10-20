@@ -52,6 +52,10 @@ export interface BewApplicationDTO {
   company_phone?: string | null;
   /** Smart-input industry classification (20261117000000). */
   company_industry?: string | null;
+  /** Advertisement dates (20261121000000); verbatim, never invented. */
+  start_date?: string | null;
+  end_date?: string | null;
+  application_deadline?: string | null;
 }
 
 export interface BewCampaignDTO {
