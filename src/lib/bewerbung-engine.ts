@@ -346,13 +346,16 @@ async function countByStatus(
   campaignId: string,
 ): Promise<Record<string, number>> {
   const acc: Record<string, number> = {};
-  for (const s of BEW_APP_STATUSES) {
-    const { count } = await admin
-      .from("bew_applications")
-      .select("*", { count: "exact", head: true })
-      .eq("campaign_id", campaignId)
-      .eq("status", s);
-    acc[s] = count ?? 0;
+  for (const s of BEW_APP_STATUSES) acc[s] = 0;
+  // ONE query instead of one per status: fetch just the status column and
+  // reduce in JS. Same result shape (every status present, default 0), 9 fewer
+  // round trips per call (countByStatus runs on every generate/refresh).
+  const { data } = await admin
+    .from("bew_applications")
+    .select("status")
+    .eq("campaign_id", campaignId);
+  for (const row of (data ?? []) as Array<{ status: string }>) {
+    if (row.status in acc) acc[row.status] += 1;
   }
   return acc;
 }
@@ -1851,9 +1854,13 @@ export async function generateBewLetters(
   let aiQuotaHit = false;
 
   let stopAll = false;
-  for (const app of apps) {
-    if (stopAll) break;
 
+  // One letter = one bounded sequence of quality-gated attempts. Extracted so
+  // a small pool of independent workers can generate distinct companies
+  // CONCURRENTLY (the rows were already claimed atomically above, so lanes
+  // never collide). The per-letter logic is the previous loop body verbatim —
+  // same prompt, gate, PDF and status transitions — just faster.
+  async function processOne(app: BewApplicationRow): Promise<void> {
     const pos = resolveLetterPosition(app, campaign);
     const promptInput: LetterPromptInput = {
       purpose,
@@ -1990,8 +1997,8 @@ export async function generateBewLetters(
       break;
     }
 
-    if (accepted) continue;
-    if (stopAll) continue; // quota: already parked as pending
+    if (accepted) return;
+    if (stopAll) return; // quota: already parked as pending
 
     if (aiError) {
       await admin
@@ -2024,6 +2031,29 @@ export async function generateBewLetters(
       failed += 1;
     }
   }
+
+  // Bounded-concurrency worker pool over the already-claimed rows. The cap
+  // (BEW_LETTER_CONCURRENCY, default 3, clamped to 1..5) stays within the
+  // provider's rate limits. Each letter is independent (distinct prompt and
+  // row), so the result is identical to the previous sequential run — just
+  // faster, and every finished letter is persisted immediately (the existing
+  // view refresh/poll surfaces it without waiting for the whole batch).
+  const rawLanes = Number(process.env.BEW_LETTER_CONCURRENCY);
+  const lanes =
+    Number.isFinite(rawLanes) && rawLanes > 0
+      ? Math.min(Math.floor(rawLanes), 5)
+      : 3;
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(lanes, apps.length) }, async () => {
+      while (!stopAll) {
+        const app = apps[cursor];
+        if (!app) return;
+        cursor += 1;
+        await processOne(app);
+      }
+    }),
+  );
 
   const { error: statusError } = await admin
     .from("bew_campaigns")
