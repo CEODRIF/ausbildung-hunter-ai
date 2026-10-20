@@ -41,8 +41,6 @@
  * Tokens
  * ------------------------------------------------------------------ */
 
-import { normalizeGermanSalutation } from "./contact-name";
-
 export const COMPANY_TOKEN = "{{company_name}}";
 export const CONTACT_TOKEN = "{{contact_name}}";
 export const GREETING_TOKEN = "{{greeting}}";
@@ -439,10 +437,7 @@ const NAME_SHAPE_RE = /^[\p{L}][\p{L}\p{Mn}'’ .\-]{0,79}$/u;
 const SALUTATION_RE = /^(herr|frau)\b[ .,\-–]*(.*)$/i;
 
 function normalizeName(raw: string | null | undefined): string | null {
-  // Idempotent German-salutation normalization: dedupes a doubled Herr/Frau,
-  // canonicalizes the prefix, capitalizes the name, and NEVER guesses gender
-  // when no explicit salutation is present. See ./contact-name.
-  const cleaned = normalizeGermanSalutation(raw);
+  const cleaned = (raw ?? "").replace(/\s+/g, " ").trim();
   if (!cleaned) return null;
   if (!NAME_SHAPE_RE.test(cleaned)) return null;
   return cleaned.slice(0, 80);

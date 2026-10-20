@@ -233,30 +233,6 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
     return () => clearInterval(id);
   }, [campaignId, sending, router]);
 
-  /* Same idea for GENERATION: while any row is mid-letter, the client's
-     generate loop only refreshes BETWEEN batches (≤5 letters). This poll
-     uses the READ-ONLY view action (never the generation action, so it
-     cannot double-drive a batch) and surfaces each FINISHED letter the
-     moment the engine persists it — the user no longer waits for the
-     slowest company of the in-flight batch. */
-  const generating =
-    view?.applications.some((a) => a.status === "generating") ?? false;
-  useEffect(() => {
-    if (!campaignId || !generating) return;
-    const id = setInterval(() => {
-      bewGetView(campaignId)
-        .then((fresh) => {
-          if (fresh) setView(fresh);
-        })
-        .catch((e) => {
-          // Same contract as the sending poll: an expired session must
-          // navigate to /login, not be swallowed forever.
-          if (isNextRedirectError(e)) router.replace("/login");
-        });
-    }, 3000);
-    return () => clearInterval(id);
-  }, [campaignId, generating, router]);
-
   const run = useCallback(
     async <T,>(fn: () => Promise<T>): Promise<T | null> => {
       setError(null);

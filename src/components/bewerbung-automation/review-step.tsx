@@ -41,7 +41,6 @@ import {
   appSendFlags,
   hasRequiredDocuments,
   resolveBewError,
-  splitBewReviewApps,
   type BewApplicationDTO,
   type BewViewDTO,
 } from "./types";
@@ -97,14 +96,7 @@ export const ReviewStep = memo(function ReviewStep({
     () => [...view.applications].sort((a, b) => a.seq - b.seq),
     [view.applications],
   );
-  // The active Review queue holds only entries that still require review,
-  // correction or sending. Confirmed-sent rows are split OUT of the queue and
-  // shown as a read-only sent summary below — the records themselves are
-  // never deleted (sent history, counters and recovery stay intact). Failed,
-  // unconfirmed (needs_attention) and cancelled rows are kept; excluded rows
-  // remain visible (they carry the restore action).
-  const { active: activeApps, sent: sentApps } = splitBewReviewApps(apps);
-  const selectable = activeApps.filter(
+  const selectable = apps.filter(
     (a) => appSendFlags(a).length === 0 && docs.cv && docs.certs,
   );
   const selectedCount = selectable.filter((a) => selectedIds.has(a.id)).length;
@@ -190,7 +182,7 @@ export const ReviewStep = memo(function ReviewStep({
               </tr>
             </thead>
             <tbody>
-              {activeApps.map((app) => {
+              {apps.map((app) => {
                 const flags = appSendFlags(app);
                 const docsOk = docs.cv && docs.certs;
                 const eligible = flags.length === 0 && docsOk;
@@ -296,22 +288,6 @@ export const ReviewStep = memo(function ReviewStep({
             </tbody>
           </table>
         </div>
-        {sentApps.length > 0 && (
-          <div className="mt-4 rounded-2xl border border-line bg-surface-2 px-4 py-3">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <StatusPill
-                tone="success"
-                label={t("bewauto.stSentCount", { n: sentApps.length })}
-              />
-              <span className="text-xs text-muted">
-                {sentApps
-                  .map((a) => a.company_name || a.company_email)
-                  .filter(Boolean)
-                  .join("  ·  ")}
-              </span>
-            </div>
-          </div>
-        )}
       </Card>
       </div>
 

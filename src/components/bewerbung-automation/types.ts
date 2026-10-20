@@ -178,26 +178,6 @@ export function appSendFlags(app: {
   return flags;
 }
 
-/**
- * Split campaign rows into the ACTIVE review queue (entries that still
- * require review, correction or sending) and the SENT history (confirmed
- * sends). This is the single source of truth for what the Review step lists.
- *
- * Only confirmed-`sent` rows leave the active queue — failed, unconfirmed
- * (`needs_attention`), `cancelled`, `generated` and `excluded` rows stay
- * (the last one carries the restore action). This is a PURE view split: the
- * underlying records are never deleted, so a finished send simply clears the
- * active queue while the sent history, counters and recovery stay intact.
- */
-export function splitBewReviewApps<T extends { status: string }>(
-  apps: T[],
-): { active: T[]; sent: T[] } {
-  const active: T[] = [];
-  const sent: T[] = [];
-  for (const app of apps) (app.status === "sent" ? sent : active).push(app);
-  return { active, sent };
-}
-
 /** A row is eligible when it has a complete letter, a valid recipient and
  *  the campaign carries the required document set. */
 export function isEligibleForSend(

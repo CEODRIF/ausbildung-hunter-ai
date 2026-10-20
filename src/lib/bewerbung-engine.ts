@@ -32,7 +32,6 @@ import { reserveAIUsage, storagePath } from "@/lib/ai-service";
 import { extractPdfText } from "@/lib/pdf-extract";
 import type { Profile } from "@/lib/auth";
 import mammoth from "mammoth";
-import { normalizeGermanSalutation } from "@/lib/contact-name";
 import { hasApplicantProfileColumns } from "@/lib/contact-name-support";
 import { candidateProfileSchema, type CandidateProfile } from "@/lib/bewerbung-schema";
 import {
@@ -346,16 +345,13 @@ async function countByStatus(
   campaignId: string,
 ): Promise<Record<string, number>> {
   const acc: Record<string, number> = {};
-  for (const s of BEW_APP_STATUSES) acc[s] = 0;
-  // ONE query instead of one per status: fetch just the status column and
-  // reduce in JS. Same result shape (every status present, default 0), 9 fewer
-  // round trips per call (countByStatus runs on every generate/refresh).
-  const { data } = await admin
-    .from("bew_applications")
-    .select("status")
-    .eq("campaign_id", campaignId);
-  for (const row of (data ?? []) as Array<{ status: string }>) {
-    if (row.status in acc) acc[row.status] += 1;
+  for (const s of BEW_APP_STATUSES) {
+    const { count } = await admin
+      .from("bew_applications")
+      .select("*", { count: "exact", head: true })
+      .eq("campaign_id", campaignId)
+      .eq("status", s);
+    acc[s] = count ?? 0;
   }
   return acc;
 }
@@ -677,7 +673,7 @@ export async function saveBewCompanies(
       seq: r.seq,
       company_name: r.companyName,
       company_email: r.companyEmail,
-      contact_name: normalizeGermanSalutation(r.contactName) || null,
+      contact_name: r.contactName,
       company_address: r.companyAddress,
       subject: r.companyName ? buildSubject(campaign.purpose as BewPurpose, r.companyName) : "",
       body_html: "",
@@ -835,7 +831,7 @@ export async function addBewCompany(
     company_name: company,
     company_email: email,
     // Optional fields are null, never empty strings (the existing contract).
-    contact_name: normalizeGermanSalutation(parsed.contactName.value.trim()) || null,
+    contact_name: parsed.contactName.value.trim() || null,
     company_address: parsed.companyAddress.value.trim() || null,
     subject: buildSubject(campaign.purpose as BewPurpose, company),
     body_html: "",
@@ -952,24 +948,16 @@ export async function checkBewSmartInput(
     return { parsed, issues: smartAddIssues(parsed, []), diagnostic: null, diagnosticDetail: null };
   }
 
+  const { parsed, diagnostic, diagnosticDetail } = await extractSmartAd(text);
+
   // The campaign's rows (ANY status) — the duplicate/cap checks run against
   // the server truth (excluded/cancelled rows are restorable, so the shared
   // rules already account for their statuses). A failed read must not be
   // reported as "no issues": throw the stable SAVE_FAILED code.
-  //
-  // The rows snapshot is independent of the (slow) AI extraction, so run BOTH
-  // concurrently: this overlaps the DB round trip with the Gemini call and
-  // removes one serial wait per analysis without changing any result.
-  const [
-    { parsed, diagnostic, diagnosticDetail },
-    { data: rowsData, error: rowsError },
-  ] = await Promise.all([
-    extractSmartAd(text),
-    admin
-      .from("bew_applications")
-      .select("status, company_email")
-      .eq("campaign_id", campaignId),
-  ]);
+  const { data: rowsData, error: rowsError } = await admin
+    .from("bew_applications")
+    .select("status, company_email")
+    .eq("campaign_id", campaignId);
   if (rowsError || !rowsData) throw new Error("SAVE_FAILED");
   const rows = rowsData as unknown as Array<{
     status: string;
@@ -1198,7 +1186,7 @@ export async function updateBewApplicationFields(
     .update({
       company_name: validated.companyName,
       company_email: validated.companyEmail,
-      contact_name: normalizeGermanSalutation(validated.contactName) || null,
+      contact_name: validated.contactName,
       company_address: validated.companyAddress,
       subject: validated.companyName
         ? buildSubject(purpose, validated.companyName)
@@ -1854,13 +1842,9 @@ export async function generateBewLetters(
   let aiQuotaHit = false;
 
   let stopAll = false;
+  for (const app of apps) {
+    if (stopAll) break;
 
-  // One letter = one bounded sequence of quality-gated attempts. Extracted so
-  // a small pool of independent workers can generate distinct companies
-  // CONCURRENTLY (the rows were already claimed atomically above, so lanes
-  // never collide). The per-letter logic is the previous loop body verbatim —
-  // same prompt, gate, PDF and status transitions — just faster.
-  async function processOne(app: BewApplicationRow): Promise<void> {
     const pos = resolveLetterPosition(app, campaign);
     const promptInput: LetterPromptInput = {
       purpose,
@@ -1997,8 +1981,8 @@ export async function generateBewLetters(
       break;
     }
 
-    if (accepted) return;
-    if (stopAll) return; // quota: already parked as pending
+    if (accepted) continue;
+    if (stopAll) continue; // quota: already parked as pending
 
     if (aiError) {
       await admin
@@ -2031,29 +2015,6 @@ export async function generateBewLetters(
       failed += 1;
     }
   }
-
-  // Bounded-concurrency worker pool over the already-claimed rows. The cap
-  // (BEW_LETTER_CONCURRENCY, default 3, clamped to 1..5) stays within the
-  // provider's rate limits. Each letter is independent (distinct prompt and
-  // row), so the result is identical to the previous sequential run — just
-  // faster, and every finished letter is persisted immediately (the existing
-  // view refresh/poll surfaces it without waiting for the whole batch).
-  const rawLanes = Number(process.env.BEW_LETTER_CONCURRENCY);
-  const lanes =
-    Number.isFinite(rawLanes) && rawLanes > 0
-      ? Math.min(Math.floor(rawLanes), 5)
-      : 3;
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(lanes, apps.length) }, async () => {
-      while (!stopAll) {
-        const app = apps[cursor];
-        if (!app) return;
-        cursor += 1;
-        await processOne(app);
-      }
-    }),
-  );
 
   const { error: statusError } = await admin
     .from("bew_campaigns")
