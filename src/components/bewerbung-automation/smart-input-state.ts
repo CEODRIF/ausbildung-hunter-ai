@@ -19,7 +19,12 @@ import {
   isValidEmail,
   normalizeEmail,
 } from "@/lib/bewerbung-automation";
-import { adAutoAddGate, parseAdvertisement, type ParsedAdvertisement } from "@/lib/bew-ad-parser";
+import {
+  adAutoAddGate,
+  parseAdvertisement,
+  smartAddIssues as parserSmartAddIssues,
+  type ParsedAdvertisement,
+} from "@/lib/bew-ad-parser";
 import {
   bewErrorCode,
   isNextRedirectError,
@@ -92,6 +97,25 @@ export interface SmartCheckResult {
   issues: SmartAddFailCode[];
 }
 
+/**
+ * The full blocking-issue list for a parsed advertisement (the field rules
+ * mirror `adAutoAddGate` one-to-one, then the duplicate / cap checks run only
+ * when the field rules pass — the same order `precheckSmartAdd` and the
+ * server apply).
+ *
+ * SHARED between the client ("Check information" pre-analysis and the
+ * live check) and the SERVER check action (which runs it over the
+ * AI-enhanced parse against the campaign's DB rows) — ONE rule set (the
+ * parser's `smartAddIssues`), zero drift between what the user reviews and
+ * what the server persists.
+ */
+export function smartAddIssues(
+  parsed: ParsedAdvertisement,
+  applications: Array<Pick<BewApplicationDTO, "status" | "company_email">>,
+): SmartAddFailCode[] {
+  return parserSmartAddIssues(parsed, applications);
+}
+
 export function checkSmartAdd(
   text: string,
   applications: Array<Pick<BewApplicationDTO, "status" | "company_email">>,
@@ -100,31 +124,7 @@ export function checkSmartAdd(
     return { parsed: null, ok: false, issues: ["EMPTY_INPUT"] };
   }
   const parsed = parseAdvertisement(text);
-  const issues: SmartAddFailCode[] = [];
-  if (parsed.tooLongInput) issues.push("INVALID_PAYLOAD");
-  // The SAME field rules the server gate applies (mirror of adAutoAddGate),
-  // but ALL of them are reported — not just the first.
-  if (!parsed.companyName.value.trim()) issues.push("PARSE_NO_COMPANY");
-  const email = parsed.companyEmail.value.trim();
-  if (!email) issues.push("PARSE_NO_EMAIL");
-  else if (!isValidEmail(email)) issues.push("PARSE_INVALID_EMAIL");
-  if (
-    parsed.positionTitle.problem === "too_long" ||
-    parsed.positionBrief.problem === "too_long"
-  ) {
-    issues.push("POSITION_TOO_LONG");
-  }
-  if (issues.length === 0) {
-    const active = applications.filter(
-      (a) => a.status !== "excluded" && a.status !== "cancelled",
-    );
-    const normalized = normalizeEmail(email);
-    if (active.some((a) => normalizeEmail(a.company_email ?? "") === normalized)) {
-      issues.push("DUPLICATE_COMPANY");
-    } else if (active.length >= BEW_MAX_COUNT) {
-      issues.push("COUNT_EXCEEDED");
-    }
-  }
+  const issues = smartAddIssues(parsed, applications);
   return { parsed, ok: issues.length === 0, issues };
 }
 
@@ -152,6 +152,9 @@ export type SmartAddRow = {
   position_title?: string | null;
   position_brief?: string | null;
   employer_facts?: string | null;
+  /** Smart-input extras (20261117000000); absent when the migration is pending. */
+  company_phone?: string | null;
+  company_industry?: string | null;
 };
 
 /** Map the persisted row onto the view's DTO (extra server fields dropped). */
@@ -177,6 +180,8 @@ export function toApplicationDTO(row: SmartAddRow): BewApplicationDTO {
       : {}),
     ...(row.position_brief !== undefined ? { position_brief: row.position_brief } : {}),
     ...(row.employer_facts !== undefined ? { employer_facts: row.employer_facts } : {}),
+    ...(row.company_phone !== undefined ? { company_phone: row.company_phone } : {}),
+    ...(row.company_industry !== undefined ? { company_industry: row.company_industry } : {}),
   };
 }
 
@@ -237,8 +242,13 @@ export interface SmartAddDeps {
    */
   claim: () => boolean;
   release: () => void;
-  /** The persistence call (the server action) with the RAW pasted text. */
-  add: (rawText: string) => Promise<SmartAddRow>;
+  /**
+   * The persistence call (the server action) with the RAW pasted text and —
+   * when the flow ran through the server check — the FROZEN reviewed fields
+   * (null for the legacy deterministic flow). The server re-validates and
+   * re-grounds everything; this is never trusted blindly.
+   */
+  add: (rawText: string, reviewed: ParsedAdvertisement | null) => Promise<SmartAddRow>;
   /** Called ONLY after `add` resolved (the input-clear hook lives here). */
   onRowAdded: (row: BewApplicationDTO) => void;
 }
@@ -265,13 +275,21 @@ export async function runSmartAdd(
   text: string,
   applications: Array<Pick<BewApplicationDTO, "status" | "company_email">>,
   deps: SmartAddDeps,
+  /**
+   * The FROZEN reviewed extraction (the check step's server result) when the
+   * flow ran through the server check — the precheck then evaluates THAT
+   * parse (an AI-enhanced field the deterministic parser missed must not
+   * block a passed check). Absent → the legacy deterministic precheck.
+   */
+  reviewed: ParsedAdvertisement | null = null,
 ): Promise<SmartAddOutcome> {
   if (!deps.claim()) return { ok: false, code: "UNKNOWN", busy: true };
   try {
-    const parsed = text.trim() ? parseAdvertisement(text) : null;
+    const parsed =
+      reviewed ?? (text.trim() ? parseAdvertisement(text) : null);
     const check = precheckSmartAdd(parsed, applications);
     if (!check.ok) return { ok: false, code: check.code, busy: false };
-    const row = await deps.add(text);
+    const row = await deps.add(text, reviewed);
     deps.onRowAdded(toApplicationDTO(row));
     return { ok: true, row };
   } catch (e) {

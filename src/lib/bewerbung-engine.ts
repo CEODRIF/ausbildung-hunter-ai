@@ -34,6 +34,7 @@ import type { Profile } from "@/lib/auth";
 import mammoth from "mammoth";
 import { hasApplicantProfileColumns } from "@/lib/contact-name-support";
 import { candidateProfileSchema, type CandidateProfile } from "@/lib/bewerbung-schema";
+import { extractSmartAd, validateReviewedFields } from "@/lib/bew-ad-ai";
 import {
   BEW_ATTACHMENT_BUCKET,
   deleteLetterPdf,
@@ -92,6 +93,9 @@ import {
   BEW_AD_INPUT_MAX,
   adAutoAddGate,
   parseAdvertisement,
+  smartAddIssues,
+  type ParsedAdvertisement,
+  type SmartAddIssueCode,
 } from "@/lib/bew-ad-parser";
 
 /* ------------------------------------------------------------------ *
@@ -161,6 +165,10 @@ export type BewApplicationRow = {
   position_title?: string | null;
   position_brief?: string | null;
   employer_facts?: string | null;
+  /** Smart-input extracted phone number (20261117000000); verbatim. */
+  company_phone?: string | null;
+  /** Smart-input industry classification (20261117000000). */
+  company_industry?: string | null;
   /** Generation retries used for this letter (capped). */
   quality_attempts?: number;
   /** Lease for stale-generation recovery. */
@@ -715,6 +723,12 @@ export async function saveBewCompanies(
  *   - the pasted text is re-parsed and re-validated HERE (the client's live
  *     preview is advisory; the server's parse is the single source of truth)
  *     with the SAME deterministic parser the preview uses;
+ *   - when the check step produced AI-enhanced fields (the `reviewed`
+ *     argument — the FROZEN reviewed extraction), those exact values are
+ *     persisted: they are re-validated server-side (validity, length caps,
+ *     and GROUNDED — whitespace-normalized substrings of the raw text). Any
+ *     violation falls back to the deterministic re-parse (the legacy
+ *     contract) — never a partial/trusted client payload;
  *   - only stable error codes are thrown (the client maps them to localized
  *     messages; there is no generic failure path here).
  *
@@ -732,6 +746,14 @@ export async function addBewCompany(
   userId: string,
   campaignId: string,
   rawText: string,
+  /**
+   * The FROZEN reviewed extraction from the check step (the client's
+   * serialized `ParsedAdvertisement`), when the flow ran through the server
+   * check. Validated + grounded against `rawText` before use; any violation
+   * silently falls back to the deterministic re-parse (the legacy path).
+   * Omitted by legacy callers → deterministic parse, exactly as before.
+   */
+  reviewed?: unknown,
 ): Promise<BewApplicationRow> {
   const { admin, campaign } = await requireOwnedCampaign(userId, campaignId);
   // A terminal series is reopened by receiving new work (see doc); a send in
@@ -743,8 +765,13 @@ export async function addBewCompany(
   const text = (rawText ?? "").trim();
   if (!text || text.length > BEW_AD_INPUT_MAX) throw new Error("INVALID_PAYLOAD");
 
-  // Parse + gate with the shared deterministic parser (stable codes).
-  const parsed = parseAdvertisement(text);
+  // The checked (possibly AI-enhanced) extraction, re-validated and grounded
+  // server-side; when absent or invalid → the deterministic re-parse (the
+  // legacy single source of truth). The GATE below then applies to whatever
+  // won — reviewed fields that failed validation can never bypass it.
+  const parsed =
+    (reviewed !== undefined ? validateReviewedFields(reviewed, text) : null) ??
+    parseAdvertisement(text);
   const gate = adAutoAddGate(parsed);
   if (!gate.ok) throw new Error(gate.code);
 
@@ -773,10 +800,12 @@ export async function addBewCompany(
 
   const maxSeq = rows.reduce((m, r) => Math.max(m, r.seq ?? 0), 0);
   const positionProbe = hasBewPositionColumns();
+  const smartProbe = hasBewSmartColumns();
 
   const company = parsed.companyName.value.trim();
   const email = parsed.companyEmail.value.trim();
   const positionSupported = await positionProbe;
+  const smartSupported = await smartProbe;
   const rowPayload = {
     campaign_id: campaignId,
     user_id: userId,
@@ -799,6 +828,16 @@ export async function addBewCompany(
           // Never auto-filled: "verified employer facts" are only ever
           // entered (or verified) by the user.
           employer_facts: null,
+        }
+      : {}),
+    // Smart-input extras (20261117000000): the phone is VERBATIM (original
+    // formatting, country code included when present) and the industry is the
+    // reviewed classification. Both are NULL for rows created by the other
+    // write paths (they never send these keys).
+    ...(smartSupported
+      ? {
+          company_phone: parsed.companyPhone.value.trim() || null,
+          company_industry: parsed.companyIndustry.value.trim() || null,
         }
       : {}),
   };
@@ -826,6 +865,66 @@ export async function addBewCompany(
   // (valid_count is derived from the rows, so it can never drift).
   await refreshCampaignCounters(admin, campaignId);
   return inserted as unknown as BewApplicationRow;
+}
+
+/**
+ * The smart-input "Check information" step — SERVER-side analysis without
+ * any persistence (the frozen review the user then confirms).
+ *
+ * Contract:
+ *   - ownership is enforced by the read (foreign/unknown campaign id →
+ *     NOT_FOUND — the indistinguishable-from-vanished rule the whole page
+ *     follows);
+ *   - the extraction is the AI-enhanced one (`extractSmartAd`: deterministic
+ *     parse + Gemini when the DEDICATED GEMINI_SMART_INPUT_API_KEY is
+ *     configured; any AI failure degrades to the deterministic parse — this
+ *     function therefore ALWAYS returns a usable result, the Check → Review
+ *     → Confirm workflow never breaks on AI availability);
+ *   - the issues are computed with the SAME shared rule set the client
+ *     "Check information" uses (`smartAddIssues`), evaluated against the
+ *     campaign's DB rows (the server truth, not the client's view);
+ *   - NOTHING is written.
+ */
+export async function checkBewSmartInput(
+  userId: string,
+  campaignId: string,
+  rawText: string,
+): Promise<{
+  parsed: ParsedAdvertisement;
+  issues: SmartAddIssueCode[];
+}> {
+  const { admin } = await requireOwnedCampaign(userId, campaignId);
+
+  const text = (rawText ?? "").trim();
+  if (!text) {
+    const empty = parseAdvertisement("");
+    return { parsed: empty, issues: ["INVALID_PAYLOAD"] };
+  }
+
+  // Over-limit input: reject WITHOUT spending an AI call (the deterministic
+  // parse alone carries the tooLongInput flag the shared rules report).
+  if (text.length > BEW_AD_INPUT_MAX) {
+    const parsed = parseAdvertisement(text);
+    return { parsed, issues: smartAddIssues(parsed, []) };
+  }
+
+  const { parsed } = await extractSmartAd(text);
+
+  // The campaign's rows (ANY status) — the duplicate/cap checks run against
+  // the server truth (excluded/cancelled rows are restorable, so the shared
+  // rules already account for their statuses). A failed read must not be
+  // reported as "no issues": throw the stable SAVE_FAILED code.
+  const { data: rowsData, error: rowsError } = await admin
+    .from("bew_applications")
+    .select("status, company_email")
+    .eq("campaign_id", campaignId);
+  if (rowsError || !rowsData) throw new Error("SAVE_FAILED");
+  const rows = rowsData as unknown as Array<{
+    status: string;
+    company_email: string | null;
+  }>;
+
+  return { parsed, issues: smartAddIssues(parsed, rows) };
 }
 
 /**
@@ -1397,6 +1496,38 @@ export function hasBewPositionColumns(): Promise<boolean> {
 /** Test hook: drop the cached position-columns probe. */
 export function resetBewPositionColumnsProbe(): void {
   bewPositionProbe = null;
+}
+
+/* ---------------- Smart-input columns probe ---------------- */
+
+let bewSmartProbe: Promise<boolean> | null = null;
+
+/**
+ * Migration-state probe for the 20261117000000 smart-input columns
+ * (company_phone / company_industry). Same contract as the other probes: a
+ * CLEAN READ proves support; any error (e.g. the columns are missing because
+ * the migration is pending) resolves to false, and the feature degrades to
+ * "no phone/industry persistence" instead of a 42703 crash.
+ */
+export function hasBewSmartColumns(): Promise<boolean> {
+  bewSmartProbe ??= (async () => {
+    try {
+      const admin = createAdminClient();
+      const { error } = await admin
+        .from("bew_applications")
+        .select("company_phone")
+        .limit(1);
+      return error === null;
+    } catch {
+      return false;
+    }
+  })();
+  return bewSmartProbe;
+}
+
+/** Test hook: drop the cached smart-input columns probe. */
+export function resetBewSmartColumnsProbe(): void {
+  bewSmartProbe = null;
 }
 
 /* ---------------- Candidate (CV) profile load ---------------- */

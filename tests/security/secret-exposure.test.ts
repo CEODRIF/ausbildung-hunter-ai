@@ -36,6 +36,8 @@ const SERVER_SECRETS = [
   "MICROSOFT_CLIENT_SECRET",
   "ARBEITSAGENTUR_API_KEY",
   "GEMINI_API_KEY",
+  // The DEDICATED Smart Input Gemini key (bew-ad-ai reads it; server-only).
+  "GEMINI_SMART_INPUT_API_KEY",
   "CRON_SECRET",
 ] as const;
 

@@ -286,7 +286,33 @@ describe("action → engine argument mapping (service contract)", () => {
     if (!res.ok) throw new Error("unreachable: expected ok result");
     expect(res.row).toMatchObject({ id: "app-new", seq: 2, company_name: "Beta GmbH" });
     const call = engineCalls.find((c) => c.fn === "addBewCompany")!;
-    expect(call.args).toEqual(["user-1", "c1", rawAd]);
+    // Legacy path: no `reviewed` field in the form → the 4th argument is
+    // explicitly undefined (the engine re-parses deterministically).
+    expect(call.args).toEqual(["user-1", "c1", rawAd, undefined]);
+  });
+
+  it("bewAddCompany forwards the FROZEN reviewed extraction when present (server re-validates + re-grounds)", async () => {
+    const rawAd = "Beta GmbH\ninfo@beta.de\nTelefon: +49 30 123456";
+    const reviewed = {
+      companyName: { value: "Beta GmbH", status: "extracted" },
+      companyEmail: { value: "info@beta.de", status: "extracted" },
+      contactName: { value: "", status: "missing" },
+      companyAddress: { value: "", status: "missing" },
+      companyPhone: { value: "+49 30 123456", status: "extracted" },
+      companyIndustry: { value: "Other", status: "extracted" },
+      positionTitle: { value: "", status: "missing" },
+      positionBrief: { value: "", status: "missing" },
+      tooLongInput: false,
+    };
+    const fd = new FormData();
+    fd.set("campaignId", "c1");
+    fd.set("text", rawAd);
+    fd.set("reviewed", JSON.stringify(reviewed));
+    await actions.bewAddCompany(fd);
+    const call = engineCalls.find((c) => c.fn === "addBewCompany")!;
+    // The reviewed payload crosses the boundary as the parsed object (the
+    // engine validates + grounds it; a malformed one falls back to re-parse).
+    expect(call.args).toEqual(["user-1", "c1", rawAd, reviewed]);
   });
 
   it("bewAddCompany re-authenticates before any engine work", async () => {

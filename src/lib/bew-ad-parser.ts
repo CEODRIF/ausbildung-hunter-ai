@@ -11,13 +11,19 @@
  *   - companyEmail   (bew_applications.company_email)
  *   - contactName    (bew_applications.contact_name, optional)
  *   - companyAddress (bew_applications.company_address, optional)
+ *   - companyPhone   (bew_applications.company_phone, optional, verbatim, ≤ 80)
  *   - positionTitle  (bew_applications.position_title, optional, ≤ 160)
  *   - positionBrief  (bew_applications.position_brief, optional, ≤ 4000)
  *
- * The schema has NO columns for phone / start date / location / employment
- * type / school degree, so those are deliberately NOT extracted fields (they
- * remain part of the original text and, when they appear inside the
- * description section, stay inside the preserved brief).
+ * company_industry (bew_applications, optional) is NOT a deterministic
+ * field: it is only ever filled by the AI extraction layer (server-side,
+ * `@/lib/bew-ad-ai`) from the advertisement's context. In this module it is
+ * always "missing" — the deterministic path never classifies, never guesses.
+ *
+ * The schema has NO columns for start date / location / employment type /
+ * school degree, so those are deliberately NOT extracted fields (they remain
+ * part of the original text and, when they appear inside the description
+ * section, stay inside the preserved brief).
  *
  * Honesty contract (mirrors the rest of the feature: "never invented"):
  *   - Every stored value is a verbatim substring (or line-join) of the pasted
@@ -33,9 +39,11 @@
  */
 
 import {
+  BEW_MAX_COUNT,
   BEW_POSITION_BRIEF_MAX,
   BEW_POSITION_TITLE_MAX,
   isValidEmail,
+  normalizeEmail,
 } from "@/lib/bewerbung-automation";
 
 /**
@@ -44,6 +52,47 @@ import {
  * use for oversized payloads) instead of being parsed silently.
  */
 export const BEW_AD_INPUT_MAX = 20_000;
+
+/** Hard cap for a stored phone number (column limit, migration 20261117000000). */
+export const BEW_PHONE_MAX = 80;
+
+/** Hard cap for a stored industry classification (column limit). */
+export const BEW_INDUSTRY_MAX = 120;
+
+/**
+ * Whitespace/zero-width/comma normalization shared by the anti-fabrication
+ * "grounding" checks (the AI layer and the reviewed-fields validation use
+ * the SAME normalization so a value that grounds on the server also grounds
+ * on the client and vice versa). Commas are treated as whitespace because
+ * extracted values JOIN source lines (e.g. a two-line address becomes
+ * "Str. 15, 92224 Amberg") — content (letters/digits) is never relaxed.
+ */
+export function normalizeForGrounding(text: string): string {
+  return text
+    .replace(/[\u200b\u200c\u200d\u2060\ufeff]/g, "")
+    .replace(/,/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function countDigits(value: string): number {
+  return (value.match(/\d/g) ?? []).length;
+}
+
+/**
+ * A phone value is plausible when it is short (≤ BEW_PHONE_MAX), carries at
+ * least 5 digits, starts with "+" (international) or "0" (national), and uses
+ * only phone characters. This is FORMAT plausibility — never reachability —
+ * and never a reason to "fix" the value: the number is stored verbatim.
+ */
+export function isPlausiblePhone(value: string): boolean {
+  const t = value.trim();
+  if (t.length < 5 || t.length > BEW_PHONE_MAX) return false;
+  if (!/^[+\d]/.test(t)) return false;
+  if (countDigits(t) < 5) return false;
+  return !/[^\d+\s\-./()]/.test(t);
+}
 
 export type ParsedAdFieldStatus = "extracted" | "suggested" | "missing" | "invalid";
 
@@ -60,6 +109,17 @@ export interface ParsedAdvertisement {
   companyEmail: ParsedAdField;
   contactName: ParsedAdField;
   companyAddress: ParsedAdField;
+  /**
+   * Verbatim phone number (original formatting, international country code
+   * included when present — never completed or invented). "missing" when no
+   * reliable number is found.
+   */
+  companyPhone: ParsedAdField;
+  /**
+   * Industry classification — ONLY ever filled by the AI extraction layer
+   * (server-side). This deterministic module always returns "missing".
+   */
+  companyIndustry: ParsedAdField;
   positionTitle: ParsedAdField;
   positionBrief: ParsedAdField;
   /** true when the pasted text exceeds BEW_AD_INPUT_MAX (rejected upstream). */
@@ -74,6 +134,65 @@ export type AdGateCode =
 
 /** The Auto-organize gate: only these stable, user-actionable failure codes. */
 export type AdGateResult = { ok: true } | { ok: false; code: AdGateCode };
+
+/* ------------------------------------------------------------------ *
+ * Shared check rules (client "Check information" AND server check action)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The stable blocking-issue codes a smart-input check can report (a subset of
+ * the smart-input-state `SmartAddFailCode` union — EMPTY_INPUT is the only
+ * code that applies before any parse exists).
+ */
+export type SmartAddIssueCode =
+  | "INVALID_PAYLOAD"
+  | "PARSE_NO_COMPANY"
+  | "PARSE_NO_EMAIL"
+  | "PARSE_INVALID_EMAIL"
+  | "DUPLICATE_COMPANY"
+  | "COUNT_EXCEEDED"
+  | "POSITION_TOO_LONG";
+
+/**
+ * The FULL blocking-issue list for a parsed advertisement — ONE rule set,
+ * shared by the client's "Check information" (deterministic pre-analysis)
+ * and the SERVER check action (AI-enhanced parse against the campaign's DB
+ * rows), so what the user reviews and what the server persists can never
+ * drift apart.
+ *
+ * Order: field rules first (mirroring `adAutoAddGate` one-to-one, but ALL of
+ * them reported — not just the first), then the duplicate / 100-row-cap
+ * checks — and only when the field rules pass.
+ */
+export function smartAddIssues(
+  parsed: ParsedAdvertisement,
+  applications: Array<{ status: string; company_email: string | null }>,
+): SmartAddIssueCode[] {
+  const issues: SmartAddIssueCode[] = [];
+  if (parsed.tooLongInput) issues.push("INVALID_PAYLOAD");
+  if (!parsed.companyName.value.trim()) issues.push("PARSE_NO_COMPANY");
+  const email = parsed.companyEmail.value.trim();
+  if (!email) issues.push("PARSE_NO_EMAIL");
+  else if (!isValidEmail(email)) issues.push("PARSE_INVALID_EMAIL");
+  if (
+    parsed.positionTitle.problem === "too_long" ||
+    parsed.positionBrief.problem === "too_long"
+  ) {
+    issues.push("POSITION_TOO_LONG");
+  }
+  if (issues.length === 0) {
+    const active = applications.filter(
+      (a) => a.status !== "excluded" && a.status !== "cancelled",
+    );
+    const normalized = normalizeEmail(email);
+    if (active.some((a) => normalizeEmail(a.company_email ?? "") === normalized)) {
+      issues.push("DUPLICATE_COMPANY");
+    } else if (active.length >= BEW_MAX_COUNT) {
+      issues.push("COUNT_EXCEEDED");
+    }
+  }
+  return issues;
+}
 
 /* ------------------------------------------------------------------ *
  * Pattern sets (German-first, conservative)
@@ -221,8 +340,40 @@ const HOUSE_NO = /\b\d{1,4}[a-z]?\b/i;
 /** German postal code line: "92224 Amberg, Oberpfalz". */
 const PLZ_LINE = /^(\d{5})\s+(.+)$/;
 
-/** Phone-like lines (the schema has no phone column — skipped as a field). */
+/**
+ * Phone-like lines (kept to EXCLUDE phone content from the preserved brief —
+ * a number must never leak into the job description).
+ */
 const PHONE_LINE = /^(\+|00|0\d|tel\.?\s|telefon\s|phone\s)/i;
+
+/** Dated lines that must never be mistaken for phone numbers. */
+const DATE_LINE =
+  /^(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4}|\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2})$/;
+
+/**
+ * A phone token: international ("+49 151 23456789", "0049 …") or national
+ * ("030 123456", "0151 23456789") — with spaces, dashes, dots, slashes or
+ * parentheses. The match is the token itself, so the ORIGINAL formatting is
+ * preserved verbatim (no digits are added, none removed).
+ */
+const PHONE_CANDIDATE =
+  /\+\d[\d\s\-./()]{3,24}|\b00\d[\d\s\-./()]{3,24}|\b0\d[\d\s\-./()]{3,24}\b/;
+
+/**
+ * Find the first plausible phone token in a line. Returns null when the line
+ * carries no number, when the candidate is a date, or when the digit count is
+ * implausible for its kind (international ≥ 8 digits, national ≥ 7).
+ */
+export function findPhoneToken(line: string): string | null {
+  const m = line.match(PHONE_CANDIDATE);
+  if (!m) return null;
+  const token = m[0].replace(/[\s\-./()]+$/, "").trim();
+  if (DATE_LINE.test(token)) return null;
+  const digits = countDigits(token);
+  const international = token.startsWith("+") || token.startsWith("00");
+  if (digits < (international ? 8 : 7) || digits > 15) return null;
+  return isPlausiblePhone(token) ? token : null;
+}
 
 /** Personal-name prefix (conservative contact heuristic). */
 const NAME_PREFIX = /^(frau|herr|dr\.?|prof\.?|mag\.?|dipl\.?-?ing\.?)\s/i;
@@ -292,7 +443,11 @@ const LABEL_CONTACT = /^(ansprechpartner(?:in)?|kontaktperson)\s*[:\-–]\s*(.+)
 const LABEL_ADDRESS = /^(adresse|anschrift|address)\s*[:\-–]\s*(.+)$/i;
 const LABEL_TITLE =
   /^(ausbildung(?:splatz|sberuf|sangebot)?|praktikum|stelle|position|job|rolle|stellentitel|beruf)\s*[:\-–]\s*(.+)$/i;
-const LABEL_PHONE = /^(telefon|tel\.?|phone|fax)\s*[:\-–]\s*.+$/i;
+const LABEL_PHONE = /^(telefon|tel\.?|telephone|phone)\s*[:\-–]\s*(.+)$/i;
+/** FAX lines are consumed (never leaked to other fields) but never captured. */
+const LABEL_FAX = /^fax\s*[:\-–]\s*.+$/i;
+/** "Tel 030 123456" / "Telefon: +49 …" without a colon — still a phone label. */
+const LABEL_PHONE_NOCOLON = /^(tel\.?|telefon|telephone|phone|t\.)\s+(\S.*)$/i;
 /** "Ausbildung als Mechatroniker …" / "Praktikum bei …" style title lines. */
 const TITLE_AS = /^(ausbildung(?:splatz)?|praktikum|stelle)\s+(als|zu|für|bei)\s+(.+)$/i;
 
@@ -346,6 +501,8 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
     companyEmail: missing(),
     contactName: missing(),
     companyAddress: missing(),
+    companyPhone: missing(),
+    companyIndustry: missing(),
     positionTitle: missing(),
     positionBrief: missing(),
     tooLongInput: text.length > BEW_AD_INPUT_MAX,
@@ -362,6 +519,7 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
   let email: ParsedAdField = missing();
   let contact: ParsedAdField = missing();
   let address: ParsedAdField = missing();
+  let phone: ParsedAdField = missing();
   let title: ParsedAdField = missing();
 
   /* --- pass 1: locate the first description/requirements/benefit heading */
@@ -467,10 +625,40 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       return;
     }
 
-    // 7) phone label — recognized so it is never mistaken for other fields
-    if (LABEL_PHONE.test(t)) {
+    // 7) phone — recognized so it is never mistaken for other fields, and
+    //    extracted VERBATIM (original formatting, country code included when
+    //    present). FAX is consumed but never captured.
+    if (LABEL_FAX.test(t)) {
       consumed[i] = true;
       return;
+    }
+    const mPhone = t.match(LABEL_PHONE) ?? t.match(LABEL_PHONE_NOCOLON);
+    if (mPhone) {
+      const token = findPhoneToken(mPhone[2] ?? t);
+      if (token) {
+        if (overwriteLabels || phone.status === "missing") {
+          phone = fieldFrom(token, "extracted", BEW_PHONE_MAX);
+        }
+      }
+      consumed[i] = true;
+      return;
+    }
+    // 7b) a bare phone-number line (header / trailing contact region only —
+    //     the same passes as every other field). Conservative: the whole line
+    //     is short and number-like, and the token passes plausibility + the
+    //     date guard. Marked "suggested" (no explicit label) — the review
+    //     step is the disambiguation for ambiguous contact blocks.
+    if (
+      phone.status === "missing" &&
+      t.length <= 40 &&
+      (PHONE_LINE.test(t) || /^[+0]/.test(t))
+    ) {
+      const token = findPhoneToken(t);
+      if (token) {
+        phone = fieldFrom(token, "suggested", BEW_PHONE_MAX);
+        consumed[i] = true;
+        return;
+      }
     }
 
     // 8) postal-code line → address (street line above it, when present)
@@ -651,7 +839,7 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       if (consumed[i]) continue;
       const t = rawLines[i].trim();
       if (!t || isNoise(t)) continue;
-      if (PHONE_LINE.test(t)) continue; // phone has no column — do not mix in
+      if (PHONE_LINE.test(t)) continue; // phone has its own field — do not mix in
       const meta = t.match(META_LABELS);
       if (meta) {
         if ((meta[2] ?? "").trim().length >= 20) briefLines.push(t); // content
@@ -692,6 +880,9 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
   result.companyEmail = email;
   result.contactName = contact;
   result.companyAddress = address;
+  result.companyPhone = phone;
+  // Industry is AI-layer only (see module header) — the deterministic parser
+  // never classifies, so this stays "missing" here.
   result.positionTitle = title;
   return result;
 }
