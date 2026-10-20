@@ -18,15 +18,10 @@
  *   - endDate        (bew_applications.end_date, optional, verbatim, ≤ 40)
  *   - deadline       (bew_applications.application_deadline, optional, verbatim, ≤ 40)
  *
- * company_industry (bew_applications, optional): the AI extraction layer
- * (`@/lib/bew-ad-ai`) classifies from the full advertisement context. When
- * the AI is unavailable (no key / provider failure) the deterministic path
- * carries a CONSERVATIVE floor classification: only an EXPLICIT industry
- * term present verbatim in the employer's identity lines (the company line,
- * the company-description labels) maps to the closed taxonomy — the matched
- * term becomes the verbatim subcategory, so nothing is invented. Job-title
- * words are deliberately NOT evidence (industry = employer activity, not the
- * advertised role). No match → "missing".
+ * company_industry (bew_applications, optional) is NOT a deterministic
+ * field: it is only ever filled by the AI extraction layer (server-side,
+ * `@/lib/bew-ad-ai`) from the advertisement's context. In this module it is
+ * always "missing" — the deterministic path never classifies, never guesses.
  *
  * The dates are ONLY extracted from EXPLICITLY LABELED lines (Bewerbungs-
  * schluss, Beginn, Ende der Ausbildung, …) that carry a parseable date token —
@@ -131,11 +126,8 @@ export interface ParsedAdvertisement {
    */
   companyPhone: ParsedAdField;
   /**
-   * Industry classification. The AI extraction layer (server-side) fills it
-   * from the full context; when the AI is unavailable the deterministic
-   * fallback may fill it from an EXPLICIT industry term in the employer's
-   * identity lines (closed taxonomy + verbatim subcategory, "suggested" —
-   * reviewable, never invented). Otherwise "missing".
+   * Industry classification — ONLY ever filled by the AI extraction layer
+   * (server-side). This deterministic module always returns "missing".
    */
   companyIndustry: ParsedAdField;
   positionTitle: ParsedAdField;
@@ -332,31 +324,12 @@ const BENEFIT_HEADINGS = [
   /^benefits?\b/i,
 ];
 
-/**
- * The "… an" clause of an APPLICATION directive — shared by APPLY_STOP and
- * LABEL_APPLY_EMAIL so both recognize the SAME shapes: "Bewerbungen an:",
- * "Bewerbungen bitte an:" and the parenthetical "Bewerbungen (bitte) an:"
- * (a common German ad shape).
- */
-const APPLY_AN = "bewerb(?:en|ung|ungen)?\\s+(?:\\(\\s*bitte\\s*\\)\\s*|bitte\\s+)?an";
-
 /** A stop heading that is itself an APPLICATION directive (strong e-mail). */
-const APPLY_STOP = new RegExp(`^(?:${APPLY_AN}|apply\\s+(?:to|via))\\b`, "i");
-/**
- * A line that DIRECTS the application and ENDS with the directive ("… an:",
- * "… per E-Mail an:", "… apply to:") — i.e. the address sits on the SAME
- * (handled by LABEL_APPLY_EMAIL) or the FOLLOWING line (the multi-line form
- * portals and career pages frequently render). Only recognized where the
- * same-line form does not apply (the description region, pass 5).
- */
-const DIRECTIVE_AN_LINE = new RegExp(
-  `(?:${APPLY_AN}|apply\\s+(?:to|via)|per\\s+e-?mail\\s+an|e-?mail\\s+an)\\s*[:\\-–]?\\s*$`,
-  "i",
-);
+const APPLY_STOP = /^(?:bewerb(?:en|ung|ungen)?\s+(?:bitte\s+)?an|apply\s+(?:to|via))\b/i;
 
 /** Closing/contact sections — END the preserved brief (after it has started). */
 const STOP_HEADINGS = [
-  new RegExp(`^(?:${APPLY_AN})\\b`, "i"),
+  /^bewerb(?:en|ung|ungen)?\s+(?:bitte\s+)?an\b/i,
   /^bewerb(?:en)? dich\b/i,
   /^bewerbe dich\b/i,
   /^jetzt bewerben\b/i,
@@ -517,7 +490,8 @@ const LABEL_EMAIL = /^(e-?mail|email|mail|kontakte?)\s*[:\-–]\s*(.*)$/i;
  * ausbildung@…" ad yielded the generic info@ because the label pass
  * first-wins/overwrite semantics had no notion of "application address").
  */
-const LABEL_APPLY_EMAIL = new RegExp(`^(?:${APPLY_AN}|apply\\s+(?:to|via))\\s*[:\\-–]\\s*(.+)$`, "i");
+const LABEL_APPLY_EMAIL =
+  /^(?:bewerb(?:en|ung|ungen)?\s+(?:bitte\s+)?an|apply\s+(?:to|via))\s*[:\-–]\s*(.+)$/i;
 
 /**
  * Lines that mark an e-mail as belonging to a (FORMER) APPLICANT or another
@@ -531,24 +505,7 @@ const APPLICANT_LINE_HINT =
 const LABEL_COMPANY =
   /^(firma|unternehmen|arbeitgeber|company|employer|unternehmensdarstellung|unternehmensbeschreibung|unternehmensprofil|firmenprofil|firmenbeschreibung)\s*[:\-–]\s*(.+)$/i;
 const LABEL_CONTACT = /^(ansprechpartner(?:in)?|kontaktperson)\s*[:\-–]\s*(.+)$/i;
-// NB: German ads label the postal address in several explicit forms:
-// "Adresse:", "Anschrift:", "Betriebsanschrift:" (business address) and
-// "Postanschrift der Personalabteilung:" (HR postal address — with a
-// "der/des + 1–2 words" modifier clause). All are the same field: the
-// employer's postal address (the later explicit label wins, first-wins in
-// the contact pass — the parser's existing label semantics).
-const LABEL_ADDRESS =
-  /^(betriebsanschrift|postanschrift(?:\s+(?:der|des)\s+[A-Za-zÄÖÜäöüß]+(?:\s+[A-Za-zÄÖÜäöüß]+)?)?|anschrift|adresse|address)\s*[:\-–]\s*(.+)$/i;
-/**
- * Explicit TRAINING/WORKING LOCATION labels ("Arbeitsort: …", "Ausbildungsort:
- * …", "Standort: …"). This is the training location — a WEAKER address signal
- * than a real postal address (street + PLZ), so it only fills
- * `companyAddress` when nothing better was found, and it is marked
- * "suggested" (reviewable). An explicit `Adresse:`/`Anschrift:` label or a
- * street + PLZ block always outranks it (first-wins in the line passes).
- */
-const LABEL_LOCATION =
-  /^(arbeitsort|ausbildungsort|standort(?:\s+(?:der|des)\s+[A-Za-zÄÖÜäöüß]+(?:\s+[A-Za-zÄÖÜäöüß]+)?)?|arbeitssitz|ort|location|workplace)\s*[:\-–]\s*(.+)$/i;
+const LABEL_ADDRESS = /^(adresse|anschrift|address)\s*[:\-–]\s*(.+)$/i;
 const LABEL_TITLE =
   /^(ausbildung(?:splatz|sberuf|sangebot)?|praktikum|stelle|position|job|rolle|stellentitel|beruf)\s*[:\-–]\s*(.+)$/i;
 const LABEL_PHONE = /^(telefon|tel\.?|telephone|phone)\s*[:\-–]\s*(.+)$/i;
@@ -556,165 +513,8 @@ const LABEL_PHONE = /^(telefon|tel\.?|telephone|phone)\s*[:\-–]\s*(.+)$/i;
 const LABEL_FAX = /^fax\s*[:\-–]\s*.+$/i;
 /** "Tel 030 123456" / "Telefon: +49 …" without a colon — still a phone label. */
 const LABEL_PHONE_NOCOLON = /^(tel\.?|telefon|telephone|phone|t\.)\s+(\S.*)$/i;
-/** "Ausbildung als Mechatroniker …" / "Ausbildung zum/zur …" title lines. */
-const TITLE_AS = /^(ausbildung(?:splatz)?|praktikum|stelle)\s+(als|zum|zur|zu|für|bei)\s+(.+)$/i;
-/**
- * A BARE title heading: "Ausbildung Mechatroniker (m/w/d)",
- * "Ausbildungsplatz Kfz-Mechatroniker" — the classic ad H1 without a
- * preposition (the most common German ad-title shape, and the one the
- * fallback used to miss entirely). Conservative guards:
- *   - the role part starts with a capital (excludes "Ausbildung bei der
- *     Stadt …" — employer phrases, and "Ausbildung mit Zukunft" slogans);
- *   - no e-mail, no phone, no PLZ, no date token, no street+house number;
- *   - short line (≤ 12 words) — a sentence is not a title heading.
- * Status "suggested": the line is the ad's title with high probability, but
- * the review form stays the confirmation.
- */
-// NB: the role part's CAPITAL start is enforced case-sensitively in the
-// rule's guard (TITLE_ROLE_START) — the /i flag must not relax it,
-// otherwise slogans ("Ausbildung mit Zukunft") would match.
-const TITLE_BARE =
-  /^(?:ausbildung(?:splatz|sberuf|sangebot)?|praktikum(?:splatz)?|stellenangebot|jobangebot)\s+(\S[A-Za-zÄÖÜäöüß'’\-/():,. ]{1,98})$/i;
-/** Role part must start with a capital (excludes "Ausbildung bei der …", slogans). */
-const TITLE_ROLE_START = /^[A-ZÄÖÜ]/;
-
-/* --- conservative industry floor (AI unavailable) --- */
-
-/**
- * Employer-identity evidence for the deterministic industry floor: the
- * company line plus the VALUES of company-description labels
- * ("Unternehmensbeschreibung: Wir sind ein Kältetechnik-Unternehmen …").
- * These are the lines that describe WHO the employer is — the same
- * "activity, not the advertised role" rule the AI prompt applies.
- */
-const COMPANY_DESC_LABEL =
-  /^(unternehmensbeschreibung|unternehmensdarstellung|unternehmensprofil|firmenprofil|firmenbeschreibung|über das unternehmen|über die firma|über uns)\s*[:\-–]\s*(.+)$/i;
-
-/**
- * The CLOSED deterministic industry table. Each rule matches an EXPLICIT
- * German industry term (compound forms included — the capture is the
- * complete word the term sits in, verbatim) and maps it to a member of the
- * closed `BEW_INDUSTRY_LABELS` taxonomy (bew-ad-ai.ts; the test suite asserts
- * the table stays inside that taxonomy). First matching rule wins
- * (specific terms are listed before general ones). The composed value uses
- * the SAME shape the AI layer produces: `<Category> — <verbatim term>`.
- *
- * Deliberately NOT in the table: profession words ("Mechatroniker",
- * "Kaufmann", …) — those are job titles, not employer activity; using them
- * would classify a bakery hiring a Mechatroniker as machinery.
- */
-const INDUSTRY_KEYWORD_RULES: ReadonlyArray<{ re: RegExp; category: string }> = [
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:kälte|kühltechnik|klimastechnik|klimatechnik)[A-Za-zÄÖÜäöüß]*/i,
-    category: "HVAC & Refrigeration",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:maschinenbau|anlagentechnik)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Machinery & Equipment",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:zeugbau|zerspanung|spritzguss)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Manufacturing",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:automobil|kfz-?technik|kraftfahrzeug)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Automotive",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:tischlerei|schlosserei|sanitär|installations?technik|heizungs-?bau|dachdeckerei)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Skilled Trades",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:baugewerbe|hochbau|baunebengewerbe|immobilien|baustoff)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Construction & Real Estate",
-  },
-  { re: /\bbau\b/i, category: "Construction & Real Estate" },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:solartechnik|solar-?technik|photovoltaik|energietechnik|erneuerbar)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Energy & Environment",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:chemie|pharma)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Chemical & Pharmaceutical",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:logistik|spedition)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Logistics & Transport",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:großhandel|einzelhandel|handel|commerce)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Retail & Wholesale",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:bäckerei|konditorei|lebensmittel|gastronomie)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Food & Beverage",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:hotellerie|gastgewerbe|touroperator|reisebüro)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Hospitality & Tourism",
-  },
-  { re: /\bhotel\b/i, category: "Hospitality & Tourism" },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:pflege|krankenhaus|klinik|physiotherapie)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Health & Care",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:bank|versicherung)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Finance & Insurance",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:berufsschule|bildungs-?werk)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Education & Research",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:software|it-?dienstleistung|it-?lösungen|it-?beratung)[A-Za-zÄÖÜäöüß]*/i,
-    category: "IT & Software",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:telekommunikation|mobilfunk)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Telecommunications",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:verlag|druckerei|medienagentur|werbeagentur)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Media & Creative",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:anwaltskanzlei|steuerberatung|notar|wirtschaftsprüfung)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Legal & Consulting",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:öffentl\w*|kommune|landkreis)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Public Sector",
-  },
-  {
-    re: /[A-Za-zÄÖÜäöüß-]*(?:personal-?dienstleistung|zeitarbeit|personalvermittlung)[A-Za-zÄÖÜäöüß]*/i,
-    category: "Staffing & Recruiting",
-  },
-];
-
-/**
- * The deterministic industry floor: the FIRST explicit industry term found
- * in the employer-identity evidence → `<Category> — <verbatim term>`
- * (the closed-taxonomy + grounded-subcategory shape the AI layer uses).
- * Returns null when no rule matches — "missing" is the honest answer, never
- * a guess.
- */
-export function classifyIndustryFromEvidence(evidence: readonly string[]): string | null {
-  for (const rule of INDUSTRY_KEYWORD_RULES) {
-    for (const line of evidence) {
-      const m = line.match(rule.re);
-      if (!m) continue;
-      const term = m[0].replace(/^[-\s]+|[-\s]+$/g, "").trim();
-      // "Bau" is the table's shortest legitimate term (every keyword is ≥ 3
-      // chars) — shorter matches are junk, longer ones would overflow the
-      // composed value.
-      if (term.length < 3 || term.length > 60) continue;
-      const composed = `${rule.category} — ${term}`;
-      return composed.length > BEW_INDUSTRY_MAX ? rule.category : composed;
-    }
-  }
-  return null;
-}
+/** "Ausbildung als Mechatroniker …" / "Praktikum bei …" style title lines. */
+const TITLE_AS = /^(ausbildung(?:splatz)?|praktikum|stelle)\s+(als|zu|für|bei)\s+(.+)$/i;
 
 /* --- advertisement dates (labeled lines only — never an unlabeled date) --- */
 
@@ -902,13 +702,6 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
    * replace it — the directive is the strongest e-mail signal in the ad.
    */
   let applyEmailSet = false;
-  /**
-   * Employer-identity evidence for the deterministic industry floor (see
-   * INDUSTRY_KEYWORD_RULES): the line that established the company name,
-   * plus the values of company-description labels. Everything else (job
-   * title, description body, applicant data) is deliberately NOT evidence.
-   */
-  const companyEvidence: string[] = [];
 
   /* --- pass 1: locate the first description/requirements/benefit heading */
   let headerEnd = -1; // index of the first "brief" heading line
@@ -972,17 +765,9 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
         // "Kontakt: Frau Müller" — a labelled contact person, not an e-mail.
         if (contact.status === "missing") contact = fieldFrom(rest, "extracted", 120);
       } else if (rest) {
-        // "Kontakt: 09621/472983" — a contact line carrying a PHONE, not an
-        // e-mail: claim the number (first-wins) instead of flagging the
-        // phone digits as an invalid e-mail address.
-        const contactPhone = findPhoneToken(rest);
-        if (contactPhone) {
-          if (phone.status === "missing") phone = fieldFrom(contactPhone, "extracted", BEW_PHONE_MAX);
-        } else {
-          // Labelled but not a parseable address → flag it, never invent one.
-          if (!applyEmailSet && (overwriteLabels || email.status === "missing")) {
-            email = { value: rest, status: "invalid" };
-          }
+        // Labelled but not a parseable address → flag it, never invent one.
+        if (!applyEmailSet && (overwriteLabels || email.status === "missing")) {
+          email = { value: rest, status: "invalid" };
         }
       }
       consumed[i] = true;
@@ -992,13 +777,8 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
     // 2) explicit company label
     const mCompany = t.match(LABEL_COMPANY);
     if (mCompany) {
-      // A company-DESCRIPTION label is identity evidence for the industry
-      // floor (its value describes the employer's activity).
-      const mDesc = t.match(COMPANY_DESC_LABEL);
-      if (mDesc) companyEvidence.push(mDesc[2]);
       if (overwriteLabels || company.status === "missing") {
         company = fieldFrom(mCompany[2], "extracted", 200);
-        companyEvidence.unshift(t); // the line that established the company
       }
       consumed[i] = true;
       return;
@@ -1024,20 +804,6 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       return;
     }
 
-    // 4b) explicit TRAINING/WORKING location label ("Arbeitsort: 92224
-    //     Amberg") — fills the address ONLY when no postal address was found
-    //     (first-wins, never displaces an explicit Adresse/PLZ+street block):
-    //     the training location is explicit source data, marked "suggested"
-    //     because it is a location, not necessarily the letterhead address.
-    const mLocation = t.match(LABEL_LOCATION);
-    if (mLocation) {
-      if (address.status === "missing") {
-        address = fieldFrom(mLocation[2], "suggested", 200);
-      }
-      consumed[i] = true;
-      return;
-    }
-
     // 5) explicit position-title label ("Ausbildung: Mechatroniker/in …")
     const mTitle = t.match(LABEL_TITLE);
     if (mTitle) {
@@ -1048,34 +814,12 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       return;
     }
 
-    // 6) "Ausbildung als …" / "Ausbildung zum …" / "Praktikum bei …" title line
+    // 6) "Ausbildung als …" / "Praktikum bei …" style title line
     const mAs = t.match(TITLE_AS);
     if (mAs && wordCount(t) <= 10) {
       if (overwriteLabels || title.status === "missing") {
         title = fieldFrom(t, "extracted", BEW_POSITION_TITLE_MAX);
       }
-      consumed[i] = true;
-      return;
-    }
-
-    // 6b) BARE title heading ("Ausbildung Mechatroniker (m/w/d)") — the
-    //     classic ad H1 without a preposition. Only when the title is still
-    //     missing (a labelled title always outranks it), and only for lines
-    //     that carry no other field data (the guards are in TITLE_BARE's
-    //     doc block). "suggested": explicit-looking, reviewable.
-    const mBare = t.match(TITLE_BARE);
-    if (
-      mBare &&
-      TITLE_ROLE_START.test(mBare[1]) &&
-      title.status === "missing" &&
-      wordCount(t) <= 12 &&
-      !findEmailToken(t) &&
-      !findPhoneToken(t) &&
-      !PLZ_LINE.test(t) &&
-      !findDateToken(t, "first") &&
-      !(STREET_HINT.test(t) && HOUSE_NO.test(t))
-    ) {
-      title = fieldFrom(t, "suggested", BEW_POSITION_TITLE_MAX);
       consumed[i] = true;
       return;
     }
@@ -1183,10 +927,7 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
 
     // 10) legal form → company name (the line is company metadata either way)
     if (LEGAL_FORM.test(t) && t.length <= 80 && wordCount(t) <= 12) {
-      if (company.status === "missing") {
-        company = fieldFrom(t, "extracted", 200);
-        companyEvidence.unshift(t);
-      }
+      if (company.status === "missing") company = fieldFrom(t, "extracted", 200);
       consumed[i] = true;
       return;
     }
@@ -1268,7 +1009,6 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       if (AD_KEYWORDS.test(t)) continue; // advertisement copy, not a company
       if (classifyHeading(t)) continue; // a heading, not a name
       company = fieldFrom(t, "suggested", 200);
-      companyEvidence.unshift(t);
       consumed[i] = true;
       break;
     }
@@ -1324,66 +1064,11 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       claimLabeledDates(firstHeadingLine);
       briefLines.push(firstHeadingLine); // bare section word, keep structure
     }
-     for (let i = headerEnd + 1; i < rawLines.length; i++) {
-       const line = rawLines[i];
-       if (isNoise(line)) continue; // interface text never reaches the brief
-       const t = line.trim();
-       claimLabeledDates(t);
-       // Explicitly LABELED contact lines inside the description region (a
-       // mid-ad "Kontakt:" block with no trailing heading): claim the field
-       // READ-ONLY — the line stays verbatim in the brief (the same contract
-       // as the labeled dates). Unlabeled prose is never scanned here: a
-       // bare number in a description could be anything but the HR phone.
-       if (address.status === "missing" || phone.status === "missing") {
-         const mBriefAddr = t.match(LABEL_ADDRESS) ?? t.match(LABEL_LOCATION);
-         if (mBriefAddr) {
-           if (address.status === "missing") {
-             address = fieldFrom(
-               mBriefAddr[2],
-               t.match(LABEL_ADDRESS) ? "extracted" : "suggested",
-               200,
-             );
-           }
-         } else {
-           const mBriefPhone = t.match(LABEL_PHONE) ?? t.match(LABEL_PHONE_NOCOLON);
-           if (mBriefPhone) {
-             const tok = findPhoneToken(mBriefPhone[2] ?? t);
-             if (tok && phone.status === "missing") {
-               phone = fieldFrom(tok, "extracted", BEW_PHONE_MAX);
-             }
-           } else {
-             const mBriefContact = t.match(LABEL_EMAIL);
-             if (mBriefContact) {
-               const rest = mBriefContact[2].trim();
-               if (!findEmailToken(rest)) {
-                 const tok = findPhoneToken(rest);
-                 if (tok && phone.status === "missing") {
-                   phone = fieldFrom(tok, "extracted", BEW_PHONE_MAX);
-                 }
-               }
-             }
-           }
-         }
-       }
-       // MULTI-LINE application directive: the line ENDS with "… an:" /
-       // "… per E-Mail an:" and the address sits on the FOLLOWING line —
-       // the strongest e-mail signal, same contract as the same-line
-       // directive (it outranks every generic finding and the first-token
-       // last resort). Read-only: both lines stay verbatim in the brief.
-       if (!applyEmailSet && DIRECTIVE_AN_LINE.test(t)) {
-         for (let j = i + 1; j < rawLines.length; j++) {
-           const next = rawLines[j].trim();
-           if (!next) continue;
-           const tok = findEmailToken(next);
-           if (tok && !APPLICANT_LINE_HINT.test(next)) {
-             email = isValidEmail(tok)
-               ? fieldFrom(tok, "extracted")
-               : { value: tok, status: "invalid" };
-             applyEmailSet = true;
-           }
-           break;
-         }
-       }
+    for (let i = headerEnd + 1; i < rawLines.length; i++) {
+      const line = rawLines[i];
+      if (isNoise(line)) continue; // interface text never reaches the brief
+      const t = line.trim();
+      claimLabeledDates(t);
       const h = t ? classifyHeading(t) : null;
       if (h && h.kind === "stop") {
         // "Bewerbungen (bitte) an: ausbildung@firma.de" — the application
@@ -1462,15 +1147,8 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
     : contact;
   result.companyAddress = address;
   result.companyPhone = phone;
-  // Industry floor (the AI layer remains the primary classifier and always
-  // wins when it succeeds — mergeAiExtraction overwrites this field): only
-  // an EXPLICIT term in the employer's identity lines is mapped, closed
-  // taxonomy + verbatim subcategory, "suggested" (reviewable). No evidence
-  // → "missing" — never a guess.
-  const industryFloor = classifyIndustryFromEvidence(companyEvidence);
-  if (industryFloor) {
-    result.companyIndustry = fieldFrom(industryFloor, "suggested", BEW_INDUSTRY_MAX);
-  }
+  // Industry is AI-layer only (see module header) — the deterministic parser
+  // never classifies, so this stays "missing" here.
   result.positionTitle = title;
   result.startDate = startDate;
   result.endDate = endDate;
