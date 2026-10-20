@@ -32,6 +32,7 @@ import { reserveAIUsage, storagePath } from "@/lib/ai-service";
 import { extractPdfText } from "@/lib/pdf-extract";
 import type { Profile } from "@/lib/auth";
 import mammoth from "mammoth";
+import { normalizeGermanSalutation } from "@/lib/contact-name";
 import { hasApplicantProfileColumns } from "@/lib/contact-name-support";
 import { candidateProfileSchema, type CandidateProfile } from "@/lib/bewerbung-schema";
 import {
@@ -673,7 +674,7 @@ export async function saveBewCompanies(
       seq: r.seq,
       company_name: r.companyName,
       company_email: r.companyEmail,
-      contact_name: r.contactName,
+      contact_name: normalizeGermanSalutation(r.contactName) || null,
       company_address: r.companyAddress,
       subject: r.companyName ? buildSubject(campaign.purpose as BewPurpose, r.companyName) : "",
       body_html: "",
@@ -831,7 +832,7 @@ export async function addBewCompany(
     company_name: company,
     company_email: email,
     // Optional fields are null, never empty strings (the existing contract).
-    contact_name: parsed.contactName.value.trim() || null,
+    contact_name: normalizeGermanSalutation(parsed.contactName.value.trim()) || null,
     company_address: parsed.companyAddress.value.trim() || null,
     subject: buildSubject(campaign.purpose as BewPurpose, company),
     body_html: "",
@@ -1186,7 +1187,7 @@ export async function updateBewApplicationFields(
     .update({
       company_name: validated.companyName,
       company_email: validated.companyEmail,
-      contact_name: validated.contactName,
+      contact_name: normalizeGermanSalutation(validated.contactName) || null,
       company_address: validated.companyAddress,
       subject: validated.companyName
         ? buildSubject(purpose, validated.companyName)
