@@ -135,14 +135,14 @@ describe("dedicated key resolution", () => {
     withKey();
     process.env.GEMINI_API_KEY = "MUST-NEVER-BE-READ";
     expect(resolveSmartInputGeminiKey()).toBe("test-dedicated-key-0123456789");
-    expect(resolveSmartInputGeminiModel()).toBe("gemini-2.5-flash");
+    expect(resolveSmartInputGeminiModel()).toBe("gemini-3.8-flash");
   });
 
   it("honors the dedicated model override only", () => {
-    process.env.GEMINI_SMART_INPUT_MODEL = "gemini-2.5-pro";
-    expect(resolveSmartInputGeminiModel()).toBe("gemini-2.5-pro");
+    process.env.GEMINI_SMART_INPUT_MODEL = "gemini-3.5-flash-lite";
+    expect(resolveSmartInputGeminiModel()).toBe("gemini-3.5-flash-lite");
     process.env.GEMINI_SMART_INPUT_MODEL = "x";
-    expect(resolveSmartInputGeminiModel()).toBe("gemini-2.5-flash");
+    expect(resolveSmartInputGeminiModel()).toBe("gemini-3.8-flash");
   });
 });
 
@@ -368,14 +368,14 @@ describe("extractAdWithGemini (mocked — no paid calls)", () => {
 
   it("sends ONLY the dedicated key header (never shared keys), to the model override", async () => {
     withKey();
-    process.env.GEMINI_SMART_INPUT_MODEL = "gemini-2.5-pro";
+    process.env.GEMINI_SMART_INPUT_MODEL = "gemini-3.5-flash-lite";
     process.env.AI_API_KEY = "SHARED-MUST-NOT-LEAK";
     const fetchMock = vi.fn(async () => geminiEnvelope(GOOD_AI));
     vi.stubGlobal("fetch", fetchMock);
     await extractAdWithGemini(MESSY_AD);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toContain("gemini-2.5-pro:generateContent");
+    expect(url).toContain("gemini-3.5-flash-lite:generateContent");
     const headers = (init.headers ?? {}) as Record<string, string>;
     expect(headers["x-goog-api-key"]).toBe("test-dedicated-key-0123456789");
     expect(headers["x-goog-api-key"]).not.toBe("SHARED-MUST-NOT-LEAK");
