@@ -51,6 +51,7 @@ import {
   isValidEmail,
   normalizeEmail,
 } from "@/lib/bewerbung-automation";
+import { normalizeGermanSalutation } from "@/lib/contact-name";
 
 /**
  * Hard cap for the pasted text. Longer pastes are rejected with an actionable
@@ -1141,7 +1142,9 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
 
   result.companyName = company;
   result.companyEmail = email;
-  result.contactName = contact;
+  result.contactName = contact.value
+    ? { ...contact, value: normalizeGermanSalutation(contact.value) }
+    : contact;
   result.companyAddress = address;
   result.companyPhone = phone;
   // Industry is AI-layer only (see module header) — the deterministic parser
