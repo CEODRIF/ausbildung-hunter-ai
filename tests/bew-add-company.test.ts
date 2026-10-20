@@ -797,6 +797,39 @@ describe("checkBewSmartInput — server-side analysis, no persistence", () => {
     expect(diagnostic).toBe("no-key");
   });
 
+  it("AI http failure → the SAFE upstream detail propagates (actionable, never raw)", async () => {
+    // Production repro 2026-10-20: the owner saw "http-4xx" with no reason.
+    // The detail carries the allowlisted provider status + sanitized
+    // message so the next live test pinpoints key / schema / quota.
+    process.env.GEMINI_SMART_INPUT_API_KEY = "test-dedicated-key-0123456789";
+    seedCampaign();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 400,
+              message: "API key not valid. Please pass a valid API key.",
+              status: "API_KEY_INVALID",
+            },
+          }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const { parsed, issues, diagnostic, diagnosticDetail } = await checkBewSmartInput(
+      USER,
+      CAMPAIGN,
+      KAELTE_AD,
+    );
+    expect(diagnostic).toBe("http-400");
+    expect(diagnosticDetail).toBe("API_KEY_INVALID: API key not valid. Please pass a valid API key.");
+    // The deterministic floor is intact (the workflow never breaks).
+    expect(parsed.companyName.value).toBe("Amberger Kühltechnik GmbH");
+    expect(issues).toEqual([]);
+  });
+
   it("dedicated key + valid AI response → merged (AI-enhanced) parsed result", async () => {
     process.env.GEMINI_SMART_INPUT_API_KEY = "test-dedicated-key-0123456789";
     seedCampaign();

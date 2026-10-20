@@ -751,12 +751,15 @@ describe("CompaniesStep render — smart input section (test 15–17, 18)", () =
       expect(src).toContain(`id="${id}"`);
     }
     // 3. AI failure is NEVER a silent success: a clear warning (role=alert)
-    //    with the non-sensitive code + an explicit RETRY, and the pre-fill
-    //    is explicitly labeled standard-analysis, not AI.
+    //    with the non-sensitive code + the SAFE upstream detail (allowlisted
+    //    provider status + sanitized message fragment, `http-*` only) + an
+    //    explicit RETRY, and the pre-fill is labeled standard-analysis.
     expect(src).toContain('analysis.diagnostic !== "ai"');
     expect(src).toContain('t("bewauto.aiFailed"');
     expect(src).toContain('t("bewauto.retryAnalysis")');
     expect(src).toContain('role="alert"');
+    expect(src).toContain("diagnosticDetail: res.diagnosticDetail");
+    expect(src).toContain("analysis!.diagnosticDetail");
     // 4. Confirm is active ONLY once the form carries the two required
     //    fields (the server re-validates everything anyway).
     expect(src).toContain('form.companyName.trim() !== "" && form.companyEmail.trim() !== ""');

@@ -18,6 +18,7 @@ import {
   resolveSmartInputGeminiKey,
   resolveSmartInputGeminiModel,
   resetSmartInputDiagnostics,
+  sanitizeUpstreamMessage,
   validateGeminiAdPayload,
   validateReviewedFields,
   type AiAdExtraction,
@@ -896,5 +897,168 @@ describe("grounding with diacritic folding (models normalize umlauts)", () => {
     const merged = mergeAiExtraction(parseAdvertisement(RHEINBLICK_AD), ai!, RHEINBLICK_AD);
     expect(merged.companyAddress.value).toBe("Im Mediapark 7, 50670 Koeln");
     expect(merged.companyAddress.status).toBe("extracted");
+  });
+});
+
+/* ------------------- upstream failure diagnostics (sanitized) ------------------- */
+
+/**
+ * Production repro 2026-10-20 (Smart Input preview): the owner saw
+ * "Analysis failed (http-4xx) — the fields come from the standard
+ * analysis, NOT the AI." with NO idea WHY the provider refused. These
+ * tests pin the new contract: the http code stays, and a SAFE,
+ * ACTIONABLE detail (allowlisted provider error status + sanitized
+ * message fragment) is surfaced — never the key, e-mails, URLs, token
+ * runs, digit runs or the advertisement text.
+ */
+describe("upstream failure diagnostics (safe + actionable)", () => {
+  function httpError(status: number, body: unknown): Response {
+    return new Response(typeof body === "string" ? body : JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("400 API_KEY_INVALID → http-400 + detail; the key itself is REDACTED, never echoed", async () => {
+    withKey();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        httpError(400, {
+          error: {
+            code: 400,
+            message: "API key not valid. Please pass a valid API key. (test-dedicated-key-0123456789)",
+            status: "API_KEY_INVALID",
+          },
+        }),
+      ),
+    );
+    const out = await extractAdWithGemini(MESSY_AD);
+    expect(out.extraction).toBeNull();
+    expect(out.diagnostic).toBe("http-400");
+    expect(out.diagnosticDetail).toBe(
+      "API_KEY_INVALID: API key not valid. Please pass a valid API key. ([redacted])",
+    );
+    expect(out.diagnosticDetail).not.toContain("test-dedicated-key-0123456789");
+  });
+
+  it("400 INVALID_ARGUMENT echoing ad content → e-mails/tokens/digits redacted, truncated", async () => {
+    withKey();
+    const longRef = "abcdef1234567890abcdef123456";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        httpError(400, {
+          error: {
+            code: 400,
+            message: `Invalid argument: bad value 'Bewerbungen bitte an: ausbildung@nordstern-digital.example' with schema ref ${longRef} and phone 494063827426 in generation_config.response_schema properties start_date.`,
+            status: "INVALID_ARGUMENT",
+          },
+        }),
+      ),
+    );
+    const out = await extractAdWithGemini(MESSY_AD);
+    expect(out.diagnostic).toBe("http-400");
+    const d = out.diagnosticDetail;
+    expect(d).not.toBeNull();
+    expect(d).toContain("INVALID_ARGUMENT");
+    expect(d).not.toContain("ausbildung@nordstern-digital.example");
+    expect(d).toContain("[email]");
+    expect(d).not.toContain(longRef);
+    expect(d).not.toContain("494063827426");
+    expect(d!.length).toBeLessThanOrEqual("INVALID_ARGUMENT: ".length + 160);
+  });
+
+  it("429 RESOURCE_EXHAUSTED → quota detail (the key-restriction/quota class)", async () => {
+    withKey();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        httpError(429, {
+          error: {
+            code: 429,
+            message: "Resource has been exhausted (e.g. check quota). Please try again later.",
+            status: "RESOURCE_EXHAUSTED",
+          },
+        }),
+      ),
+    );
+    const out = await extractAdWithGemini(MESSY_AD);
+    expect(out.diagnostic).toBe("http-429");
+    expect(out.diagnosticDetail).toBe(
+      "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota). Please try again later.",
+    );
+  });
+
+  it("an UNKNOWN error.status is never echoed (allowlist); the sanitized message survives", async () => {
+    withKey();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        httpError(403, {
+          error: {
+            code: 403,
+            message: "Weird custom upstream note.",
+            status: "SOME_CUSTOM_UNLISTED_STATUS",
+          },
+        }),
+      ),
+    );
+    const out = await extractAdWithGemini(MESSY_AD);
+    expect(out.diagnostic).toBe("http-403");
+    expect(out.diagnosticDetail).toBe("Weird custom upstream note.");
+    expect(out.diagnosticDetail).not.toContain("SOME_CUSTOM_UNLISTED_STATUS");
+  });
+
+  it("a non-JSON error body → detail null (the code alone still classifies)", async () => {
+    withKey();
+    vi.stubGlobal("fetch", vi.fn(async () => httpError(500, "<html>Bad Gateway</html>")));
+    const out = await extractAdWithGemini(MESSY_AD);
+    expect(out.diagnostic).toBe("http-500");
+    expect(out.diagnosticDetail).toBeNull();
+  });
+
+  it("extractSmartAd propagates the detail on failure and nulls it on success", async () => {
+    withKey();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        httpError(400, {
+          error: { code: 400, message: "Request contains an invalid argument.", status: "INVALID_ARGUMENT" },
+        }),
+      ),
+    );
+    const failed = await extractSmartAd(MESSY_AD);
+    expect(failed.source).toBe("deterministic");
+    expect(failed.diagnostic).toBe("http-400");
+    expect(failed.diagnosticDetail).toBe(
+      "INVALID_ARGUMENT: Request contains an invalid argument.",
+    );
+    vi.stubGlobal("fetch", vi.fn(async () => geminiEnvelope(GOOD_AI)));
+    const ok = await extractSmartAd(MESSY_AD);
+    expect(ok.source).toBe("ai");
+    expect(ok.diagnostic).toBe("ai");
+    expect(ok.diagnosticDetail).toBeNull();
+  });
+
+  it("sanitizeUpstreamMessage: redacts key/e-mail/url/token/digit runs, truncates, null when empty", () => {
+    expect(sanitizeUpstreamMessage("ok: abc", "SECRET")).toBe("ok: abc");
+    expect(sanitizeUpstreamMessage("", "SECRET")).toBeNull();
+    expect(sanitizeUpstreamMessage("   ", "SECRET")).toBeNull();
+    // A 500-char run of short words truncates to the 160-char cap (at a word
+    // boundary, so ≤ 160); nothing longer may ever be surfaced.
+    const truncated = sanitizeUpstreamMessage("word ".repeat(100), "SECRET");
+    expect(truncated).not.toBeNull();
+    expect(truncated!.length).toBeLessThanOrEqual(160);
+    expect(truncated!.length).toBeGreaterThan(100);
+    // A 500-char single token run is itself token-like → redacted.
+    expect(sanitizeUpstreamMessage("x".repeat(500), "SECRET")).toBe("[token]");
+    expect(sanitizeUpstreamMessage("key=SECRETKEY here", "SECRETKEY")).toBe("key=[redacted] here");
+    expect(sanitizeUpstreamMessage("a@b.de https://x.dev 123456789012345678901", "SECRET")).toBe(
+      "[email] [url] [token]",
+    );
+    expect(sanitizeUpstreamMessage("deadline 15.06.2027 note", "SECRET")).toBe(
+      "deadline 15.06.[n] note",
+    );
   });
 });

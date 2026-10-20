@@ -156,6 +156,8 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
   const [analysis, setAnalysis] = useState<{
     issues: SmartAddFailCode[];
     diagnostic: SmartInputDiagnostic | null;
+    /** Safe upstream detail for `http-*` diagnostics (never for success). */
+    diagnosticDetail: string | null;
   } | null>(null);
   /** The editable form (null = nothing analyzed yet). */
   const [form, setForm] = useState<SmartForm | null>(null);
@@ -222,6 +224,7 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
         setAnalysis({
           issues: res.issues as SmartAddFailCode[],
           diagnostic: res.diagnostic,
+          diagnosticDetail: res.diagnosticDetail,
         });
       } catch (e) {
         if (isNextRedirectError(e)) {
@@ -373,16 +376,25 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
       </div>
 
       {/* AI failure — a CLEAR warning (never a silent fallback): which
-          non-sensitive code fired + an explicit retry. The form below is
-          still the deterministic pre-fill, explicitly labeled as such. */}
+          non-sensitive code fired + the SAFE upstream detail (allowlisted
+          provider status + sanitized message fragment, `http-*` only) + an
+          explicit retry. The form below is still the deterministic pre-fill,
+          explicitly labeled as such. */}
       {aiFailed && (
         <div
           role="alert"
           className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3 py-2.5"
         >
-          <p className="text-xs font-semibold text-warning">
-            {t("bewauto.aiFailed", { code: analysis!.diagnostic! })}
-          </p>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-warning">
+              {t("bewauto.aiFailed", { code: analysis!.diagnostic! })}
+            </p>
+            {analysis!.diagnosticDetail ? (
+              <p className="mt-0.5 break-words font-mono text-[11px] leading-4 text-warning">
+                {analysis!.diagnosticDetail}
+              </p>
+            ) : null}
+          </div>
           <Button
             variant="secondary"
             disabled={disabled || analyzing || inFlight}

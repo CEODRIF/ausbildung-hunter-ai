@@ -131,9 +131,11 @@ describe("parseAdvertisement — sectioned ad with bullets (test 3–4)", () => 
     expect(p.positionBrief.value).not.toContain("Bewerbung an");
   });
 
-  it("captures the e-mail from the 'Bewerbung an:' line (suggested)", () => {
+  it("captures the e-mail from the 'Bewerbung an:' line — the explicit application directive is the STRONG signal (extracted)", () => {
+    // NORDSTERN contract (2026-10-20): an explicit "Bewerbung an:" address
+    // outranks a generic "E-Mail:" label, whatever the line order.
     expect(p.companyEmail.value).toBe("karriere@kuehlo-gmbh.de");
-    expect(p.companyEmail.status).toBe("suggested");
+    expect(p.companyEmail.status).toBe("extracted");
   });
 
   it("extracts the company from the legal form and leaves the role line as residual header", () => {
@@ -568,5 +570,142 @@ describe("parseAdvertisement — advertisement dates (labeled, verbatim)", () =>
   it("a date value is never mistaken for a phone number", () => {
     const p = ad(["Beginn: 01.09.2027"]);
     expect(p.companyPhone.status).toBe("missing");
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * NORDSTERN production repro (2026-10-20, Smart Input preview) —
+ * application e-mail ranking + applicant exclusion + dates/position.
+ *
+ * Reconstructed 1:1 (structure + visible content) from the preview
+ * screenshot: the deterministic fallback had selected the GENERIC
+ * info@ address although the ad explicitly directs applications to
+ * ausbildung@…, and a former applicant's own e-mail/phone sits inside
+ * the ad body.
+ * ------------------------------------------------------------------ */
+
+const NORDSTERN_LINES = [
+  "Nordstern Digitalhandel GmbH",
+  "Frau Miriam Schneider",
+  "Spitalerstraße 12",
+  "20095 Hamburg",
+  "Telefon: +49 40 6382 7426",
+  "E-Mail: info@nordstern-digital.example",
+  "Bewerbungsschluss: 15.06.2027",
+  "",
+  "Aufgaben:",
+  "- Pflege und Optimierung unseres Online-Shops",
+  "- Unterstützung bei Online-Marketing-Kampagnen",
+  "- Analyse von Verkaufszahlen und Kundenverhalten",
+  "- Erstellung von Produkttexten und Social-Media-Posts",
+  "",
+  "Voraussetzungen:",
+  "- Interesse an E-Commerce und digitalen Medien",
+  "- Gute Kommunikationsfähigkeiten",
+  "- Selbstständige und zuverlässige Arbeitsweise",
+  "",
+  "Hinweis: Daniel Fischer [daniel.fischer@applicant-mail.example, +49 151 2345 6789] ist ein ehemaliger Bewerber und kein Mitarbeiter oder Ansprechpartner des Unternehmens.",
+  "",
+  "Bewerbungen bitte an: ausbildung@nordstern-digital.example",
+];
+
+describe("NORDSTERN repro — application e-mail ranking, applicant exclusion, dates", () => {
+  it("the explicit 'Bewerbungen bitte an:' address OVERRANKS the generic info@ (any line order)", () => {
+    const p = parseAdvertisement(NORDSTERN_LINES.join("\n"));
+    expect(p.companyEmail.value).toBe("ausbildung@nordstern-digital.example");
+    expect(p.companyEmail.status).toBe("extracted");
+    // The generic label is present in the source but never selected.
+    expect(p.companyEmail.value).not.toBe("info@nordstern-digital.example");
+    // …and the former applicant's own address is never a company contact.
+    expect(p.companyEmail.value).not.toBe("daniel.fischer@applicant-mail.example");
+  });
+
+  it("the directive wins even when it sits BEFORE the generic E-Mail label", () => {
+    const lines = [
+      "Nordstern Digitalhandel GmbH",
+      "E-Mail: info@nordstern-digital.example",
+      "Bewerbungen bitte an: ausbildung@nordstern-digital.example",
+    ];
+    const p = parseAdvertisement(lines.join("\n"));
+    expect(p.companyEmail.value).toBe("ausbildung@nordstern-digital.example");
+  });
+
+  it("WITHOUT any directive the generic labeled address is kept (old behavior)", () => {
+    const lines = NORDSTERN_LINES.filter((l) => !l.startsWith("Bewerbungen bitte an"));
+    const p = parseAdvertisement(lines.join("\n"));
+    expect(p.companyEmail.value).toBe("info@nordstern-digital.example");
+    expect(p.companyEmail.status).toBe("extracted");
+  });
+
+  it("extracts company / contact / address / HR phone exactly as the preview showed", () => {
+    const p = parseAdvertisement(NORDSTERN_LINES.join("\n"));
+    expect(p.companyName.value).toBe("Nordstern Digitalhandel GmbH");
+    expect(p.contactName.value).toBe("Frau Miriam Schneider");
+    expect(p.companyAddress.value).toBe("Spitalerstraße 12, 20095 Hamburg");
+    // The HR phone — NOT the former applicant's mobile in the Hinweis line.
+    expect(p.companyPhone.value).toBe("+49 40 6382 7426");
+    expect(p.companyPhone.value).not.toBe("+49 151 2345 6789");
+  });
+
+  it("deadline extracted; start/end stay MISSING (no labeled lines — never invented)", () => {
+    const p = parseAdvertisement(NORDSTERN_LINES.join("\n"));
+    expect(p.deadline.value).toBe("15.06.2027");
+    expect(p.deadline.status).toBe("extracted");
+    expect(p.startDate.status).toBe("missing");
+    expect(p.endDate.status).toBe("missing");
+    // The position has no recognizable label in this ad → missing (labeled
+    // variants are covered below); industry is AI-layer only → missing.
+    expect(p.positionTitle.status).toBe("missing");
+    expect(p.companyIndustry.status).toBe("missing");
+  });
+
+  it("labeled position + labeled start/end variants are extracted verbatim", () => {
+    const p = parseAdvertisement(
+      [
+        "Nordstern Digitalhandel GmbH",
+        "E-Mail: info@nordstern-digital.example",
+        "Ausbildungsberuf: Kaufmann für E-Commerce (m/w/d)",
+        "Ausbildungsbeginn: 01.09.2027",
+        "Ausbildungsende: 31.08.2030",
+        "Bewerbungsschluss: 15.06.2027",
+      ].join("\n"),
+    );
+    expect(p.positionTitle.value).toBe("Kaufmann für E-Commerce (m/w/d)");
+    expect(p.positionTitle.status).toBe("extracted");
+    expect(p.startDate.value).toBe("01.09.2027");
+    expect(p.endDate.value).toBe("31.08.2030");
+    expect(p.deadline.value).toBe("15.06.2027");
+  });
+
+  it("a bare date in prose is NEVER assigned (no label = no field)", () => {
+    const p = parseAdvertisement(
+      [
+        "Nordstern Digitalhandel GmbH",
+        "E-Mail: info@nordstern-digital.example",
+        "Die Ausbildung startet am 01.09.2027 und endet am 31.08.2030.",
+      ].join("\n"),
+    );
+    expect(p.startDate.status).toBe("missing");
+    expect(p.endDate.status).toBe("missing");
+  });
+
+  it("an applicant-marked line is the ONLY e-mail → the field stays missing (never filed to a former applicant)", () => {
+    const p = parseAdvertisement(
+      [
+        "Nordstern Digitalhandel GmbH",
+        "Hinweis: Daniel Fischer [daniel.fischer@applicant-mail.example] ist ein ehemaliger Bewerber.",
+      ].join("\n"),
+    );
+    expect(p.companyEmail.value).not.toBe("daniel.fischer@applicant-mail.example");
+    expect(p.companyEmail.status).toBe("missing");
+    expect(adAutoAddGate(p).ok).toBe(false); // PARSE_NO_EMAIL — actionable
+  });
+
+  it("the brief preserves the job content but NOT the application directive line", () => {
+    const p = parseAdvertisement(NORDSTERN_LINES.join("\n"));
+    expect(p.positionBrief.value).toContain("Pflege und Optimierung unseres Online-Shops");
+    expect(p.positionBrief.value).toContain("Interesse an E-Commerce und digitalen Medien");
+    expect(p.positionBrief.value).not.toContain("Bewerbungen bitte an");
+    expect(p.positionBrief.value).not.toContain("ausbildung@nordstern-digital.example");
   });
 });

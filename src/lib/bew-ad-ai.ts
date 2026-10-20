@@ -516,6 +516,7 @@ EXTRACT (return null / an empty array for anything absent or unreliable — NEVE
 - company_address: the employer's street address with city and postal code exactly as written (join lines with ", "). Only the EMPLOYER's address — never the applicant's.
 - emails: EVERY e-mail address in the text, each with its context:
   "employer" (HR/company contact for this position), "recruiter" (recruiter/staffing agency), "applicant" (the candidate's own address, e.g. from a pasted CV), "platform" (job portal), "other".
+  ORDER them by how likely they are to be THE application address for this position: an explicit application directive ("Bewerbungen (bitte) an: …", "Bewerbung an: …", "apply to/via …") FIRST, then HR/recruiter addresses, then generic company addresses (info@/kontakt@), then the applicant's own, then platform addresses. An e-mail the text itself marks as belonging to a former applicant or an unrelated person is "applicant" or "other" — never "employer".
 - phones: EVERY phone number EXACTLY AS WRITTEN (preserve the original formatting and the international country code when present; never add, remove or normalize digits), each with the same context values.
 - position_title: the advertised POSITION's title as written.
 - position_brief: a VERBATIM excerpt of the job description and relevant requirements (contiguous text copied from the source, at most 4000 characters, no rewriting, no translation, no summary). null when there is no description.
@@ -684,6 +685,62 @@ export type SmartInputDiagnostic =
 export interface GeminiExtractionResult {
   extraction: AiAdExtraction | null;
   diagnostic: SmartInputDiagnostic;
+  /**
+   * Actionable, SAFE upstream detail for `http-*` diagnostics only: the
+   * allowlisted provider error status (e.g. `API_KEY_INVALID`) plus a
+   * sanitized, truncated fragment of the provider message. Never the key,
+   * never e-mails/URLs/token-like material, never the advertisement text.
+   * `null` for every other diagnostic (there is no upstream message).
+   */
+  diagnosticDetail: string | null;
+}
+
+/**
+ * Google's canonical error status names (API errors reference). The detail
+ * only ever surfaces a member of this closed set — arbitrary upstream
+ * strings are never echoed to the owner (sanitization by construction).
+ */
+const GEMINI_ERROR_STATUSES: ReadonlySet<string> = new Set([
+  "INVALID_ARGUMENT",
+  "FAILED_PRECONDITION",
+  "OUT_OF_RANGE",
+  "UNAUTHENTICATED",
+  "PERMISSION_DENIED",
+  "NOT_FOUND",
+  "ALREADY_EXISTS",
+  "RESOURCE_EXHAUSTED",
+  "CANCELLED",
+  "UNKNOWN",
+  "INTERNAL",
+  "UNAVAILABLE",
+  "DEADLINE_EXCEEDED",
+  "UNIMPLEMENTED",
+  "API_KEY_INVALID",
+]);
+
+const UPSTREAM_MESSAGE_MAX = 160;
+
+/**
+ * Sanitize a provider error message for owner display. Strips the key
+ * itself (paranoia: messages can echo request fields), e-mail addresses,
+ * URLs, long token-like runs and 4+ digit runs (phones/dates), then
+ * truncates to a word boundary. Returns null when nothing safe remains —
+ * the diagnostic code alone is still enough to classify the failure.
+ */
+export function sanitizeUpstreamMessage(message: string, key: string): string | null {
+  let out = message;
+  if (key) out = out.split(key).join("[redacted]");
+  out = out
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email]")
+    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/\b[A-Za-z0-9_-]{20,}\b/g, "[token]")
+    .replace(/\b\d{4,}\b/g, "[n]")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (out.length > UPSTREAM_MESSAGE_MAX) {
+    out = out.slice(0, UPSTREAM_MESSAGE_MAX).replace(/\s+\S*$/, "").trim();
+  }
+  return out || null;
 }
 
 /**
@@ -694,8 +751,11 @@ export interface GeminiExtractionResult {
  */
 export async function extractAdWithGemini(text: string): Promise<GeminiExtractionResult> {
   const rawKey = process.env.GEMINI_SMART_INPUT_API_KEY?.trim();
-  if (!rawKey) return { extraction: null, diagnostic: "no-key" }; // deterministic path only
-  if (isPlaceholderValue(rawKey)) return { extraction: null, diagnostic: "placeholder-key" };
+  // deterministic path only (nothing to diagnose upstream — no request sent)
+  if (!rawKey) return { extraction: null, diagnostic: "no-key", diagnosticDetail: null };
+  if (isPlaceholderValue(rawKey)) {
+    return { extraction: null, diagnostic: "placeholder-key", diagnosticDetail: null };
+  }
   const key = rawKey;
   const model = resolveSmartInputGeminiModel();
 
@@ -739,11 +799,40 @@ export async function extractAdWithGemini(text: string): Promise<GeminiExtractio
     const diagnostic: SmartInputDiagnostic =
       e instanceof Error && e.name === "TimeoutError" ? "timeout" : "network";
     logSmartInput("warn", diagnostic);
-    return { extraction: null, diagnostic };
+    return { extraction: null, diagnostic, diagnosticDetail: null };
   }
   if (!response.ok) {
-    logSmartInput("warn", `http ${response.status}`);
-    return { extraction: null, diagnostic: `http-${response.status}` as SmartInputDiagnostic };
+    // Read the provider error body for a SAFE, actionable detail
+    // (production repro 2026-10-20: the owner saw "http-400" with no idea
+    // WHY — key problem? schema problem? quota?). Only the allowlisted
+    // error.status and a sanitized message fragment ever leave this
+    // function; the key, e-mails, URLs, token-like runs, digit runs and
+    // the advertisement text can never leak through.
+    let diagnosticDetail: string | null = null;
+    try {
+      const bodyText = ((await response.text().catch(() => "")) || "").slice(0, 8192);
+      const errBody = bodyText
+        ? (JSON.parse(bodyText) as { error?: { status?: unknown; message?: unknown } })
+        : null;
+      const statusPart =
+        typeof errBody?.error?.status === "string" &&
+        GEMINI_ERROR_STATUSES.has(errBody.error.status)
+          ? errBody.error.status
+          : null;
+      const messagePart =
+        typeof errBody?.error?.message === "string"
+          ? sanitizeUpstreamMessage(errBody.error.message, key)
+          : null;
+      diagnosticDetail = [statusPart, messagePart].filter(Boolean).join(": ") || null;
+    } catch {
+      diagnosticDetail = null; // a broken error body never breaks the fallback
+    }
+    logSmartInput("warn", `http ${response.status}${diagnosticDetail ? ` ${diagnosticDetail}` : ""}`);
+    return {
+      extraction: null,
+      diagnostic: `http-${response.status}` as SmartInputDiagnostic,
+      diagnosticDetail,
+    };
   }
 
   let envelope: unknown;
@@ -751,7 +840,7 @@ export async function extractAdWithGemini(text: string): Promise<GeminiExtractio
     envelope = await response.json();
   } catch {
     logSmartInput("warn", "invalid json envelope");
-    return { extraction: null, diagnostic: "invalid-envelope" };
+    return { extraction: null, diagnostic: "invalid-envelope", diagnosticDetail: null };
   }
 
   const candidates = (envelope as { candidates?: unknown })?.candidates;
@@ -766,7 +855,7 @@ export async function extractAdWithGemini(text: string): Promise<GeminiExtractio
     : "";
   if (!raw) {
     logSmartInput("warn", "empty model output");
-    return { extraction: null, diagnostic: "empty-output" };
+    return { extraction: null, diagnostic: "empty-output", diagnosticDetail: null };
   }
 
   let json: unknown;
@@ -774,15 +863,15 @@ export async function extractAdWithGemini(text: string): Promise<GeminiExtractio
     json = JSON.parse(raw);
   } catch {
     logSmartInput("warn", "model output not json");
-    return { extraction: null, diagnostic: "not-json" };
+    return { extraction: null, diagnostic: "not-json", diagnosticDetail: null };
   }
   const extraction = validateGeminiAdPayload(json);
   if (!extraction) {
     logSmartInput("warn", "schema validation failed");
-    return { extraction: null, diagnostic: "schema-violation" };
+    return { extraction: null, diagnostic: "schema-violation", diagnosticDetail: null };
   }
   logSmartInput("ok", "");
-  return { extraction, diagnostic: "ai" };
+  return { extraction, diagnostic: "ai", diagnosticDetail: null };
 }
 
 /* ------------------------------------------------------------------ *
@@ -799,6 +888,12 @@ export interface SmartAdExtraction {
    * in the review area so production can be diagnosed without log access.
    */
   diagnostic: SmartInputDiagnostic;
+  /**
+   * Safe upstream detail for `http-*` diagnostics only (allowlisted error
+   * status + sanitized message fragment) — see GeminiExtractionResult.
+   * `null` everywhere else.
+   */
+  diagnosticDetail: string | null;
 }
 
 /**
@@ -808,9 +903,14 @@ export interface SmartAdExtraction {
  */
 export async function extractSmartAd(text: string): Promise<SmartAdExtraction> {
   const base = parseAdvertisement(text);
-  const { extraction: ai, diagnostic } = await extractAdWithGemini(text);
-  if (!ai) return { parsed: base, source: "deterministic", diagnostic };
-  return { parsed: mergeAiExtraction(base, ai, text), source: "ai", diagnostic: "ai" };
+  const { extraction: ai, diagnostic, diagnosticDetail } = await extractAdWithGemini(text);
+  if (!ai) return { parsed: base, source: "deterministic", diagnostic, diagnosticDetail };
+  return {
+    parsed: mergeAiExtraction(base, ai, text),
+    source: "ai",
+    diagnostic: "ai",
+    diagnosticDetail: null,
+  };
 }
 
 /* ------------------------------------------------------------------ *

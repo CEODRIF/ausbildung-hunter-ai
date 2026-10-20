@@ -323,9 +323,12 @@ const BENEFIT_HEADINGS = [
   /^benefits?\b/i,
 ];
 
+/** A stop heading that is itself an APPLICATION directive (strong e-mail). */
+const APPLY_STOP = /^(?:bewerb(?:en|ung|ungen)?\s+(?:bitte\s+)?an|apply\s+(?:to|via))\b/i;
+
 /** Closing/contact sections — END the preserved brief (after it has started). */
 const STOP_HEADINGS = [
-  /^bewerb(?:en|ung|ungen)? an\b/i,
+  /^bewerb(?:en|ung|ungen)?\s+(?:bitte\s+)?an\b/i,
   /^bewerb(?:en)? dich\b/i,
   /^bewerbe dich\b/i,
   /^jetzt bewerben\b/i,
@@ -454,6 +457,26 @@ function findEmailToken(line: string): string | null {
  * ------------------------------------------------------------------ */
 
 const LABEL_EMAIL = /^(e-?mail|email|mail|kontakte?)\s*[:\-–]\s*(.*)$/i;
+/**
+ * Explicit APPLICATION directives ("Bewerbungen (bitte) an: …", "Bewerbung
+ * an: …", "apply to/via …") — the STRONGEST e-mail signal in an
+ * advertisement: it outranks every generic "E-Mail:" label regardless of
+ * line order (production repro 2026-10-20: a "Bewerbungen bitte an:
+ * ausbildung@…" ad yielded the generic info@ because the label pass
+ * first-wins/overwrite semantics had no notion of "application address").
+ */
+const LABEL_APPLY_EMAIL =
+  /^(?:bewerb(?:en|ung|ungen)?\s+(?:bitte\s+)?an|apply\s+(?:to|via))\s*[:\-–]\s*(.+)$/i;
+
+/**
+ * Lines that mark an e-mail as belonging to a (FORMER) APPLICANT or another
+ * unrelated person — such an e-mail is NEVER a company contact, whatever it
+ * looks like (production repro 2026-10-20: "Hinweis: Daniel Fischer
+ * [daniel.fischer@…] ist ein ehemaliger Bewerber …"). Conservative
+ * keyword set (no pronouns — "mein" would over-block legitimate lines).
+ */
+const APPLICANT_LINE_HINT =
+  /\b(?:ehemalig\w*|bewerber\w*|kandidat\w*|antragstell\w*|lebenslauf|curriculum\s+vitae|cv\b|applicant|former|ex-?mitarbeiter)\b/i;
 const LABEL_COMPANY =
   /^(firma|unternehmen|arbeitgeber|company|employer|unternehmensdarstellung|unternehmensbeschreibung|unternehmensprofil|firmenprofil|firmenbeschreibung)\s*[:\-–]\s*(.+)$/i;
 const LABEL_CONTACT = /^(ansprechpartner(?:in)?|kontaktperson)\s*[:\-–]\s*(.+)$/i;
@@ -611,6 +634,12 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
   let startDate: ParsedAdField = missing();
   let endDate: ParsedAdField = missing();
   let deadline: ParsedAdField = missing();
+  /**
+   * Set once an EXPLICIT application directive ("Bewerbungen (bitte) an: …")
+   * captured the e-mail: from then on no generic label / bare token may
+   * replace it — the directive is the strongest e-mail signal in the ad.
+   */
+  let applyEmailSet = false;
 
   /* --- pass 1: locate the first description/requirements/benefit heading */
   let headerEnd = -1; // index of the first "brief" heading line
@@ -641,13 +670,31 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
     const t = line.trim();
     if (!t) return;
 
-    // 1) explicit e-mail label
+    // 0) explicit APPLICATION e-mail directive — the strongest e-mail
+    //    signal (outranks generic "E-Mail:" labels in ANY line order);
+    //    first-wins among directives.
+    const mApply = t.match(LABEL_APPLY_EMAIL);
+    if (mApply) {
+      const rest = mApply[1].trim();
+      const token = findEmailToken(rest);
+      if (token && !applyEmailSet) {
+        email = isValidEmail(token)
+          ? fieldFrom(token, "extracted")
+          : { value: token, status: "invalid" };
+        applyEmailSet = true;
+      }
+      consumed[i] = true;
+      return;
+    }
+
+    // 1) explicit e-mail label (generic — a captured application directive
+    //    is NEVER displaced by it)
     const mEmail = t.match(LABEL_EMAIL);
     if (mEmail) {
       const rest = mEmail[2].trim();
       const token = findEmailToken(rest);
       if (token) {
-        if (overwriteLabels || email.status === "missing") {
+        if (!applyEmailSet && (overwriteLabels || email.status === "missing")) {
           email = isValidEmail(token)
             ? fieldFrom(token, "extracted")
             : { value: token, status: "invalid" };
@@ -657,7 +704,7 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
         if (contact.status === "missing") contact = fieldFrom(rest, "extracted", 120);
       } else if (rest) {
         // Labelled but not a parseable address → flag it, never invent one.
-        if (overwriteLabels || email.status === "missing") {
+        if (!applyEmailSet && (overwriteLabels || email.status === "missing")) {
           email = { value: rest, status: "invalid" };
         }
       }
@@ -807,10 +854,11 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       return;
     }
 
-    // 9) bare e-mail token (header region)
+    // 9) bare e-mail token (header region) — never one the line itself
+    //    marks as a (former) applicant's address.
     const token = findEmailToken(t);
     if (token) {
-      if (email.status === "missing") {
+      if (email.status === "missing" && !APPLICANT_LINE_HINT.test(t)) {
         email = isValidEmail(token)
           ? fieldFrom(token, "suggested")
           : { value: token, status: "invalid" };
@@ -843,11 +891,20 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
 
     // 12) STOP heading (e.g. "Kontaktdaten", "Kontaktadresse") — its inline
     //     content may carry the e-mail; the heading line itself is consumed.
+    //     An APPLICATION-directive stop ("Bewerbungen bitte an: X") is the
+    //     strong signal: it displaces a generic finding (unless another
+    //     directive already won).
     const h = classifyHeading(t);
     if (h && h.kind === "stop") {
+      const isApplyStop = APPLY_STOP.test(h.inline ?? "") || APPLY_STOP.test(t);
       const rest = h.inline ?? "";
       const stopEmail = findEmailToken(rest) ?? findEmailToken(t);
-      if (email.status === "missing" && stopEmail) {
+      if (isApplyStop && stopEmail && !applyEmailSet) {
+        email = isValidEmail(stopEmail)
+          ? fieldFrom(stopEmail, "extracted")
+          : { value: stopEmail, status: "invalid" };
+        applyEmailSet = true;
+      } else if (email.status === "missing" && stopEmail && !APPLICANT_LINE_HINT.test(t)) {
         email = isValidEmail(stopEmail)
           ? fieldFrom(stopEmail, "suggested")
           : { value: stopEmail, status: "invalid" };
@@ -936,14 +993,21 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       const t = line.trim();
       const h = t ? classifyHeading(t) : null;
       if (h && h.kind === "stop") {
-        // "Bewerbung an: bewerbung@firma.de" — capture the e-mail first.
-        if (email.status === "missing") {
-          const stopEmail = findEmailToken(h.inline ?? "") ?? findEmailToken(t);
-          if (stopEmail) {
-            email = isValidEmail(stopEmail)
-              ? fieldFrom(stopEmail, "suggested")
-              : { value: stopEmail, status: "invalid" };
-          }
+        // "Bewerbungen (bitte) an: ausbildung@firma.de" — the application
+        // directive ends the brief AND is the strong e-mail signal (it
+        // displaces a generic finding); other stops only fill when missing
+        // and never for an applicant-marked line.
+        const stopEmail = findEmailToken(h.inline ?? "") ?? findEmailToken(t);
+        const isApplyStop = APPLY_STOP.test(h.inline ?? "") || APPLY_STOP.test(t);
+        if (isApplyStop && stopEmail && !applyEmailSet) {
+          email = isValidEmail(stopEmail)
+            ? fieldFrom(stopEmail, "extracted")
+            : { value: stopEmail, status: "invalid" };
+          applyEmailSet = true;
+        } else if (email.status === "missing" && stopEmail && !APPLICANT_LINE_HINT.test(t)) {
+          email = isValidEmail(stopEmail)
+            ? fieldFrom(stopEmail, "suggested")
+            : { value: stopEmail, status: "invalid" };
         }
         break;
       }
@@ -985,9 +1049,11 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       : missing();
   }
 
-  /* --- last-ditch e-mail: first token anywhere in the text */
+  /* --- last-ditch e-mail: first token anywhere in the text — but never one
+     the line itself marks as a (former) applicant's address (that would
+     file the application to the wrong person). */
   if (email.status === "missing") {
-    const anyLine = rawLines.find((l) => findEmailToken(l));
+    const anyLine = rawLines.find((l) => findEmailToken(l) && !APPLICANT_LINE_HINT.test(l));
     const token = anyLine ? findEmailToken(anyLine) : null;
     if (token) {
       email = isValidEmail(token)
