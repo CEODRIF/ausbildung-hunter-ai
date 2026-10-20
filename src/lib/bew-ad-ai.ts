@@ -29,10 +29,17 @@ import "server-only";
  * DEGRADATION (graceful, by design):
  *   - key missing or placeholder → deterministic parser only (source:
  *     "deterministic") — the Check → Review → Confirm workflow is UNCHANGED;
- *   - network error, timeout, HTTP 401/429/5xx, non-JSON or schema-invalid
- *     model output → the SAME fallback (a logged controlled message, never
- *     the key, never the pasted text).
+ *   - network error, timeout, HTTP 4xx/5xx (with a safe, sanitized upstream
+ *     detail for the owner: allowlisted error status + redacted message),
+ *     non-JSON or schema-invalid model output → the SAME fallback (a logged
+ *     controlled message, never the key, never the pasted text).
  * The caller therefore always gets a usable ParsedAdvertisement.
+ *
+ * DECODING: `strict: true` was REMOVED from generationConfig (2026-10-20
+ * production failure — the upstream endpoint rejected the strict combination
+ * with this schema and returned a non-2xx on every request). The
+ * responseSchema stays as a strong bias; validateGeminiAdPayload is the
+ * authoritative gate (see the request body comment in extractAdWithGemini).
  */
 
 import {
@@ -268,7 +275,8 @@ export function validateGeminiAdPayload(payload: unknown): AiAdExtraction | null
       // else: category/confidence off-contract ⇒ industry = null (rest survives)
     }
     // a structurally broken industry (string/number/array) is a schema
-    // violation for the whole payload (strict mode makes this unreachable)
+    // violation for the whole payload — rare without strict decoding, and
+    // exactly what this validator exists to catch.
     if (!i || typeof i !== "object" || Array.isArray(i)) return null;
   }
 
@@ -644,10 +652,10 @@ export const SMART_INPUT_RESPONSE_SCHEMA = {
       description: "Employer's industry (activity-based), null when unreliable.",
     },
   },
-  // STRICT DECODING: with `strict: true` in generationConfig, Gemini
-  // GUARANTEES schema conformance (types, nullables, enums, required).
-  // Without it the schema is only a bias — a paraphrased industry category
-  // or a missing key then depends on our validator alone.
+  // Every property is listed as required (nullable ones may be null) so the
+  // model answers the FULL contract; final enforcement is server-side in
+  // validateGeminiAdPayload (strict decoding was removed — see the request
+  // body comment: the upstream endpoint rejected it).
   required: [
     "company_name",
     "contact_name",
@@ -772,11 +780,13 @@ export async function extractAdWithGemini(text: string): Promise<GeminiExtractio
       maxOutputTokens: 8192,
       responseMimeType: "application/json",
       responseSchema: SMART_INPUT_RESPONSE_SCHEMA,
-      // GUARANTEED schema conformance (types / nullables / enums / required)
-      // — the production repro showed an unconstrained model can answer a
-      // structurally valid but contract-breaking payload (off-enum industry),
-      // which then made the whole extraction unusable.
-      strict: true,
+      // NB: NO `strict` flag — the upstream endpoint rejected the strict
+      // decoding combination with this schema (production failure 2026-10-20:
+      // non-2xx on every request, fields fell back to standard analysis).
+      // The schema stays as a strong bias, and SERVER-SIDE validation
+      // (validateGeminiAdPayload) is the real gate: any off-contract payload
+      // (off-enum industry, missing keys, wrong types) is dropped or
+      // degraded exactly as before — the deterministic floor never breaks.
     },
   };
 

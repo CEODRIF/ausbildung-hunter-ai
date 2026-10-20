@@ -3,9 +3,11 @@
  * layer) and the deterministic phone/industry rules in `@/lib/bew-ad-parser`.
  *
  * NO paid API credits: the Gemini endpoint is ALWAYS mocked (stubbed global
- * fetch); these tests exercise the DEDICATED key resolution, the strict
- * schema validation, the grounding/anti-fabrication contract, the merge
- * semantics, the reviewed-fields backstop and the graceful fallbacks.
+ * fetch); these tests exercise the DEDICATED key resolution, the schema
+ * validation (server-side gate — the request itself is non-strict), the
+ * grounding/anti-fabrication contract, the merge semantics, the
+ * reviewed-fields backstop, the safe upstream diagnostics and the graceful
+ * fallbacks.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -346,7 +348,11 @@ describe("extractAdWithGemini (mocked — no paid calls)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("request body uses strict decoding (guaranteed schema conformance)", async () => {
+  it("request body uses NON-strict decoding (strict was rejected upstream; server validation is the gate)", async () => {
+    // Production failure 2026-10-20: with `strict: true` the upstream
+    // endpoint answered a non-2xx on EVERY request — the fields fell back
+    // to the standard analysis. The strict flag must stay ABSENT, while the
+    // JSON bias (mimeType + schema) and the server-side validator remain.
     withKey();
     const fetchMock = vi.fn(async () => geminiEnvelope(GOOD_AI));
     vi.stubGlobal("fetch", fetchMock);
@@ -355,8 +361,9 @@ describe("extractAdWithGemini (mocked — no paid calls)", () => {
     const body = JSON.parse(String(init.body)) as {
       generationConfig: Record<string, unknown>;
     };
-    expect(body.generationConfig.strict).toBe(true);
+    expect("strict" in body.generationConfig).toBe(false);
     expect(body.generationConfig.responseMimeType).toBe("application/json");
+    expect(body.generationConfig.responseSchema).toBeDefined();
   });
 
   it("sends ONLY the dedicated key header (never shared keys), to the model override", async () => {
