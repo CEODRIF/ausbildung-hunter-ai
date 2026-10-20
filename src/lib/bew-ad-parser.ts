@@ -323,9 +323,12 @@ const BENEFIT_HEADINGS = [
   /^benefits?\b/i,
 ];
 
+/** A stop heading that is itself an APPLICATION directive (strong e-mail). */
+const APPLY_STOP = /^(?:bewerb(?:en|ung|ungen)?\s+(?:bitte\s+)?an|apply\s+(?:to|via))\b/i;
+
 /** Closing/contact sections — END the preserved brief (after it has started). */
 const STOP_HEADINGS = [
-  /^bewerb(?:en|ung|ungen)? an\b/i,
+  /^bewerb(?:en|ung|ungen)?\s+(?:bitte\s+)?an\b/i,
   /^bewerb(?:en)? dich\b/i,
   /^bewerbe dich\b/i,
   /^jetzt bewerben\b/i,
@@ -413,6 +416,30 @@ function cleanInput(text: string): string {
 }
 
 /**
+ * Line-level MARKDOWN normalization for pasted advertisements (portals,
+ * LinkedIn and career-page exports paste rich text as Markdown). Strips the
+ * SYNTAX only — the text content is preserved — so labels like
+ * `**Unternehmen:**` or `# Stellenbeschreibung` are recognized exactly like
+ * their plain-text form. Conservative on purpose:
+ *   - emphasis is only unwrapped in PAIRS (`**…**`, `__…__`, `*…*`, `_…_`),
+ *     which keeps German job-title conventions like `(m/w_d)` / `m/w*d*`
+ *     and lone underscores untouched;
+ *   - inline links `[label](url)` keep the label and drop the URL (the URL
+ *     is portal noise, not advertisement data);
+ *   - heading (`# …`) and blockquote (`> …`) markers are stripped.
+ */
+function normalizeMarkdownLine(line: string): string {
+  return line
+    .replace(/\[([^\]]*)\]\([^)\s]*\)/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:]|$)/g, "$1$2")
+    .replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:]|$)/g, "$1$2")
+    .replace(/^\s{0,3}#{1,6}\s+/, "")
+    .replace(/^\s{0,3}>\s?/, "");
+}
+
+/**
  * Heading detection for a single line. The label part is the text before the
  * first colon (so "Beschreibung: Als Mechatroniker …" is recognized AND its
  * inline content is kept); short standalone headings ("Aufgaben", "Profil")
@@ -454,6 +481,26 @@ function findEmailToken(line: string): string | null {
  * ------------------------------------------------------------------ */
 
 const LABEL_EMAIL = /^(e-?mail|email|mail|kontakte?)\s*[:\-–]\s*(.*)$/i;
+/**
+ * Explicit APPLICATION directives ("Bewerbungen (bitte) an: …", "Bewerbung
+ * an: …", "apply to/via …") — the STRONGEST e-mail signal in an
+ * advertisement: it outranks every generic "E-Mail:" label regardless of
+ * line order (production repro 2026-10-20: a "Bewerbungen bitte an:
+ * ausbildung@…" ad yielded the generic info@ because the label pass
+ * first-wins/overwrite semantics had no notion of "application address").
+ */
+const LABEL_APPLY_EMAIL =
+  /^(?:bewerb(?:en|ung|ungen)?\s+(?:bitte\s+)?an|apply\s+(?:to|via))\s*[:\-–]\s*(.+)$/i;
+
+/**
+ * Lines that mark an e-mail as belonging to a (FORMER) APPLICANT or another
+ * unrelated person — such an e-mail is NEVER a company contact, whatever it
+ * looks like (production repro 2026-10-20: "Hinweis: Daniel Fischer
+ * [daniel.fischer@…] ist ein ehemaliger Bewerber …"). Conservative
+ * keyword set (no pronouns — "mein" would over-block legitimate lines).
+ */
+const APPLICANT_LINE_HINT =
+  /\b(?:ehemalig\w*|bewerber\w*|kandidat\w*|antragstell\w*|lebenslauf|curriculum\s+vitae|cv\b|applicant|former|ex-?mitarbeiter)\b/i;
 const LABEL_COMPANY =
   /^(firma|unternehmen|arbeitgeber|company|employer|unternehmensdarstellung|unternehmensbeschreibung|unternehmensprofil|firmenprofil|firmenbeschreibung)\s*[:\-–]\s*(.+)$/i;
 const LABEL_CONTACT = /^(ansprechpartner(?:in)?|kontaktperson)\s*[:\-–]\s*(.+)$/i;
@@ -505,10 +552,16 @@ function findDateToken(value: string, pick: "first" | "last"): string | null {
 /**
  * Labeled date lines (German-first, conservative). Only EXPLICIT labels are
  * accepted — a bare date anywhere else is never assigned to a field (that
- * would be guessing). The labels are SEARCHED in the line (not anchored): one
- * line may carry several labeled dates (portals render
- * "Start: 01.09.2027, Bewerbung bis: 30.06.2027" on a single line), and the
- * token is always taken from the text AFTER the label that claimed it.
+ * would be guessing). "Explicit" covers three shapes, in order of strength:
+ *   1. bare labels: "Beginn: 01.09.2027", "Bewerbungsschluss: 15.06.2027",
+ *   2. label + preposition: "Beginn zum 01.09.2027", "Bewerbung bis 30.06.2027",
+ *   3. VERB phrases: "Die Ausbildung beginnt am 01.09.2027", "… endet am
+ *      31.08.2030" — the date is still explicitly stated, just conjugated.
+ * The labels are SEARCHED in the line (not anchored): one line may carry
+ * several labeled dates (portals render "Start: 01.09.2027, Bewerbung bis:
+ * 30.06.2027" — and prose renders "beginnt am … und endet am …" — on a
+ * single line), and the token is always taken from the text AFTER the label
+ * that claimed it.
  */
 const DATE_LABEL_RULES: Array<{
   field: "deadline" | "start" | "end";
@@ -522,16 +575,43 @@ const DATE_LABEL_RULES: Array<{
     pick: "first",
   },
   {
+    // "Beginn: …" / "Beginn zum|ab …" / "Die Ausbildung beginnt am …" /
+    // "startet am …" — verb conjugations (beginn|beginnt|beginnen,
+    // start|startet|starte|starten|startdatum) included.
     field: "start",
-    re: /(?:ausbildungsbeginn|arbeitsbeginn|beginn(?:\s+(?:der\s+ausbildung|zum|ab))?|start(?:datum)?(?:\s+(?:zum|ab))?)\s*[:\-–]?\s+/i,
+    re: /(?:ausbildungsbeginn|arbeitsbeginn|beginn(?:t|en)?|start(?:datum|et|e|en)?)\s*(?:(?:der\s+ausbildung\s+)?(?:am|zum|ab))?\s*[:\-–]?\s+/i,
     pick: "first",
   },
   {
+    // "Ausbildungsende: …" / "Ende (der Ausbildung) (am|zum) …" / "endet am …"
+    // (verb conjugations ende|endet|enden) / "Dauer: X bis Y" (pick: last).
     field: "end",
-    re: /(?:ausbildungsende|ende\s+(?:der\s+ausbildung|zum)|dauer)\s*[:\-–]?\s+/i,
+    re: /(?:ausbildungsende(?:t|n)?|ende(?:t|n)?|dauer)\s*(?:(?:der\s+ausbildung\s+)?(?:am|zum))?\s*[:\-–]?\s+/i,
     pick: "last",
   },
 ];
+
+/**
+ * Every (field, token) pair an EXPLICIT label/verb phrase on this line
+ * claims (the only dates this parser ever assigns — see DATE_LABEL_RULES).
+ * Shared by the field-assembly passes: header/contact lines are consumed
+ * after a claim; brief-region lines are collected read-only (the line
+ * stays verbatim in the description).
+ */
+function findLabeledDates(line: string): Array<{
+  field: "deadline" | "start" | "end";
+  token: string;
+}> {
+  const out: Array<{ field: "deadline" | "start" | "end"; token: string }> = [];
+  for (const rule of DATE_LABEL_RULES) {
+    const m = line.match(rule.re); // first (unanchored) occurrence
+    if (!m || m.index === undefined) continue;
+    const rest = line.slice(m.index + m[0].length);
+    const token = findDateToken(rest, rule.pick);
+    if (token) out.push({ field: rule.field, token });
+  }
+  return out;
+}
 
 /**
  * Known short metadata labels (Beginn, Ort, Anstellungsart, Schulabschluss,
@@ -597,7 +677,11 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
 
   if (!text || !text.trim()) return result;
 
-  const rawLines = cleanInput(text).split("\n");
+  // Markdown pastes are normalized line-by-line BEFORE any rule runs (labels
+  // like "**Unternehmen:**" must be recognized — see normalizeMarkdownLine).
+  const rawLines = cleanInput(text)
+    .split("\n")
+    .map(normalizeMarkdownLine);
   // Track which header lines were consumed by a field (for the residual rule
   // and the heuristics). null = not yet assigned.
   const consumed: Array<boolean> = rawLines.map(() => false);
@@ -611,6 +695,12 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
   let startDate: ParsedAdField = missing();
   let endDate: ParsedAdField = missing();
   let deadline: ParsedAdField = missing();
+  /**
+   * Set once an EXPLICIT application directive ("Bewerbungen (bitte) an: …")
+   * captured the e-mail: from then on no generic label / bare token may
+   * replace it — the directive is the strongest e-mail signal in the ad.
+   */
+  let applyEmailSet = false;
 
   /* --- pass 1: locate the first description/requirements/benefit heading */
   let headerEnd = -1; // index of the first "brief" heading line
@@ -641,13 +731,31 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
     const t = line.trim();
     if (!t) return;
 
-    // 1) explicit e-mail label
+    // 0) explicit APPLICATION e-mail directive — the strongest e-mail
+    //    signal (outranks generic "E-Mail:" labels in ANY line order);
+    //    first-wins among directives.
+    const mApply = t.match(LABEL_APPLY_EMAIL);
+    if (mApply) {
+      const rest = mApply[1].trim();
+      const token = findEmailToken(rest);
+      if (token && !applyEmailSet) {
+        email = isValidEmail(token)
+          ? fieldFrom(token, "extracted")
+          : { value: token, status: "invalid" };
+        applyEmailSet = true;
+      }
+      consumed[i] = true;
+      return;
+    }
+
+    // 1) explicit e-mail label (generic — a captured application directive
+    //    is NEVER displaced by it)
     const mEmail = t.match(LABEL_EMAIL);
     if (mEmail) {
       const rest = mEmail[2].trim();
       const token = findEmailToken(rest);
       if (token) {
-        if (overwriteLabels || email.status === "missing") {
+        if (!applyEmailSet && (overwriteLabels || email.status === "missing")) {
           email = isValidEmail(token)
             ? fieldFrom(token, "extracted")
             : { value: token, status: "invalid" };
@@ -657,7 +765,7 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
         if (contact.status === "missing") contact = fieldFrom(rest, "extracted", 120);
       } else if (rest) {
         // Labelled but not a parseable address → flag it, never invent one.
-        if (overwriteLabels || email.status === "missing") {
+        if (!applyEmailSet && (overwriteLabels || email.status === "missing")) {
           email = { value: rest, status: "invalid" };
         }
       }
@@ -752,29 +860,25 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
     }
 
     // 7c) labeled advertisement dates — the ONLY dates this parser assigns:
-    //     an explicit label (Bewerbungsschluss / Beginn / Ende / Dauer, …)
-    //     plus a parseable date token on the SAME line. Verbatim, first-wins
-    //     per field. A line WITHOUT a parseable date ("Beginn: ab sofort")
-    //     is deliberately NOT consumed here — META_LABELS keeps it out of
-    //     the residual brief instead.
+    //     an explicit label (Bewerbungsschluss / Beginn / Ende / Dauer, …) or
+    //     an explicit verb phrase (beginnt am / endet am, …) plus a parseable
+    //     date token on the SAME line. Verbatim, first-wins per field. A line
+    //     WITHOUT a parseable date ("Beginn: ab sofort") is deliberately NOT
+    //     consumed here — META_LABELS keeps it out of the residual brief
+    //     instead.
     if (
       deadline.status === "missing" ||
       startDate.status === "missing" ||
       endDate.status === "missing"
     ) {
       let dateFound = false;
-      for (const rule of DATE_LABEL_RULES) {
+      for (const hit of findLabeledDates(t)) {
         const target =
-          rule.field === "deadline" ? deadline : rule.field === "start" ? startDate : endDate;
+          hit.field === "deadline" ? deadline : hit.field === "start" ? startDate : endDate;
         if (target.status !== "missing") continue;
-        const m = t.match(rule.re); // first (unanchored) occurrence
-        if (!m || m.index === undefined) continue;
-        const rest = t.slice(m.index + m[0].length);
-        const token = findDateToken(rest, rule.pick);
-        if (!token) continue;
-        const field = fieldFrom(token, "extracted", BEW_DATE_MAX);
-        if (rule.field === "deadline") deadline = field;
-        else if (rule.field === "start") startDate = field;
+        const field = fieldFrom(hit.token, "extracted", BEW_DATE_MAX);
+        if (hit.field === "deadline") deadline = field;
+        else if (hit.field === "start") startDate = field;
         else endDate = field;
         dateFound = true;
       }
@@ -807,10 +911,11 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       return;
     }
 
-    // 9) bare e-mail token (header region)
+    // 9) bare e-mail token (header region) — never one the line itself
+    //    marks as a (former) applicant's address.
     const token = findEmailToken(t);
     if (token) {
-      if (email.status === "missing") {
+      if (email.status === "missing" && !APPLICANT_LINE_HINT.test(t)) {
         email = isValidEmail(token)
           ? fieldFrom(token, "suggested")
           : { value: token, status: "invalid" };
@@ -843,11 +948,20 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
 
     // 12) STOP heading (e.g. "Kontaktdaten", "Kontaktadresse") — its inline
     //     content may carry the e-mail; the heading line itself is consumed.
+    //     An APPLICATION-directive stop ("Bewerbungen bitte an: X") is the
+    //     strong signal: it displaces a generic finding (unless another
+    //     directive already won).
     const h = classifyHeading(t);
     if (h && h.kind === "stop") {
+      const isApplyStop = APPLY_STOP.test(h.inline ?? "") || APPLY_STOP.test(t);
       const rest = h.inline ?? "";
       const stopEmail = findEmailToken(rest) ?? findEmailToken(t);
-      if (email.status === "missing" && stopEmail) {
+      if (isApplyStop && stopEmail && !applyEmailSet) {
+        email = isValidEmail(stopEmail)
+          ? fieldFrom(stopEmail, "extracted")
+          : { value: stopEmail, status: "invalid" };
+        applyEmailSet = true;
+      } else if (email.status === "missing" && stopEmail && !APPLICANT_LINE_HINT.test(t)) {
         email = isValidEmail(stopEmail)
           ? fieldFrom(stopEmail, "suggested")
           : { value: stopEmail, status: "invalid" };
@@ -920,30 +1034,57 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
   const briefLines: string[] = [];
   let residualBrief = false;
 
+  /**
+   * Claim an explicit date from a line READ-ONLY (the line stays verbatim in
+   * the description). Bare dates in prose are never assigned — no guessing.
+   */
+  const claimLabeledDates = (line: string): void => {
+    if (!line) return;
+    for (const hit of findLabeledDates(line)) {
+      const target =
+        hit.field === "deadline" ? deadline : hit.field === "start" ? startDate : endDate;
+      if (target.status !== "missing") continue;
+      const field = fieldFrom(hit.token, "extracted", BEW_DATE_MAX);
+      if (hit.field === "deadline") deadline = field;
+      else if (hit.field === "start") startDate = field;
+      else endDate = field;
+    }
+  };
+
   if (headerEnd >= 0) {
     // Heading-driven: everything from the first description heading until a
     // closing/contact heading, including sub-sections ("Aufgaben", "Profil",
     // "Wir bieten", …) — they are part of the description, not noise.
     const firstHeadingLine = rawLines[headerEnd].trim();
     if (briefInline) {
+      claimLabeledDates(briefInline);
       briefLines.push(briefInline); // "Beschreibung: …" → keep the content
     } else if (firstHeadingLine) {
+      claimLabeledDates(firstHeadingLine);
       briefLines.push(firstHeadingLine); // bare section word, keep structure
     }
     for (let i = headerEnd + 1; i < rawLines.length; i++) {
       const line = rawLines[i];
       if (isNoise(line)) continue; // interface text never reaches the brief
       const t = line.trim();
+      claimLabeledDates(t);
       const h = t ? classifyHeading(t) : null;
       if (h && h.kind === "stop") {
-        // "Bewerbung an: bewerbung@firma.de" — capture the e-mail first.
-        if (email.status === "missing") {
-          const stopEmail = findEmailToken(h.inline ?? "") ?? findEmailToken(t);
-          if (stopEmail) {
-            email = isValidEmail(stopEmail)
-              ? fieldFrom(stopEmail, "suggested")
-              : { value: stopEmail, status: "invalid" };
-          }
+        // "Bewerbungen (bitte) an: ausbildung@firma.de" — the application
+        // directive ends the brief AND is the strong e-mail signal (it
+        // displaces a generic finding); other stops only fill when missing
+        // and never for an applicant-marked line.
+        const stopEmail = findEmailToken(h.inline ?? "") ?? findEmailToken(t);
+        const isApplyStop = APPLY_STOP.test(h.inline ?? "") || APPLY_STOP.test(t);
+        if (isApplyStop && stopEmail && !applyEmailSet) {
+          email = isValidEmail(stopEmail)
+            ? fieldFrom(stopEmail, "extracted")
+            : { value: stopEmail, status: "invalid" };
+          applyEmailSet = true;
+        } else if (email.status === "missing" && stopEmail && !APPLICANT_LINE_HINT.test(t)) {
+          email = isValidEmail(stopEmail)
+            ? fieldFrom(stopEmail, "suggested")
+            : { value: stopEmail, status: "invalid" };
         }
         break;
       }
@@ -985,9 +1126,11 @@ export function parseAdvertisement(text: string): ParsedAdvertisement {
       : missing();
   }
 
-  /* --- last-ditch e-mail: first token anywhere in the text */
+  /* --- last-ditch e-mail: first token anywhere in the text — but never one
+     the line itself marks as a (former) applicant's address (that would
+     file the application to the wrong person). */
   if (email.status === "missing") {
-    const anyLine = rawLines.find((l) => findEmailToken(l));
+    const anyLine = rawLines.find((l) => findEmailToken(l) && !APPLICANT_LINE_HINT.test(l));
     const token = anyLine ? findEmailToken(anyLine) : null;
     if (token) {
       email = isValidEmail(token)

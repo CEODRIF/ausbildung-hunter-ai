@@ -343,6 +343,11 @@ export type BewCheckSmartResult = {
    * production (e.g. "no-key" vs "http-401" vs "schema-violation").
    */
   diagnostic: SmartInputDiagnostic | null;
+  /**
+   * Safe upstream detail for `http-*` diagnostics only (allowlisted provider
+   * error status + sanitized message fragment) — `null` everywhere else.
+   */
+  diagnosticDetail: string | null;
 };
 
 export async function bewCheckSmartInput(
@@ -352,11 +357,11 @@ export async function bewCheckSmartInput(
   const campaignId = readString(formData, "campaignId");
   const text = readString(formData, "text");
   if (!text.trim()) {
-    return { ok: false, issues: ["EMPTY_INPUT"], parsed: null, diagnostic: null };
+    return { ok: false, issues: ["EMPTY_INPUT"], parsed: null, diagnostic: null, diagnosticDetail: null };
   }
   try {
-    const { parsed, issues, diagnostic } = await checkBewSmartInput(userId, campaignId, text);
-    return { ok: issues.length === 0, issues, parsed, diagnostic };
+    const { parsed, issues, diagnostic, diagnosticDetail } = await checkBewSmartInput(userId, campaignId, text);
+    return { ok: issues.length === 0, issues, parsed, diagnostic, diagnosticDetail };
   } catch (e) {
     if (isNextRedirectError(e)) throw e; // re-authentication — propagate
     const message = e instanceof Error ? e.message : "";
@@ -365,7 +370,7 @@ export async function bewCheckSmartInput(
       // Internals stay server-side; the user only sees the stable code.
       console.error("[bew] bewCheckSmartInput: unexpected failure", message);
     }
-    return { ok: false, issues: [code], parsed: null, diagnostic: null };
+    return { ok: false, issues: [code], parsed: null, diagnostic: null, diagnosticDetail: null };
   }
 }
 

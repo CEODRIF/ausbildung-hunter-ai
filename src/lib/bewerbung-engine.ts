@@ -926,23 +926,29 @@ export async function checkBewSmartInput(
    * to the owner so a production fallback can be classified without logs.
    */
   diagnostic: SmartInputDiagnostic | null;
+  /**
+   * Safe upstream detail for `http-*` diagnostics only (allowlisted provider
+   * error status + sanitized message fragment) — `null` everywhere else.
+   * Makes the owner-visible "http-400" actionable (WHY, not just THAT).
+   */
+  diagnosticDetail: string | null;
 }> {
   const { admin } = await requireOwnedCampaign(userId, campaignId);
 
   const text = (rawText ?? "").trim();
   if (!text) {
     const empty = parseAdvertisement("");
-    return { parsed: empty, issues: ["INVALID_PAYLOAD"], diagnostic: null };
+    return { parsed: empty, issues: ["INVALID_PAYLOAD"], diagnostic: null, diagnosticDetail: null };
   }
 
   // Over-limit input: reject WITHOUT spending an AI call (the deterministic
   // parse alone carries the tooLongInput flag the shared rules report).
   if (text.length > BEW_AD_INPUT_MAX) {
     const parsed = parseAdvertisement(text);
-    return { parsed, issues: smartAddIssues(parsed, []), diagnostic: null };
+    return { parsed, issues: smartAddIssues(parsed, []), diagnostic: null, diagnosticDetail: null };
   }
 
-  const { parsed, diagnostic } = await extractSmartAd(text);
+  const { parsed, diagnostic, diagnosticDetail } = await extractSmartAd(text);
 
   // The campaign's rows (ANY status) — the duplicate/cap checks run against
   // the server truth (excluded/cancelled rows are restorable, so the shared
@@ -958,7 +964,7 @@ export async function checkBewSmartInput(
     company_email: string | null;
   }>;
 
-  return { parsed, issues: smartAddIssues(parsed, rows), diagnostic };
+  return { parsed, issues: smartAddIssues(parsed, rows), diagnostic, diagnosticDetail };
 }
 
 /**
