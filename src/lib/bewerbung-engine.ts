@@ -949,16 +949,24 @@ export async function checkBewSmartInput(
     return { parsed, issues: smartAddIssues(parsed, []), diagnostic: null, diagnosticDetail: null };
   }
 
-  const { parsed, diagnostic, diagnosticDetail } = await extractSmartAd(text);
-
   // The campaign's rows (ANY status) — the duplicate/cap checks run against
   // the server truth (excluded/cancelled rows are restorable, so the shared
   // rules already account for their statuses). A failed read must not be
   // reported as "no issues": throw the stable SAVE_FAILED code.
-  const { data: rowsData, error: rowsError } = await admin
-    .from("bew_applications")
-    .select("status, company_email")
-    .eq("campaign_id", campaignId);
+  //
+  // The rows snapshot is independent of the (slow) AI extraction, so run BOTH
+  // concurrently: this overlaps the DB round trip with the Gemini call and
+  // removes one serial wait per analysis without changing any result.
+  const [
+    { parsed, diagnostic, diagnosticDetail },
+    { data: rowsData, error: rowsError },
+  ] = await Promise.all([
+    extractSmartAd(text),
+    admin
+      .from("bew_applications")
+      .select("status, company_email")
+      .eq("campaign_id", campaignId),
+  ]);
   if (rowsError || !rowsData) throw new Error("SAVE_FAILED");
   const rows = rowsData as unknown as Array<{
     status: string;

@@ -170,6 +170,18 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
   // ref claim is race-free between two rapid clicks; the server's
   // DUPLICATE_COMPANY check is the final backstop).
   const inFlightRef = useRef(false);
+  // Synchronous duplicate-ANALYZE guard (mirrors inFlightRef): state updates
+  // are batched, so only a ref claim is race-free between two rapid clicks —
+  // without it a double-click fires two full AI extractions.
+  const analyzingRef = useRef(false);
+  // Last SUCCESSFUL analysis of byte-identical text, reused with no network
+  // round trip and no re-spent AI call. Failures are never cached, so the
+  // "retry" button after an AI failure still re-attempts the extraction.
+  const lastAnalysisRef = useRef<{
+    text: string;
+    parsed: ParsedAdvertisement;
+    issues: SmartAddFailCode[];
+  } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const router = useRouter();
 
@@ -195,16 +207,27 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
    * keeps the pasted text for a retry.
    */
   const onAnalyze = useCallback(() => {
-    if (disabled || analyzing || inFlight) return;
+    if (disabled || analyzing || inFlight || analyzingRef.current) return;
     setError(null);
     setNotice(null);
     if (!text.trim() || text.length > BEW_AD_INPUT_MAX) {
       const local = checkSmartAdd(text, view.applications);
       setForm(null);
       setAnalysis(null);
+      lastAnalysisRef.current = null;
       setError(errText(local.issues[0] ?? "EMPTY_INPUT"));
       return;
     }
+    // Reuse the last successful analysis of byte-identical text — no network
+    // round trip, no re-spent AI call. The confirm step re-validates
+    // duplicates server-side, so reusing a stored result is always safe.
+    const cached = lastAnalysisRef.current;
+    if (cached && cached.text === text) {
+      setForm(formFromParsed(cached.parsed));
+      setAnalysis({ issues: cached.issues, diagnostic: null, diagnosticDetail: null });
+      return;
+    }
+    analyzingRef.current = true;
     setAnalyzing(true);
     (async () => {
       try {
@@ -215,6 +238,7 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
         if (res.parsed === null) {
           // The check itself could not run (foreign campaign / internal
           // failure) — stable code, localized, text kept for the retry.
+          lastAnalysisRef.current = null;
           setError(errText(res.issues[0] ?? "CHECK_UNAVAILABLE"));
           setForm(null);
           setAnalysis(null);
@@ -226,14 +250,22 @@ export const SmartCompanyInput = memo(function SmartCompanyInput({
           diagnostic: res.diagnostic,
           diagnosticDetail: res.diagnosticDetail,
         });
+        // Cache only a clean success (the AI did not fail) so the "retry"
+        // button after a failure still re-attempts the extraction.
+        lastAnalysisRef.current =
+          res.diagnostic === null
+            ? { text, parsed: res.parsed, issues: res.issues as SmartAddFailCode[] }
+            : null;
       } catch (e) {
         if (isNextRedirectError(e)) {
           // Session expired mid-analysis: re-authenticate, keep the text.
           router.replace("/login");
           return;
         }
+        lastAnalysisRef.current = null;
         setError(errText("CHECK_UNAVAILABLE"));
       } finally {
+        analyzingRef.current = false;
         setAnalyzing(false);
       }
     })();
