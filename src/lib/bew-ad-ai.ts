@@ -311,7 +311,23 @@ function rankedContactCandidates(entries: AiContactEntry[]): AiContactEntry[] {
   };
   return entries
     .filter((e) => e.context !== "applicant" && e.context !== "platform")
-    .sort((a, b) => rank[a.context] - rank[b.context]);
+    .sort((a, b) => rank[a.context] - rank[b.context] || applicationHintScore(a.value) - applicationHintScore(b.value));
+}
+
+/**
+ * APPLICATION-HINT tie-break (production repro 2026-10-20): when the model
+ * tags SEVERAL addresses with the same context (e.g. `info@…` AND
+ * `bewerbung@…` both "employer"), text order alone would let the GENERAL
+ * address win. An address whose local part is clearly application-related is
+ * preferred — a deterministic, explainable bias. No hint ⇒ stable original
+ * order (ambiguity stays visible via the "suggested" status).
+ */
+const APPLICATION_HINT =
+  /^(bewerb|karriere|career|job|ausbildung|personal|hr|human|apply|application|stell|vakan|vacan|anwendung)/;
+
+function applicationHintScore(value: string): number {
+  const local = value.split("@")[0] ?? value;
+  return APPLICATION_HINT.test(local) ? 0 : 1;
 }
 
 /**

@@ -20,6 +20,7 @@ import {
   resetSmartInputDiagnostics,
   validateGeminiAdPayload,
   validateReviewedFields,
+  type AiAdExtraction,
 } from "@/lib/bew-ad-ai";
 import {
   findPhoneToken,
@@ -563,5 +564,74 @@ describe("deterministic phone extraction (conservative, verbatim)", () => {
     expect(p.positionBrief.value).not.toContain("0151 23456789");
     expect(p.positionBrief.value).toContain("Wir suchen dich für unser Team.");
     expect(p.companyIndustry.status).toBe("missing");
+  });
+});
+
+
+describe("application-email ranking tie-break (production repro 2026-10-20)", () => {
+  const AD = [
+    "KälteKompressor GmbH",
+    "Telefon: +49 711 555 1234",
+    "info@kaeltekompressor.de",
+    "bewerbung@kaeltekompressor.de",
+    "Ausbildung als Industriemechatroniker (m/w/d)",
+    "Beschreibung: Wir produzieren Kältemaschinen für die industrielle Kältetechnik.",
+  ].join("\n");
+  const base = () => parseAdvertisement(AD);
+  const aiOf = (emails: Array<{ value: string; context: string }>, phones: Array<{ value: string; context: string }> = []) =>
+    validateGeminiAdPayload({
+      company_name: "KälteKompressor GmbH",
+      contact_name: null,
+      contact_role: null,
+      company_address: null,
+      emails,
+      phones,
+      position_title: "Ausbildung als Industriemechatroniker (m/w/d)",
+      position_brief: "Wir produzieren Kältemaschinen für die industrielle Kältetechnik.",
+      industry: null,
+    }) as AiAdExtraction;
+
+  it("prefers the application address when BOTH are tagged employer (general one listed first)", () => {
+    const ai = aiOf([
+      { value: "info@kaeltekompressor.de", context: "employer" },
+      { value: "bewerbung@kaeltekompressor.de", context: "employer" },
+    ]);
+    const merged = mergeAiExtraction(base(), ai, AD);
+    expect(merged.companyEmail.value).toBe("bewerbung@kaeltekompressor.de");
+    // still ambiguous (two employer addresses) ⇒ "suggested" for the review step
+    expect(merged.companyEmail.status).toBe("suggested");
+  });
+
+  it("keeps text order when NO candidate carries an application hint", () => {
+    const ad2 = AD + "\nkontakt@kaeltekompressor.de";
+    const ai = aiOf([
+      { value: "info@kaeltekompressor.de", context: "employer" },
+      { value: "kontakt@kaeltekompressor.de", context: "employer" },
+    ]);
+    const merged = mergeAiExtraction(base(), ai, ad2);
+    expect(merged.companyEmail.value).toBe("info@kaeltekompressor.de");
+    expect(merged.companyEmail.status).toBe("suggested");
+  });
+
+  it("a single employer address without hints stays 'extracted'", () => {
+    const ad2 = AD + "\nkontakt@kaeltekompressor.de";
+    const ai = aiOf([{ value: "kontakt@kaeltekompressor.de", context: "employer" }]);
+    const merged = mergeAiExtraction(base(), ai, ad2);
+    expect(merged.companyEmail.value).toBe("kontakt@kaeltekompressor.de");
+    expect(merged.companyEmail.status).toBe("extracted");
+  });
+
+  it("phone ranking is unaffected by the e-mail hint (no '@' in numbers)", () => {
+    const ad2 = AD + "\n+49 711 555 9999";
+    const ai = aiOf(
+      [{ value: "bewerbung@kaeltekompressor.de", context: "employer" }],
+      [
+        { value: "+49 711 555 1234", context: "employer" },
+        { value: "+49 711 555 9999", context: "employer" },
+      ],
+    );
+    const merged = mergeAiExtraction(base(), ai, ad2);
+    expect(merged.companyPhone.value).toBe("+49 711 555 1234"); // stable text order
+    expect(merged.companyPhone.status).toBe("suggested");
   });
 });
