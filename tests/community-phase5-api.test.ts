@@ -960,14 +960,9 @@ describe("client invariants (Phase 5 surface)", () => {
     "src/components/community/profile-card.tsx",
     "src/components/community/community-settings.tsx",
   ];
-  const PAGES = [
-    "src/app/community/search/page.tsx",
-    "src/app/community/questions/new/page.tsx",
-    "src/app/community/questions/[id]/page.tsx",
-    "src/app/community/[room]/questions/page.tsx",
-    "src/app/community/moderation/page.tsx",
-  ];
-  const ALL = [...COMPONENTS, ...PAGES, "src/components/community/room-chat.tsx"];
+  // The Phase 5 route pages were removed (Community UI removal); the
+  // component surface below is still exercised as inert code.
+  const ALL = [...COMPONENTS, "src/components/community/room-chat.tsx"];
 
   it("no polling: no setInterval / EventSource / busy loops in the new components", () => {
     for (const p of COMPONENTS) {
@@ -1010,22 +1005,9 @@ describe("client invariants (Phase 5 surface)", () => {
     }
   });
 
-  it("the moderation page guards access server-side (role re-resolved + redirect)", () => {
-    const src = read("src/app/community/moderation/page.tsx");
-    expect(src).toContain("fetchViewerRole");
-    expect(src).toContain("isModerator");
-    expect(src).toContain('from "next/navigation"');
-  });
-
   it("the report dialog sends only whitelisted fields (no client identity)", () => {
     const src = read("src/components/community/report-dialog.tsx");
     expect(src).not.toContain("reporter_id");
     expect(src).not.toContain("user.id");
-  });
-
-  it("the Phase 5 pages are server components (authorization stays server-side)", () => {
-    for (const p of PAGES) {
-      expect(read(p), p).not.toContain('"use client"');
-    }
   });
 });

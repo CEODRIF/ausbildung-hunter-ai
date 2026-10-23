@@ -587,16 +587,10 @@ describe("settings reload on open (16-17)", () => {
     expect(syncFn.slice(0, syncFn.indexOf("}, [onShowPresenceChanged]"))).not.toMatch(/setPresenceMode|setShowPresence\(|touchCommunityPresence/);
   });
 
-  it("17. a full page reload rebuilds the settings from the database (page → shell initial state)", () => {
-    const PAGE = readSrc("src/app/community/page.tsx");
-    // The page reads the viewer's OWN community_profiles row (RLS-scoped)
-    // with the settings column set and maps it through the single
-    // nulls → defaults transform into the shell's initial state:
-    expect(PAGE).toContain("buildViewerSettings");
-    expect(PAGE).toContain("VIEWER_SETTINGS_SELECT");
-    expect(PAGE).toContain('settings={viewer}');
-    expect(PAGE).toContain('.eq("user_id", user.id)');
-    // and the mapper is the single column → state transform (nulls → defaults):
+  it("17. the settings mapper rebuilds state from the database columns (nulls → defaults)", () => {
+    // The community pages were removed (Community UI removal); the mapper in
+    // lib/community remains the single column → state transform
+    // (nulls → defaults) and is what the pages used to feed the shell:
     const mapped = buildViewerSettings({
       presence_mode: "away",
       show_presence: false,

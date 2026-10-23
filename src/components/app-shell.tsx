@@ -111,8 +111,6 @@ interface NavItem {
   href: string;
   icon: IconName;
   soon?: boolean;
-  /** Unread counter (Community). Rendered only when > 0. */
-  badge?: number;
 }
 
 interface NavSection {
@@ -138,7 +136,6 @@ const NAV_SECTIONS: NavSection[] = [
         href: "/opportunities/saved",
         icon: "bookmark",
       },
-      { labelKey: "nav.community", href: "/community", icon: "users" },
     ],
   },
   {
@@ -360,10 +357,6 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
     heading: { titleKey: "pages.scanner.title", subtitleKey: "pages.scanner.subtitle" },
   },
   {
-    match: (p) => p === "/community" || p.startsWith("/community/"),
-    heading: { titleKey: "pages.community.title", subtitleKey: "pages.community.subtitle" },
-  },
-  {
     match: (p) => p === "/settings/email" || p.startsWith("/settings/email/"),
     heading: { titleKey: "pages.settingsEmail.title", subtitleKey: "pages.settingsEmail.subtitle" },
   },
@@ -456,7 +449,6 @@ function NavSectionList({
                   </div>
                 );
               }
-              const hasBadge = typeof item.badge === "number" && item.badge > 0;
               return (
                 <Link
                   key={item.labelKey}
@@ -474,22 +466,8 @@ function NavSectionList({
                 >
                   <span className="relative shrink-0">
                     <IconCmp size={18} strokeWidth={1.8} />
-                    {collapsed && hasBadge && (
-                      <span
-                        aria-hidden
-                        className="absolute -end-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-surface"
-                      />
-                    )}
                   </span>
                   {!collapsed && <span className="truncate flex-1">{label}</span>}
-                  {!collapsed && hasBadge && (
-                    <span
-                      className="ms-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-bold text-white"
-                      aria-label={`${item.badge}`}
-                    >
-                      {item.badge}
-                    </span>
-                  )}
                 </Link>
               );
             })}
@@ -507,33 +485,25 @@ function NavSectionList({
 export function AppShell({
   children,
   profile,
-  communityUnread,
   fill = false,
 }: {
   children: React.ReactNode;
   profile?: Profile | null;
-  /** Server-computed unread count shown as the Community nav badge. */
-  communityUnread?: number;
   /**
    * Bound the content column to exactly the visible viewport so a page can own
-   * its own internal scrolling (chat). Used by /community only; every other
-   * route keeps the normal, document-scrolling shell.
+   * its own internal scrolling (chat). No route uses this anymore (the
+   * Community pages were removed); kept for reversibility.
    */
   fill?: boolean;
 }) {
   const pathname = usePathname();
   const { t } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
-  // The Community entry carries the unread counter (server-computed per
-  // section layout); every other item is passed through untouched.
+  // Shallow array copy: the Admin section is pushed onto a fresh array so the
+  // module-level NAV_SECTIONS constant is never mutated.
   const sections = useMemo(
     () => {
-      const base = NAV_SECTIONS.map((section) => ({
-        ...section,
-        items: section.items.map((item) =>
-          item.href === "/community" ? { ...item, badge: communityUnread } : item,
-        ),
-      }));
+      const base = [...NAV_SECTIONS];
       // Phase 10: the Admin entry exists in the NAV DATA only for the
       // platform admin — the flag is the SERVER-computed profile field
       // (session user id → admins table), never CSS hiding, never a client
@@ -547,7 +517,7 @@ export function AppShell({
       }
       return base;
     },
-    [communityUnread, profile],
+    [profile],
   );
   const closeMobile = useCallback(() => setMobileOpen(false), []);
 
@@ -718,12 +688,13 @@ export function AppShell({
             nav on phones; the footer wrapper below gets its own spacer
             because it sits after the main element and would otherwise be
             covered by the nav.
-            Fill routes (/community): main becomes the EXACT, definite chat
+            Fill routes: main becomes the EXACT, definite chat
             box — a positioned (relative) containing block with no padding —
             and the bottom-nav reservation moves to the flex SIBLING spacer
             below. The chat root then fills main via `absolute inset-0`:
             zero percentage-height resolution, so no engine (notably iOS
-            Safari) can collapse or clip it and hide the composer. */}
+            Safari) can collapse or clip it and hide the composer.
+            (No route sets fill anymore; kept for reversibility.) */}
         <main
           className={`flex-1 ${fill ? "relative min-h-0 overflow-hidden" : "pb-28 lg:pb-0"}`}
         >
