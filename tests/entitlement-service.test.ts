@@ -28,7 +28,9 @@ vi.mock("@/lib/supabase/server", () => ({
 const { COMMERCIAL_PLANS } = await import("@/lib/billing/commercial-plans");
 const {
   ALL_FEATURE_IDS,
+  assertSavedApplicationCapacity,
   checkFeature,
+  checkSavedApplicationCapacity,
   completeFeatureOp,
   effectiveUploadLimitBytes,
   getBillingStatus,
@@ -1404,5 +1406,149 @@ describe("server-side identifiers only", () => {
     }
     // The reservation really went through the server-side RPC.
     expect(rpcCalls(admin.calls, "reserve_feature_op")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkSavedApplicationCapacity / assertSavedApplicationCapacity (F1 —
+// saved_applications items quota, migration 20261123000000)
+// ---------------------------------------------------------------------------
+
+const capRow = (over: Record<string, unknown> = {}) => ({
+  status: "ok",
+  plan_limit: 3,
+  used: 2,
+  remaining: 1,
+  ...over,
+});
+
+describe("checkSavedApplicationCapacity — RPC contract", () => {
+  it("maps a clean 'ok' row 1:1 and forwards the server-identity args", async () => {
+    const { admin } = setup({
+      rpc: { check_saved_application_capacity: { data: [capRow()] } },
+    });
+    const check = await checkSavedApplicationCapacity(USER, 1, "camp-9");
+    expect(check).toEqual({ status: "ok", planLimit: 3, used: 2, remaining: 1 });
+    const calls = rpcCalls(admin.calls, "check_saved_application_capacity");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual({
+      p_user_id: USER,
+      p_new_count: 1,
+      p_replace_campaign_id: "camp-9",
+    });
+  });
+
+  it("maps 'unmetered' (plan_limit null) — no gate, legacy behavior kept", async () => {
+    setup({
+      rpc: {
+        check_saved_application_capacity: {
+          data: [capRow({ status: "unmetered", plan_limit: null, used: 9, remaining: null })],
+        },
+      },
+    });
+    const check = await checkSavedApplicationCapacity(USER);
+    expect(check).toEqual({ status: "unmetered", planLimit: null, used: 9, remaining: 0 });
+  });
+
+  it("maps 'disabled' and 'exceeded'", async () => {
+    setup({
+      rpc: {
+        check_saved_application_capacity: {
+          data: [capRow({ status: "disabled", plan_limit: 0, remaining: 0 })],
+        },
+      },
+    });
+    expect(await checkSavedApplicationCapacity(USER, 1)).toMatchObject({
+      status: "disabled",
+      planLimit: 0,
+    });
+    setup({
+      rpc: {
+        check_saved_application_capacity: {
+          data: [capRow({ status: "exceeded", plan_limit: 3, remaining: 0 })],
+        },
+      },
+    });
+    expect(await checkSavedApplicationCapacity(USER, 2)).toMatchObject({
+      status: "exceeded",
+      planLimit: 3,
+    });
+  });
+
+  it("an unhandled RPC (no spec) fails closed to 'error', never throws", async () => {
+    setup({}); // makeAdmin answers unhandled rpcs with an error
+    const check = await checkSavedApplicationCapacity(USER, 1);
+    expect(check).toEqual({ status: "error", planLimit: null, used: 0, remaining: 0 });
+  });
+
+  it("an unknown status in the payload fails closed to 'error'", async () => {
+    setup({
+      rpc: {
+        check_saved_application_capacity: { data: [capRow({ status: "weird" })] },
+      },
+    });
+    const check = await checkSavedApplicationCapacity(USER, 1);
+    expect(check.status).toBe("error");
+  });
+
+  it("an ok-status row with garbage numbers is coerced (status is the gate)", async () => {
+    setup({
+      rpc: {
+        check_saved_application_capacity: {
+          data: [capRow({ plan_limit: "x", used: "y", remaining: "z" })],
+        },
+      },
+    });
+    const check = await checkSavedApplicationCapacity(USER, 1);
+    expect(check).toEqual({ status: "ok", planLimit: null, used: 0, remaining: 0 });
+  });
+});
+
+describe("assertSavedApplicationCapacity — the server gate", () => {
+  it("is a no-op (no RPC) when the operation adds ZERO content rows", async () => {
+    const { admin } = setup({});
+    await expect(assertSavedApplicationCapacity(USER, 0)).resolves.toBeUndefined();
+    expect(rpcCalls(admin.calls, "check_saved_application_capacity")).toHaveLength(0);
+  });
+
+  it("passes 'ok' and 'unmetered'", async () => {
+    for (const status of ["ok", "unmetered"]) {
+      setup({
+        rpc: {
+          check_saved_application_capacity: { data: [capRow({ status })] },
+        },
+      });
+      await expect(assertSavedApplicationCapacity(USER, 1)).resolves.toBeUndefined();
+    }
+  });
+
+  it("denies 'exceeded' with the STABLE code CAPACITY_EXCEEDED", async () => {
+    setup({
+      rpc: {
+        check_saved_application_capacity: { data: [capRow({ status: "exceeded" })] },
+      },
+    });
+    await expect(assertSavedApplicationCapacity(USER, 1)).rejects.toThrow("CAPACITY_EXCEEDED");
+  });
+
+  it("denies 'disabled' with CAPACITY_EXCEEDED (an explicit 0 is a denial, not unmetered)", async () => {
+    setup({
+      rpc: {
+        check_saved_application_capacity: { data: [capRow({ status: "disabled" })] },
+      },
+    });
+    await expect(assertSavedApplicationCapacity(USER, 1)).rejects.toThrow("CAPACITY_EXCEEDED");
+  });
+
+  it("fails CLOSED on a lookup failure: SAVE_FAILED (a missing reading is never 'room')", async () => {
+    const failures: Array<Record<string, unknown>> = [
+      { check_saved_application_capacity: { data: null, error: { message: "boom" } } },
+      { check_saved_application_capacity: { data: null, throw: new Error("client down") } },
+      { check_saved_application_capacity: { data: null } },
+    ];
+    for (const spec of failures) {
+      setup({ rpc: spec as never });
+      await expect(assertSavedApplicationCapacity(USER, 1)).rejects.toThrow("SAVE_FAILED");
+    }
   });
 });

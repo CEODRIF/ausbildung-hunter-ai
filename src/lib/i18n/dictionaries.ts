@@ -2051,6 +2051,8 @@ const de = {
         "Diese E-Mail-Adresse ist bereits in der Serie vorhanden — doppelte Einträge werden nicht hinzugefügt.",
       COUNT_EXCEEDED:
         "Die Serie hat bereits 100 Einträge — die maximale Anzahl ist erreicht.",
+      CAPACITY_EXCEEDED:
+        "Das Limit deiner Mitgliedschaft für gespeicherte Bewerbungen ist erreicht — entferne Einträge oder wechsle zu einem größeren Plan.",
       POSITION_TOO_LONG:
         "Der Stellentitel oder die Stellenbeschreibung ist zu lang (max. 160 / 4000 Zeichen) — bitte kürzen. Deine Eingabe bleibt erhalten.",
       CAMPAIGN_SENDING:
@@ -4047,6 +4049,8 @@ const en: Dict = {
         "This e-mail address is already in the series — duplicates are not added.",
       COUNT_EXCEEDED:
         "The series already has 100 entries — the maximum was reached.",
+      CAPACITY_EXCEEDED:
+        "Your plan's saved-application limit was reached — remove entries or switch to a larger plan.",
       POSITION_TOO_LONG:
         "The position title or job description is too long (max. 160 / 4000 characters) — please shorten the text. Your input is preserved.",
       CAMPAIGN_SENDING:
@@ -6049,6 +6053,8 @@ const fr: Dict = {
         "Cette adresse e-mail est déjà présente dans la série — les doublons ne sont pas ajoutés.",
       COUNT_EXCEEDED:
         "La série contient déjà 100 entrées — le maximum est atteint.",
+      CAPACITY_EXCEEDED:
+        "La limite de candidatures enregistrées de votre plan est atteinte — supprimez des entrées ou passez à un plan plus grand.",
       POSITION_TOO_LONG:
         "L'intitulé ou la description du poste est trop long (max. 160 / 4000 caractères) — veuillez raccourcir le texte. Votre saisie est conservée.",
       CAMPAIGN_SENDING:
@@ -7980,6 +7986,7 @@ const ar: Dict = {
       DUPLICATE_COMPANY:
         "هذا البريد الإلكتروني موجود بالفعل في السلسلة — لا تُضاف العناصر المكررة.",
       COUNT_EXCEEDED: "تحتوي السلسلة بالفعل على 100 سجل — تم الوصول إلى الحد الأقصى.",
+      CAPACITY_EXCEEDED: "تم بلوغ الحد الأقصى للطلبات المحفوظة في خطتك — احذف بعض السجلات أو انتقل إلى خطة أكبر.",
       POSITION_TOO_LONG:
         "مسمى الوظيفة أو وصفها طويل جدًا (الحد الأقصى 160 / 4000 حرف) — يرجى اختصار النص. تم الاحتفاظ بإدخالك.",
       CAMPAIGN_SENDING: "جارٍ إرسال الدفعة — يمكن إضافة السجلات بعد الانتهاء.",

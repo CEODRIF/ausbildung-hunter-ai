@@ -812,3 +812,127 @@ export async function getBillingStatus(
     features,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Saved-application capacity (items quota: live content-row count, no reset)
+// ---------------------------------------------------------------------------
+
+export type SavedCapacityStatus =
+  | "ok"
+  | "unmetered"
+  | "disabled"
+  | "exceeded"
+  | "error";
+
+export interface SavedCapacityCheck {
+  status: SavedCapacityStatus;
+  /** The plan limit (null = unmetered / unknown). */
+  planLimit: number | null;
+  used: number;
+  remaining: number;
+}
+
+const SAVED_CAPACITY_FALLBACK: SavedCapacityCheck = {
+  status: "error",
+  planLimit: null,
+  used: 0,
+  remaining: 0,
+};
+
+/**
+ * Advisory, read-only check of the saved_applications capacity (items
+ * quota). `newContentCount` = how many CONTENT rows (non-empty company
+ * name) the operation would ADD; `replaceCampaignId` = a campaign whose
+ * rows the SAME operation deletes first (its slots become free).
+ *
+ * NEVER throws: any lookup failure yields `status: "error"`, which
+ * callers must treat as a denial (fail closed — the same policy as
+ * `checkFeature`'s `lookup_error`).
+ */
+export async function checkSavedApplicationCapacity(
+  userId: string,
+  newContentCount: number = 0,
+  replaceCampaignId: string | null = null,
+): Promise<SavedCapacityCheck> {
+  let admin;
+  try {
+    admin = createAdminClient();
+  } catch {
+    return SAVED_CAPACITY_FALLBACK;
+  }
+  let data: unknown;
+  let rpcError: { message?: string } | null = null;
+  try {
+    const res = await admin.rpc("check_saved_application_capacity", {
+      p_user_id: userId,
+      p_new_count: newContentCount,
+      p_replace_campaign_id: replaceCampaignId,
+    });
+    data = res.data;
+    rpcError = res.error;
+  } catch {
+    return SAVED_CAPACITY_FALLBACK;
+  }
+  if (rpcError) return SAVED_CAPACITY_FALLBACK;
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | Record<string, unknown>
+    | null;
+  if (!row || typeof row !== "object") return SAVED_CAPACITY_FALLBACK;
+  const status = row["status"];
+  if (
+    status !== "ok" &&
+    status !== "unmetered" &&
+    status !== "disabled" &&
+    status !== "exceeded"
+  ) {
+    return SAVED_CAPACITY_FALLBACK;
+  }
+  const planLimit =
+    typeof row["plan_limit"] === "number" && Number.isFinite(row["plan_limit"])
+      ? row["plan_limit"]
+      : null;
+  const used =
+    typeof row["used"] === "number" && Number.isFinite(row["used"])
+      ? row["used"]
+      : 0;
+  const remaining =
+    typeof row["remaining"] === "number" && Number.isFinite(row["remaining"])
+      ? row["remaining"]
+      : 0;
+  return { status, planLimit, used, remaining };
+}
+
+/**
+ * The server-side gate for operations that ADD a saved application
+ * (a content row). No-op when `newContentCount <= 0` (empty rows consume
+ * no capacity). Denies with STABLE codes the bew actions map 1:1:
+ *   - plan limit exceeded, or the feature explicitly disabled (0)
+ *       → CAPACITY_EXCEEDED
+ *   - capacity unreadable (lookup failure) → SAVE_FAILED (fail closed,
+ *     a missing reading must never be treated as "plenty of room")
+ *
+ * This is an ADVISORY pre-check for clean UX. The HARD guarantee is the
+ * `enforce_saved_application_capacity` trigger on bew_applications
+ * (migration 20261123000000): it serializes per user (lock → limit →
+ * count → decide) and raises `saved_application_capacity_exceeded`, so a
+ * pre-check→insert race can never commit an over-limit state. The engine
+ * maps that marker message to CAPACITY_EXCEEDED in every write path.
+ */
+export async function assertSavedApplicationCapacity(
+  userId: string,
+  newContentCount: number,
+  replaceCampaignId: string | null = null,
+): Promise<void> {
+  if (newContentCount <= 0) return;
+  const check = await checkSavedApplicationCapacity(
+    userId,
+    newContentCount,
+    replaceCampaignId,
+  );
+  if (check.status === "exceeded" || check.status === "disabled") {
+    throw new Error("CAPACITY_EXCEEDED");
+  }
+  if (check.status === "error") {
+    throw new Error("SAVE_FAILED");
+  }
+}

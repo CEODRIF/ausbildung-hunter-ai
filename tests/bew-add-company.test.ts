@@ -108,7 +108,19 @@ function makeFrom(table: string) {
 vi.doMock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (table: string) => makeFrom(table),
-    rpc: () => Promise.resolve({ data: null, error: null }),
+    // F1 (saved_applications capacity): this suite runs the REAL entitlement
+    // service (unmocked), so the engine's advisory pre-check reaches this
+    // rpc. A bare `data: null` maps to the fail-closed "error" status and a
+    // SAVE_FAILED throw — "unmetered" (no plan limit) keeps the capacity
+    // gate out of this suite's way. Capacity itself is covered by
+    // tests/saved-applications-capacity.test.ts.
+    rpc: (fn: string) =>
+      fn === "check_saved_application_capacity"
+        ? Promise.resolve({
+            data: [{ status: "unmetered", plan_limit: null, used: 0, remaining: null }],
+            error: null,
+          })
+        : Promise.resolve({ data: null, error: null }),
     storage: {
       from: () => ({
         download: async () => ({

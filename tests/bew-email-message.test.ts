@@ -325,6 +325,9 @@ function installMocks() {
     // Plan upload cap: 10 MB = the universal hard ceiling, so every
     // pre-existing size assertion in this suite keeps its meaning.
     effectiveUploadLimitBytes: async () => 10 * 1024 * 1024,
+    // F1: the engine's saved_applications capacity gate — no-op keeps this
+    // suite "fully permissive" (capacity has its own dedicated suite).
+    assertSavedApplicationCapacity: async () => {},
   }));
   vi.doMock("@/lib/email-campaigns", () => ({
     getUsageSnapshot: async (userId: string) => {

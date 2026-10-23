@@ -167,6 +167,10 @@ vi.doMock("@/lib/billing/entitlement-service", () => ({
   // Plan upload cap: 10 MB = the universal hard ceiling, so every
   // pre-existing size assertion in this suite keeps its meaning.
   effectiveUploadLimitBytes: async () => 10 * 1024 * 1024,
+  // F1: the engine's saved_applications capacity gate. No-op keeps this
+  // suite "fully permissive" as documented above (capacity is covered by
+  // tests/saved-applications-capacity.test.ts).
+  assertSavedApplicationCapacity: async () => {},
 }));
 vi.doMock("@/lib/auth", () => ({ getCurrentUserAndProfile: authMock }));
 vi.doMock("next/navigation", () => ({

@@ -227,10 +227,11 @@ export type BewErrorCode =
    | "PARSE_NO_COMPANY"
    | "PARSE_NO_EMAIL"
    | "PARSE_INVALID_EMAIL"
-   | "DUPLICATE_COMPANY"
-   | "COUNT_EXCEEDED"
-   | "POSITION_TOO_LONG"
-   | "UNKNOWN";
+    | "DUPLICATE_COMPANY"
+    | "COUNT_EXCEEDED"
+    | "CAPACITY_EXCEEDED"
+    | "POSITION_TOO_LONG"
+    | "UNKNOWN";
 
 const BEW_CODE_SET: ReadonlySet<string> = new Set<string>([
   "INVALID_COUNT",
@@ -277,6 +278,7 @@ const BEW_CODE_SET: ReadonlySet<string> = new Set<string>([
   "PARSE_INVALID_EMAIL",
   "DUPLICATE_COMPANY",
   "COUNT_EXCEEDED",
+  "CAPACITY_EXCEEDED",
   "POSITION_TOO_LONG",
 ]);
 

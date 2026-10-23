@@ -94,6 +94,7 @@ import {
   parseAdvertisement,
 } from "@/lib/bew-ad-parser";
 import {
+  assertSavedApplicationCapacity,
   checkFeature,
   completeFeatureOp,
   effectiveUploadLimitBytes,
@@ -562,7 +563,9 @@ async function createBewCampaignCore(
     throw new Error("Unable to create the automation campaign.");
   const row = campaign as BewCampaignRow;
 
-  // Seed the requested number of empty application rows.
+  // Seed the requested number of empty application rows. (Empty rows
+  // consume NO saved_applications capacity — the capacity trigger counts
+  // non-empty company names only, see migration 20261123000000.)
   const seeds = Array.from({ length: check.value }, (_, i) => ({
     campaign_id: row.id,
     user_id: input.userId,
@@ -654,6 +657,17 @@ export async function saveBewCompanies(
   }
   const result = buildImportResult(records, 1);
 
+  // Capacity gate (saved_applications items quota) — runs BEFORE the
+  // delete, so a denied replace never destroys the current list. Only
+  // CONTENT rows (non-empty company name) consume capacity; the
+  // replace frees this campaign's slots (p_replace_campaign_id). The DB
+  // trigger (20261123000000) is the hard backstop for the narrow
+  // pre-check→delete→insert window.
+  const newContentCount = result.rows.filter(
+    (r) => (r.companyName ?? "").trim() !== "",
+  ).length;
+  await assertSavedApplicationCapacity(userId, newContentCount, campaignId);
+
   // Replace existing applications with the imported set (reset letters).
   await admin.from("bew_applications").delete().eq("campaign_id", campaignId);
   const rows = result.rows.map((r, i) => {
@@ -681,7 +695,14 @@ export async function saveBewCompanies(
   });
   if (rows.length > 0) {
     const { error } = await admin.from("bew_applications").insert(rows);
-    if (error) throw new Error("Unable to save the company list.");
+    if (error) {
+      // The capacity trigger (hard backstop for the pre-check→insert race)
+      // raises this exact marker — map it to the stable code.
+      if (error.message.includes("saved_application_capacity_exceeded")) {
+        throw new Error("CAPACITY_EXCEEDED");
+      }
+      throw new Error("Unable to save the company list.");
+    }
   }
   // The campaign counters must land together with the rows: the wizard's
   // step-1→2 gate is derived from this state. A failed write here is a
@@ -778,6 +799,12 @@ export async function addBewCompany(
   );
   if (duplicated) throw new Error("DUPLICATE_COMPANY");
 
+  // Capacity gate (saved_applications): the gate above guarantees a
+  // non-empty company name, so this add always creates ONE content row.
+  // The DB trigger (20261123000000) is the hard backstop for the
+  // pre-check→insert race.
+  await assertSavedApplicationCapacity(userId, 1, null);
+
   const maxSeq = rows.reduce((m, r) => Math.max(m, r.seq ?? 0), 0);
   const positionProbe = hasBewPositionColumns();
 
@@ -818,6 +845,9 @@ export async function addBewCompany(
   if (insertError || !inserted) {
     // Stable code (never the raw DB text): the UI maps it locally.
     console.error("[bew] addBewCompany: insert failed", insertError?.message);
+    if (insertError?.message.includes("saved_application_capacity_exceeded")) {
+      throw new Error("CAPACITY_EXCEEDED");
+    }
     throw new Error("SAVE_FAILED");
   }
   // A terminal series that just received new work is reopened: the counter
@@ -899,9 +929,12 @@ export async function setBewCompanyCount(
  *     excluded ones (they hold a seq slot): the batch is clamped to the
  *     remaining room, and a campaign that is already full rejects with
  *     CAMPAIGN_FULL,
- *   - the new rows continue the seq sequence (max seq + 1 — the table has
- *     UNIQUE(campaign_id, seq)) and are byte-identical in shape to the
- *     creation seeds (empty pending rows — NOT fake company data),
+   *   - the new rows continue the seq sequence (max seq + 1 — the table has
+   *     UNIQUE(campaign_id, seq)) and are byte-identical in shape to the
+   *     creation seeds (empty pending rows — NOT fake company data),
+   *   - the new rows are EMPTY, so they consume no saved_applications
+   *     capacity (the capacity trigger counts non-empty company names
+   *     only — see migration 20261123000000),
  *   - the denormalized counters are RECOMPUTED after the insert (the 42703
  *     lesson: a missed counter write freezes the wizard's step gates),
  *   - the batch insert is a single statement — atomic; a failed insert
@@ -1048,6 +1081,16 @@ export async function updateBewApplicationFields(
     app.seq,
   ).rows[0];
 
+  // Capacity gate (saved_applications): only an empty→content transition
+  // adds capacity. A rename (content→content) is free; a clear
+  // (content→empty) frees a slot. The DB trigger applies the identical
+  // transition rule (20261123000000).
+  const oldHasContent = (app.company_name ?? "").trim() !== "";
+  const newHasContent = (validated.companyName ?? "").trim() !== "";
+  if (newHasContent && !oldHasContent) {
+    await assertSavedApplicationCapacity(userId, 1, null);
+  }
+
   const positionSupportedUpdate = await positionProbe;
   const { data: updated, error: updateError } = await admin
     .from("bew_applications")
@@ -1080,6 +1123,9 @@ export async function updateBewApplicationFields(
     .maybeSingle();
   if (updateError) {
     console.error("[bew] updateBewApplicationFields: update failed", updateError.message);
+    if (updateError.message.includes("saved_application_capacity_exceeded")) {
+      throw new Error("CAPACITY_EXCEEDED");
+    }
     throw new Error("SAVE_FAILED");
   }
   // The row's validity changed → the campaign counters must follow

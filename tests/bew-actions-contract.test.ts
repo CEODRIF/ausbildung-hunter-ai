@@ -336,6 +336,59 @@ describe("action → engine argument mapping (service contract)", () => {
     expect(res).toEqual({ ok: false, code: "SAVE_FAILED" }); // localized on the client
   });
 
+  it("F1: bewSaveCompanies propagates the stable CAPACITY_EXCEEDED code (rejects — the client localizes it)", async () => {
+    const engine = vi.mocked(await import("@/lib/bewerbung-engine"));
+    (engine.saveBewCompanies as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (...args: unknown[]) => {
+        engineCalls.push({ fn: "saveBewCompanies", args });
+        throw new Error("CAPACITY_EXCEEDED");
+      },
+    );
+    const fd = new FormData();
+    fd.set("campaignId", "c1");
+    fd.set(
+      "records",
+      JSON.stringify([{ companyName: "A", companyEmail: "a@b.de" }]),
+    );
+    // The stable code survives the action boundary (withStableError rethrows
+    // it untouched — never the fallback SAVE_FAILED, never a raw DB text).
+    await expect(actions.bewSaveCompanies(fd)).rejects.toThrow("CAPACITY_EXCEEDED");
+    expect(engineCalls.find((c) => c.fn === "saveBewCompanies")).toBeTruthy();
+  });
+
+  it("F1: bewUpdateCompany propagates the stable CAPACITY_EXCEEDED code (empty→content fill at the limit)", async () => {
+    const engine = vi.mocked(await import("@/lib/bewerbung-engine"));
+    (engine.updateBewApplicationFields as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (...args: unknown[]) => {
+        engineCalls.push({ fn: "updateBewApplicationFields", args });
+        throw new Error("CAPACITY_EXCEEDED");
+      },
+    );
+    const fd = new FormData();
+    fd.set("applicationId", "app-1");
+    fd.set(
+      "payload",
+      JSON.stringify({ companyName: "A", companyEmail: "a@b.de" }),
+    );
+    await expect(actions.bewUpdateCompany(fd)).rejects.toThrow("CAPACITY_EXCEEDED");
+    expect(engineCalls.find((c) => c.fn === "updateBewApplicationFields")).toBeTruthy();
+  });
+
+  it("F1: bewAddCompany resolves CAPACITY_EXCEEDED as a RESULT (same JSON-safe contract as DUPLICATE_COMPANY)", async () => {
+    const engine = vi.mocked(await import("@/lib/bewerbung-engine"));
+    (engine.addBewCompany as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (...args: unknown[]) => {
+        engineCalls.push({ fn: "addBewCompany", args });
+        throw new Error("CAPACITY_EXCEEDED");
+      },
+    );
+    const fd = new FormData();
+    fd.set("campaignId", "c1");
+    fd.set("text", "Beta GmbH\ninfo@beta.de");
+    const res = await actions.bewAddCompany(fd);
+    expect(res).toEqual({ ok: false, code: "CAPACITY_EXCEEDED" });
+  });
+
   it("bewAddCompany NEVER converts the auth redirect into a result (the client must navigate)", async () => {
     login(null); // expired/absent session → requireUser() redirects
     const fd = new FormData();
