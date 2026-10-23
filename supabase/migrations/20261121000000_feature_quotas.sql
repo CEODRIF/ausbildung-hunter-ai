@@ -547,7 +547,7 @@ begin
          from public.feature_usage f
         where f.user_id = p_user_id
           and f.feature_id = p_feature_id
-           and f.period_key = period_key_str), 0);
+          and f.period_key = period_key_str), 0);
   end if;
 
   return jsonb_build_object(
