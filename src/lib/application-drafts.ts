@@ -7,6 +7,11 @@ import { createClient } from "@/lib/supabase/server";
 import { listEmailAccounts } from "@/lib/email-oauth";
 import { normalizeRecipientEmail } from "@/lib/email-recipients";
 import { hasContactNameColumn } from "@/lib/contact-name-support";
+import {
+  completeFeatureOp,
+  releaseFeatureOp,
+  reserveFeatureOp,
+} from "@/lib/billing/entitlement-service";
 import type { Profile } from "@/lib/auth";
 
 export type ApplicationGoal = "ausbildung" | "arbeit" | "praktikum";
@@ -56,6 +61,33 @@ export const ALLOWED_ATTACHMENT_TYPES = new Set([
   "image/png",
   "image/jpeg",
 ]);
+
+export type DraftQuotaCode =
+  | "quota_exhausted"
+  | "feature_disabled"
+  | "quota_unavailable";
+
+/**
+ * email_drafts quota failure with a controlled code + message. Every message
+ * is safe to surface to the client: no raw RPC/DB detail ever leaks.
+ * Thrown from BOTH creation paths — the legacy `createBlankDraft` (draft row)
+ * and the draft-free `createOwnedCampaign` (campaign owns the content) — so a
+ * metered plan cannot bypass the meter by switching composers.
+ */
+export class DraftQuotaError extends Error {
+  readonly code: DraftQuotaCode;
+  constructor(code: DraftQuotaCode) {
+    super(
+      code === "quota_exhausted"
+        ? "You've reached the daily limit for new application emails. The limit resets daily (UTC)."
+        : code === "feature_disabled"
+          ? "Application emails are not available on your current plan."
+          : "The application email limit could not be verified. Please try again later.",
+    );
+    this.name = "DraftQuotaError";
+    this.code = code;
+  }
+}
 
 export function sanitizeEmailHtml(html: string) {
   return sanitizeHtml(html, {
@@ -130,17 +162,33 @@ export async function getApplicationComposerData() {
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle<ApplicationDraft>();
-  if (!existing)
-    return {
-      userId: user.id,
-      profile,
-      accounts,
-      draft: await createBlankDraft(
-        user.id,
-        profile.selected_goal ?? "ausbildung",
-        accounts[0].id,
-      ),
-    };
+  if (!existing) {
+    try {
+      return {
+        userId: user.id,
+        profile,
+        accounts,
+        draft: await createBlankDraft(
+          user.id,
+          profile.selected_goal ?? "ausbildung",
+          accounts[0].id,
+        ),
+      };
+    } catch (error) {
+      // A metered user at the daily limit still sees the composer page:
+      // `draft: null` makes the page render the upgrade card instead of
+      // failing the whole request. Quota failures are the ONLY soft
+      // failures here — everything else stays an error as before.
+      if (error instanceof DraftQuotaError)
+        return {
+          userId: user.id,
+          profile,
+          accounts,
+          draft: null as ApplicationDraft | null,
+        };
+      throw error;
+    }
+  }
   // The contact_name column is OPTIONAL (migration 20261108000000 is
   // applied manually) — querying it on a pre-migration database would
   // error and silently drop ALL recipients (disabling "Send
@@ -191,20 +239,52 @@ export async function getApplicationComposerData() {
   };
 }
 
+/**
+ * Create one blank draft and meter it against the `email_drafts` quota
+ * (1 op = 1 created application email, locked definition).
+ *
+ * Flow: atomic reserve → insert → complete (success) or release (failure).
+ * `reserve_feature_op` increments the counter at reservation and is
+ * idempotent per run id, so concurrent creations each consume exactly one
+ * slot; the 15-min stale-run expiry is the safety net for a crash between
+ * reserve and complete. Legacy (pre-commercial) users resolve to `unmetered`
+ * and no ledger RPC runs at all — behavior is byte-identical to before.
+ * Quota lookup failure is FAIL-CLOSED (a metered user cannot ride through a
+ * transient DB error), never an upgrade.
+ */
 export async function createBlankDraft(
   userId: string,
   goal: ApplicationGoal,
   senderAccountId: string,
 ) {
   const admin = createAdminClient();
+  const runId = randomUUID();
+  const reservation = await reserveFeatureOp(userId, "email_drafts", runId);
+  if (reservation.outcome === "quota_exhausted")
+    throw new DraftQuotaError("quota_exhausted");
+  if (reservation.outcome === "feature_disabled")
+    throw new DraftQuotaError("feature_disabled");
+  if (reservation.outcome === "error")
+    throw new DraftQuotaError("quota_unavailable");
+  const metered =
+    reservation.outcome === "reserved" ||
+    reservation.outcome === "already_reserved";
+
   const { data, error } = await admin
     .from("application_drafts")
     .insert({ user_id: userId, goal, sender_email_account_id: senderAccountId })
     .select("*")
     .single<ApplicationDraft>();
-  // Controlled message only: this runs inside the composer server action, so a
-  // raw Supabase insert error (FK/constraint/DB detail) must never reach the client.
-  if (error) throw new Error("Unable to create a new application.");
+  if (error) {
+    // The row was never created → refund the reservation. Release only
+    // targets `status='reserved'` rows and is no_op-safe, so it can never
+    // refund a run that was never successfully reserved.
+    if (metered) await releaseFeatureOp(userId, "email_drafts", runId);
+    // Controlled message only: this runs inside the composer server action, so a
+    // raw Supabase insert error (FK/constraint/DB detail) must never reach the client.
+    throw new Error("Unable to create a new application.");
+  }
+  if (metered) await completeFeatureOp(userId, "email_drafts", runId);
   return { ...data, recipients: [], attachments: [] };
 }
 

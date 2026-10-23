@@ -3,6 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getEntitlements } from "@/lib/billing/entitlements";
+import { effectiveUploadLimitBytes } from "@/lib/billing/entitlement-service";
 import { createAIProvider } from "@/lib/ai-provider";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 
@@ -352,6 +353,13 @@ export async function uploadAIFile(file: File) {
   // buffer is what gets stored — never the client-provided metadata.
   const buffer = Buffer.from(await file.arrayBuffer());
   const detected = validateAIFile(file, buffer);
+  // Plan-aware per-file cap on top of the universal 10 MB hard ceiling in
+  // validateAIFile (commercial plans: 2 / 15 / 15 MB). A subscription
+  // lookup failure degrades to 10 MB inside the entitlement service —
+  // never an upgrade — so the effective cap can only tighten, not loosen.
+  const maxBytes = await effectiveUploadLimitBytes(user.id);
+  if (buffer.length > maxBytes)
+    throw new Error("File exceeds your plan's upload limit.");
   const mime = DETECTED_MIME[detected];
   const admin = createAdminClient();
   const path = storagePath(user.id, file.name);
@@ -434,17 +442,38 @@ export async function reserveAIUsage(userId: string) {
     );
 }
 
+/** Compensating release for a reservation whose follow-up step failed —
+ *  best-effort; a compensation failure must never mask the original error. */
+async function releaseAIUsageQuiet(userId: string) {
+  try {
+    const admin = createAdminClient();
+    await admin.rpc("release_ai_request", { target_user_id: userId });
+  } catch {
+    // ignored on purpose
+  }
+}
+
 export async function prepareChat(
   userId: string,
   conversationId: string,
   content: string,
   fileIds: string[],
+  options: {
+    /** Skip the legacy AI reservation when the caller has already reserved
+     *  the DEDICATED meter for this operation (e.g. cover-letter requests
+     *  are metered against the cover-letter quota, not the AI quota). */
+    skipAiReservation?: boolean;
+  } = {},
 ) {
   await assertConversation(userId, conversationId);
   const clean = content.trim();
   if (!clean && !fileIds.length)
     throw new Error("Enter a message or attach a file.");
-  await reserveAIUsage(userId);
+  let aiReserved = false;
+  if (!options.skipAiReservation) {
+    await reserveAIUsage(userId);
+    aiReserved = true;
+  }
   const admin = createAdminClient();
   // The client may echo duplicate ids — dedupe before the count check so a
   // legitimate single attachment is never rejected as "not available".
@@ -456,8 +485,11 @@ export async function prepareChat(
         .in("id", uniqueIds)
         .eq("user_id", userId)
     : { data: [] as AIFile[] };
-  if ((uploadedFiles ?? []).length !== uniqueIds.length)
+  if ((uploadedFiles ?? []).length !== uniqueIds.length) {
+    // A failed post-reservation step must not consume the AI quota.
+    if (aiReserved) await releaseAIUsageQuiet(userId);
     throw new Error("One or more uploaded files are not available.");
+  }
   const stored = uploadedFiles ?? [];
 
   // Idempotent retry: a failed generation already persisted the user
@@ -512,7 +544,10 @@ export async function prepareChat(
       })
       .select("id, conversation_id, user_id, role, content, created_at")
       .single<ChatMessage>();
-    if (error) throw new Error("Unable to save your message.");
+    if (error) {
+      if (aiReserved) await releaseAIUsageQuiet(userId);
+      throw new Error("Unable to save your message.");
+    }
     userMessage = data;
   }
   // Associate only when we created the row (a reused retry row already
@@ -529,8 +564,10 @@ export async function prepareChat(
     const { error: filesError } = await admin.from("ai_message_files").insert(files);
     // Never silently drop the association — that is what made attachments
     // "sent but invisible to the AI" (the old code ignored this error).
-    if (filesError)
+    if (filesError) {
+      if (aiReserved) await releaseAIUsageQuiet(userId);
       throw new Error("Unable to attach the selected files.");
+    }
   }
   await admin
     .from("ai_conversations")

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import {
+  OpportunityCapacityError,
   OpportunityNotFoundError,
   OpportunityProviderError,
   listSavedOpportunities,
@@ -34,6 +35,11 @@ const notesBodySchema = z
 function errorResponse(error: unknown) {
   if (error instanceof OpportunityNotFoundError)
     return NextResponse.json({ error: error.message }, { status: 404 });
+  if (error instanceof OpportunityCapacityError)
+    return NextResponse.json(
+      { error: error.message, code: "capacity_reached" },
+      { status: 403 },
+    );
   if (error instanceof OpportunityProviderError)
     return NextResponse.json({ error: error.message }, { status: 502 });
   return NextResponse.json(

@@ -18,6 +18,7 @@ import {
 } from "@/lib/application-drafts";
 import { hasContactNameColumn } from "@/lib/contact-name-support";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import { effectiveUploadLimitBytes } from "@/lib/billing/entitlement-service";
 
 export async function saveDraft(input: {
   draftId: string;
@@ -97,6 +98,11 @@ export async function uploadAttachment(formData: FormData) {
   if (!(file instanceof File)) throw new Error("No attachment selected.");
   if (file.size <= 0 || file.size > MAX_ATTACHMENT_SIZE)
     throw new Error("Attachments must be 10 MB or smaller.");
+  // Plan-aware cap (commercial plans differ from the 10 MB legacy ceiling).
+  // Lookup failure degrades to 10 MB — never an upgrade.
+  const maxBytes = await effectiveUploadLimitBytes(current.user.id);
+  if (file.size > maxBytes)
+    throw new Error("Attachment exceeds your plan's upload limit.");
   if (!ALLOWED_ATTACHMENT_TYPES.has(file.type))
     throw new Error("This file type is not supported.");
   await assertDraftOwnership(current.user.id, draftId);
@@ -232,6 +238,11 @@ export async function stageAttachment(formData: FormData) {
   if (!(file instanceof File)) throw new Error("No attachment selected.");
   if (file.size <= 0 || file.size > MAX_ATTACHMENT_SIZE)
     throw new Error("Attachments must be 10 MB or smaller.");
+  // Plan-aware cap (commercial plans differ from the 10 MB legacy ceiling).
+  // Lookup failure degrades to 10 MB — never an upgrade.
+  const maxBytes = await effectiveUploadLimitBytes(current.user.id);
+  if (file.size > maxBytes)
+    throw new Error("Attachment exceeds your plan's upload limit.");
   if (!ALLOWED_ATTACHMENT_TYPES.has(file.type))
     throw new Error("This file type is not supported.");
   const storagePath = createStagingPath(current.user.id, file.name);

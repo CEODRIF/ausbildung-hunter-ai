@@ -16,6 +16,16 @@ vi.mock("@/lib/opportunities/search", () => ({
   OpportunityProviderError: class extends Error {},
   searchOpportunities: vi.fn(),
 }));
+// The search route now meters each executed search against the
+// opportunity_search quota (reserve → search → complete/release). This file
+// tests RATE LIMITING, not quota behavior, so the entitlement service is
+// mocked as an always-available, always-reserving meter — the same pattern
+// tests/opportunities/search-quota.test.ts uses for the route's other deps.
+vi.mock("@/lib/billing/entitlement-service", () => ({
+  reserveFeatureOp: vi.fn(async () => ({ outcome: "reserved" })),
+  completeFeatureOp: vi.fn(async () => undefined),
+  releaseFeatureOp: vi.fn(async () => undefined),
+}));
 vi.mock("@/lib/opportunities/saved", () => ({
   OpportunityNotFoundError: class extends Error {},
   OpportunityProviderError: class extends Error {},

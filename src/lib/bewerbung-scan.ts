@@ -1,6 +1,11 @@
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  completeFeatureOp,
+  releaseFeatureOp,
+  reserveFeatureOp,
+} from "@/lib/billing/entitlement-service";
 import { getEntitlements } from "@/lib/billing/entitlements";
 import { createAIProvider } from "@/lib/ai-provider";
 import { buildFileContext } from "@/lib/ai-file-context";
@@ -57,6 +62,13 @@ function extractAndNormalize(raw: string, goal: ScanGoal): unknown {
 /** Long structured CV extraction gets a bigger per-request budget than the
  *  60s chat default (the function timeout in Vercel stays the backstop). */
 const SCANNER_AI_TIMEOUT_MS = 180_000;
+/** User-safe scanner quota messages (stored/surfaced verbatim). */
+const SCANNER_QUOTA_EXHAUSTED = "Scanner limit reached for your current plan.";
+const SCANNER_FEATURE_DISABLED =
+  "Scanner is not available on your current plan.";
+const SCANNER_QUOTA_UNAVAILABLE =
+  "Scanner quota could not be verified. Please try again later.";
+
 /** Messages that are already user-safe (stored verbatim, no code mapping). */
 const SAFE_SCAN_MESSAGES = new Set([
   "Not authorized.",
@@ -70,6 +82,9 @@ const SAFE_SCAN_MESSAGES = new Set([
   "AI usage is unavailable.",
   "The AI response did not match the required profile schema.",
   "Unable to save candidate profile.",
+  SCANNER_QUOTA_EXHAUSTED,
+  SCANNER_FEATURE_DISABLED,
+  SCANNER_QUOTA_UNAVAILABLE,
   PDF_PARSE_FAILED,
   SCAN_PROFILE_INCOMPLETE,
 ]);
@@ -89,18 +104,36 @@ export async function runScan(scanId: string) {
     .update({ status: "analyzing", error_message: null })
     .eq("id", scanId)
     .eq("user_id", user.id);
+  // Per-cycle scanner quota (one operation = one scan run). The scan id is
+  // the stable idempotency key — re-running the same scan after a failure is
+  // "already_reserved" and never double-charges. Reserved BEFORE any model
+  // call so a failed scan can release it (a failed op must not consume quota).
+  let scannerReserved = false;
+  const scannerRes = await reserveFeatureOp(user.id, "scanner", scanId);
+  if (scannerRes.outcome === "quota_exhausted")
+    throw new Error(SCANNER_QUOTA_EXHAUSTED);
+  if (scannerRes.outcome === "feature_disabled")
+    throw new Error(SCANNER_FEATURE_DISABLED);
+  if (scannerRes.outcome === "error")
+    throw new Error(SCANNER_QUOTA_UNAVAILABLE);
+  scannerReserved = true;
   // Plan-aware AI limit, resolved server-side (free users: unchanged).
   const entitlements = await getEntitlements(user.id);
   const { error: usageError } = await admin.rpc("reserve_ai_request", {
     target_user_id: user.id,
     max_requests: entitlements.aiPerDay,
   });
-  if (usageError)
+  if (usageError) {
+    // The AI reservation failed — release the scanner operation so the
+    // failed scan costs nothing.
+    await releaseFeatureOp(user.id, "scanner", scanId).catch(() => undefined);
     throw new Error(
       usageError.message.includes("ai_daily_limit_reached")
         ? "AI daily request limit reached. Please try again tomorrow."
         : "AI usage is unavailable.",
     );
+  }
+  const aiReserved = true;
   try {
     const { data: files } = await admin
       .from("bewerbung_scan_files")
@@ -232,6 +265,8 @@ export async function runScan(scanId: string) {
         "A structured candidate profile was created from your documents.",
       metadata: { scan_id: scanId },
     });
+    // Success: the per-cycle reservation becomes a consumed operation.
+    await completeFeatureOp(user.id, "scanner", scanId);
     return finalProfile;
   } catch (error) {
     const raw = error instanceof Error ? error.message : "Scan failed.";
@@ -244,6 +279,15 @@ export async function runScan(scanId: string) {
       : SCAN_UNEXPECTED_FAILED;
     if (message !== raw)
       console.error("[bewerbung-scanner] scan failed:", error);
+    // A failed op must not consume quota: release the live scanner
+    // reservation (per-cycle) and, only if it was taken, the AI reservation
+    // (per-day — releasing it unconditionally would refund a legitimate unit).
+    if (scannerReserved)
+      await releaseFeatureOp(user.id, "scanner", scanId).catch(() => undefined);
+    if (aiReserved)
+      await Promise.resolve(
+        admin.rpc("release_ai_request", { target_user_id: user.id }),
+      ).catch(() => undefined);
     await admin
       .from("bewerbung_scans")
       .update({ status: "failed", error_message: message.slice(0, 500) })

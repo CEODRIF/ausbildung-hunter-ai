@@ -878,9 +878,12 @@ describe("staged attachments (draft-free composer)", () => {
     expect(meta.filename).toBe("Lebenslauf 2026.pdf");
     expect(meta.mime_type).toBe("application/pdf");
     expect(meta.size_bytes).toBe(3);
-    // No database table was read or written — opening/using the composer
-    // never creates a record of any kind.
-    expect(H.fromCalls).toEqual([]);
+    // The composer still creates NO record of any kind. The only database
+    // access is the READ-ONLY plan-cap lookup (subscriptions) that the
+    // billing meter added to the upload path — it writes nothing (see the
+    // H.store assertion below) and degrades to the 10 MB ceiling when the
+    // lookup fails.
+    expect(H.fromCalls).toEqual(["subscriptions"]);
     expect(Object.keys(H.store)).toEqual([]);
   });
 

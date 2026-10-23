@@ -8,8 +8,14 @@ import {
   saveAssistantMessage,
 } from "@/lib/ai-service";
 import {
+  completeFeatureOp,
+  releaseFeatureOp,
+  reserveFeatureOp,
+} from "@/lib/billing/entitlement-service";
+import {
   decideScope,
   detectUILanguage,
+  isCoverLetterRequest,
   SCOPE_REDIRECTS,
 } from "@/lib/ai-scope";
 import { buildSearchContextBlock } from "@/lib/germany-knowledge";
@@ -69,6 +75,12 @@ export async function POST(request: Request) {
       { error: "Conversation is required." },
       { status: 400 },
     );
+  // Quota settlement state (declared before the try so the catch can
+  // release a reservation when the generation fails before any chunk is
+  // delivered — a failed op must not consume quota).
+  let coverLetterRunId: string | null = null;
+  let aiReserved = false;
+  let delivered = false;
   try {
     const fileIds = Array.isArray(body.fileIds)
       ? body.fileIds.filter((id) => typeof id === "string")
@@ -81,7 +93,65 @@ export async function POST(request: Request) {
     // for every in-scope request.
     const history = await recentMessages(user.id, body.conversationId);
     const scope = decideScope(body.content || "", fileIds.length > 0, history);
-    await prepareChat(user.id, body.conversationId, body.content || "", fileIds);
+    // Cover-letter requests are metered against the DEDICATED cover-letter
+    // quota (one operation = one generated letter) — they must not bypass
+    // it by riding the general AI quota. The reservation happens BEFORE any
+    // model call and is released when nothing is delivered.
+    const isCoverLetter = isCoverLetterRequest(body.content || "");
+    if (isCoverLetter) {
+      coverLetterRunId = crypto.randomUUID();
+      const reserved = await reserveFeatureOp(
+        user.id,
+        "cover_letter",
+        coverLetterRunId,
+      );
+      if (reserved.outcome === "quota_exhausted") {
+        return NextResponse.json(
+          {
+            error: "Cover letter limit reached. It resets daily (UTC).",
+            code: "quota_exhausted",
+          },
+          { status: 429 },
+        );
+      }
+      if (reserved.outcome === "feature_disabled") {
+        return NextResponse.json(
+          {
+            error:
+              "Cover letter generation is not available on your current plan.",
+            code: "feature_disabled",
+          },
+          { status: 403 },
+        );
+      }
+      if (reserved.outcome === "error") {
+        return NextResponse.json(
+          {
+            error:
+              reserved.message ?? "Quota service temporarily unavailable.",
+            code: "quota_unavailable",
+          },
+          { status: 503 },
+        );
+      }
+    }
+    try {
+      await prepareChat(
+        user.id,
+        body.conversationId,
+        body.content || "",
+        fileIds,
+        { skipAiReservation: isCoverLetter },
+      );
+      // prepareChat succeeded: the AI reservation (regular chat) is live.
+      aiReserved = !isCoverLetter;
+    } catch (error) {
+      if (coverLetterRunId) {
+        await releaseFeatureOp(user.id, "cover_letter", coverLetterRunId);
+        coverLetterRunId = null;
+      }
+      throw error;
+    }
     let stream: ReadableStream<Uint8Array>;
     if (scope.inScope) {
       const context = await getAIContext(user.id, body.conversationId);
@@ -110,6 +180,11 @@ export async function POST(request: Request) {
           : undefined,
       );
     } else {
+      if (coverLetterRunId) {
+        // A scope redirect executes no generation — release the operation.
+        await releaseFeatureOp(user.id, "cover_letter", coverLetterRunId);
+        coverLetterRunId = null;
+      }
       console.info(
         "[ai-chat] out-of-scope request redirected",
         JSON.stringify({ conversationId: body.conversationId, reason: scope.reason }),
@@ -119,6 +194,19 @@ export async function POST(request: Request) {
     let complete = "";
     let persisted = false;
     const encoder = new TextEncoder();
+    // Settle the cover-letter reservation exactly once: a letter that was
+    // actually generated (any content delivered) is consumed; an empty
+    // stream is released so a failed op costs nothing.
+    const settleCoverLetter = async (contentDelivered: boolean) => {
+      if (!coverLetterRunId) return;
+      const runId = coverLetterRunId;
+      coverLetterRunId = null;
+      if (contentDelivered) {
+        await completeFeatureOp(user.id, "cover_letter", runId);
+      } else {
+        await releaseFeatureOp(user.id, "cover_letter", runId);
+      }
+    };
     // The stream ends exactly once — either cleanly (flush) or because the
     // client stopped/refreshed (cancel). Both paths persist the answer the
     // user actually saw, so assistant messages survive stop, refresh and
@@ -145,11 +233,13 @@ export async function POST(request: Request) {
     };
     const transformer: CancelableTransformer = {
       transform(chunk, controller) {
+        delivered = true;
         complete += new TextDecoder().decode(chunk);
         controller.enqueue(chunk);
       },
       async flush(controller) {
         const saved = await persist();
+        await settleCoverLetter(complete.trim().length > 0);
         // Final metadata frame (NUL-delimited): the client extracts the
         // persisted message id so the committed bubble carries the real
         // database identity instead of a local placeholder.
@@ -165,6 +255,7 @@ export async function POST(request: Request) {
       async cancel() {
         // Client aborted mid-stream: persist the partial answer.
         await persist();
+        await settleCoverLetter(complete.trim().length > 0);
       },
     };
     const transformed = stream.pipeThrough(new TransformStream(transformer));
@@ -180,6 +271,17 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    // A generation that failed before ANY chunk reached the client must not
+    // consume quota — release the live reservation (cover-letter or the
+    // general AI counter). Partial/complete deliveries keep it (conservative:
+    // the user did receive a generated answer).
+    if (!delivered) {
+      if (coverLetterRunId) {
+        await releaseFeatureOp(user.id, "cover_letter", coverLetterRunId);
+      } else if (aiReserved) {
+        await releaseFeatureOp(user.id, "ai_assistant").catch(() => undefined);
+      }
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "AI request failed." },
       { status: 400 },

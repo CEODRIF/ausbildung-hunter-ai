@@ -150,6 +150,24 @@ vi.doMock("@/lib/supabase/admin", () => ({
     },
   }),
 }));
+// Entitlements: fully permissive — the row-repair contract under test is
+// independent of the automation meter (covered by the entitlement tests).
+vi.doMock("@/lib/billing/entitlement-service", () => ({
+  checkFeature: async () => ({
+    allowed: true,
+    reason: "ok",
+    limit: null,
+    used: 0,
+    remaining: null,
+    resetsAt: null,
+  }),
+  reserveFeatureOp: async () => ({ outcome: "reserved" }),
+  completeFeatureOp: async () => ({ outcome: "completed" }),
+  releaseFeatureOp: async () => ({ outcome: "released" }),
+  // Plan upload cap: 10 MB = the universal hard ceiling, so every
+  // pre-existing size assertion in this suite keeps its meaning.
+  effectiveUploadLimitBytes: async () => 10 * 1024 * 1024,
+}));
 vi.doMock("@/lib/auth", () => ({ getCurrentUserAndProfile: authMock }));
 vi.doMock("next/navigation", () => ({
   // The shape Next.js actually rejects a server action with on redirect():

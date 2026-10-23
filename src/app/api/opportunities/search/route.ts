@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server";
+import {
+  completeFeatureOp,
+  releaseFeatureOp,
+  reserveFeatureOp,
+} from "@/lib/billing/entitlement-service";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import {
   BA_SOURCE_ID,
@@ -73,10 +78,53 @@ export async function GET(request: Request) {
     );
   }
 
+  // Per-day search quota (one operation = one server-side search execution).
+  // Reserved AFTER parameter validation (invalid requests cost nothing) and
+  // released whenever the execution fails — a failed op never consumes quota.
+  const runId = crypto.randomUUID();
+  const reserved = await reserveFeatureOp(
+    user.id,
+    "opportunity_search",
+    runId,
+  );
+  if (reserved.outcome === "quota_exhausted") {
+    return NextResponse.json(
+      {
+        error: "Opportunity search limit reached. It resets daily (UTC).",
+        code: "quota_exhausted",
+      },
+      { status: 429, headers: rateLimitHeaders(limited) },
+    );
+  }
+  if (reserved.outcome === "feature_disabled") {
+    return NextResponse.json(
+      {
+        error: "Opportunity search is not available on your current plan.",
+        code: "feature_disabled",
+      },
+      { status: 403 },
+    );
+  }
+  if (reserved.outcome === "error") {
+    return NextResponse.json(
+      {
+        error: reserved.message ?? "Quota service temporarily unavailable.",
+        code: "quota_unavailable",
+      },
+      { status: 503 },
+    );
+  }
+
   try {
     const result = await searchOpportunities(params, { userId: user.id });
+    // Success: the reservation becomes a consumed operation.
+    await completeFeatureOp(user.id, "opportunity_search", runId);
     return NextResponse.json(result, { headers: rateLimitHeaders(limited) });
   } catch (error) {
+    // Failed search executions (upstream 502/500) must not consume quota.
+    await releaseFeatureOp(user.id, "opportunity_search", runId).catch(
+      () => undefined,
+    );
     if (error instanceof BaFetchFailure) {
       // Transient official-source failure AFTER controlled retries: a
       // structured 502 so the client can keep its previous results and offer
