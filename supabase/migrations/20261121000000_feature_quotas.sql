@@ -354,11 +354,15 @@ begin
     raise exception 'missing_args';
   end if;
 
+  -- The WHERE clause must qualify the column: this function's RETURNS
+  -- TABLE(status) OUT parameter would otherwise make the reference
+  -- ambiguous at runtime ("column reference status is ambiguous",
+  -- verified on PostgreSQL 14). The SET target is unaffected.
   update public.feature_usage_runs
      set status = 'succeeded'
    where run_id = p_run_id
      and user_id = p_user_id
-     and status = 'reserved';
+     and public.feature_usage_runs.status = 'reserved';
 
   if found then
     return query select 'completed'::text;
