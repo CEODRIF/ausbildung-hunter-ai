@@ -957,22 +957,22 @@ describe("listSendingBewCampaigns — due-aware selection (scheduled-batch starv
     expect(await listSendingBewCampaigns()).toEqual([]);
   });
 
-  it("a due scheduled batch is not starved behind in-flight campaigns at the tick cap", async () => {
+  it("a due scheduled batch LEADS the list — ahead of every in-flight campaign, at ANY cap", async () => {
     seedRow("camp-inf-1", { started_at: pastIso() });
     seedRow("camp-inf-2", { started_at: pastIso() });
     seedRow("camp-inf-3", { started_at: pastIso() });
     seedRow("camp-due", { scheduled_at: pastIso() });
 
-    // Even with due-aware ordering, at the OLD cap of 3 the due batch still
-    // falls behind the three in-flight rows — which is why the cap had to be
-    // raised to 10 together with the ordering fix (both halves of the fix).
+    // The tick's wall budget fits ~one batch, so list order IS priority: the
+    // due batch must lead at EVERY cap — including the old 3, where the
+    // in-flight-first merge starved it behind all three rows (the "sends only
+    // when I open the website" regression).
     const oldCap = await listSendingBewCampaigns(3);
-    expect(oldCap.map((c) => c.id)).toEqual(["camp-inf-1", "camp-inf-2", "camp-inf-3"]);
+    expect(oldCap.map((c) => c.id)).toEqual(["camp-due", "camp-inf-1", "camp-inf-2"]);
 
-    // At the tick's cap (10): in-flight first (unchanged priority), then the
-    // due batch — the regression where the pending batch sat behind the cap.
+    // At the tick's cap (10): the due batch first, then the in-flight FIFO.
     const listed = await listSendingBewCampaigns(10);
-    expect(listed.map((c) => c.id)).toEqual(["camp-inf-1", "camp-inf-2", "camp-inf-3", "camp-due"]);
+    expect(listed.map((c) => c.id)).toEqual(["camp-due", "camp-inf-1", "camp-inf-2", "camp-inf-3"]);
   });
 
   it("keeps in-flight campaigns in FIFO order by started_at", async () => {
@@ -1002,7 +1002,7 @@ describe("listSendingBewCampaigns — due-aware selection (scheduled-batch starv
     seedRow("camp-inf", { started_at: pastIso() });
     seedRow("camp-due", { scheduled_at: pastIso() });
     const listed = await listSendingBewCampaigns();
-    expect(listed.map((c) => c.id)).toEqual(["camp-inf", "camp-due", "camp-legacy"]);
+    expect(listed.map((c) => c.id)).toEqual(["camp-due", "camp-inf", "camp-legacy"]);
   });
 
   it("on a database without the scheduled_at column the read degrades to the in-flight list — never empty", async () => {
@@ -1010,6 +1010,164 @@ describe("listSendingBewCampaigns — due-aware selection (scheduled-batch starv
     seedRow("camp-due", { scheduled_at: pastIso() });
     db.failLte = true; // the due/legacy reads fail as on a pre-20261116 database
     expect(await listSendingBewCampaigns()).toEqual([{ id: "camp-inf", user_id: USER }]);
+  });
+});
+
+describe("cron tick simulation — a due scheduled batch is served WITHOUT a browser visit", () => {
+  /**
+   * Replicates the /api/cron/bew-scheduler loop VERBATIM (auth and wall
+   * budget aside): list the campaigns in order, drain the FIRST one with
+   * BATCH_SIZE. One full batch per tick is the realistic ceiling (45 s
+   * budget vs ~50 s per 5 sends) — so this is exactly what production sees.
+   */
+  async function tick() {
+    const listed = await listSendingBewCampaigns(10);
+    if (!listed.length) return { listed, result: null as any };
+    const first = listed[0];
+    const result = await processBewSendBatch(first.user_id, first.id, 5);
+    return { listed, result };
+  }
+
+  it("tick 1 sends the DUE batch ahead of an in-flight backlog; later ticks drain the backlog; no e-mail is ever sent twice", async () => {
+    const due = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // due 1 h ago
+
+    // IN-FLIGHT backlog campaign: already started (so it is a real in-flight
+    // row), 6 queued apps waiting — the kind of backlog that used to consume
+    // the tick's only batch slot before any due batch could be touched.
+    db.bew_campaigns.push({
+      id: "camp-backlog",
+      user_id: USER,
+      email_account_id: "acct-1",
+      purpose: "ausbildung",
+      status: "sending",
+      usage_date: TODAY,
+      created_at: due,
+      started_at: due,
+      completed_at: null,
+      email_subject: "Bewerbung Backlog",
+      email_body_html: "<p>Backlog</p>",
+    });
+    for (let i = 1; i <= 6; i++)
+      db.bew_applications.push({
+        id: `backlog-${i}`,
+        campaign_id: "camp-backlog",
+        user_id: USER,
+        seq: i,
+        company_name: `Backlog ${i}`,
+        contact_name: null,
+        company_email: `jobs${i}@backlog.de`,
+        company_address: null,
+        subject: `Bewerbung Backlog ${i}`,
+        body_html: `<p>Backlog ${i}</p>`,
+        body_text: `Backlog ${i}`,
+        status: "queued",
+        error_code: null,
+        error_message: null,
+        attempt_count: 0,
+        next_attempt_at: null,
+        provider_message_id: null,
+        sent_at: null,
+        created_at: due,
+        updated_at: due,
+      });
+
+    // DUE scheduled batch: the ordinary camp-1, 5 apps, due 1 h ago,
+    // started_at NULL by design.
+    seedCampaign({ scheduled_at: due });
+    seedDocuments();
+    db.bew_campaign_documents.push(
+      { id: "cd-b1", campaign_id: "camp-backlog", document_id: "doc-cv", user_id: USER, kind: "cv", storage_path: `${USER}/cv.pdf`, filename: "cv.pdf", mime_type: "application/pdf", size_bytes: 1000 },
+      { id: "cd-b2", campaign_id: "camp-backlog", document_id: "doc-cert", user_id: USER, kind: "certificate", storage_path: `${USER}/cert.pdf`, filename: "cert.pdf", mime_type: "application/pdf", size_bytes: 800 },
+    );
+    for (let i = 1; i <= 5; i++) seedApp(i, { next_attempt_at: due });
+    db.sendScripts = Array.from({ length: 11 }, (_, i) => okSend(`m-${i + 1}`));
+
+    // — TICK 1 (server-side only): the due batch must lead and be sent.
+    const t1 = await tick();
+    expect(t1.listed.map((c) => c.id)).toEqual([CAMPAIGN, "camp-backlog"]);
+    expect(t1.result.sent).toBe(5);
+    expect(db.sendLog.map((m) => m.to)).toEqual([
+      "jobs1@firma1.de",
+      "jobs2@firma2.de",
+      "jobs3@firma3.de",
+      "jobs4@firma4.de",
+      "jobs5@firma5.de",
+    ]);
+    // The backlog was NOT touched by this tick (no browser involved).
+    expect(
+      db.bew_applications.filter((a) => a.campaign_id === "camp-backlog").every((a) => a.status === "queued"),
+    ).toBe(true);
+    // The due campaign self-heals to terminal and LEAVES the tick's list.
+    const dueCamp = db.bew_campaigns.find((c) => c.id === CAMPAIGN)!;
+    expect(dueCamp.status).toBe("completed");
+    expect(dueCamp.started_at).toBeTruthy(); // stamped by the first real claim
+
+    // — TICK 2: the backlog is now first; 5 of its 6 apps drain.
+    const t2 = await tick();
+    expect(t2.listed.map((c) => c.id)).toEqual(["camp-backlog"]);
+    expect(t2.result.sent).toBe(5);
+
+    // — TICK 3: the last backlog app.
+    const t3 = await tick();
+    expect(t3.result.sent).toBe(1);
+    expect(
+      db.bew_applications.filter((a) => a.campaign_id === "camp-backlog").every((a) => a.status === "sent"),
+    ).toBe(true);
+
+    // — TICK 4: nothing left — an empty list sends nothing.
+    const t4 = await tick();
+    expect(t4.listed).toEqual([]);
+    expect(t4.result).toBeNull();
+
+    // Exactly one e-mail per application across ALL ticks (no duplicates).
+    expect(db.sendLog).toHaveLength(11);
+    expect(new Set(db.sendLog.map((m) => m.to)).size).toBe(11);
+  });
+
+  it("an in-flight backlog is still drained (due-first never starves it permanently)", async () => {
+    // Only an in-flight campaign exists: it is served on the very first tick.
+    db.bew_campaigns.push({
+      id: "camp-backlog",
+      user_id: USER,
+      email_account_id: "acct-1",
+      purpose: "ausbildung",
+      status: "sending",
+      usage_date: TODAY,
+      created_at: new Date().toISOString(),
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      email_subject: "Bewerbung Backlog",
+      email_body_html: "<p>Backlog</p>",
+    });
+    for (let i = 1; i <= 3; i++)
+      db.bew_applications.push({
+        id: `backlog-${i}`,
+        campaign_id: "camp-backlog",
+        user_id: USER,
+        seq: i,
+        company_name: `Backlog ${i}`,
+        contact_name: null,
+        company_email: `jobs${i}@backlog.de`,
+        company_address: null,
+        subject: `Bewerbung Backlog ${i}`,
+        body_html: `<p>Backlog ${i}</p>`,
+        body_text: `Backlog ${i}`,
+        status: "queued",
+        error_code: null,
+        error_message: null,
+        attempt_count: 0,
+        next_attempt_at: null,
+        provider_message_id: null,
+        sent_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    db.sendScripts = [okSend("b1"), okSend("b2"), okSend("b3")];
+
+    const t1 = await tick();
+    expect(t1.listed.map((c) => c.id)).toEqual(["camp-backlog"]);
+    expect(t1.result.sent).toBe(3);
+    expect(db.sendLog).toHaveLength(3);
   });
 });
 
