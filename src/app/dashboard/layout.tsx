@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import { getCommunityUnreadCount } from "@/lib/community/server";
 
 export const dynamic = "force-dynamic";
 
@@ -20,8 +21,9 @@ export default async function DashboardLayout({
   // confirmed user in this state has inconsistent account data).
   if (!profile || profile.account_status === "pending") redirect("/verify");
   if (!profile.selected_goal) redirect("/onboarding");
+  const communityUnread = await getCommunityUnreadCount(profile.id);
   return (
-    <AppShell profile={profile}>
+    <AppShell profile={profile} communityUnread={communityUnread}>
       {children}
     </AppShell>
   );
