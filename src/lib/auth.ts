@@ -2,7 +2,7 @@ import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { isPlatformAdminId } from "@/lib/community/platform-admin";
+import { isPlatformAdminId } from "@/lib/platform-admin";
 
 export type Profile = {
   id: string;
@@ -38,13 +38,14 @@ export type Profile = {
   daily_email_limit: number;
   created_at: string;
   updated_at: string;
-  /**
-   * Platform administrator (stable auth.id + public.admins membership —
-   * server-computed, never client-set). Only ever true for the designated
-   * account; the nav surface reads this, every PRIVILEGED OPERATION
-   * re-checks with isPlatformAdmin() at request time.
-   */
-  isPlatformAdmin?: boolean;
+   /**
+    * Platform administrator (stable auth.id + public.admins membership —
+    * server-computed, never client-set). Only ever true for the designated
+    * account; the nav surface reads this. The flag is display-only —
+    * privileged endpoints re-check admin membership server-side at
+    * request time (billing gate — requireAdmin()).
+    */
+   isPlatformAdmin?: boolean;
 };
 
 /**
@@ -76,8 +77,9 @@ function scrub(message: string): string {
  * The platform-admin flag for the serialized profile: ZERO cost for every
  * user except the designated account — the membership is only queried
  * (one PK select, service role) when the stable id matches. Fail-closed:
- * a read error → false. The flag is display/nav-only; privileged ops
- * always re-run isPlatformAdmin() server-side at request time.
+ * a read error → false. The flag is display/nav-only; privileged endpoints
+ * re-check admin membership server-side at request time (billing gate —
+ * requireAdmin()).
  */
 async function withPlatformAdminFlag(
   userId: string,

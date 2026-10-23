@@ -31,7 +31,7 @@
  *       bounce; the denial reason is logged server-side
  *     - unauthenticated still goes to /login
  *     - the 403 page is a dead end (no admin nav/content, user-initiated link)
- *     - the billing-admin path (platform check → /admin/users) is intact
+  *     - the /admin index routes to /admin/users (the sole remaining surface)
  *
  *   CONFIGURATION
  *     - PLATFORM_ADMIN_USER_ID is a server-side constant, NOT an env var
@@ -41,11 +41,7 @@
  *   MIGRATION v11 (the heal)
  *     - idempotent, keeps the v10 email guard verbatim, inserts ONLY for
  *       the designated UUID, touches no RLS/policies
- *
- *   API ROUTES (independent of the page gate)
- *     - /api/admin/announcements: 401 unauthenticated, 403 normal user
- *     - /api/admin/community/users: 401 unauthenticated, 403 normal user
- */
+  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as React from "react";
@@ -65,13 +61,8 @@ import {
 import {
   PLATFORM_ADMIN_EMAIL,
   PLATFORM_ADMIN_USER_ID,
-  isPlatformAdmin,
-  requirePlatformAdmin,
-} from "@/lib/community/platform-admin";
+} from "@/lib/platform-admin";
 import { AdminForbidden } from "@/components/admin-forbidden";
-
-import { POST as announcePOST } from "@/app/api/admin/announcements/route";
-import { GET as usersGET } from "@/app/api/admin/community/users/route";
 
 // ---------------------------------------------------------------------------
 // Fixtures + mocks
@@ -79,7 +70,6 @@ import { GET as usersGET } from "@/app/api/admin/community/users/route";
 
 const ADMIN = PLATFORM_ADMIN_USER_ID; // 6fa45036-… (the configured id)
 const ALICE = "11111111-1111-4111-8111-111111111111"; // normal user
-const BOB = "22222222-2222-4222-8222-222222222222"; // wrong id, HAS membership
 const ROOT = join(__dirname, "..");
 
 type Result = { data: unknown; error: { message: string; code?: string } | null };
@@ -178,20 +168,13 @@ describe("/admin route decisions (diagnoseAdminAccess)", () => {
     mockSession(null);
     expect(await diagnoseAdminAccess()).toEqual({ status: "unauthenticated" });
     expect(await requireAdmin()).toBeNull();
-    expect(await requirePlatformAdmin()).toBeNull();
-    expect(await isPlatformAdmin()).toEqual({ ok: false, code: "unauthenticated" });
   });
 
   it("4. spoofed client email never authorizes — identity is the session id", async () => {
     const admin = mockAdminClient();
     mockSession({ id: ALICE, email: PLATFORM_ADMIN_EMAIL });
 
-    // the platform check fails on the id BEFORE the DB is ever consulted:
-    expect(await isPlatformAdmin()).toEqual({ ok: false, code: "not_admin" });
-    expect(admin.calls.filter((c) => c.table === "admins")).toHaveLength(0);
-
-    // and the route gate treats the same (no-membership) session as a
-    // normal user:
+    // the route gate denies the spoofed (no-membership) session:
     admin.queue("admins", { data: null, error: null });
     const access = await diagnoseAdminAccess();
     expect(access).toEqual({
@@ -202,25 +185,11 @@ describe("/admin route decisions (diagnoseAdminAccess)", () => {
     });
   });
 
-  it("5. wrong admin id WITH a real membership row → still denied", async () => {
-    const admin = mockAdminClient();
-    admin.queue("admins", { data: { user_id: BOB }, error: null });
-    admin.queue("profiles", { data: { ...PROFILE, id: BOB }, error: null });
-    mockSession({ id: BOB });
-
-    // the PLATFORM check demands the configured id — membership alone
-    // (e.g. a billing admin) does not grant platform admin:
-    expect(await isPlatformAdmin()).toEqual({ ok: false, code: "not_admin" });
-    // (the billing gate would pass for BOB — that is /admin/users, a
-    //  different, intended surface; the platform surface is denied)
-  });
-
-  it("6. configured admin id but MISSING admins membership → denied", async () => {
+  it("5. configured admin id but MISSING admins membership → denied", async () => {
     const admin = mockAdminClient();
     admin.queue("admins", { data: null, error: null });
     mockSession({ id: ADMIN, email: PLATFORM_ADMIN_EMAIL });
 
-    expect(await isPlatformAdmin()).toEqual({ ok: false, code: "not_bound" });
     const access = await diagnoseAdminAccess();
     expect(access).toEqual({
       status: "forbidden",
@@ -236,7 +205,6 @@ describe("/admin route decisions (diagnoseAdminAccess)", () => {
     admin.queue("admins", { data: null, error: { message: "boom" } });
     mockSession({ id: ADMIN });
     // the service-role read errored → treated as no membership:
-    expect(await isPlatformAdmin()).toEqual({ ok: false, code: "not_bound" });
     expect((await diagnoseAdminAccess()).status).not.toBe("ok");
   });
 
@@ -292,10 +260,6 @@ describe("exact production state (second incident: 403 despite full provisioning
     const access = await diagnoseAdminAccess();
     expect(access.status).toBe("ok");
     if (access.status === "ok") expect(access.profile.id).toBe(PROD_UID);
-
-    // the platform gate (stable id + session + membership) agrees:
-    admin.queue("admins", { data: { user_id: PROD_UID }, error: null });
-    expect(await isPlatformAdmin()).toEqual({ ok: true, userId: PROD_UID });
 
     // and the legacy wrapper resolves a profile (billing surface intact):
     admin.queue("admins", { data: { user_id: PROD_UID }, error: null });
@@ -390,9 +354,8 @@ describe("/admin route redirect contract", () => {
     expect(html).not.toContain('aria-label="Admin"');
   });
 
-  it("the billing-admin path is intact: platform check → /admin/users for non-platform admins", () => {
+  it("the /admin index routes admins to /admin/users (the sole remaining admin surface)", () => {
     const page = readSrc("src/app/admin/page.tsx");
-    expect(page).toContain("isPlatformAdmin()");
     expect(page).toContain('redirect("/admin/users")');
   });
 
@@ -410,7 +373,7 @@ describe("/admin route redirect contract", () => {
 
 describe("PLATFORM_ADMIN_USER_ID configuration", () => {
   it("is a literal server-side constant — no env var can be missing or spoofed", () => {
-    const src = readSrc("src/lib/community/platform-admin.ts");
+    const src = readSrc("src/lib/platform-admin.ts");
     expect(src).toMatch(/^import "server-only";/);
     expect(src).not.toContain("process.env");
     expect(src).toContain(`export const PLATFORM_ADMIN_USER_ID = "${ADMIN}";`);
@@ -450,62 +413,5 @@ describe("v11 admin membership heal migration", () => {
     expect(v11).not.toMatch(/create policy|drop policy|alter policy|grant\b/i);
     // the legacy owner UUID (99a30c47-…) must not appear anywhere:
     expect(v11).not.toContain("99a30c47");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// E. API ROUTES — independent of the page gate
-// ---------------------------------------------------------------------------
-
-describe("admin API routes authorize independently", () => {
-  function post(url: string, body: unknown): Request {
-    return new Request(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
-
-  it("/api/admin/announcements: unauthenticated → 401, normal user → 403", async () => {
-    mockAdminClient();
-    mockSession(null);
-    expect((await announcePOST(post("http://x/api/admin/announcements", { title: "t".repeat(20) }))).status).toBe(401);
-
-    mockSession({ id: ALICE, email: "alice@example.com" });
-    const res = await announcePOST(
-      post("http://x/api/admin/announcements", {
-        title: "Wartungsarbeiten am Samstag",
-        content: "offline",
-        type: "maintenance",
-        sendKey: "a0a0a0a0-a0a0-4a0a-8a0a-a0a0a0a0a0a0",
-      }),
-    );
-    expect(res.status).toBe(403);
-  });
-
-  it("/api/admin/community/users: unauthenticated → 401, normal user → 403", async () => {
-    mockAdminClient();
-    mockSession(null);
-    expect((await usersGET(new Request("http://x/api/admin/community/users?q=abc"))).status).toBe(401);
-
-    mockSession({ id: ALICE });
-    expect((await usersGET(new Request("http://x/api/admin/community/users?q=abc"))).status).toBe(403);
-  });
-
-  it("a forged body claiming the admin as actor is never the actor", async () => {
-    const admin = mockAdminClient();
-    mockSession({ id: ALICE });
-    const res = await announcePOST(
-      post("http://x/api/admin/announcements", {
-        title: "Wartungsarbeiten am Samstag",
-        content: "offline",
-        type: "maintenance",
-        sendKey: "a0a0a0a0-a0a0-4a0a-8a0a-a0a0a0a0a0a0",
-        created_by: ADMIN,
-        actorId: ADMIN,
-      }),
-    );
-    expect(res.status).toBe(403);
-    expect(admin.calls.filter((c) => c.op === "insert" && c.table === "notifications")).toHaveLength(0);
   });
 });

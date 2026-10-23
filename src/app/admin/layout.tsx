@@ -2,7 +2,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { diagnoseAdminAccess } from "@/lib/billing/admin";
-import { isPlatformAdmin } from "@/lib/community/platform-admin";
 import { getServerT } from "@/lib/i18n/server";
 import { AdminNav } from "@/components/admin-nav";
 import { AdminForbidden } from "@/components/admin-forbidden";
@@ -12,13 +11,11 @@ export const dynamic = "force-dynamic";
 /**
  * Admin area layout — shared chrome for every /admin page.
  *
- * Gate (server-side, the ONLY one that matters): an active session AND a
- * verified public.admins membership (diagnoseAdminAccess — the same check
- * requireAdmin() performs, with a diagnostic reason). The platform-admin
- * sections (overview / announcements / community moderation) additionally
- * re-check isPlatformAdmin() INSIDE their page — the nav simply does not
- * render them for non-platform admins, which is presentation, not security.
- */
+  * Gate (server-side, the ONLY one that matters): an active session AND a
+  * verified public.admins membership (diagnoseAdminAccess — the same check
+  * requireAdmin() performs, with a diagnostic reason). The only remaining
+  * admin surface is user/billing management under /admin/users.
+  */
 export default async function AdminLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
@@ -50,7 +47,6 @@ export default async function AdminLayout({
     return <AdminForbidden />;
   }
 
-  const platform = (await isPlatformAdmin()).ok;
   const t = await getServerT();
 
   return (
@@ -62,15 +58,7 @@ export default async function AdminLayout({
         >
           ← {t("admin.back")}
         </Link>
-        <AdminNav
-          isPlatformAdmin={platform}
-          labels={{
-            overview: t("admin.navOverview"),
-            announcements: t("admin.navAnnouncements"),
-            community: t("admin.navCommunity"),
-            users: t("admin.navUsers"),
-          }}
-        />
+        <AdminNav labels={{ users: t("admin.navUsers") }} />
         {children}
       </div>
     </main>

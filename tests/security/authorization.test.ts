@@ -164,12 +164,13 @@ describe("identity is never taken from the request", () => {
   it("admin routes require an admin/owner role (vertical privilege escalation)", () => {
     const adminRoutes = routeFiles.filter((f) => rel(f).includes("src/app/api/admin/"));
     expect(adminRoutes.length).toBeGreaterThan(0);
-    // requireAdmin (billing/plan administration), requirePlatformOwner (the
-    // notification console), or isPlatformAdmin (the Phase 10 platform-admin
-    // surface: announcements + community moderation + bans — the strictest
-    // gate: stable id + session + public.admins membership, fail-closed).
+    // requireAdmin (billing/plan administration) — the only remaining admin
+    // API surface (the community/moderation/announcements routes were removed
+    // with the Community feature; the platform-admin identity check itself
+    // lives in src/lib/platform-admin.ts and is exercised server-side by the
+    // /admin layout gate).
     for (const file of adminRoutes) {
-      expect(read(file), rel(file)).toMatch(/requireAdmin|requirePlatformOwner|isPlatformAdmin/);
+      expect(read(file), rel(file)).toMatch(/requireAdmin/);
     }
   });
 });
