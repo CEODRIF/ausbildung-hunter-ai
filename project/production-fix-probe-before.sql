@@ -1,9 +1,16 @@
 -- ============================================================================
--- Production pre/post-fix PROBE — READ-ONLY (pure SELECT statements only; no DDL, no DML)
--- Run in the Supabase SQL editor. Paste the results back for verification.
+-- Production PRE-MIGRATION probe — READ-ONLY (pure SELECT statements only;
+-- no DDL, no DML).
+-- Run the WHOLE file in the Supabase SQL editor BEFORE applying any
+-- migration. Every statement must SUCCEED. An expected object being absent
+-- shows up as a missing row — never as an error (no user-defined function
+-- is invoked in this file, so 42883 is impossible here).
+-- Companion: production-fix-probe-after.sql (run only AFTER 20261120→21→22).
 --
--- PRE-FIX expectations are marked (PRE). After applying 20261120→21→22,
--- re-run the same script: every (PRE) expectation inverts as noted.
+-- Expected production state (pre-fix):
+--   * ledger stops before 20261120 (gap migrations were applied manually);
+--   * the 20261123 objects are present (applied manually);
+--   * the 20261120/21/22 objects are absent (never applied).
 -- ============================================================================
 
 -- 1) Migration ledger (PRE: latest < 20261120000000; none of 20261120..23 listed)
@@ -31,15 +38,15 @@ select p.proname as function_name,
      -- expected ABSENT pre-fix (created by 20261121):
      'feature_quota_kind', 'plan_feature_limit',
      'reserve_feature_op', 'complete_feature_op', 'release_feature_op',
-      'expire_stale_feature_runs', 'feature_quota_status',
-      'release_ai_request',
-      -- expected PRESENT pre-fix with the OLD 20261020 version (20261121
-      -- re-creates these three, identical signatures):
-      'get_deckblatt_usage_status',
-      'reserve_deckblatt_generation', 'release_deckblatt_generation',
-      -- expected PRESENT both pre- and post-fix (20261020; 20261121 leaves
-      -- it deliberately untouched):
-      'complete_deckblatt_generation',
+     'expire_stale_feature_runs', 'feature_quota_status',
+     'release_ai_request',
+     -- expected PRESENT pre-fix with the OLD 20261020 version (20261121
+     -- re-creates these three, identical signatures):
+     'get_deckblatt_usage_status',
+     'reserve_deckblatt_generation', 'release_deckblatt_generation',
+     -- expected PRESENT both pre- and post-fix (20261020; 20261121 leaves
+     -- it deliberately untouched):
+     'complete_deckblatt_generation',
      -- expected ABSENT pre-fix (created by 20261122):
      'create_mock_checkout', 'complete_mock_checkout',
      -- expected PRESENT (manual 20261123 + older):
@@ -78,8 +85,8 @@ select table_name, column_name
    and table_name in ('billing_plans', 'subscriptions')
  order by table_name, ordinal_position;
 
--- 5) Constraint names + definitions the migrations will drop/recreate
---    (PRE: expect all 4 rows with the OLD narrow definitions)
+-- 5) Constraint names + definitions the migrations will re-add under the SAME
+--    names (PRE: expect all 4 rows with the OLD narrow definitions)
 select conname, conrelid::regclass as on_table, pg_get_constraintdef(oid) as definition
   from pg_constraint
  where connamespace = 'public'::regnamespace
@@ -107,9 +114,8 @@ select tgname, tgrelid::regclass as on_table
   from pg_trigger
  where tgname = 'bew_applications_enforce_saved_capacity';
 
--- 8) RLS state of the new tables (run AFTER fix for the 4 new tables:
---    expect relrowsecurity = t and ZERO pg_policies rows for
---    subscription_events / mock_checkouts)
+-- 8) RLS state of the capacity/ledger tables (PRE: only user_capacity_locks
+--    expected to appear, with relrowsecurity = t)
 select relname, relrowsecurity
   from pg_class
  where relnamespace = 'public'::regnamespace
@@ -122,41 +128,7 @@ select id, file_size_limit
  where id = 'ai-files';
 
 -- ============================================================================
--- POST-FIX spot checks (run after applying 20261120→21→22)
+-- End of PRE-MIGRATION probe: all 9 statements above must return results
+-- without errors. For post-migration verification run instead:
+--   production-fix-probe-after.sql
 -- ============================================================================
-
--- P1. plan_feature_limit resolves WITHOUT 42883 (expect: NULL for a legacy
---     user; an integer if that user holds an active commercial plan)
-select public.plan_feature_limit(
-  coalesce((select user_id from public.subscriptions limit 1),
-           (select id from auth.users limit 1)),
-  'saved_applications');
-
--- P2. feature_quota_status answers (expect: a jsonb with "used"; a
---     'missing_args' error is expected and harmless only if BOTH
---     subscriptions and auth.users are empty)
-select public.feature_quota_status(
-  coalesce((select user_id from public.subscriptions limit 1),
-           (select id from auth.users limit 1)),
-  'ai_assistant');
-
--- P3. the F1 advisory RPC now answers (expect: one row; status 'unmetered'
---     for a legacy user — the dangling plan_feature_limit ref is resolved)
-select public.check_saved_application_capacity(
-  coalesce((select user_id from public.subscriptions limit 1),
-           (select id from auth.users limit 1)),
-  1, null);
-
--- P4. seed rows present with the 12-key matrices
-select plan_id, price_cents, duration_kind, duration_value, is_commercial,
-       feature_limits ->> 'saved_applications' as saved_applications_limit
-  from public.billing_plans
- where plan_id in ('trial', 'premium_10d', 'premium_monthly')
- order by plan_id;
-
--- P5. deckblatt constraint widened (expect: single check def with <= 60)
-select conname, pg_get_constraintdef(oid)
-  from pg_constraint
- where connamespace = 'public'::regnamespace
-   and conrelid = 'public.ai_deckblatt_usage'::regclass
-   and contype = 'c';
