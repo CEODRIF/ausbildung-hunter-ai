@@ -370,6 +370,10 @@ begin
 
   if found then
     return query select 'completed'::text;
+    -- RETURN QUERY does NOT exit the function (verified on PG14: without
+    -- this the success case yields TWO rows, 'completed' and 'no_op');
+    -- every other early-return path in this file uses the same pattern.
+    return;
   end if;
 
   return query select 'no_op'::text;
@@ -405,6 +409,13 @@ begin
   -- Unknown run, or a run that already succeeded: nothing to refund.
   if run_row is null or run_row.status <> 'reserved' then
     return query select 'no_op'::text;
+    -- RETURN QUERY does NOT exit the function (verified on PG14): without
+    -- this the two UPDATEs below run on EVERY no-op call, flipping a
+    -- SUCCEEDED run to 'released' and refunding a quota unit that the
+    -- completed op legitimately consumed (and double-refunding on each
+    -- repeated release). The explicit return is the pattern used by every
+    -- other early-return path in this file.
+    return;
   end if;
 
   update public.feature_usage_runs
