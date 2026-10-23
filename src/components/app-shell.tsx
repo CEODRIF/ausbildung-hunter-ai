@@ -26,11 +26,9 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
-  AtSign,
   BarChart3,
   Bell,
   Bookmark,
-  BookOpen,
   Briefcase,
   Check,
   ChevronDown,
@@ -43,11 +41,8 @@ import {
   Download,
   ExternalLink,
   FileText,
-  Flag,
-  Award,
   Folder,
   Globe,
-  Hash,
   Home,
   IdCard,
   Image as ImageIcon,
@@ -56,8 +51,6 @@ import {
   LogOut,
   Mail,
   Menu,
-  Mic,
-  MicOff,
   Monitor,
   Moon,
   MoreHorizontal,
@@ -67,7 +60,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PenLine,
-  PhoneOff,
   Pin,
   Plus,
   RotateCw,
@@ -77,7 +69,6 @@ import {
   Settings,
   Share2,
   Shield,
-  Smile,
   Sparkles,
   Square,
   Sun,
@@ -86,8 +77,6 @@ import {
   Upload,
   User,
   Users,
-  Volume2,
-  Wifi,
   X,
 } from "lucide-react";
 import type { Profile } from "@/lib/auth";
@@ -111,8 +100,6 @@ interface NavItem {
   href: string;
   icon: IconName;
   soon?: boolean;
-  /** Unread counter (Community). Rendered only when > 0. */
-  badge?: number;
 }
 
 interface NavSection {
@@ -138,7 +125,6 @@ const NAV_SECTIONS: NavSection[] = [
         href: "/opportunities/saved",
         icon: "bookmark",
       },
-      { labelKey: "nav.community", href: "/community", icon: "users" },
     ],
   },
   {
@@ -237,23 +223,11 @@ const LUCIDE: Record<IconName, LucideIcon> = {
   refresh: RotateCw,
   logout: LogOut,
   chart: BarChart3,
-  home: Home,
-  hash: Hash,
-  book: BookOpen,
-  idCard: IdCard,
-  message: MessageCircle,
-  at: AtSign,
-  smile: Smile,
-  reply: CornerUpLeft,
-  pin: Pin,
-  mic: Mic,
-  micOff: MicOff,
-  phoneOff: PhoneOff,
-  volume: Volume2,
-  wifi: Wifi,
-  shield: Shield,
-  flag: Flag,
-  award: Award,
+   home: Home,
+   idCard: IdCard,
+    reply: CornerUpLeft,
+    shield: Shield,
+    pin: Pin,
   // Brand marks: the shell never renders these — the profile social tiles
   // use the filled official glyphs from the Icon component. These are
   // stroke-set placeholders that keep the Record exhaustive.
@@ -360,10 +334,6 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
     heading: { titleKey: "pages.scanner.title", subtitleKey: "pages.scanner.subtitle" },
   },
   {
-    match: (p) => p === "/community" || p.startsWith("/community/"),
-    heading: { titleKey: "pages.community.title", subtitleKey: "pages.community.subtitle" },
-  },
-  {
     match: (p) => p === "/settings/email" || p.startsWith("/settings/email/"),
     heading: { titleKey: "pages.settingsEmail.title", subtitleKey: "pages.settingsEmail.subtitle" },
   },
@@ -456,8 +426,7 @@ function NavSectionList({
                   </div>
                 );
               }
-              const hasBadge = typeof item.badge === "number" && item.badge > 0;
-              return (
+               return (
                 <Link
                   key={item.labelKey}
                   href={item.href}
@@ -472,25 +441,9 @@ function NavSectionList({
                       : "text-muted hover:bg-surface-2 hover:text-ink"
                   }`}
                 >
-                  <span className="relative shrink-0">
-                    <IconCmp size={18} strokeWidth={1.8} />
-                    {collapsed && hasBadge && (
-                      <span
-                        aria-hidden
-                        className="absolute -end-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-surface"
-                      />
-                    )}
-                  </span>
-                  {!collapsed && <span className="truncate flex-1">{label}</span>}
-                  {!collapsed && hasBadge && (
-                    <span
-                      className="ms-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-bold text-white"
-                      aria-label={`${item.badge}`}
-                    >
-                      {item.badge}
-                    </span>
-                  )}
-                </Link>
+                   <IconCmp size={18} strokeWidth={1.8} className="shrink-0" />
+                   {!collapsed && <span className="truncate flex-1">{label}</span>}
+                 </Link>
               );
             })}
           </nav>
@@ -507,48 +460,30 @@ function NavSectionList({
 export function AppShell({
   children,
   profile,
-  communityUnread,
-  fill = false,
 }: {
   children: React.ReactNode;
   profile?: Profile | null;
-  /** Server-computed unread count shown as the Community nav badge. */
-  communityUnread?: number;
-  /**
-   * Bound the content column to exactly the visible viewport so a page can own
-   * its own internal scrolling (chat). Used by /community only; every other
-   * route keeps the normal, document-scrolling shell.
-   */
-  fill?: boolean;
 }) {
   const pathname = usePathname();
   const { t } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
-  // The Community entry carries the unread counter (server-computed per
-  // section layout); every other item is passed through untouched.
-  const sections = useMemo(
-    () => {
-      const base = NAV_SECTIONS.map((section) => ({
-        ...section,
-        items: section.items.map((item) =>
-          item.href === "/community" ? { ...item, badge: communityUnread } : item,
-        ),
-      }));
-      // Phase 10: the Admin entry exists in the NAV DATA only for the
-      // platform admin — the flag is the SERVER-computed profile field
-      // (session user id → admins table), never CSS hiding, never a client
-      // claim. Ordinary users never receive the section at all. The /admin
-      // route itself stays gated by requirePlatformAdmin regardless.
-      if (profile?.isPlatformAdmin === true) {
-        base.push({
+  // The Admin entry exists in the NAV DATA only for the platform admin — the
+  // flag is the SERVER-computed profile field (stable session user id), never
+  // CSS hiding, never a client claim. Ordinary users never receive the
+  // section at all. The /admin routes stay gated by the billing-admin gate
+  // (diagnoseAdminAccess) regardless.
+  const sections = useMemo<NavSection[]>(() => {
+    if (profile?.isPlatformAdmin === true) {
+      return [
+        ...NAV_SECTIONS,
+        {
           titleKey: "nav.admin",
-          items: [{ labelKey: "nav.admin", href: "/admin", icon: "shield" }],
-        });
-      }
-      return base;
-    },
-    [communityUnread, profile],
-  );
+          items: [{ labelKey: "nav.admin", href: "/admin/users", icon: "shield" }],
+        },
+      ];
+    }
+    return NAV_SECTIONS;
+  }, [profile]);
   const closeMobile = useCallback(() => setMobileOpen(false), []);
 
   // Top-nav compact mode: icon-only links (labels hidden, tooltips on).
@@ -639,8 +574,6 @@ export function AppShell({
       {/* Logical margin-inline-start mirrors for RTL automatically. */}
       <div
         className={`relative z-10 flex min-h-screen flex-col transition-[margin] duration-200 ${
-          fill ? "h-[100dvh] min-h-0 overflow-hidden" : ""
-        } ${
           collapsed ? "lg:ms-[84px]" : "lg:ms-[272px]"
         }`}
       >
@@ -714,29 +647,13 @@ export function AppShell({
         </header>
 
         {/* ------------------------------------------------ content -------- */}
-        {/* Normal routes: pb-28 keeps page content clear of the fixed bottom
-            nav on phones; the footer wrapper below gets its own spacer
-            because it sits after the main element and would otherwise be
-            covered by the nav.
-            Fill routes (/community): main becomes the EXACT, definite chat
-            box — a positioned (relative) containing block with no padding —
-            and the bottom-nav reservation moves to the flex SIBLING spacer
-            below. The chat root then fills main via `absolute inset-0`:
-            zero percentage-height resolution, so no engine (notably iOS
-            Safari) can collapse or clip it and hide the composer. */}
-        <main
-          className={`flex-1 ${fill ? "relative min-h-0 overflow-hidden" : "pb-28 lg:pb-0"}`}
-        >
+        {/* pb-28 keeps page content clear of the fixed bottom nav on phones;
+            the footer wrapper below keeps its own padding because it sits
+            after the main element and would otherwise be covered by the nav. */}
+        <main className="flex-1 pb-28 lg:pb-0">
           {children}
         </main>
-        {/* Fill mode, phones only: the fixed bottom nav's reservation
-            (h-28 = the old pb-28 value, which already covered the nav's
-            footprint: bottom-3 + bar height + safe-area inset) as a flex
-            sibling, so main's box ends exactly where the nav begins. */}
-        {fill && <div aria-hidden className="h-28 max-lg:block shrink-0" />}
-        {/* In full-height mode the phone keeps the space for the chat itself;
-            the legal bar stays on every other route and on desktop. */}
-        <div className={`pb-24 lg:pb-0 ${fill ? "max-lg:hidden" : ""}`}>
+        <div className="pb-24 lg:pb-0">
           <LegalFooter variant="bar" />
         </div>
       </div>

@@ -249,9 +249,8 @@ describe("mobile bottom navigation — the sheet's bottom stays reachable", () =
 
   it("the shell keeps its own nav clearance and the mobile bar itself", () => {
     const shell = read("../src/components/app-shell.tsx");
-    // The existing page-level clearance — in main's NON-FILL template branch
-    // (fill mode, /community, reserves the nav via a sibling spacer instead).
-    expect(shell).toMatch(/<main[\s\S]{0,200}: "pb-28 lg:pb-0"/);
+    // The existing page-level clearance in main.
+    expect(shell).toContain('<main className="flex-1 pb-28 lg:pb-0">');
     // The fixed bottom nav must still exist (not removed by this fix).
     expect(shell).toContain("fixed inset-x-3 bottom-3 z-30");
     expect(shell).toContain("lg:hidden");
