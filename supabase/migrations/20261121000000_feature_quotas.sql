@@ -235,7 +235,11 @@ as $$
 declare
   kind text := public.feature_quota_kind(p_feature_id);
   plan_limit integer := public.plan_feature_limit(p_user_id, p_feature_id);
-  period_key text;
+  -- Named period_key_str (not period_key): an unqualified period_key in
+  -- embedded SQL (the ON CONFLICT target list, WHERE comparisons) would be
+  -- ambiguous against the table column of the same name — and the ON
+  -- CONFLICT target list cannot be table-qualified (grammar).
+  period_key_str text;
   sub_start timestamptz;
   cur_used integer;
 begin
@@ -268,7 +272,7 @@ begin
   end if;
 
   if kind = 'per_day' then
-    period_key := (timezone('utc', now()))::date::text;
+    period_key_str := (timezone('utc', now()))::date::text;
   else
     -- per_cycle: the current subscription period is the cycle.
     select s.current_period_start into sub_start
@@ -277,7 +281,7 @@ begin
     if sub_start is null then
       sub_start := timezone('utc', now());
     end if;
-    period_key := (timezone('utc', sub_start))::date::text;
+    period_key_str := (timezone('utc', sub_start))::date::text;
   end if;
 
   -- Idempotency: this run is already on the ledger (double click,
@@ -290,7 +294,7 @@ begin
       from public.feature_usage f
      where f.user_id = p_user_id
        and f.feature_id = p_feature_id
-       and f.period_key = period_key;
+       and f.period_key = period_key_str;
     return query select 'already_reserved'::text,
                         coalesce(cur_used, 0),
                         greatest(plan_limit - coalesce(cur_used, 0), 0);
@@ -298,7 +302,7 @@ begin
   end if;
 
   insert into public.feature_usage_runs (run_id, user_id, feature_id, period_key, status)
-  values (p_run_id, p_user_id, p_feature_id, period_key, 'reserved')
+  values (p_run_id, p_user_id, p_feature_id, period_key_str, 'reserved')
   on conflict (run_id) do nothing;
 
   if not found then
@@ -308,7 +312,7 @@ begin
       from public.feature_usage f
      where f.user_id = p_user_id
        and f.feature_id = p_feature_id
-       and f.period_key = period_key;
+       and f.period_key = period_key_str;
     return query select 'already_reserved'::text,
                         coalesce(cur_used, 0),
                         greatest(plan_limit - coalesce(cur_used, 0), 0);
@@ -318,7 +322,7 @@ begin
   -- Atomic increment; the WHERE clause makes it impossible to exceed the
   -- limit, even under concurrent racers.
   insert into public.feature_usage (user_id, feature_id, period_key, used)
-  values (p_user_id, p_feature_id, period_key, 1)
+  values (p_user_id, p_feature_id, period_key_str, 1)
   on conflict (user_id, feature_id, period_key)
   do update set used = public.feature_usage.used + 1
   where public.feature_usage.used < plan_limit
@@ -494,7 +498,10 @@ declare
   kind text := public.feature_quota_kind(p_feature_id);
   sub_start timestamptz;
   resets_at timestamptz;
-  period_key text;
+  -- Named period_key_str (not period_key): the WHERE comparison
+  -- f.period_key = <var> must not become ambiguous against the table
+  -- column of the same name (see reserve_feature_op).
+  period_key_str text;
   used_value integer;
 begin
   if p_user_id is null or p_feature_id is null then
@@ -507,8 +514,8 @@ begin
   end if;
 
   if kind = 'per_day' then
-    period_key := (timezone('utc', now()))::date::text;
-    resets_at := (period_key::date + 1) at time zone 'utc';
+    period_key_str := (timezone('utc', now()))::date::text;
+    resets_at := (period_key_str::date + 1) at time zone 'utc';
   else
     -- per_cycle: the counter and the reset instant follow the
     -- subscription period.
@@ -519,7 +526,7 @@ begin
     if sub_start is null then
       sub_start := timezone('utc', now());
     end if;
-    period_key := (timezone('utc', sub_start))::date::text;
+    period_key_str := (timezone('utc', sub_start))::date::text;
   end if;
 
   if p_feature_id = 'ai_assistant' then
@@ -540,7 +547,7 @@ begin
          from public.feature_usage f
         where f.user_id = p_user_id
           and f.feature_id = p_feature_id
-          and f.period_key = period_key), 0);
+           and f.period_key = period_key_str), 0);
   end if;
 
   return jsonb_build_object(
