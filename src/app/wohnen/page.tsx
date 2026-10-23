@@ -4,31 +4,13 @@ import { Icon, type IconName } from "@/components/icon";
 
 /**
  * Section landing page ("Ratgeber & Rechner") — replaces the former housing
- * overview. Four cards, one per new tool/guide; all labels come from the
+ * overview. One card (the salary calculator); all labels come from the
  * guides.land i18n block (de/en/fr/ar).
  */
 export default async function RatgeberLandingPage() {
   const t = await getServerT();
   const cards: Array<{ href: string; icon: IconName; titleKey: string; descKey: string }> = [
     { href: "/wohnen/gehalt", icon: "chart", titleKey: "guides.land.c1Title", descKey: "guides.land.c1Desc" },
-    {
-      href: "/wohnen/neu-in-deutschland",
-      icon: "globe",
-      titleKey: "guides.land.c2Title",
-      descKey: "guides.land.c2Desc",
-    },
-    {
-      href: "/wohnen/nach-dem-vertrag",
-      icon: "file",
-      titleKey: "guides.land.c3Title",
-      descKey: "guides.land.c3Desc",
-    },
-    {
-      href: "/wohnen/konsulat",
-      icon: "idCard",
-      titleKey: "guides.land.c4Title",
-      descKey: "guides.land.c4Desc",
-    },
   ];
   return (
     <div className="mx-auto max-w-4xl">
