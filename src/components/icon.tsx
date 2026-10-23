@@ -60,7 +60,7 @@ export type IconName =
   | "chart"
   // Housing / Wohnen (MVP).
   | "home"
-  // /wohnen/konsulat guide (ID card), reply affordance, admin nav (shield),
+  // ID card (settings/profile), reply affordance, admin nav (shield),
   // bewerbung-automation address preview (pin).
   | "idCard"
   | "reply"

@@ -134,17 +134,6 @@ const NAV_SECTIONS: NavSection[] = [
     titleKey: "guides.nav.section",
     items: [
       { labelKey: "guides.nav.gehalt", href: "/wohnen/gehalt", icon: "chart" },
-      {
-        labelKey: "guides.nav.neu",
-        href: "/wohnen/neu-in-deutschland",
-        icon: "globe",
-      },
-      {
-        labelKey: "guides.nav.vertrag",
-        href: "/wohnen/nach-dem-vertrag",
-        icon: "file",
-      },
-      { labelKey: "guides.nav.konsulat", href: "/wohnen/konsulat", icon: "idCard" },
     ],
   },
   {
@@ -257,18 +246,6 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
   {
     match: (p) => p === "/wohnen/gehalt",
     heading: { titleKey: "guides.page.gehaltTitle", subtitleKey: "guides.page.gehaltSubtitle" },
-  },
-  {
-    match: (p) => p === "/wohnen/neu-in-deutschland",
-    heading: { titleKey: "guides.page.neuTitle", subtitleKey: "guides.page.neuSubtitle" },
-  },
-  {
-    match: (p) => p === "/wohnen/nach-dem-vertrag",
-    heading: { titleKey: "guides.page.vertragTitle", subtitleKey: "guides.page.vertragSubtitle" },
-  },
-  {
-    match: (p) => p === "/wohnen/konsulat",
-    heading: { titleKey: "guides.page.konsulatTitle", subtitleKey: "guides.page.konsulatSubtitle" },
   },
   {
     match: (p) => p === "/wohnen",
