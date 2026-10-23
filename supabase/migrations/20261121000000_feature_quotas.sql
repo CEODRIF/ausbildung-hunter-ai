@@ -349,6 +349,7 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+begin
   if p_user_id is null or p_run_id is null then
     raise exception 'missing_args';
   end if;
@@ -364,6 +365,7 @@ as $$
   end if;
 
   return query select 'no_op'::text;
+end;
 $$;
 
 revoke all on function public.complete_feature_op(uuid, uuid) from public, anon, authenticated;
