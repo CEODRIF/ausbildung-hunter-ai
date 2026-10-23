@@ -3,6 +3,7 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { AI_DAILY_REQUEST_LIMIT } from "@/lib/ai-service";
+import { checkFeature } from "@/lib/billing/entitlement-service";
 import type { Profile } from "@/lib/auth";
 import type { SafeEmailAccount } from "@/lib/email-oauth";
 import { getUsageSnapshot, type UsageSnapshot } from "@/lib/email-campaigns";
@@ -380,11 +381,22 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
         : null,
   });
 
+  // Plan-aware AI limit (billing meter): commercial plans surface their
+  // feature_limits value; legacy users the plan row's ai_requests_per_day
+  // (free → 100). Display-only — when the meter cannot be read
+  // (lookup_error) or is unmetered (limit null), show the legacy default
+  // instead of a bogus 0.
+  const aiEntitlement = await checkFeature(userId, "ai_assistant");
+  const aiLimit =
+    aiEntitlement.reason === "lookup_error" || aiEntitlement.limit === null
+      ? AI_DAILY_REQUEST_LIMIT
+      : aiEntitlement.limit;
+
   return {
     profile: profileResult.data,
     usage: usageResult.data,
     usageSnapshot,
-    aiLimit: AI_DAILY_REQUEST_LIMIT,
+    aiLimit,
     applicationsCount: applicationsResult.count ?? 0,
     activities: (activityResult.data ?? []) as ActivityLog[],
     emailAccount: emailAccountResult.data as SafeEmailAccount | null,

@@ -261,8 +261,18 @@ function makeFrom(table: TableKey) {
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (table: string) => makeFrom(table as TableKey),
-    rpc: async () => {
+    rpc: async (fn: string) => {
       await hop();
+      // F1 (saved_applications): an empty→content save makes ONE extra RPC
+      // round-trip — the advisory capacity pre-check. It is counted exactly
+      // like any other hop; "unmetered" keeps the gate out of the perf
+      // contract (covered by tests/saved-applications-capacity.test.ts).
+      if (fn === "check_saved_application_capacity") {
+        return {
+          data: [{ status: "unmetered", plan_limit: null, used: 0, remaining: null }],
+          error: null,
+        };
+      }
       return { data: null, error: null };
     },
     storage: { from: () => ({ upload: async () => ({ error: null }) }) },
@@ -467,7 +477,7 @@ describe("F4/F5 per-row Save — client-visible flow", () => {
     expect(m.waves).toBe(6);
   });
 
-  it("F4b updateBewApplicationFields (warm): 6 RTT / 6 waves", async () => {
+  it("F4b updateBewApplicationFields (warm): 7 RTT / 7 waves", async () => {
     await engine.updateBewApplicationFields(USER, "app-2", {
       companyName: "Warm GmbH",
       companyEmail: "warm@warm.de",
@@ -482,13 +492,16 @@ describe("F4/F5 per-row Save — client-visible flow", () => {
         companyAddress: null,
       }),
     );
-    expect(m.rtt).toBe(6);
-    expect(m.waves).toBe(6);
+    // F1: app-3 is an EMPTY→CONTENT fill, so the save carries one extra hop
+    // — the advisory saved_applications capacity pre-check (rpc).
+    expect(m.rtt).toBe(7);
+    expect(m.waves).toBe(7);
   });
 
-  it("BEFORE: update action + refresh (getBewCampaignView) = 14 RTT / 13 waves", async () => {
+  it("BEFORE: update action + refresh (getBewCampaignView) = 15 RTT / 14 waves", async () => {
     // Warm the probe first (steady state) so the composite is comparable
-    // with the AFTER number.
+    // with the AFTER number. (app-4 is an empty→content fill: it also pays
+    // the F1 capacity pre-check hop — unmeasured, like before.)
     await engine.updateBewApplicationFields(USER, "app-4", {
       companyName: "Warmup",
       companyEmail: "warmup@warmup.de",
@@ -507,12 +520,13 @@ describe("F4/F5 per-row Save — client-visible flow", () => {
       await getCurrentUserAndProfile(); // action 2 auth (the `await refresh()`)
       await engine.getBewCampaignView(USER, "camp-1");
     });
-    // (auth 2 + warm update 6) + (auth 2 + view 4 — seeded campaign has no sender)
-    expect(m.rtt).toBe(14);
-    expect(m.waves).toBe(13);
+    // (auth 2 + warm update 7 — incl. the F1 empty→content capacity
+    // pre-check hop) + (auth 2 + view 4 — seeded campaign has no sender)
+    expect(m.rtt).toBe(15);
+    expect(m.waves).toBe(14);
   });
 
-  it("AFTER: update action only (no view refetch; probe ∥ app select) = 9 RTT / 8 waves (cold probe)", async () => {
+  it("AFTER: update action only (no view refetch; probe ∥ app select) = 10 RTT / 9 waves (cold probe)", async () => {
     const m = await measure("F5b row-save AFTER", async () => {
       const { getCurrentUserAndProfile } = await import("@/lib/auth");
       await getCurrentUserAndProfile(); // the single action's auth
@@ -525,11 +539,12 @@ describe("F4/F5 per-row Save — client-visible flow", () => {
       // NO getBewCampaignView: the action returns the saved row and the
       // client patches that ONE row into the view.
     });
-    // 2 auth + (probe ∥ app) + campaign + update + counter×3
-    expect(m.rtt).toBe(9);
-    expect(m.waves).toBe(8);
+    // 2 auth + (probe ∥ app) + capacity pre-check (F1, app-6 is
+    // empty→content) + campaign + update + counter×3
+    expect(m.rtt).toBe(10);
+    expect(m.waves).toBe(9);
     // And strictly fewer round trips than the BEFORE composite.
-    expect(m.rtt).toBeLessThan(14);
-    expect(m.waves).toBeLessThan(13);
+    expect(m.rtt).toBeLessThan(15);
+    expect(m.waves).toBeLessThan(14);
   });
 });

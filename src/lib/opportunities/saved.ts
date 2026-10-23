@@ -1,5 +1,6 @@
 import "server-only";
 
+import { checkFeature } from "@/lib/billing/entitlement-service";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { candidateProfileSchema } from "@/lib/bewerbung-schema";
 import { computeMatch, MATCHER_VERSION } from "@/lib/opportunities/matching";
@@ -11,6 +12,14 @@ import {
 import { resolveOpportunityCached } from "@/lib/opportunities/search";
 
 export { OpportunityNotFoundError, OpportunityProviderError };
+
+/** Plan item capacity reached (saved-opportunity limit of the current plan). */
+export class OpportunityCapacityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpportunityCapacityError";
+  }
+}
 
 export interface SavedOpportunityRow {
   id: string;
@@ -71,10 +80,39 @@ export async function saveOpportunityFromKey(
   notes?: string,
 ): Promise<SavedOpportunityRow> {
   assertValidKey(opportunityKey);
+  const admin = createAdminClient();
+  // Plan item capacity (one item = one NEW saved row). Checked server-side
+  // before the write; re-saving an already-saved key is a no-op upsert and
+  // must not be blocked (it adds no new item). Unverifiable subscription
+  // state fails CLOSED (never grants a new item).
+  let reSaveAllowed = false;
+  const capacity = await checkFeature(userId, "saved_opportunities");
+  if (!capacity.allowed) {
+    if (capacity.reason === "lookup_error")
+      throw new OpportunityProviderError(
+        "Unable to verify your plan right now. Please try again.",
+      );
+    if (capacity.reason !== "quota_exhausted")
+      throw new OpportunityCapacityError(
+        "Saved opportunities are not available on your current plan.",
+      );
+    reSaveAllowed = true;
+  }
   // Cached resolver: saving an opportunity just viewed does not re-hit BA
   // (the detail page warmed the short-lived details cache).
   const opportunity = await resolveOpportunityCached(opportunityKey);
-  const admin = createAdminClient();
+  if (reSaveAllowed) {
+    const { data: existing } = await admin
+      .from("saved_opportunities")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("opportunity_key", opportunity.id)
+      .maybeSingle();
+    if (!existing)
+      throw new OpportunityCapacityError(
+        "Saved opportunity limit reached for your current plan.",
+      );
+  }
 
   // Optional server-computed match snapshot at save time (never
   // client-supplied, never written to the shared opportunity cache).

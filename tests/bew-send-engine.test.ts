@@ -54,7 +54,29 @@ interface DB {
   /** Simulate a database WITHOUT the scheduled_at column (20261116 pending):
    *  any query using `lte` fails, mirroring PostgREST's column-missing error. */
   failLte: boolean;
-}
+  /** In-memory mirror of `feature_usage_runs` (any status kept — the SQL
+   *  ledger keeps released rows too): runId → row. */
+  automationLedger: Map<
+    string,
+    { userId: string; status: "reserved" | "succeeded" | "released" }
+  >;
+  /** Force the checkFeature/reserve lookups to deny (fail-closed paths).
+   *  Quota exhaustion itself is DERIVED from the ledger + limit, never faked. */
+  automationDeny: "lookup_error" | "feature_disabled" | null;
+  /** Plan limit for "automation": null = legacy unmetered, 0 = disabled.
+   *  Default 1000 → pre-existing tests behave exactly as before. */
+  automationLimit: number | null;
+  /** Make releaseFeatureOp throw (a settlement failure must never break the send flow). */
+  automationReleaseFails: boolean;
+  /** runIds handed to releaseFeatureOp, in call order (refund audit). */
+  automationReleaseCalls: string[];
+  /** runIds handed to completeFeatureOp, in call order (charge audit). */
+  automationCompleteCalls: string[];
+  /** Count of REAL refund transitions (reserved→released). A double refund
+   *  would bump this twice for the same row — the no-double-refund proof
+   *  (release CALLS alone are not enough: no_op calls are audited too). */
+  automationRefunds: number;
+ }
 
 function freshDb(): DB {
   return {
@@ -90,7 +112,22 @@ function freshDb(): DB {
     removedPaths: [],
     insertFailTables: new Set<string>(),
     failLte: false,
+    automationLedger: new Map(),
+    automationDeny: null,
+    automationLimit: 1000,
+    automationReleaseFails: false,
+    automationReleaseCalls: [],
+    automationCompleteCalls: [],
+    automationRefunds: 0,
   };
+}
+
+/** Current automation charge = ledger rows still consuming a unit
+ *  (`reserved` holds one; `succeeded` keeps its charge; `released` refunds). */
+function automationCharges(): number {
+  return [...db.automationLedger.values()].filter(
+    (r) => r.status === "reserved" || r.status === "succeeded",
+  ).length;
 }
 
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -391,6 +428,81 @@ function installMocks() {
       },
     }),
   }));
+  // Entitlements: STATEFUL automation ledger mirroring the production SQL
+  // contract (supabase/migrations/20261121000000_feature_quotas.sql):
+  //   - reserve CHARGES immediately (counter = rows still reserved/succeeded);
+  //   - a run id already on the ledger in ANY status → "already_reserved"
+  //     with NO counter change (re-claim / transient retry / double click
+  //     can never charge the same application twice);
+  //   - complete: reserved → "succeeded" (keeps its charge); else no_op;
+  //   - release: reserved → "released" (refunds exactly one unit); a
+  //     succeeded or unknown run → no_op (a send is never un-charged, a
+  //     double refund is impossible).
+  vi.doMock("@/lib/billing/entitlement-service", () => {
+    const used = () =>
+      [...db.automationLedger.values()].filter(
+        (r) => r.status === "reserved" || r.status === "succeeded",
+      ).length;
+    return {
+      checkFeature: async () => {
+        if (db.automationDeny === "lookup_error")
+          return { allowed: false, reason: "lookup_error", limit: db.automationLimit, used: 0, remaining: 0, resetsAt: null };
+        if (db.automationDeny === "feature_disabled" || db.automationLimit === 0)
+          return { allowed: false, reason: "feature_disabled", limit: 0, used: 0, remaining: 0, resetsAt: null };
+        if (db.automationLimit === null)
+          return { allowed: true, reason: "ok_legacy_unmetered", limit: null, used: 0, remaining: null, resetsAt: null };
+        const u = used();
+        const remaining = Math.max((db.automationLimit as number) - u, 0);
+        return {
+          allowed: remaining > 0,
+          reason: remaining > 0 ? "ok" : "quota_exhausted",
+          limit: db.automationLimit,
+          used: u,
+          remaining,
+          resetsAt: null,
+        };
+      },
+      reserveFeatureOp: async (_userId: string, _featureId: string, runId: string) => {
+        if (db.automationDeny === "lookup_error")
+          return { outcome: "error", message: "Subscription state could not be verified." };
+        if (db.automationDeny === "feature_disabled" || db.automationLimit === 0)
+          return { outcome: "feature_disabled" };
+        if (db.automationLimit === null) return { outcome: "unmetered" };
+        const limit = db.automationLimit as number;
+        // Idempotency: run id already on the ledger (ANY status) — never charge twice.
+        if (db.automationLedger.has(runId))
+          return { outcome: "already_reserved", used: used(), remaining: Math.max(limit - used(), 0) };
+        if (used() >= limit)
+          return { outcome: "quota_exhausted", used: limit, remaining: 0 };
+        db.automationLedger.set(runId, { userId: _userId, status: "reserved" });
+        return { outcome: "reserved", used: used(), remaining: Math.max(limit - used(), 0) };
+      },
+      completeFeatureOp: async (_userId: string, _featureId: string, runId: string) => {
+        db.automationCompleteCalls.push(runId);
+        const row = db.automationLedger.get(runId);
+        if (row && row.status === "reserved") {
+          row.status = "succeeded";
+          return { outcome: "completed" };
+        }
+        return { outcome: "no_op" };
+      },
+      releaseFeatureOp: async (_userId: string, _featureId: string, runId: string) => {
+        db.automationReleaseCalls.push(runId);
+        if (db.automationReleaseFails) throw new Error("injected release failure");
+        const row = db.automationLedger.get(runId);
+        if (!row || row.status !== "reserved") return { outcome: "no_op" };
+        row.status = "released";
+        db.automationRefunds += 1;
+        return { outcome: "released" };
+      },
+      // Plan upload cap: 10 MB = the universal hard ceiling, so every
+      // pre-existing size assertion in this suite keeps its meaning.
+      effectiveUploadLimitBytes: async () => 10 * 1024 * 1024,
+      // F1: the engine's saved_applications capacity gate — no-op keeps this
+      // suite "fully permissive" (capacity has its own dedicated suite).
+      assertSavedApplicationCapacity: async () => {},
+    };
+  });
   vi.doMock("@/lib/email-campaigns", () => ({
     getUsageSnapshot: async (userId: string) => {
       const du = daily(db, userId);
@@ -1246,6 +1358,262 @@ describe("cancelBewSend — release reserved quota for queued apps", () => {
     expect(db.bew_applications.find((a) => a.status === "sent")).toBeTruthy();
     expect(daily(db, USER).emails_reserved).toBe(0);
     expect(db.bew_campaigns[0].status).toBe("cancelled");
+  });
+});
+
+describe("automation quota — reserve / settle / cancel (no double charge, no double refund)", () => {
+  it("sent application: reservation is completed and charged exactly once", async () => {
+    seedCampaign();
+    seedDocuments();
+    seedApp(1);
+    db.sendScripts = [okSend("m1")];
+
+    const result = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(result.sent).toBe(1);
+    // Ledger: app-1 succeeded — the one and only charge.
+    expect(db.automationLedger.get("app-1")?.status).toBe("succeeded");
+    expect(automationCharges()).toBe(1);
+    expect(db.automationCompleteCalls).toEqual(["app-1"]);
+    expect(db.automationReleaseCalls).toEqual([]);
+
+    // A second drain settles nothing again: the campaign's only row was sent,
+    // so the counter refresh already closed the campaign ("completed") and the
+    // drain refuses BEFORE claiming anything (nothing can be re-settled).
+    const second = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(second.stop).toBe("not-sending");
+    expect(second.processed).toBe(0);
+    expect(automationCharges()).toBe(1);
+    expect(db.automationCompleteCalls).toHaveLength(1);
+    expect(db.automationReleaseCalls).toHaveLength(0);
+  });
+
+  it("definitive failure: reservation released, refunded capacity reused mid-drain", async () => {
+    seedCampaign();
+    seedDocuments();
+    seedApp(1);
+    seedApp(2);
+    db.automationLimit = 1; // makes the refund observable
+    db.sendScripts = [failDefinitive, okSend("m2")];
+
+    // app-1 fails definitively (reservation refunded) and the SAME drain
+    // continues to app-2 — which re-uses the just-refunded unit.
+    const result = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(result.failed).toBe(1);
+    expect(result.sent).toBe(1);
+    expect(db.bew_applications[0].status).toBe("failed");
+    expect(db.automationLedger.get("app-1")?.status).toBe("released");
+    expect(db.automationReleaseCalls).toEqual(["app-1"]);
+    expect(db.bew_applications[1].status).toBe("sent");
+    expect(db.automationLedger.get("app-2")?.status).toBe("succeeded");
+    // One real refund, one real charge — exactly one e-mail out the door.
+    expect(db.automationRefunds).toBe(1);
+    expect(automationCharges()).toBe(1);
+    expect(db.automationCompleteCalls).toEqual(["app-2"]);
+    expect(db.sendLog).toHaveLength(2); // both attempts hit the provider
+  });
+
+  it("transient retry: the reservation is HELD and re-claimed as already_reserved — charged exactly once", async () => {
+    seedCampaign();
+    seedDocuments();
+    seedApp(1);
+    db.sendScripts = [failTemporary, okSend("m1")];
+
+    // Attempt 1: transient → back to queued; the reservation stays reserved.
+    const first = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(first.sent).toBe(0);
+    expect(db.bew_applications[0].status).toBe("queued");
+    expect(db.automationLedger.get("app-1")?.status).toBe("reserved");
+    expect(automationCharges()).toBe(1);
+    expect(db.automationReleaseCalls).toEqual([]); // held, NOT refunded
+
+    // Attempt 2 (due now): re-claim under the SAME stable run id (app-1) …
+    db.bew_applications[0].next_attempt_at = new Date(0).toISOString();
+    const second = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(second.sent).toBe(1);
+    expect(db.bew_applications[0].status).toBe("sent");
+    // … the ledger answers already_reserved → the TOTAL stays one charge.
+    expect(db.automationLedger.get("app-1")?.status).toBe("succeeded");
+    expect(automationCharges()).toBe(1);
+    expect(db.automationCompleteCalls).toEqual(["app-1"]);
+    expect(db.sendLog).toHaveLength(2); // both attempts hit the provider
+  });
+
+  it("uncertain outcome: settled as consumed (completed), never refunded, never re-attempted", async () => {
+    seedCampaign();
+    seedDocuments();
+    seedApp(1);
+    db.sendScripts = [rawNetworkError];
+
+    const result = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(result.uncertain).toBe(1);
+    expect(db.bew_applications[0].status).toBe("needs_attention");
+    expect(db.automationLedger.get("app-1")?.status).toBe("succeeded");
+    expect(automationCharges()).toBe(1);
+    expect(db.automationReleaseCalls).toEqual([]);
+
+    // Later drains never touch it again.
+    db.sendScripts = [okSend("dup?")];
+    await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(automationCharges()).toBe(1);
+    expect(db.sendLog).toHaveLength(1);
+  });
+
+  it("reconnect failure: reservation released, batch stops before the next row", async () => {
+    seedCampaign();
+    seedDocuments();
+    seedApp(1);
+    seedApp(2);
+    db.automationLimit = 1;
+    db.sendScripts = [failReconnect];
+
+    const result = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(result.stop).toBe("reconnect");
+    expect(db.bew_applications[0].status).toBe("needs_attention");
+    expect(db.bew_applications[1].status).toBe("queued");
+    expect(db.automationLedger.get("app-1")?.status).toBe("released");
+    expect(automationCharges()).toBe(0);
+    expect(db.automationReleaseCalls).toEqual(["app-1"]);
+  });
+
+  it("per-row denial stops the drain fail-closed: nothing sent, nothing charged, row stays 'sending'", async () => {
+    seedCampaign();
+    seedDocuments();
+    seedApp(1);
+    seedApp(2);
+    db.automationLimit = 1;
+    // The plan's one unit is already consumed (limit reached, derived — not faked).
+    db.automationLedger.set("seed", { userId: USER, status: "succeeded" });
+
+    const result = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(result.stop).toBe("quota-exhausted");
+    expect(result.sent).toBe(0);
+    expect(db.bew_applications[0].status).toBe("sending"); // claimed, then reserve-denied
+    expect(db.bew_applications[1].status).toBe("queued"); // untouched
+    expect(db.sendLog).toHaveLength(0);
+    expect(db.automationLedger.has("app-1")).toBe(false); // no ledger row → no charge
+    expect(automationCharges()).toBe(1); // only the pre-existing "seed" charge
+
+    // Re-queue the stuck row (the claim-lease reclaim) and free the unit:
+    // the next drain meters and sends it exactly once — then re-gates the
+    // NEXT row mid-drain when the unit is spent again (no over-charge).
+    db.bew_applications[0].status = "queued";
+    db.automationLedger.delete("seed");
+    db.sendScripts = [okSend("m1")];
+    const second = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(second.sent).toBe(1);
+    expect(second.stop).toBe("quota-exhausted");
+    expect(db.bew_applications[0].status).toBe("sent");
+    expect(db.bew_applications[1].status).toBe("sending"); // claimed, reserve denied
+    expect(automationCharges()).toBe(1); // app-1's one-and-only charge
+    expect(db.automationCompleteCalls).toEqual(["app-1"]);
+    expect(db.automationLedger.has("app-2")).toBe(false); // never reserved
+  });
+
+  it("feature_disabled / lookup_error denials map to their own stop codes", async () => {
+    seedCampaign();
+    seedDocuments();
+    seedApp(1);
+    db.automationDeny = "feature_disabled";
+    const first = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(first.stop).toBe("automation-disabled");
+    expect(db.bew_applications[0].status).toBe("sending"); // claimed, denied, nothing released
+    expect(db.automationLedger.size).toBe(0);
+    expect(db.sendLog).toHaveLength(0);
+
+    db.bew_applications[0].status = "queued"; // simulate the lease reclaim
+    db.automationDeny = "lookup_error";
+    const second = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(second.stop).toBe("automation-unavailable");
+    expect(db.automationLedger.size).toBe(0);
+    expect(db.sendLog).toHaveLength(0);
+  });
+
+  it("reserve-level exhaustion mid-drain: the batch stops, no over-charge", async () => {
+    seedCampaign();
+    seedDocuments();
+    seedApp(1);
+    seedApp(2);
+    db.automationLimit = 1;
+    db.sendScripts = [okSend("m1"), okSend("never-sent")];
+
+    const result = await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(result.sent).toBe(1);
+    expect(result.stop).toBe("quota-exhausted");
+    expect(db.bew_applications[0].status).toBe("sent");
+    expect(db.bew_applications[1].status).toBe("sending"); // claimed, reserve denied
+    expect(automationCharges()).toBe(1);
+    expect(db.automationLedger.has("app-2")).toBe(false);
+    expect(db.sendLog).toHaveLength(1);
+  });
+
+  it("startBewSend gate: a denied feature never enqueues (stable codes, no charge)", async () => {
+    seedCampaign({ status: "draft" });
+    seedDocuments();
+    seedApp(1, { status: "generated" });
+    db.automationLimit = 1;
+    db.automationLedger.set("seed", { userId: USER, status: "succeeded" }); // limit reached
+
+    let result = await startBewSend(USER, CAMPAIGN);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("AUTOMATION_QUOTA_EXHAUSTED");
+    expect(db.bew_applications[0].status).toBe("generated"); // never queued
+    expect(db.sendLog).toHaveLength(0);
+    expect(automationCharges()).toBe(1);
+
+    db.automationDeny = "lookup_error";
+    result = await startBewSend(USER, CAMPAIGN);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("AUTOMATION_UNAVAILABLE");
+    expect(db.bew_applications[0].status).toBe("generated");
+
+    db.automationDeny = "feature_disabled";
+    result = await startBewSend(USER, CAMPAIGN);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("AUTOMATION_DISABLED");
+    expect(db.bew_applications[0].status).toBe("generated");
+    expect(db.sendLog).toHaveLength(0);
+    expect(db.automationLedger.size).toBe(1); // "seed" only — nothing was reserved
+  });
+
+  it("cancel: refunds each live reservation once; a second cancel refunds nothing (no double refund)", async () => {
+    seedCampaign({ status: "sending" });
+    seedDocuments();
+    seedApp(1);
+    seedApp(2);
+
+    // One drain: both rows hit a transient provider failure → both back to
+    // queued, each with a LIVE reservation (held for the retry, not settled).
+    // (The drain loop continues after a transient, so both scripts are used.)
+    db.sendScripts = [failTemporary, failTemporary];
+    await processBewSendBatch(USER, CAMPAIGN, 5);
+    expect(db.bew_applications[0].status).toBe("queued");
+    expect(db.bew_applications[1].status).toBe("queued");
+    expect(db.automationLedger.get("app-1")?.status).toBe("reserved");
+    expect(db.automationLedger.get("app-2")?.status).toBe("reserved");
+    expect(automationCharges()).toBe(2);
+    expect(db.automationRefunds).toBe(0); // nothing settled yet
+
+    // Cancel: the RPC refunds the shared e-mail capacity; the engine then
+    // releases every currently-cancelled row — each live reservation is
+    // refunded EXACTLY once (reserved→released is a single transition).
+    const first = await cancelBewSend(USER, CAMPAIGN);
+    expect(first.cancelled).toBe(2);
+    expect(db.automationLedger.get("app-1")?.status).toBe("released");
+    expect(db.automationLedger.get("app-2")?.status).toBe("released");
+    expect(automationCharges()).toBe(0);
+    expect(db.automationRefunds).toBe(2); // one real refund per row
+    expect(db.automationReleaseCalls).toEqual(["app-1", "app-2"]);
+
+    // Second cancel: the RPC cancels nothing new …
+    const second = await cancelBewSend(USER, CAMPAIGN);
+    expect(second.cancelled).toBe(0);
+    // … yet the engine re-releases every currently-cancelled row. The ledger
+    // absorbs both calls as no_op: the refund count does NOT move — a double
+    // cancel can never refund twice.
+    expect(automationCharges()).toBe(0);
+    expect(db.automationRefunds).toBe(2); // still exactly two real refunds
+    expect(db.automationLedger.get("app-1")?.status).toBe("released");
+    expect(db.automationReleaseCalls).toEqual(["app-1", "app-2", "app-1", "app-2"]);
   });
 });
 

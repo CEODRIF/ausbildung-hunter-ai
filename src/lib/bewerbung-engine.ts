@@ -93,6 +93,14 @@ import {
   adAutoAddGate,
   parseAdvertisement,
 } from "@/lib/bew-ad-parser";
+import {
+  assertSavedApplicationCapacity,
+  checkFeature,
+  completeFeatureOp,
+  effectiveUploadLimitBytes,
+  releaseFeatureOp,
+  reserveFeatureOp,
+} from "@/lib/billing/entitlement-service";
 
 /* ------------------------------------------------------------------ *
  * Row types (mirror the migration)
@@ -555,7 +563,9 @@ async function createBewCampaignCore(
     throw new Error("Unable to create the automation campaign.");
   const row = campaign as BewCampaignRow;
 
-  // Seed the requested number of empty application rows.
+  // Seed the requested number of empty application rows. (Empty rows
+  // consume NO saved_applications capacity — the capacity trigger counts
+  // non-empty company names only, see migration 20261123000000.)
   const seeds = Array.from({ length: check.value }, (_, i) => ({
     campaign_id: row.id,
     user_id: input.userId,
@@ -647,6 +657,17 @@ export async function saveBewCompanies(
   }
   const result = buildImportResult(records, 1);
 
+  // Capacity gate (saved_applications items quota) — runs BEFORE the
+  // delete, so a denied replace never destroys the current list. Only
+  // CONTENT rows (non-empty company name) consume capacity; the
+  // replace frees this campaign's slots (p_replace_campaign_id). The DB
+  // trigger (20261123000000) is the hard backstop for the narrow
+  // pre-check→delete→insert window.
+  const newContentCount = result.rows.filter(
+    (r) => (r.companyName ?? "").trim() !== "",
+  ).length;
+  await assertSavedApplicationCapacity(userId, newContentCount, campaignId);
+
   // Replace existing applications with the imported set (reset letters).
   await admin.from("bew_applications").delete().eq("campaign_id", campaignId);
   const rows = result.rows.map((r, i) => {
@@ -674,7 +695,14 @@ export async function saveBewCompanies(
   });
   if (rows.length > 0) {
     const { error } = await admin.from("bew_applications").insert(rows);
-    if (error) throw new Error("Unable to save the company list.");
+    if (error) {
+      // The capacity trigger (hard backstop for the pre-check→insert race)
+      // raises this exact marker — map it to the stable code.
+      if (error.message.includes("saved_application_capacity_exceeded")) {
+        throw new Error("CAPACITY_EXCEEDED");
+      }
+      throw new Error("Unable to save the company list.");
+    }
   }
   // The campaign counters must land together with the rows: the wizard's
   // step-1→2 gate is derived from this state. A failed write here is a
@@ -771,6 +799,12 @@ export async function addBewCompany(
   );
   if (duplicated) throw new Error("DUPLICATE_COMPANY");
 
+  // Capacity gate (saved_applications): the gate above guarantees a
+  // non-empty company name, so this add always creates ONE content row.
+  // The DB trigger (20261123000000) is the hard backstop for the
+  // pre-check→insert race.
+  await assertSavedApplicationCapacity(userId, 1, null);
+
   const maxSeq = rows.reduce((m, r) => Math.max(m, r.seq ?? 0), 0);
   const positionProbe = hasBewPositionColumns();
 
@@ -811,6 +845,9 @@ export async function addBewCompany(
   if (insertError || !inserted) {
     // Stable code (never the raw DB text): the UI maps it locally.
     console.error("[bew] addBewCompany: insert failed", insertError?.message);
+    if (insertError?.message.includes("saved_application_capacity_exceeded")) {
+      throw new Error("CAPACITY_EXCEEDED");
+    }
     throw new Error("SAVE_FAILED");
   }
   // A terminal series that just received new work is reopened: the counter
@@ -892,9 +929,12 @@ export async function setBewCompanyCount(
  *     excluded ones (they hold a seq slot): the batch is clamped to the
  *     remaining room, and a campaign that is already full rejects with
  *     CAMPAIGN_FULL,
- *   - the new rows continue the seq sequence (max seq + 1 — the table has
- *     UNIQUE(campaign_id, seq)) and are byte-identical in shape to the
- *     creation seeds (empty pending rows — NOT fake company data),
+   *   - the new rows continue the seq sequence (max seq + 1 — the table has
+   *     UNIQUE(campaign_id, seq)) and are byte-identical in shape to the
+   *     creation seeds (empty pending rows — NOT fake company data),
+   *   - the new rows are EMPTY, so they consume no saved_applications
+   *     capacity (the capacity trigger counts non-empty company names
+   *     only — see migration 20261123000000),
  *   - the denormalized counters are RECOMPUTED after the insert (the 42703
  *     lesson: a missed counter write freezes the wizard's step gates),
  *   - the batch insert is a single statement — atomic; a failed insert
@@ -1041,6 +1081,16 @@ export async function updateBewApplicationFields(
     app.seq,
   ).rows[0];
 
+  // Capacity gate (saved_applications): only an empty→content transition
+  // adds capacity. A rename (content→content) is free; a clear
+  // (content→empty) frees a slot. The DB trigger applies the identical
+  // transition rule (20261123000000).
+  const oldHasContent = (app.company_name ?? "").trim() !== "";
+  const newHasContent = (validated.companyName ?? "").trim() !== "";
+  if (newHasContent && !oldHasContent) {
+    await assertSavedApplicationCapacity(userId, 1, null);
+  }
+
   const positionSupportedUpdate = await positionProbe;
   const { data: updated, error: updateError } = await admin
     .from("bew_applications")
@@ -1073,6 +1123,9 @@ export async function updateBewApplicationFields(
     .maybeSingle();
   if (updateError) {
     console.error("[bew] updateBewApplicationFields: update failed", updateError.message);
+    if (updateError.message.includes("saved_application_capacity_exceeded")) {
+      throw new Error("CAPACITY_EXCEEDED");
+    }
     throw new Error("SAVE_FAILED");
   }
   // The row's validity changed → the campaign counters must follow
@@ -1105,6 +1158,12 @@ export async function uploadBewDocument(
   const buffer = Buffer.from(await file.arrayBuffer());
   const check = validateDocumentInput(file.type, buffer.length);
   if (!check.ok) throw new Error(`DOCUMENT_${check.error.toUpperCase()}`);
+  // Plan-aware cap on top of the universal 10 MB ceiling in
+  // validateDocumentInput. Same stable code as a plain oversized file —
+  // the UI already maps DOCUMENT_TOO-LARGE to the localized "file too
+  // large" message. Lookup failure degrades to 10 MB (never an upgrade).
+  const maxBytes = await effectiveUploadLimitBytes(userId);
+  if (buffer.length > maxBytes) throw new Error("DOCUMENT_TOO-LARGE");
 
   const admin = createAdminClient();
   const path = storagePath(userId, file.name);
@@ -2168,6 +2227,28 @@ export async function startBewSend(
   );
   if (!sender) return { ok: false, error: "SENDER_NOT_READY" };
 
+  // AUTOMATION QUOTA GATE (server-side, fail-closed): application automation
+  // is a commercial-plan feature — the entitlement contract resolves every
+  // free/legacy/trial state to a zero limit (feature_disabled /
+  // plan_expired). Denying at send start keeps those users from enqueuing
+  // batches they could never meter; the per-row reserve in
+  // processBewSendBatch re-checks at CLAIM time (a plan can expire or be
+  // downgraded between start and drain), so gate + per-row reserve together
+  // close both entry points.
+  const automation = await checkFeature(userId, "automation");
+  if (!automation.allowed) {
+    return {
+      ok: false,
+      error:
+        automation.reason === "quota_exhausted"
+          ? "AUTOMATION_QUOTA_EXHAUSTED"
+          : automation.reason === "lookup_error"
+            ? "AUTOMATION_UNAVAILABLE"
+            : "AUTOMATION_DISABLED",
+      senderEmail: sender.email,
+    };
+  }
+
   const docs = await loadCampaignDocuments(admin, campaignId, userId);
   const hasCv = docs.some((d) => d.kind === "cv");
   const hasCertificates = docs.some(
@@ -2474,6 +2555,41 @@ export async function processBewSendBatch(
       }
       processed += 1;
 
+      // AUTOMATION QUOTA (one op = one application e-mail): reserve under
+      // the row's STABLE id — the same run id on every re-claim, so a
+      // transient retry, a crash reclaim, or an overlapping tick can never
+      // charge the same application twice (the ledger answers
+      // `already_reserved`). Every denial is fail-closed: nothing is sent,
+      // nothing is released (nothing was reserved), and the row stays
+      // `sending` until the claim lease expires — `reclaimStaleSending`
+      // returns it to `queued` and the next drain re-gates it here.
+      const automationReservation = await reserveFeatureOp(
+        userId,
+        "automation",
+        app.id,
+      );
+      const automationMetered =
+        automationReservation.outcome === "reserved" ||
+        automationReservation.outcome === "already_reserved";
+      if (!automationMetered && automationReservation.outcome !== "unmetered") {
+        stop =
+          automationReservation.outcome === "error"
+            ? "automation-unavailable"
+            : automationReservation.outcome === "feature_disabled"
+              ? "automation-disabled"
+              : "quota-exhausted";
+        break;
+      }
+      /** Settle this row's automation reservation: `final` = the e-mail
+       *  executed (sent, or consumed-as-uncertain) → complete; otherwise
+       *  the reservation is refunded. Both are no_op-safe, never throw,
+       *  and are no-ops when the row was unmetered. */
+      const settleAutomation = async (final: boolean) => {
+        if (!automationMetered) return;
+        if (final) await completeFeatureOp(userId, "automation", app.id);
+        else await releaseFeatureOp(userId, "automation", app.id);
+      };
+
       // Resolve the campaign e-mail for THIS recipient — independently, from
       // this row's own company/contact data plus the profile name. The
       // letter's body_html is NOT involved in the e-mail body at all.
@@ -2505,14 +2621,16 @@ export async function processBewSendBatch(
           left(
             personalizationError instanceof Error
               ? personalizationError.message
-              : "personalization failed",
-            500,
-          ),
-        );
-        await releaseCapacity(admin, userId, campaign.usage_date, 1);
-        failed += 1;
-        continue;
-      }
+             : "personalization failed",
+             500,
+           ),
+         );
+         await releaseCapacity(admin, userId, campaign.usage_date, 1);
+         // Permanent failure → refund the automation reservation.
+         await settleAutomation(false);
+         failed += 1;
+         continue;
+       }
 
       // The recipient gets the PDF file, not raw HTML: ensure THIS company's
       // Anschreiben PDF exists (generates on first send / after edits, heals
@@ -2530,33 +2648,39 @@ export async function processBewSendBatch(
           app.id,
           "failed",
           "pdf_generation_failed",
-          "The cover letter PDF could not be generated for this application.",
-        );
-        await releaseCapacity(admin, userId, campaign.usage_date, 1);
-        failed += 1;
-        continue;
-      }
+           "The cover letter PDF could not be generated for this application.",
+         );
+         await releaseCapacity(admin, userId, campaign.usage_date, 1);
+         // Permanent failure → refund the automation reservation.
+         await settleAutomation(false);
+         failed += 1;
+         continue;
+       }
       // Campaign documents (CV + certificates) + this company's PDF — no
       // duplicate attachment names in one e-mail.
       const appAttachments = dedupeAttachmentsByName([...attachments, pdfRef]);
 
       let provider: Awaited<ReturnType<typeof createEmailProvider>>;
       try {
-        provider = await createEmailProvider(userId, campaign.email_account_id, appAttachments);
-      } catch (error) {
-        const c = classifySendError(error);
-        if (c.kind === "reconnect") {
-          await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
-          await releaseCapacity(admin, userId, campaign.usage_date, 1);
-          failed += 1;
-          stop = "reconnect";
-          break;
-        }
-        await markBewApp(admin, app.id, "failed", c.code, c.message);
-        await releaseCapacity(admin, userId, campaign.usage_date, 1);
-        failed += 1;
-        continue;
-      }
+         provider = await createEmailProvider(userId, campaign.email_account_id, appAttachments);
+       } catch (error) {
+         const c = classifySendError(error);
+         if (c.kind === "reconnect") {
+           await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
+           await releaseCapacity(admin, userId, campaign.usage_date, 1);
+           // Permanent failure (sender dead) → refund the reservation.
+           await settleAutomation(false);
+           failed += 1;
+           stop = "reconnect";
+           break;
+         }
+         await markBewApp(admin, app.id, "failed", c.code, c.message);
+         await releaseCapacity(admin, userId, campaign.usage_date, 1);
+         // Permanent failure → refund the automation reservation.
+         await settleAutomation(false);
+         failed += 1;
+         continue;
+       }
 
       try {
         const result = await provider.sendEmail({
@@ -2589,9 +2713,11 @@ export async function processBewSendBatch(
         // non-throwing and non-fatal by design: the row stays "sent", the
         // quota stays consumed, the e-mail is never re-triggered, and the
         // post-drain sweep retries a failed delete safely.
-        await deleteLetterPdf(userId, app.id, admin);
-        sent += 1;
-      } catch (error) {
+         await deleteLetterPdf(userId, app.id, admin);
+         // The send executed → make the automation reservation final.
+         await settleAutomation(true);
+         sent += 1;
+       } catch (error) {
         const c = classifySendError(error);
         if (c.kind === "retry" && app.attempt_count < BEW_MAX_SEND_ATTEMPTS) {
           await admin
@@ -2603,10 +2729,14 @@ export async function processBewSendBatch(
               next_attempt_at: inSecondsIso(BEW_RETRY_AFTER_SECONDS),
             })
             .eq("id", app.id);
-          // Quota stays reserved for the retry.
+          // Quota stays reserved for the retry (shared e-mail capacity AND
+          // the automation reservation — the re-claim re-reserves with the
+          // same run id and is charged once, total).
         } else if (c.kind === "reconnect") {
           await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
           await releaseCapacity(admin, userId, campaign.usage_date, 1);
+          // Permanent failure (sender dead) → refund the reservation.
+          await settleAutomation(false);
           failed += 1;
           stop = "reconnect";
           break;
@@ -2616,11 +2746,16 @@ export async function processBewSendBatch(
             target_user_id: userId,
             reservation_date: campaign.usage_date,
           });
+          // The send operation EXECUTED (delivery uncertain but possible) →
+          // count it, exactly like a confirmed send.
+          await settleAutomation(true);
           await markBewApp(admin, app.id, "needs_attention", c.code, c.message);
           uncertain += 1;
         } else {
           await markBewApp(admin, app.id, "failed", c.code, c.message);
           await releaseCapacity(admin, userId, campaign.usage_date, 1);
+          // Permanent failure → refund the automation reservation.
+          await settleAutomation(false);
           failed += 1;
         }
       }
@@ -2725,7 +2860,23 @@ export async function cancelBewSend(
     target_user_id: userId,
     target_campaign_id: campaignId,
   });
-  if (!error) await refreshCampaignCounters(admin, campaignId);
+  if (!error) {
+    // AUTOMATION QUOTA: the RPC refunded the shared e-mail capacity; refund
+    // the automation reservations of the same rows too. Releasing every
+    // currently-`cancelled` row is idempotent — release_feature_op refunds
+    // only `reserved` ledger rows (a row cancelled in an earlier call is
+    // already settled → no_op), so a double cancel can never refund twice.
+    const { data: cancelledRows } = await admin
+      .from("bew_applications")
+      .select("id")
+      .eq("campaign_id", campaignId)
+      .eq("user_id", userId)
+      .eq("status", "cancelled");
+    for (const row of (cancelledRows ?? []) as Array<{ id: string }>) {
+      await releaseFeatureOp(userId, "automation", row.id);
+    }
+    await refreshCampaignCounters(admin, campaignId);
+  }
   return { cancelled: typeof data === "number" ? data : 0 };
 }
 

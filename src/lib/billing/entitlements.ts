@@ -19,6 +19,10 @@ export interface SubscriptionState {
   current_period_start: string | null;
   current_period_end: string | null;
   canceled_at: string | null;
+  /** Set once a trial has ever been activated for this account and never
+   *  cleared (one trial per account, enforced server-side). Null when the
+   *  row predates migration 20261120000000 or no trial was used. */
+  trial_activated_at: string | null;
 }
 
 export interface Entitlements {
@@ -42,6 +46,7 @@ interface SubscriptionRow {
   current_period_start: string | null;
   current_period_end: string | null;
   canceled_at: string | null;
+  trial_activated_at: string | null;
 }
 
 function isSubscriptionCurrent(row: SubscriptionRow, nowMs: number): boolean {
@@ -72,9 +77,9 @@ export async function getEntitlements(
     const admin = createAdminClient();
     const { data } = await admin
       .from("subscriptions")
-      .select(
-        "plan, status, provider, current_period_start, current_period_end, canceled_at",
-      )
+       .select(
+         "plan, status, provider, current_period_start, current_period_end, canceled_at, trial_activated_at",
+       )
       .eq("user_id", userId)
       .maybeSingle();
     row = (data as SubscriptionRow | null) ?? null;
@@ -107,11 +112,12 @@ export async function getEntitlements(
             ? row.status
             : "active",
         provider: row.provider ?? "manual",
-        current_period_start: row.current_period_start,
-        current_period_end: row.current_period_end,
-        canceled_at: row.canceled_at,
-      }
-    : null;
+         current_period_start: row.current_period_start,
+         current_period_end: row.current_period_end,
+         canceled_at: row.canceled_at,
+         trial_activated_at: row.trial_activated_at ?? null,
+       }
+     : null;
 
   if (row && isSubscriptionCurrent(row, nowMs) && planLimits) {
     const planId = row.plan as PlanId;

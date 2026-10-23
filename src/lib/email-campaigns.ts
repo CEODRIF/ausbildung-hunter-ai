@@ -1,5 +1,6 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   assertDraftOwnership,
@@ -8,8 +9,14 @@ import {
   htmlToText,
   validateRecipientList,
   MAX_ATTACHMENT_SIZE,
+  DraftQuotaError,
   type ApplicationGoal,
 } from "@/lib/application-drafts";
+import {
+  completeFeatureOp,
+  releaseFeatureOp,
+  reserveFeatureOp,
+} from "@/lib/billing/entitlement-service";
 import {
   createEmailProvider,
   type ProviderFailure,
@@ -208,6 +215,35 @@ async function createOwnedCampaign(input: {
     }))
     .filter((item) => item.size_bytes > 0 && item.size_bytes <= MAX_ATTACHMENT_SIZE)
     .slice(0, 20);
+  // email_drafts quota (1 op = 1 created application email, locked
+  // definition). The DRAFT-FREE campaign owns the content and creates no
+  // application_draft row, so the metering point is HERE — after every
+  // validation (a rejected submission must not consume quota) and before
+  // any persistence. `createLegacyCampaign` is deliberately NOT metered:
+  // its draft was already metered at `createBlankDraft` time (double-count
+  // guard). Reserve is atomic + idempotent per run id; lookup failure is
+  // fail-closed. Refunds happen on every failure path below — release only
+  // touches `status='reserved'` rows, so an operation that was never
+  // successfully reserved is never refunded.
+  const draftRunId = randomUUID();
+  const draftReservation = await reserveFeatureOp(
+    current.user.id,
+    "email_drafts",
+    draftRunId,
+  );
+  if (draftReservation.outcome === "quota_exhausted")
+    throw new DraftQuotaError("quota_exhausted");
+  if (draftReservation.outcome === "feature_disabled")
+    throw new DraftQuotaError("feature_disabled");
+  if (draftReservation.outcome === "error")
+    throw new DraftQuotaError("quota_unavailable");
+  const draftMetered =
+    draftReservation.outcome === "reserved" ||
+    draftReservation.outcome === "already_reserved";
+  const releaseDraftQuota = () =>
+    draftMetered
+      ? releaseFeatureOp(current.user.id, "email_drafts", draftRunId)
+      : Promise.resolve({ outcome: "no_op" as const });
   const { data: capacity, error: capacityError } = await admin.rpc(
     input.scheduling ? "reserve_email_capacity_on" : "reserve_email_capacity",
     input.scheduling
@@ -218,12 +254,15 @@ async function createOwnedCampaign(input: {
         }
       : { target_user_id: current.user.id, requested: validRecipients.length },
   );
-  if (capacityError)
+  if (capacityError) {
+    // No campaign was created → the email_drafts slot goes back.
+    await releaseDraftQuota();
     throw new Error(
       capacityError.message.includes("daily_quota_exceeded")
         ? "Daily email quota exceeded."
         : "Unable to reserve daily email capacity.",
     );
+  }
   const usage = capacity as UsageSnapshot;
   const supportsContactName = await hasContactNameColumn();
   const { data: campaign, error: campaignError } = await admin
@@ -256,6 +295,7 @@ async function createOwnedCampaign(input: {
       reservation_date: usage.date,
       released: validRecipients.length,
     });
+    await releaseDraftQuota();
     throw new Error("Unable to create campaign.");
   }
   const { error: messagesError } = await admin.from("email_messages").insert(
@@ -281,6 +321,7 @@ async function createOwnedCampaign(input: {
       reservation_date: usage.date,
       released: validRecipients.length,
     });
+    await releaseDraftQuota();
     throw new Error("Unable to queue campaign messages.");
   }
   if (attachments.length > 0) {
@@ -303,9 +344,16 @@ async function createOwnedCampaign(input: {
         reservation_date: usage.date,
         released: validRecipients.length,
       });
+      await releaseDraftQuota();
       throw new Error("Unable to save attachments.");
     }
   }
+  // The application email exists and is queued → make the reservation final.
+  // Best-effort: if the completion RPC itself fails, the run ledger holds a
+  // `reserved` row that the 15-min stale-expiry sweep reconciles (the op is
+  // already durable, so keeping the counter is the safe direction).
+  if (draftMetered)
+    await completeFeatureOp(current.user.id, "email_drafts", draftRunId);
   await admin.from("activity_logs").insert({
     user_id: current.user.id,
     activity_type: "campaign_created",
@@ -321,7 +369,11 @@ async function createOwnedCampaign(input: {
 
 /** Legacy (pre-migration) path: the application draft remains the content
  *  source. Kept verbatim so the product behaves EXACTLY as before until the
- *  manual migration 20261110000000 is applied. */
+ *  manual migration 20261110000000 is applied.
+ *
+ *  QUOTA: deliberately NOT metered here — the draft was already metered
+ *  against `email_drafts` at `createBlankDraft` time; metering the campaign
+ *  too would double-count one application email. */
 async function createLegacyCampaign(input: {
   draftId: string;
   senderAccountId: string;

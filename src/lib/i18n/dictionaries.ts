@@ -28,6 +28,162 @@ const de = {
     
     
   },
+  // ---- Billing / subscription (plans, demo checkout, usage) --------------
+  billing: {
+    featureNames: {
+      ai_assistant: "KI-Assistent",
+      cover_letter: "Anschreiben",
+      resume_ai: "Lebenslauf-KI",
+      scanner: "Bewerbungsscan",
+      deckblatt: "Deckblatt AI",
+      email_drafts: "E-Mail-Entwürfe",
+      opportunity_search: "Stellensuche",
+      saved_opportunities: "Gespeicherte Stellen",
+      saved_applications: "Gespeicherte Bewerbungen",
+      salary_calculator: "Brutto-Netto-Rechner",
+      automation: "Bewerbung-Automatisierung",
+      upload: "Max. Dateigröße",
+    },
+    errors: {
+      unauthorized: "Bitte melde dich an, um fortzufahren.",
+      invalid_input: "Ungültige Eingabe. Bitte versuche es erneut.",
+      mock_payments_disabled:
+        "Demo-Zahlungen sind in dieser Umgebung nicht verfügbar.",
+      invalid_plan: "Dieses Angebot kann nicht gekauft werden.",
+      not_found: "Kauf nicht gefunden.",
+      terminal:
+        "Dieser Kauf ist bereits abgeschlossen und kann nicht erneut verarbeitet werden.",
+      expired: "Dieser Kauf ist abgelaufen. Bitte starte einen neuen Kauf.",
+      payment_failed:
+        "Die Demo-Zahlung ist fehlgeschlagen. Es wurde nichts berechnet.",
+      canceled: "Der Kauf wurde storniert. Es wurde nichts berechnet.",
+      failed: "Etwas ist schiefgelaufen. Bitte versuche es erneut.",
+    },
+    checkout: {
+      pageTitle: "Demo-Kauf",
+      backToBilling: "Zur Abrechnung",
+      summaryTitle: "Ihre Auswahl",
+      priceLabel: "Preis",
+      durationLabel: "Laufzeit",
+      durationFixedDays: "{days} Tage ab bestätigtem Kauf",
+      durationCalendarMonth: "Ein Kalendermonat ab bestätigtem Kauf",
+      totalDue: "Gesamtbetrag",
+      keyLimits: "Wichtige Limits",
+      perDay: "{value}/Tag",
+      perCycle: "{value} pro Abrechnungszyklus",
+      items: "{value} Einträge",
+      mb: "max. {value} MB pro Datei",
+      unlimited: "Kein Limit",
+      disabled: "Nicht verfügbar",
+      demoBanner: "DEMO PAYMENT — NO REAL CHARGE",
+      simulatedNotice:
+        "Die Zahlung wird nur simuliert. Es werden keine echten Daten erhoben, keine echten Beträge berechnet und kein echter Zahlungsdienstleister kontaktiert.",
+      inertNotice:
+        "Demo-Zahlungen sind in dieser Umgebung deaktiviert. Die Kaufsteuerung ist daher inaktiv — es werden keine Berechtigungen aktiviert.",
+      startButton: "Demo-Kauf starten",
+      startPending: "Wird gestartet …",
+      pendingTitle: "Simulierte Verarbeitung",
+      pendingNotice:
+        "Wähle ein simuliertes Zahlungsergebnis. Es findet keine echte Zahlung statt.",
+      simulateSuccess: "Erfolg simulieren",
+      simulateFailed: "Fehler simulieren",
+      simulateCanceled: "Kauf abbrechen",
+      duplicateNotice:
+        "Dieser Kauf wurde bereits mit demselben Schlüssel erstellt — es wird derselbe Kauf fortgesetzt.",
+    },
+    success: {
+      pageTitle: "Kaufergebnis",
+      mockLabel: "DEMO PAYMENT — NO REAL CHARGE",
+      mockDisclaimer:
+        "Dies ist eine simulierte Transaktion. Es wurden keine echten Zahlungsdaten erhoben und keine echten Beträge berechnet.",
+      succeededTitle: "Demo-Kauf abgeschlossen",
+      succeededBody:
+        "Der simulierte Kauf wurde erfolgreich abgeschlossen und das Abonnement aktiviert. Dies war eine Demo-Zahlung — es wurde nichts berechnet.",
+      pendingTitle: "Kauf ausstehend",
+      pendingBody:
+        "Der simulierte Kauf wurde noch nicht abgeschlossen. Kehre zum Kauf zurück und wähle ein Zahlungsergebnis.",
+      failedTitle: "Demo-Zahlung fehlgeschlagen",
+      failedBody:
+        "Die simulierte Zahlung ist fehlgeschlagen. Es wurden keine Berechtigungen erteilt und nichts berechnet.",
+      canceledTitle: "Kauf storniert",
+      canceledBody:
+        "Der simulierte Kauf wurde storniert. Es wurden keine Berechtigungen erteilt und nichts berechnet.",
+      expiredTitle: "Kauf abgelaufen",
+      expiredBody:
+        "Dieser simulierte Kauf ist abgelaufen, bevor er abgeschlossen wurde. Bitte starte einen neuen Kauf.",
+      notFoundTitle: "Kauf nicht gefunden",
+      notFoundBody:
+        "Es wurde kein Kauf mit dieser Kennung für dein Konto gefunden. Besuche die Abrechnungsseite, um einen Kauf zu starten.",
+      currentPlan: "Dein aktuelles Abonnement",
+      backToBilling: "Zur Abrechnung",
+      plan: "Plan",
+      status: "Status",
+      periodStart: "Startdatum",
+      periodEnd: "Enddatum",
+      provider: "Anbieter",
+      providerMock: "Demo (simuliert)",
+      amount: "Betrag",
+      expiresAt: "Kauf gültig bis",
+    },
+    trial: {
+      cta: "3-Tage-Test starten",
+      ctaPending: "Wird aktiviert …",
+      resultActivated:
+        "Dein 72-Stunden-Test ist aktiv. Er läuft automatisch aus — kein manuelles Deaktivieren nötig.",
+      resultTrialUsed:
+        "Dein Test wurde bereits genutzt. Ein Neustart ist nicht möglich.",
+      resultPaidActive:
+        "Du hast bereits ein aktives kostenpflichtiges Abonnement — ein Test ist nicht nötig.",
+      error: "Der Test konnte nicht aktiviert werden. Bitte versuche es erneut.",
+    },
+    currentPlan: {
+      title: "Dein Abonnement",
+      plan: "Plan",
+      status: "Status",
+      statusNone: "Kein Abonnement",
+      statusActive: "Aktiv",
+      statusCanceled: "Gekündigt",
+      statusExpired: "Abgelaufen",
+      periodStart: "Startdatum",
+      periodEnd: "Enddatum",
+      provider: "Anbieter",
+      providerMock: "Demo (simuliert)",
+      trialUsed: "Test bereits genutzt",
+      trialNotUsed: "Test verfügbar",
+      mockNotice:
+        "Aktiv über eine simulierte (Demo-)Zahlung — keine echte Zahlung.",
+      lookupFailed:
+        "Der Abonnementstatus konnte nicht ermittelt werden. Es werden keine kostenpflichtigen Berechtigungen erteilt.",
+      trial: "Kostenlose Testphase",
+      upgradeTitle: "Upgraden",
+      upgradeLink: "Demo-Kauf starten",
+    },
+    usage: {
+      title: "Nutzung",
+      remaining: "Verbleibend",
+      usedOf: "{used} von {limit}",
+      noLimit: "Kein Limit",
+      disabled: "Nicht verfügbar",
+      resetsDaily: "Täglicher Reset (UTC)",
+      resetsOnExpiry: "Reset am Ende der Abonnementperiode",
+      noReset: "Kein Reset",
+      uploadLabel: "Max. Dateigröße",
+    },
+    offers: {
+      sectionTitle: "Pläne & Preise",
+      current: "Aktueller Plan",
+      choose: "Diesen Plan wählen",
+      durationHours: "{hours} Stunden",
+      durationDays: "{days} Tage",
+      durationCalendarMonth: "1 Kalendermonat",
+      freePrice: "Kostenlos",
+      usageEmpty: "Dein Plan verbucht keine Nutzung.",
+      errorTitle: "Abrechnungsstatus nicht verfügbar",
+      errorBody:
+        "Wir konnten deinen Abonnementstatus nicht laden. Die Pläne unten bleiben sichtbar — bitte versuche es gleich erneut.",
+      retry: "Erneut versuchen",
+    },
+  },
   // ---- Shell: sidebar sections + navigation ------------------------------
   nav: {
 
@@ -773,6 +929,7 @@ const de = {
     
     
     noEmail: { title: "Kein E-Mail-Konto verbunden", body: "Verbinden Sie vor der Vorbereitung einer Bewerbungsmail Gmail oder Outlook.", cta: "E-Mail-Konto verbinden" },
+    draftQuota: { title: "Tägliches Limit erreicht", body: "Ihr tägliches Limit für neue Bewerbungsmails ist erreicht. Das Limit wird jeden Tag (UTC) zurückgesetzt.", cta: "Plan erweitern" },
   },
 
   // ---- Account & settings pages (data, usage, email, billing) --------------
@@ -1853,6 +2010,12 @@ const de = {
         "Dein Profil ist unvollständig — bitte trage unter „Einstellungen → Profil“ alle sieben Bewerberdaten (Name, Straße, Postleitzahl, Stadt, Land, E-Mail, Telefon) ein, bevor Anschreiben generiert oder versendet werden.",
       NOTHING_TO_SEND: "Keine sendefähige Bewerbung ausgewählt.",
       QUOTA_EXHAUSTED: "Das heutige Sendekontingent ist aufgebraucht.",
+      AUTOMATION_DISABLED:
+        "Die Bewerbungs-Automatik ist nicht in deinem aktuellen Plan enthalten. Bitte unter Einstellungen → Abrechnung einen kommerziellen Plan wählen.",
+      AUTOMATION_QUOTA_EXHAUSTED:
+        "Dein tägliches Automatisierungs-Limit ist erreicht. Es wird um 00:00 UTC zurückgesetzt.",
+      AUTOMATION_UNAVAILABLE:
+        "Das Automatisierungs-Limit konnte nicht geprüft werden. Bitte erneut versuchen.",
       QUEUE_FAILED: "Die Warteschlange konnte nicht erstellt werden – bitte erneut versuchen.",
       INVALID_PAYLOAD: "Ungültige Daten.",
       SAVE_FAILED:
@@ -1888,6 +2051,8 @@ const de = {
         "Diese E-Mail-Adresse ist bereits in der Serie vorhanden — doppelte Einträge werden nicht hinzugefügt.",
       COUNT_EXCEEDED:
         "Die Serie hat bereits 100 Einträge — die maximale Anzahl ist erreicht.",
+      CAPACITY_EXCEEDED:
+        "Das Limit deiner Mitgliedschaft für gespeicherte Bewerbungen ist erreicht — entferne Einträge oder wechsle zu einem größeren Plan.",
       POSITION_TOO_LONG:
         "Der Stellentitel oder die Stellenbeschreibung ist zu lang (max. 160 / 4000 Zeichen) — bitte kürzen. Deine Eingabe bleibt erhalten.",
       CAMPAIGN_SENDING:
@@ -1918,6 +2083,161 @@ const en: Dict = {
     },
     
     
+  },
+  billing: {
+    featureNames: {
+      ai_assistant: "AI Assistant",
+      cover_letter: "Cover Letter",
+      resume_ai: "Resume AI",
+      scanner: "Application Scanner",
+      deckblatt: "Deckblatt AI",
+      email_drafts: "Email drafts",
+      opportunity_search: "Opportunity searches",
+      saved_opportunities: "Saved opportunities",
+      saved_applications: "Saved applications",
+      salary_calculator: "Gross-to-Net calculator",
+      automation: "Application Automation",
+      upload: "Max. file size",
+    },
+    errors: {
+      unauthorized: "Please sign in to continue.",
+      invalid_input: "Invalid input. Please try again.",
+      mock_payments_disabled:
+        "Demo payments are not available in this environment.",
+      invalid_plan: "This offer cannot be purchased.",
+      not_found: "Checkout not found.",
+      terminal:
+        "This checkout is already finalized and cannot be processed again.",
+      expired: "This checkout has expired. Please start a new one.",
+      payment_failed:
+        "The simulated payment failed. Nothing was charged.",
+      canceled: "The checkout was canceled. Nothing was charged.",
+      failed: "Something went wrong. Please try again.",
+    },
+    checkout: {
+      pageTitle: "Demo checkout",
+      backToBilling: "Back to billing",
+      summaryTitle: "Your selection",
+      priceLabel: "Price",
+      durationLabel: "Duration",
+      durationFixedDays: "{days} days from confirmed purchase",
+      durationCalendarMonth: "One calendar month from confirmed purchase",
+      totalDue: "Total due",
+      keyLimits: "Key limits",
+      perDay: "{value}/day",
+      perCycle: "{value} per subscription cycle",
+      items: "{value} items",
+      mb: "max. {value} MB per file",
+      unlimited: "Unlimited",
+      disabled: "Not available",
+      demoBanner: "DEMO PAYMENT — NO REAL CHARGE",
+      simulatedNotice:
+        "Payment processing is fully simulated. No real data is collected, no real charge is made, and no real payment provider is contacted.",
+      inertNotice:
+        "Demo payments are disabled in this environment. The checkout controls are therefore inert — no entitlements can be activated.",
+      startButton: "Start demo checkout",
+      startPending: "Starting …",
+      pendingTitle: "Simulated processing",
+      pendingNotice:
+        "Choose a simulated payment outcome. No real payment takes place.",
+      simulateSuccess: "Simulate success",
+      simulateFailed: "Simulate failure",
+      simulateCanceled: "Cancel checkout",
+      duplicateNotice:
+        "This checkout was already created with the same key — the same checkout is being resumed.",
+    },
+    success: {
+      pageTitle: "Checkout result",
+      mockLabel: "DEMO PAYMENT — NO REAL CHARGE",
+      mockDisclaimer:
+        "This is a simulated transaction. No real payment data was collected and no real charge was made.",
+      succeededTitle: "Demo checkout completed",
+      succeededBody:
+        "The simulated checkout completed successfully and the subscription was activated. This was a demo payment — nothing was charged.",
+      pendingTitle: "Checkout pending",
+      pendingBody:
+        "The simulated checkout has not been completed yet. Go back to checkout and pick a payment outcome.",
+      failedTitle: "Simulated payment failed",
+      failedBody:
+        "The simulated payment failed. No entitlements were granted and nothing was charged.",
+      canceledTitle: "Checkout canceled",
+      canceledBody:
+        "The simulated checkout was canceled. No entitlements were granted and nothing was charged.",
+      expiredTitle: "Checkout expired",
+      expiredBody:
+        "This simulated checkout expired before it was completed. Please start a new one.",
+      notFoundTitle: "Checkout not found",
+      notFoundBody:
+        "No checkout with this identifier was found for your account. Visit the billing page to start a checkout.",
+      currentPlan: "Your current subscription",
+      backToBilling: "Back to billing",
+      plan: "Plan",
+      status: "Status",
+      periodStart: "Start date",
+      periodEnd: "End date",
+      provider: "Provider",
+      providerMock: "Demo (simulated)",
+      amount: "Amount",
+      expiresAt: "Checkout valid until",
+    },
+    trial: {
+      cta: "Start 3-day trial",
+      ctaPending: "Activating …",
+      resultActivated:
+        "Your 72-hour trial is active. It expires automatically — no manual deactivation needed.",
+      resultTrialUsed:
+        "Your trial has already been used. It cannot be restarted.",
+      resultPaidActive:
+        "You already have an active paid subscription — no trial is needed.",
+      error: "The trial could not be activated. Please try again.",
+    },
+    currentPlan: {
+      title: "Your subscription",
+      plan: "Plan",
+      status: "Status",
+      statusNone: "No subscription",
+      statusActive: "Active",
+      statusCanceled: "Canceled",
+      statusExpired: "Expired",
+      periodStart: "Start date",
+      periodEnd: "End date",
+      provider: "Provider",
+      providerMock: "Demo (simulated)",
+      trialUsed: "Trial already used",
+      trialNotUsed: "Trial available",
+      mockNotice:
+        "Activated through a simulated (demo) payment — no real charge.",
+      lookupFailed:
+        "Subscription status could not be determined. No paid entitlements are being granted.",
+      trial: "Free trial",
+      upgradeTitle: "Upgrade",
+      upgradeLink: "Start demo checkout",
+    },
+    usage: {
+      title: "Usage",
+      remaining: "Remaining",
+      usedOf: "{used} of {limit}",
+      noLimit: "Unlimited",
+      disabled: "Not available",
+      resetsDaily: "Resets daily (UTC)",
+      resetsOnExpiry: "Resets at the end of the subscription period",
+      noReset: "No reset",
+      uploadLabel: "Max. file size",
+    },
+    offers: {
+      sectionTitle: "Plans & pricing",
+      current: "Current plan",
+      choose: "Choose this plan",
+      durationHours: "{hours} hours",
+      durationDays: "{days} days",
+      durationCalendarMonth: "1 calendar month",
+      freePrice: "Free",
+      usageEmpty: "Your plan does not meter usage.",
+      errorTitle: "Billing status unavailable",
+      errorBody:
+        "We couldn't load your subscription status. The plans below remain visible — please try again shortly.",
+      retry: "Try again",
+    },
   },
   nav: {
 
@@ -2618,6 +2938,7 @@ const en: Dict = {
     
     
     noEmail: { title: "No email account connected", body: "Connect Gmail or Outlook before preparing an application email.", cta: "Connect email account" },
+    draftQuota: { title: "Daily limit reached", body: "You've reached today's limit for new application emails. The limit resets daily (UTC).", cta: "Upgrade plan" },
   },
 
   // ---- Account & settings pages (data, usage, email, billing) --------------
@@ -3688,6 +4009,12 @@ const en: Dict = {
         "Your profile is incomplete — please fill in all seven applicant details (full name, street, postal code, city, country, e-mail, phone) under Settings → Profile before cover letters can be generated or sent.",
       NOTHING_TO_SEND: "No sendable application selected.",
       QUOTA_EXHAUSTED: "Today's sending quota is exhausted.",
+      AUTOMATION_DISABLED:
+        "Application automation is not included in your current plan. Choose a commercial plan under Settings → Billing.",
+      AUTOMATION_QUOTA_EXHAUSTED:
+        "Your daily automation limit is exhausted. It resets at 00:00 UTC.",
+      AUTOMATION_UNAVAILABLE:
+        "The automation limit could not be verified. Please try again.",
       QUEUE_FAILED: "The queue could not be created — please try again.",
       INVALID_PAYLOAD: "Invalid data.",
       SAVE_FAILED:
@@ -3722,6 +4049,8 @@ const en: Dict = {
         "This e-mail address is already in the series — duplicates are not added.",
       COUNT_EXCEEDED:
         "The series already has 100 entries — the maximum was reached.",
+      CAPACITY_EXCEEDED:
+        "Your plan's saved-application limit was reached — remove entries or switch to a larger plan.",
       POSITION_TOO_LONG:
         "The position title or job description is too long (max. 160 / 4000 characters) — please shorten the text. Your input is preserved.",
       CAMPAIGN_SENDING:
@@ -3744,8 +4073,167 @@ const fr: Dict = {
       ctaStart: "Rechercher des formations",
       searchTitle: "Quelle formation recherchez-vous ?",
     },
-    
-    
+
+
+  },
+  billing: {
+    featureNames: {
+      ai_assistant: "Assistant IA",
+      cover_letter: "Lettre de motivation",
+      resume_ai: "CV IA",
+      scanner: "Scanner de candidature",
+      deckblatt: "Deckblatt AI",
+      email_drafts: "Brouillons e-mail",
+      opportunity_search: "Recherches d'offres",
+      saved_opportunities: "Offres enregistrées",
+      saved_applications: "Candidatures enregistrées",
+      salary_calculator: "Calculateur brut/net",
+      automation: "Automatisation des candidatures",
+      upload: "Taille max. de fichier",
+    },
+    errors: {
+      unauthorized: "Veuillez vous connecter pour continuer.",
+      invalid_input: "Saisie invalide. Veuillez réessayer.",
+      mock_payments_disabled:
+        "Les paiements démo ne sont pas disponibles dans cet environnement.",
+      invalid_plan: "Cette offre ne peut pas être achetée.",
+      not_found: "Paiement introuvable.",
+      terminal:
+        "Ce paiement est déjà définitif et ne peut plus être traité.",
+      expired: "Ce paiement a expiré. Veuillez en démarrer un nouveau.",
+      payment_failed:
+        "Le paiement simulé a échoué. Aucun montant n'a été débité.",
+      canceled:
+        "Le paiement a été annulé. Aucun montant n'a été débité.",
+      failed: "Une erreur est survenue. Veuillez réessayer.",
+    },
+    checkout: {
+      pageTitle: "Paiement démo",
+      backToBilling: "Retour à la facturation",
+      summaryTitle: "Votre sélection",
+      priceLabel: "Prix",
+      durationLabel: "Durée",
+      durationFixedDays: "{days} jours à partir de l'achat confirmé",
+      durationCalendarMonth:
+        "Un mois civil à partir de l'achat confirmé",
+      totalDue: "Total à payer",
+      keyLimits: "Limites principales",
+      perDay: "{value}/jour",
+      perCycle: "{value} par cycle d'abonnement",
+      items: "{value} éléments",
+      mb: "max. {value} Mo par fichier",
+      unlimited: "Illimité",
+      disabled: "Indisponible",
+      demoBanner: "DEMO PAYMENT — NO REAL CHARGE",
+      simulatedNotice:
+        "Le traitement du paiement est entièrement simulé. Aucune donnée réelle n'est collectée, aucun débit réel n'est effectué et aucun vrai prestataire de paiement n'est contacté.",
+      inertNotice:
+        "Les paiements démo sont désactivés dans cet environnement. Les contrôles de paiement sont donc inactifs — aucun accès ne peut être activé.",
+      startButton: "Démarrer le paiement démo",
+      startPending: "Démarrage …",
+      pendingTitle: "Traitement simulé",
+      pendingNotice:
+        "Choisissez un résultat de paiement simulé. Aucun paiement réel n'est effectué.",
+      simulateSuccess: "Simuler la réussite",
+      simulateFailed: "Simuler l'échec",
+      simulateCanceled: "Annuler",
+      duplicateNotice:
+        "Ce paiement a déjà été créé avec la même clé — le même paiement est repris.",
+    },
+    success: {
+      pageTitle: "Résultat du paiement",
+      mockLabel: "DEMO PAYMENT — NO REAL CHARGE",
+      mockDisclaimer:
+        "Il s'agit d'une transaction simulée. Aucune donnée de paiement réelle n'a été collectée et aucun débit réel n'a été effectué.",
+      succeededTitle: "Paiement démo terminé",
+      succeededBody:
+        "Le paiement simulé s'est terminé avec succès et l'abonnement a été activé. Il s'agissait d'un paiement démo — aucun montant n'a été débité.",
+      pendingTitle: "Paiement en attente",
+      pendingBody:
+        "Le paiement simulé n'a pas encore été terminé. Retournez au paiement et choisissez un résultat.",
+      failedTitle: "Échec du paiement simulé",
+      failedBody:
+        "Le paiement simulé a échoué. Aucun accès n'a été accordé et aucun montant n'a été débité.",
+      canceledTitle: "Paiement annulé",
+      canceledBody:
+        "Le paiement simulé a été annulé. Aucun accès n'a été accordé et aucun montant n'a été débité.",
+      expiredTitle: "Paiement expiré",
+      expiredBody:
+        "Ce paiement simulé a expiré avant d'être terminé. Veuillez en démarrer un nouveau.",
+      notFoundTitle: "Paiement introuvable",
+      notFoundBody:
+        "Aucun paiement avec cet identifiant n'a été trouvé pour votre compte. Rendez-vous sur la page de facturation pour démarrer un paiement.",
+      currentPlan: "Votre abonnement actuel",
+      backToBilling: "Retour à la facturation",
+      plan: "Formule",
+      status: "Statut",
+      periodStart: "Date de début",
+      periodEnd: "Date de fin",
+      provider: "Prestataire",
+      providerMock: "Démo (simulé)",
+      amount: "Montant",
+      expiresAt: "Paiement valide jusqu'à",
+    },
+    trial: {
+      cta: "Démarrer l'essai de 3 jours",
+      ctaPending: "Activation …",
+      resultActivated:
+        "Votre essai de 72 heures est actif. Il expire automatiquement — aucune désactivation manuelle nécessaire.",
+      resultTrialUsed:
+        "Votre essai a déjà été utilisé. Il ne peut pas être relancé.",
+      resultPaidActive:
+        "Vous avez déjà un abonnement payant actif — aucun essai n'est nécessaire.",
+      error:
+        "L'essai n'a pas pu être activé. Veuillez réessayer.",
+    },
+    currentPlan: {
+      title: "Votre abonnement",
+      plan: "Formule",
+      status: "Statut",
+      statusNone: "Aucun abonnement",
+      statusActive: "Actif",
+      statusCanceled: "Annulé",
+      statusExpired: "Expiré",
+      periodStart: "Date de début",
+      periodEnd: "Date de fin",
+      provider: "Prestataire",
+      providerMock: "Démo (simulé)",
+      trialUsed: "Essai déjà utilisé",
+      trialNotUsed: "Essai disponible",
+      mockNotice:
+        "Activé via un paiement simulé (démo) — aucun débit réel.",
+      lookupFailed:
+        "Le statut de l'abonnement n'a pas pu être déterminé. Aucun accès payant n'est accordé.",
+      trial: "Essai gratuit",
+      upgradeTitle: "Mettre à niveau",
+      upgradeLink: "Démarrer le paiement démo",
+    },
+    usage: {
+      title: "Utilisation",
+      remaining: "Restant",
+      usedOf: "{used} sur {limit}",
+      noLimit: "Illimité",
+      disabled: "Indisponible",
+      resetsDaily: "Réinitialisation quotidienne (UTC)",
+      resetsOnExpiry:
+        "Réinitialisation à la fin de la période d'abonnement",
+      noReset: "Aucune réinitialisation",
+      uploadLabel: "Taille max. de fichier",
+    },
+    offers: {
+      sectionTitle: "Plans et tarifs",
+      current: "Plan actuel",
+      choose: "Choisir ce plan",
+      durationHours: "{hours} heures",
+      durationDays: "{days} jours",
+      durationCalendarMonth: "1 mois calendaire",
+      freePrice: "Gratuit",
+      usageEmpty: "Votre plan ne mesure pas l'utilisation.",
+      errorTitle: "Statut de facturation indisponible",
+      errorBody:
+        "Impossible de charger le statut de votre abonnement. Les plans ci-dessous restent visibles — veuillez réessayer dans un instant.",
+      retry: "Réessayer",
+    },
   },
   nav: {
 
@@ -4448,6 +4936,7 @@ const fr: Dict = {
     
     
     noEmail: { title: "Aucun compte e-mail connecté", body: "Connectez Gmail ou Outlook avant de préparer un e-mail de candidature.", cta: "Connecter un compte e-mail" },
+    draftQuota: { title: "Limite quotidienne atteinte", body: "Vous avez atteint votre limite quotidienne de nouveaux e-mails de candidature. La limite est réinitialisée chaque jour (UTC).", cta: "Améliorer mon offre" },
   },
 
   // ---- Account & settings pages (data, usage, email, billing) --------------
@@ -5523,6 +6012,12 @@ const fr: Dict = {
         "Ton profil est incomplet — renseigne les sept coordonnées du candidat (nom complet, rue, code postal, ville, pays, e-mail, téléphone) sous Paramètres → Profil avant de générer ou d'envoyer des lettres.",
       NOTHING_TO_SEND: "Aucune candidature envoyable sélectionnée.",
       QUOTA_EXHAUSTED: "Le quota d'envoi d'aujourd'hui est épuisé.",
+      AUTOMATION_DISABLED:
+        "L'automatisation des candidatures n'est pas incluse dans votre offre actuelle. Choisissez une offre commerciale sous Paramètres → Facturation.",
+      AUTOMATION_QUOTA_EXHAUSTED:
+        "Votre limite quotidienne d'automatisation est atteinte. Elle est réinitialisée à 00h00 UTC.",
+      AUTOMATION_UNAVAILABLE:
+        "La limite d'automatisation n'a pas pu être vérifiée. Veuillez réessayer.",
       QUEUE_FAILED: "La file d'attente n'a pas pu être créée — veuillez réessayer.",
       INVALID_PAYLOAD: "Données invalides.",
       SAVE_FAILED:
@@ -5558,6 +6053,8 @@ const fr: Dict = {
         "Cette adresse e-mail est déjà présente dans la série — les doublons ne sont pas ajoutés.",
       COUNT_EXCEEDED:
         "La série contient déjà 100 entrées — le maximum est atteint.",
+      CAPACITY_EXCEEDED:
+        "La limite de candidatures enregistrées de votre plan est atteinte — supprimez des entrées ou passez à un plan plus grand.",
       POSITION_TOO_LONG:
         "L'intitulé ou la description du poste est trop long (max. 160 / 4000 caractères) — veuillez raccourcir le texte. Votre saisie est conservée.",
       CAMPAIGN_SENDING:
@@ -5580,8 +6077,163 @@ const ar: Dict = {
       ctaStart: "ابحث عن الوظائف",
       searchTitle: "ما التدريب الذي تبحث عنه؟",
     },
-    
-    
+
+
+  },
+  billing: {
+    featureNames: {
+      ai_assistant: "المساعد الذكي",
+      cover_letter: "خطاب التقديم",
+      resume_ai: "السيرة الذاتية بالذكاء الاصطناعي",
+      scanner: "ماسح الطلبات",
+      deckblatt: "Deckblatt AI",
+      email_drafts: "مسودات البريد",
+      opportunity_search: "البحث عن الفرص",
+      saved_opportunities: "الفرص المحفوظة",
+      saved_applications: "الطلبات المحفوظة",
+      salary_calculator: "حاسبة الأجر",
+      automation: "أتمتة الطلبات",
+      upload: "حجم الملف الأقصى",
+    },
+    errors: {
+      unauthorized: "الرجاء تسجيل الدخول للمتابعة.",
+      invalid_input: "إدخال غير صالح. يرجى المحاولة مرة أخرى.",
+      mock_payments_disabled:
+        "مدفوعات العرض التجريبي غير متاحة في هذه البيئة.",
+      invalid_plan: "لا يمكن شراء هذه الباقة.",
+      not_found: "لم يتم العثور على عملية الشراء.",
+      terminal:
+        "تم إنهاء عملية الشراء مسبقًا ولا يمكن معالجتها مرة أخرى.",
+      expired: "انتهت صلاحية عملية الشراء. يرجى بدء عملية جديدة.",
+      payment_failed: "فشل الدفع المُحاكى. لم يتم خصم أي مبلغ.",
+      canceled: "تم إلغاء عملية الشراء. لم يتم خصم أي مبلغ.",
+      failed: "حدث خطأ ما. يرجى المحاولة مرة أخرى.",
+    },
+    checkout: {
+      pageTitle: "شراء تجريبي",
+      backToBilling: "العودة إلى الفوترة",
+      summaryTitle: "اختيارك",
+      priceLabel: "السعر",
+      durationLabel: "المدة",
+      durationFixedDays: "{days} أيام من تاريخ تأكيد الشراء",
+      durationCalendarMonth:
+        "شهر تقويمي واحد من تاريخ تأكيد الشراء",
+      totalDue: "الإجمالي المستحق",
+      keyLimits: "أهم الحدود",
+      perDay: "{value} يوميًا",
+      perCycle: "{value} لكل دورة اشتراك",
+      items: "{value} عناصر",
+      mb: "بحد أقصى {value} م.ب للملف الواحد",
+      unlimited: "غير محدود",
+      disabled: "غير متاح",
+      demoBanner: "DEMO PAYMENT — NO REAL CHARGE",
+      simulatedNotice:
+        "معالجة الدفع محاكاة بالكامل. لا يتم جمع أي بيانات حقيقية، ولا يتم أي خصم حقيقي، ولا يتم التواصل مع أي مزود مدفوعات حقيقي.",
+      inertNotice:
+        "مدفوعات العرض التجريبي معطلة في هذه البيئة. لذلك عناصر الشراء غير نشطة — لا يمكن تفعيل أي صلاحيات.",
+      startButton: "بدء الشراء التجريبي",
+      startPending: "جارٍ البدء …",
+      pendingTitle: "معالجة محاكاة",
+      pendingNotice: "اختر نتيجة دفع محاكاة. لن يتم أي دفع حقيقي.",
+      simulateSuccess: "محاكاة النجاح",
+      simulateFailed: "محاكاة الفشل",
+      simulateCanceled: "إلغاء",
+      duplicateNotice:
+        "تم إنشاء هذه العملية مسبقًا بنفس المفتاح — يتم استئناف نفس العملية.",
+    },
+    success: {
+      pageTitle: "نتيجة الشراء",
+      mockLabel: "DEMO PAYMENT — NO REAL CHARGE",
+      mockDisclaimer:
+        "هذه معاملة محاكاة. لم يتم جمع أي بيانات دفع حقيقية ولم يتم أي خصم حقيقي.",
+      succeededTitle: "اكتمل الشراء التجريبي",
+      succeededBody:
+        "اكتملت عملية الشراء المُحاكاة بنجاح وتم تفعيل الاشتراك. هذا دفع تجريبي — لم يتم خصم أي مبلغ.",
+      pendingTitle: "الشراء معلق",
+      pendingBody:
+        "لم تكتمل عملية الشراء المُحاكاة بعد. عُد إلى صفحة الشراء واختر نتيجة الدفع.",
+      failedTitle: "فشل الدفع المُحاكى",
+      failedBody:
+        "فشل الدفع المُحاكى. لم يتم منح أي صلاحيات ولم يتم خصم أي مبلغ.",
+      canceledTitle: "تم إلغاء الشراء",
+      canceledBody:
+        "أُلغيت عملية الشراء المُحاكاة. لم يتم منح أي صلاحيات ولم يتم خصم أي مبلغ.",
+      expiredTitle: "انتهت صلاحية الشراء",
+      expiredBody:
+        "انتهت صلاحية عملية الشراء المُحاكاة قبل اكتمالها. يرجى بدء عملية جديدة.",
+      notFoundTitle: "لم يتم العثور على عملية الشراء",
+      notFoundBody:
+        "لم يتم العثور على عملية شراء بهذا المعرف لحسابك. اذهب إلى صفحة الفوترة لبدء عملية شراء.",
+      currentPlan: "اشتراكك الحالي",
+      backToBilling: "العودة إلى الفوترة",
+      plan: "الباقة",
+      status: "الحالة",
+      periodStart: "تاريخ البدء",
+      periodEnd: "تاريخ الانتهاء",
+      provider: "المزوّد",
+      providerMock: "تجريبي (محاكاة)",
+      amount: "المبلغ",
+      expiresAt: "صالحية العملية حتى",
+    },
+    trial: {
+      cta: "بدء التجربة لمدة 3 أيام",
+      ctaPending: "جارٍ التفعيل …",
+      resultActivated:
+        "تجربتك لمدة 72 ساعة مفعّلة. تنتهي تلقائيًا — لا حاجة لأي إلغاء يدوي.",
+      resultTrialUsed:
+        "تم استخدام تجربتك مسبقًا. لا يمكن إعادة تشغيلها.",
+      resultPaidActive:
+        "لديك اشتراك مدفوع فعّال بالفعل — لا حاجة للتجربة.",
+      error: "تعذر تفعيل التجربة. يرجى المحاولة مرة أخرى.",
+    },
+    currentPlan: {
+      title: "اشتراكك",
+      plan: "الباقة",
+      status: "الحالة",
+      statusNone: "لا يوجد اشتراك",
+      statusActive: "فعّال",
+      statusCanceled: "ملغي",
+      statusExpired: "منتهي",
+      periodStart: "تاريخ البدء",
+      periodEnd: "تاريخ الانتهاء",
+      provider: "المزوّد",
+      providerMock: "تجريبي (محاكاة)",
+      trialUsed: "تم استخدام التجربة",
+      trialNotUsed: "التجربة متاحة",
+      mockNotice:
+        "مفعّل عبر دفع محاكاة (تجريبي) — لا يوجد خصم حقيقي.",
+      lookupFailed:
+        "تعذر تحديد حالة الاشتراك. لا يتم منح أي صلاحيات مدفوعة.",
+      trial: "التجربة المجانية",
+      upgradeTitle: "الترقية",
+      upgradeLink: "بدء الشراء التجريبي",
+    },
+    usage: {
+      title: "الاستخدام",
+      remaining: "المتبقي",
+      usedOf: "{used} من {limit}",
+      noLimit: "غير محدود",
+      disabled: "غير متاح",
+      resetsDaily: "يُعاد ضبطه يوميًا (UTC)",
+      resetsOnExpiry:
+        "يُعاد ضبطه عند نهاية فترة الاشتراك",
+      noReset: "لا يوجد إعادة ضبط",
+      uploadLabel: "حجم الملف الأقصى",
+    },
+    offers: {
+      sectionTitle: "الخطط والأسعار",
+      current: "الخطة الحالية",
+      choose: "اختر هذه الخطة",
+      durationHours: "{hours} ساعة",
+      durationDays: "{days} أيام",
+      durationCalendarMonth: "شهر تقويمي واحد",
+      freePrice: "مجاني",
+      usageEmpty: "لا تسجّل خطتك أي استخدام.",
+      errorTitle: "حالة الفوترة غير متاحة",
+      errorBody:
+        "تعذر تحميل حالة اشتراكك. تبقى الخطط أدناه ظاهرة — يرجى المحاولة مرة أخرى بعد قليل.",
+      retry: "حاول مرة أخرى",
+    },
   },
   nav: {
 
@@ -6271,6 +6923,7 @@ const ar: Dict = {
     
     
     noEmail: { title: "لا يوجد حساب بريد مرتبط", body: "اربط Gmail أو Outlook قبل تجهيز بريد التوظيف.", cta: "ربط حساب البريد" },
+    draftQuota: { title: "تم بلوغ الحد اليومي", body: "لقد بلغت الحد اليومي لرسائل البريد الجديدة للتوظيف. يُعاد ضبط الحد يوميًا (UTC).", cta: "ترقية الخطة" },
   },
 
   // ---- Account & settings pages (data, usage, email, billing) --------------
@@ -7301,6 +7954,12 @@ const ar: Dict = {
         "ملفك الشخصي غير مكتمل — يُرجى إدخال بيانات المرشح السبعة (الاسم الكامل، الشارع، الرمز البريدي، المدينة، الدولة، البريد الإلكتروني، الهاتف) من الإعدادات → الملف الشخصي قبل إنشاء الخطابات أو إرسالها.",
       NOTHING_TO_SEND: "لم يُحدد أي طلب صالح للإرسال.",
       QUOTA_EXHAUSTED: "نفد حد الإرسال اليومي.",
+      AUTOMATION_DISABLED:
+        "أتمتة الطلبات غير متضمنة في خطتك الحالية. اختر خطة تجارية من الإعدادات → الفوترة.",
+      AUTOMATION_QUOTA_EXHAUSTED:
+        "تم بلوغ حد الأتمتة اليومي. يُعاد ضبطه في 00:00 UTC.",
+      AUTOMATION_UNAVAILABLE:
+        "تعذر التحقق من حد الأتمتة. يرجى المحاولة مرة أخرى.",
       QUEUE_FAILED: "تعذر إنشاء قائمة الانتظار — يرجى المحاولة مجددًا.",
       INVALID_PAYLOAD: "بيانات غير صالحة.",
       SAVE_FAILED:
@@ -7327,6 +7986,7 @@ const ar: Dict = {
       DUPLICATE_COMPANY:
         "هذا البريد الإلكتروني موجود بالفعل في السلسلة — لا تُضاف العناصر المكررة.",
       COUNT_EXCEEDED: "تحتوي السلسلة بالفعل على 100 سجل — تم الوصول إلى الحد الأقصى.",
+      CAPACITY_EXCEEDED: "تم بلوغ الحد الأقصى للطلبات المحفوظة في خطتك — احذف بعض السجلات أو انتقل إلى خطة أكبر.",
       POSITION_TOO_LONG:
         "مسمى الوظيفة أو وصفها طويل جدًا (الحد الأقصى 160 / 4000 حرف) — يرجى اختصار النص. تم الاحتفاظ بإدخالك.",
       CAMPAIGN_SENDING: "جارٍ إرسال الدفعة — يمكن إضافة السجلات بعد الانتهاء.",

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   createBlankDraft,
+  DraftQuotaError,
   getApplicationComposerData,
   loadOwnedDraft,
   sanitizeEmailHtml,
@@ -9,6 +10,7 @@ import {
 import { ApplicationComposer } from "@/components/application-composer";
 import { ApplicationSendComposer } from "@/components/application-send-composer";
 import { Card } from "@/components/ui";
+import { Icon } from "@/components/icon";
 import {
   applyOpportunityPrefill,
   resolveOpportunityPrefill,
@@ -158,7 +160,14 @@ export default async function NewApplicationPage({
   //    draft; an already-blank draft is reused so empty drafts never pile
   //    up, and non-blank work is never overwritten.
   //  - otherwise the most recent draft is resumed (previous behaviour).
-  let activeDraft = data.draft!;
+  //
+  // QUOTA (email_drafts): when the default draft could not be created
+  // because the user's daily limit is exhausted/disabled/unverifiable,
+  // `getApplicationComposerData` returns `draft: null` (the ONLY soft
+  // failure it performs) — the composer needs a draft, so show the
+  // upgrade card instead of crashing the page.
+  if (!data.draft) return <DraftQuotaBlockedCard t={t} />;
+  let activeDraft = data.draft;
   if (rawDraft && uuidPattern.test(rawDraft)) {
     const specific = await loadOwnedDraft(data.userId, rawDraft);
     if (specific) activeDraft = specific;
@@ -169,12 +178,21 @@ export default async function NewApplicationPage({
       activeDraft.body_text.trim() === "" &&
       activeDraft.recipients.length === 0 &&
       activeDraft.attachments.length === 0;
-    if (!blank)
-      activeDraft = await createBlankDraft(
-        data.userId,
-        data.profile.selected_goal ?? "ausbildung",
-        data.accounts[0].id,
-      );
+    if (!blank) {
+      try {
+        activeDraft = await createBlankDraft(
+          data.userId,
+          data.profile.selected_goal ?? "ausbildung",
+          data.accounts[0].id,
+        );
+      } catch (error) {
+        // "New application" while the daily limit is reached: same card,
+        // not a 500. Any other error keeps its original behavior.
+        if (error instanceof DraftQuotaError)
+          return <DraftQuotaBlockedCard t={t} />;
+        throw error;
+      }
+    }
   }
 
   // Optional server-derived prefill from an opportunity (?opp=<key>).
@@ -210,6 +228,39 @@ export default async function NewApplicationPage({
             praktikumSupported={praktikumSupported}
           />
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** email_drafts quota block (daily limit reached / feature disabled on the
+ *  current plan / limit unverifiable): the legacy composer cannot open a
+ *  draft, so it offers the billing page instead of a broken editor. */
+function DraftQuotaBlockedCard({
+  t,
+}: {
+  t: (path: string) => string;
+}) {
+  return (
+    <div className="px-4 py-6 sm:px-6 lg:px-10">
+      <div className="mx-auto max-w-xl">
+        <Card className="mt-2 p-8 text-center sm:p-12">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+            <Icon name="alert" size={24} />
+          </span>
+          <h2 className="mt-6 text-2xl font-bold tracking-[-0.04em] text-ink">
+            {t("empty.draftQuota.title")}
+          </h2>
+          <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-muted">
+            {t("empty.draftQuota.body")}
+          </p>
+          <Link
+            href="/settings/billing"
+            className="mt-7 inline-flex h-11 items-center rounded-xl bg-accent px-5 text-sm font-semibold text-white hover:bg-accent-deep"
+          >
+            {t("empty.draftQuota.cta")} <span className="ms-2">→</span>
+          </Link>
+        </Card>
       </div>
     </div>
   );

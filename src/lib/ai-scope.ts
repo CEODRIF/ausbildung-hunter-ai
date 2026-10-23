@@ -198,6 +198,44 @@ const DEICTIC_PATTERNS: RegExp[] = [
   /\b(?:ceci|cela|cette|ces|ils|elles|l.{0,3}offre|la candidature|la lettre|ce texte|puis-je)\b/,
 ];
 
+// Cover-letter generation requests (de/en/fr/ar, matched on normalized text).
+// A message is treated as a cover-letter OPERATION — metered against the
+// dedicated cover-letter quota instead of the general AI quota — only when it
+// carries an explicit write/generate verb. Informational questions about
+// cover letters ("Was brauche ich für ein Anschreiben?") stay on the AI quota.
+const COVER_LETTER_PATTERNS: RegExp[] = [
+  // German
+  /anschreiben (schreiben|erstellen|formulieren|verbessern|anpassen|korrigieren)/,
+  // up to two filler words cover "mir ein", "mein", "mir", "ein", …
+  /(schreib|erstelle|erstell|formuliere|verbessere|korrigiere)(r|st)? (?:\S+ ){0,2}anschreiben/,
+  /bewerbungsschreiben (schreiben|erstellen|formulieren|verbessern)/,
+  /(schreib|erstelle|erstell|formuliere|verbessere)(r|st)? (?:\S+ ){0,2}bewerbungsschreiben/,
+  // English
+  /write (a|an|my|the|me a) cover letter/,
+  /(generate|create|draft|improve) (a|an|my|the|me a)? ?cover letter/,
+  /(write|generate|create|draft|improve) (a|an|my|the|me a) letter of application/,
+  // French (accent-tolerant: the normalizer keeps é/è, so both spellings)
+  /lettre de motivation (ecri|redige)[\s\S]{0,20}/,
+  /(ecri|redige)[\s\S]{0,20} lettre de motivation/,
+  // Arabic
+  /خطاب (التقديم|تقديم)/,
+  /خطاب التغطية/,
+  /رسالة (التقديم|تغطية)/,
+  /(اكتب|كتب|صياغة|نص|صيغة)[\s\S]{0,20}(خطاب|رسالة) (التقديم|تقديم)/,
+];
+
+/** Pure detector: does this message REQUEST a cover letter to be written?
+ *  Used by the chat route to meter the operation against the dedicated
+ *  cover-letter quota (never the general AI quota). */
+export function isCoverLetterRequest(content: string): boolean {
+  const text = normalize(content ?? "");
+  if (!text) return false;
+  for (const pattern of COVER_LETTER_PATTERNS) {
+    if (pattern.test(text)) return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Detection primitives
 // ---------------------------------------------------------------------------

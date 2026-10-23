@@ -12,16 +12,30 @@ const { createBlankDraft } = await import("@/lib/application-drafts");
 const adminClient = createAdminClient as unknown as ReturnType<typeof vi.fn>;
 
 /** Minimal admin-client fake: `.from().insert().select().single()` resolves to
- *  the supplied PostgREST-style `{ data, error }`. */
+ *  the supplied PostgREST-style `{ data, error }`. The `subscriptions` table
+ *  (consulted by the email_drafts quota meter inside createBlankDraft)
+ *  resolves to NO row → free fallback → `unmetered`, i.e. zero ledger RPCs —
+ *  exactly the legacy behavior these error-collapse tests cover. Quota
+ *  behavior itself is tested in tests/email-draft-quota.test.ts with a
+ *  mocked entitlement-service. */
 function mockInsert(result: { data: unknown; error: unknown }) {
   adminClient.mockReturnValue({
-    from: () => ({
-      insert: () => ({
-        select: () => ({
-          single: async () => result,
-        }),
-      }),
-    }),
+    from: (table: string) =>
+      table === "subscriptions"
+        ? {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: null, error: null }),
+              }),
+            }),
+          }
+        : {
+            insert: () => ({
+              select: () => ({
+                single: async () => result,
+              }),
+            }),
+          },
   } as never);
 }
 

@@ -230,7 +230,13 @@ function makeFrom(table: TableKey) {
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (table: string) => makeFrom(table as TableKey),
-    rpc: async () => ({ data: null, error: null }),
+    // F1 (saved_applications): real entitlement service;
+    // updateBewApplicationFields does an advisory capacity pre-check on
+    // empty→content fills — "unmetered" keeps the gate out of this suite.
+    rpc: async (fn: string) =>
+      fn === "check_saved_application_capacity"
+        ? { data: [{ status: "unmetered", plan_limit: null, used: 0, remaining: null }], error: null }
+        : { data: null, error: null },
     storage: { from: () => ({ upload: async () => ({ error: null }) }) },
   }),
 }));

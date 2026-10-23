@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { candidateProfileSchema } from "@/lib/bewerbung-schema";
+import {
+  completeFeatureOp,
+  releaseFeatureOp,
+  reserveFeatureOp,
+} from "@/lib/billing/entitlement-service";
 import { provider } from "@/lib/ai-service";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -104,6 +109,39 @@ export async function POST(request: Request) {
       { status: 400 },
     );
 
+  // Server-side cover-letter quota (one operation = one successful
+  // generation on this endpoint). Reserved BEFORE the model call so failed
+  // generations can be released — a failed op never consumes quota.
+  const runId = crypto.randomUUID();
+  const reserved = await reserveFeatureOp(user.id, "cover_letter", runId);
+  if (reserved.outcome === "quota_exhausted") {
+    return NextResponse.json(
+      {
+        error: "Cover letter limit reached. It resets daily (UTC).",
+        code: "quota_exhausted",
+      },
+      { status: 429 },
+    );
+  }
+  if (reserved.outcome === "feature_disabled") {
+    return NextResponse.json(
+      {
+        error: "Cover letter generation is not available on your current plan.",
+        code: "feature_disabled",
+      },
+      { status: 403 },
+    );
+  }
+  if (reserved.outcome === "error") {
+    return NextResponse.json(
+      {
+        error: reserved.message ?? "Quota service temporarily unavailable.",
+        code: "quota_unavailable",
+      },
+      { status: 503 },
+    );
+  }
+
   // The CV lives in the user's browser (per-user localStorage). The user
   // sends their OWN document; it is sanitized server-side (untrusted shape).
   const cv = sanitizeCvDocument(body.cv);
@@ -141,8 +179,12 @@ export async function POST(request: Request) {
       [{ role: "user", content: sections.join("\n\n") }],
       90_000,
     );
+    // Success: the reservation becomes a consumed operation.
+    await completeFeatureOp(user.id, "cover_letter", runId);
     return NextResponse.json({ text }, { headers: rateLimitHeaders(limited) });
   } catch (error) {
+    // Failure: release the reservation so a failed op costs nothing.
+    await releaseFeatureOp(user.id, "cover_letter", runId);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "AI request failed." },
       { status: 400 },
