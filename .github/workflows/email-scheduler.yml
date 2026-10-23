@@ -1,7 +1,21 @@
-# Email Scheduler — the primary (and only) trigger for scheduled sends.
+# Email Scheduler — the durable, browser-independent trigger for scheduled sends.
 #
-# Every 5 minutes on the default branch (main), each run makes authenticated
-# GET calls to the secure server-side scheduler endpoints:
+# REQUESTED cadence: every 5 minutes (GitHub cron is UTC) on the default
+# branch (main). ACTUAL cadence is NOT guaranteed: the `schedule` trigger is
+# best-effort and GitHub throttles it under load (5 minutes is the finest
+# interval; runs are not exact). Observed in this repository (74 schedule
+# runs, 2026-10-10 → 2026-10-23): ≈6 runs/day instead of 288 — gaps min
+# 12.6 min, avg ≈4 h, max ≈9.7 h.
+#
+# Consequence, by design: a due job is sent at the next tick that actually
+# runs — minutes to (rarely) hours after its scheduled instant, never before
+# (the claim SQL gates on the due instant). Nothing is lost: due jobs stay
+# queued with a past due-time and every tick drains as much of the backlog as
+# its bounded budget allows. A controlled on-demand tick is available any
+# time via `workflow_dispatch` (Actions → Email Scheduler → Run workflow).
+#
+# Each run makes authenticated GET calls to the secure server-side scheduler
+# endpoints:
 #   1. /api/cron/email-scheduler — the protected application-campaign engine,
 #   2. /api/cron/bew-scheduler   — the ISOLATED Bewerbung-Automation engine
 #      (an EXISTING endpoint; drains immediate batches past the first slice
@@ -34,6 +48,10 @@
 #    messages are only claimable at/after their due instant — never early.
 #  - The job echoes only the endpoint's counter JSON
 #    (ok/claimed/processed/stop/elapsed_ms) — no secrets, no recipients.
+#  - Transient network/5xx failures on the GET are retried by curl
+#    (--retry 3 --retry-delay 10): the call is idempotent because claims are
+#    atomic, so a retry can never double-send. A 401 (wrong/missing secret)
+#    is NOT retried — a red scheduler is better than a silent one.
 name: Email Scheduler
 
 on:
@@ -47,6 +65,7 @@ jobs:
     # Gated: off unless the repo variable says exactly "true".
     if: vars.EMAIL_SCHEDULER_GH == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     concurrency:
       group: email-scheduler-tick
       cancel-in-progress: false # serialize overlapping ticks, never kill mid-batch
@@ -63,9 +82,10 @@ jobs:
           fi
           : "${DEPLOY_URL:=https://ausbildungsweg.net}"
           DEPLOY_URL="${DEPLOY_URL%/}"
-          # 401 (bad/missing secret) or 5xx fails the run on purpose —
-          # a red scheduler is better than a silent one.
-          body="$(curl -sS --fail-with-body --max-time 90 \
+          # 401 (bad/missing secret) fails the run on purpose and is NOT
+          # retried; transient network/5xx failures are retried (the GET is
+          # idempotent — atomic claims make a retry double-send-safe).
+          body="$(curl -sS --fail-with-body --max-time 90 --retry 3 --retry-delay 10 \
             -H "Authorization: Bearer $CRON_SECRET" \
             "$DEPLOY_URL/api/cron/email-scheduler")"
           echo "Scheduler tick: $body"
@@ -87,8 +107,10 @@ jobs:
           # which claims due bew applications (immediate batches past the first
           # slice, and SCHEDULED batches that are now due) through the same
           # FOR UPDATE SKIP LOCKED idempotency core, so nothing double-sends.
-          # 401/5xx fails the run on purpose (a red tick > a silent one).
-          body="$(curl -sS --fail-with-body --max-time 90 \
+          # 401 fails the run on purpose (a red tick > a silent one);
+          # transient network/5xx failures are retried (the GET is
+          # idempotent — atomic claims make a retry double-send-safe).
+          body="$(curl -sS --fail-with-body --max-time 90 --retry 3 --retry-delay 10 \
             -H "Authorization: Bearer $CRON_SECRET" \
             "$DEPLOY_URL/api/cron/bew-scheduler")"
           echo "Bew scheduler tick: $body"
