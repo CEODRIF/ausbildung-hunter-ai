@@ -14,7 +14,7 @@
 --
 -- PROVENANCE (verbatim extractions — no invented SQL):
 --   [A] 20261121000000_feature_quotas.sql, CORRECTED
---       (branch fix/20261121-complete-feature-op-begin, commit fd9e69e):
+--       (branch fix/20261121-complete-feature-op-begin, commit 6f95b1d):
 --       97e4e07 added the missing begin/end in complete_feature_op;
 --       c03245e qualifies the status reference in its WHERE clause, which
 --       otherwise collides with the function's own RETURNS TABLE(status)
@@ -23,10 +23,16 @@
 --       period_key_str in reserve_feature_op and feature_quota_status,
 --       which otherwise collide with the table column in the ON CONFLICT
 --       target list (unfixable by qualification — grammar) and in WHERE
---       comparisons; fd9e69e restores one drifted indent. All 14 function
---       bodies of 20261121+20261122 audited: no other unqualified
---       colliding reference exists. All statements EXCEPT section 10
---       (feature_capacity_status + its 2 grants) extracted verbatim.
+--       comparisons; fd9e69e restores one drifted indent; 6f95b1d adds
+--       the explicit 'return;' missing after the two early RETURN QUERY
+--       paths (complete_feature_op returned TWO rows on success;
+--       release_feature_op fell through into its UPDATEs on EVERY no-op
+--       call, refunding quota units for SUCCEEDED runs — P0 leak). All 14
+--       function bodies of 20261121+20261122 audited for both defect
+--       classes: no other unqualified colliding reference, and no other
+--       early RETURN QUERY without an explicit return. All statements
+--       EXCEPT section 10 (feature_capacity_status + its 2 grants)
+--       extracted verbatim.
 --   [B] 20261122000000_mock_checkout_complete.sql — all statements.
 --   [C] 20261123000000_saved_application_capacity.sql — ONLY its
 --       feature_capacity_status block (the bew_applications remap) + grants.
@@ -381,6 +387,10 @@ begin
 
   if found then
     return query select 'completed'::text;
+    -- RETURN QUERY does NOT exit the function (verified on PG14: without
+    -- this the success case yields TWO rows, 'completed' and 'no_op');
+    -- every other early-return path in this file uses the same pattern.
+    return;
   end if;
 
   return query select 'no_op'::text;
@@ -422,6 +432,13 @@ begin
   -- Unknown run, or a run that already succeeded: nothing to refund.
   if run_row is null or run_row.status <> 'reserved' then
     return query select 'no_op'::text;
+    -- RETURN QUERY does NOT exit the function (verified on PG14): without
+    -- this the two UPDATEs below run on EVERY no-op call, flipping a
+    -- SUCCEEDED run to 'released' and refunding a quota unit that the
+    -- completed op legitimately consumed (and double-refunding on each
+    -- repeated release). The explicit return is the pattern used by every
+    -- other early-return path in this file.
+    return;
   end if;
 
   update public.feature_usage_runs
