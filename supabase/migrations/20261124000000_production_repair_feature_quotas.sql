@@ -7,16 +7,26 @@
 --   Production has 20261120 applied, 20261121/20261122 absent (the 20261121
 --   apply failed at complete_feature_op and the editor rolled the whole
 --   batch back), and 20261123 applied manually. Re-running 20261121 would
---   work EXCEPT its section 9 replaces the 20261123 feature_capacity_status
+--   work EXCEPT its section 10 replaces the 20261123 feature_capacity_status
 --   (bew_applications remap) with the legacy version (counts the dead
 --   public.applications table). This file applies everything else
 --   verbatim and swaps in the 20261123 version instead.
 --
 -- PROVENANCE (verbatim extractions — no invented SQL):
 --   [A] 20261121000000_feature_quotas.sql, CORRECTED
---       (branch fix/20261121-complete-feature-op-begin, commit 97e4e07:
---       +begin/+end; in complete_feature_op) — all statements EXCEPT its
---       section 9 (feature_capacity_status + its 2 grants).
+--       (branch fix/20261121-complete-feature-op-begin, commit c03245e):
+--       commit 97e4e07 added the missing begin/end in complete_feature_op;
+--       commit c03245e qualifies the status reference in its WHERE clause,
+--       which otherwise collides with the function's own RETURNS
+--       TABLE(status) OUT parameter and raises
+--       'column reference "status" is ambiguous' on the first call
+--       (empirically pinned on PostgreSQL 14: unqualified value reads in
+--       SELECT lists, SET right-hand sides and WHERE clauses all error;
+--       SET targets and INSERT column lists are unaffected; all 14
+--       function bodies of 20261121+20261122 audited — every other
+--       collidable reference is already qualified). All statements EXCEPT
+--       section 10 (feature_capacity_status + its 2 grants) extracted
+--       verbatim.
 --   [B] 20261122000000_mock_checkout_complete.sql — all statements.
 --   [C] 20261123000000_saved_application_capacity.sql — ONLY its
 --       feature_capacity_status block (the bew_applications remap) + grants.
@@ -29,10 +39,10 @@
 -- written, or deleted at apply time.
 --
 -- Do NOT also re-run 20261121/20261122 after this file: redundant, and
--- 20261121's section 9 would clobber [C].
+-- 20261121's section 10 would clobber [C].
 -- ============================================================================
 
--- [A] from corrected 20261121 (section 9 excluded)
+-- [A] from corrected 20261121 (section 10 excluded)
 create table if not exists public.feature_usage (
   user_id uuid not null references auth.users(id) on delete cascade,
   feature_id text not null check (feature_id in (
@@ -355,11 +365,15 @@ begin
     raise exception 'missing_args';
   end if;
 
+  -- The WHERE clause must qualify the column: this function's RETURNS
+  -- TABLE(status) OUT parameter would otherwise make the reference
+  -- ambiguous at runtime ("column reference status is ambiguous",
+  -- verified on PostgreSQL 14). The SET target is unaffected.
   update public.feature_usage_runs
      set status = 'succeeded'
    where run_id = p_run_id
      and user_id = p_user_id
-     and status = 'reserved';
+     and public.feature_usage_runs.status = 'reserved';
 
   if found then
     return query select 'completed'::text;
