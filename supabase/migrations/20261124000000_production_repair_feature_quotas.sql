@@ -14,19 +14,19 @@
 --
 -- PROVENANCE (verbatim extractions — no invented SQL):
 --   [A] 20261121000000_feature_quotas.sql, CORRECTED
---       (branch fix/20261121-complete-feature-op-begin, commit c03245e):
---       commit 97e4e07 added the missing begin/end in complete_feature_op;
---       commit c03245e qualifies the status reference in its WHERE clause,
---       which otherwise collides with the function's own RETURNS
---       TABLE(status) OUT parameter and raises
---       'column reference "status" is ambiguous' on the first call
---       (empirically pinned on PostgreSQL 14: unqualified value reads in
---       SELECT lists, SET right-hand sides and WHERE clauses all error;
---       SET targets and INSERT column lists are unaffected; all 14
---       function bodies of 20261121+20261122 audited — every other
---       collidable reference is already qualified). All statements EXCEPT
---       section 10 (feature_capacity_status + its 2 grants) extracted
---       verbatim.
+--       (branch fix/20261121-complete-feature-op-begin, commit fd9e69e):
+--       97e4e07 added the missing begin/end in complete_feature_op;
+--       c03245e qualifies the status reference in its WHERE clause, which
+--       otherwise collides with the function's own RETURNS TABLE(status)
+--       OUT parameter ('column reference "status" is ambiguous', pinned on
+--       PostgreSQL 14); bf2305e renames the period_key locals to
+--       period_key_str in reserve_feature_op and feature_quota_status,
+--       which otherwise collide with the table column in the ON CONFLICT
+--       target list (unfixable by qualification — grammar) and in WHERE
+--       comparisons; fd9e69e restores one drifted indent. All 14 function
+--       bodies of 20261121+20261122 audited: no other unqualified
+--       colliding reference exists. All statements EXCEPT section 10
+--       (feature_capacity_status + its 2 grants) extracted verbatim.
 --   [B] 20261122000000_mock_checkout_complete.sql — all statements.
 --   [C] 20261123000000_saved_application_capacity.sql — ONLY its
 --       feature_capacity_status block (the bew_applications remap) + grants.
@@ -240,7 +240,11 @@ as $$
 declare
   kind text := public.feature_quota_kind(p_feature_id);
   plan_limit integer := public.plan_feature_limit(p_user_id, p_feature_id);
-  period_key text;
+  -- Named period_key_str (not period_key): an unqualified period_key in
+  -- embedded SQL (the ON CONFLICT target list, WHERE comparisons) would be
+  -- ambiguous against the table column of the same name — and the ON
+  -- CONFLICT target list cannot be table-qualified (grammar).
+  period_key_str text;
   sub_start timestamptz;
   cur_used integer;
 begin
@@ -273,7 +277,7 @@ begin
   end if;
 
   if kind = 'per_day' then
-    period_key := (timezone('utc', now()))::date::text;
+    period_key_str := (timezone('utc', now()))::date::text;
   else
     -- per_cycle: the current subscription period is the cycle.
     select s.current_period_start into sub_start
@@ -282,7 +286,7 @@ begin
     if sub_start is null then
       sub_start := timezone('utc', now());
     end if;
-    period_key := (timezone('utc', sub_start))::date::text;
+    period_key_str := (timezone('utc', sub_start))::date::text;
   end if;
 
   -- Idempotency: this run is already on the ledger (double click,
@@ -295,7 +299,7 @@ begin
       from public.feature_usage f
      where f.user_id = p_user_id
        and f.feature_id = p_feature_id
-       and f.period_key = period_key;
+       and f.period_key = period_key_str;
     return query select 'already_reserved'::text,
                         coalesce(cur_used, 0),
                         greatest(plan_limit - coalesce(cur_used, 0), 0);
@@ -303,7 +307,7 @@ begin
   end if;
 
   insert into public.feature_usage_runs (run_id, user_id, feature_id, period_key, status)
-  values (p_run_id, p_user_id, p_feature_id, period_key, 'reserved')
+  values (p_run_id, p_user_id, p_feature_id, period_key_str, 'reserved')
   on conflict (run_id) do nothing;
 
   if not found then
@@ -313,7 +317,7 @@ begin
       from public.feature_usage f
      where f.user_id = p_user_id
        and f.feature_id = p_feature_id
-       and f.period_key = period_key;
+       and f.period_key = period_key_str;
     return query select 'already_reserved'::text,
                         coalesce(cur_used, 0),
                         greatest(plan_limit - coalesce(cur_used, 0), 0);
@@ -323,7 +327,7 @@ begin
   -- Atomic increment; the WHERE clause makes it impossible to exceed the
   -- limit, even under concurrent racers.
   insert into public.feature_usage (user_id, feature_id, period_key, used)
-  values (p_user_id, p_feature_id, period_key, 1)
+  values (p_user_id, p_feature_id, period_key_str, 1)
   on conflict (user_id, feature_id, period_key)
   do update set used = public.feature_usage.used + 1
   where public.feature_usage.used < plan_limit
@@ -523,7 +527,10 @@ declare
   kind text := public.feature_quota_kind(p_feature_id);
   sub_start timestamptz;
   resets_at timestamptz;
-  period_key text;
+  -- Named period_key_str (not period_key): the WHERE comparison
+  -- f.period_key = <var> must not become ambiguous against the table
+  -- column of the same name (see reserve_feature_op).
+  period_key_str text;
   used_value integer;
 begin
   if p_user_id is null or p_feature_id is null then
@@ -536,8 +543,8 @@ begin
   end if;
 
   if kind = 'per_day' then
-    period_key := (timezone('utc', now()))::date::text;
-    resets_at := (period_key::date + 1) at time zone 'utc';
+    period_key_str := (timezone('utc', now()))::date::text;
+    resets_at := (period_key_str::date + 1) at time zone 'utc';
   else
     -- per_cycle: the counter and the reset instant follow the
     -- subscription period.
@@ -548,7 +555,7 @@ begin
     if sub_start is null then
       sub_start := timezone('utc', now());
     end if;
-    period_key := (timezone('utc', sub_start))::date::text;
+    period_key_str := (timezone('utc', sub_start))::date::text;
   end if;
 
   if p_feature_id = 'ai_assistant' then
@@ -569,7 +576,7 @@ begin
          from public.feature_usage f
         where f.user_id = p_user_id
           and f.feature_id = p_feature_id
-          and f.period_key = period_key), 0);
+          and f.period_key = period_key_str), 0);
   end if;
 
   return jsonb_build_object(
