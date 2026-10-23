@@ -750,6 +750,20 @@ describe("durable trigger and schema (source-level guarantees)", () => {
     expect(WORKFLOW).toContain("cancel-in-progress: false");
   });
 
+  it("the scheduler documents best-effort cadence and survives transient tick failures", () => {
+    // GitHub `schedule` is best-effort — the workflow must document the
+    // ACTUAL (non-guaranteed) cadence instead of promising exact delivery.
+    expect(WORKFLOW).toContain("best-effort");
+    expect(WORKFLOW).toContain("NOT guaranteed");
+    // Transient network/5xx failures on the idempotent GET are retried;
+    // a 401 (wrong/missing secret) still fails the run fast and is NOT
+    // retried (--fail-with-body keeps the failure loud and visible).
+    expect(WORKFLOW).toMatch(/--retry 3 --retry-delay 10/);
+    expect(WORKFLOW).toContain("--fail-with-body");
+    // A wedged tick can never hold the concurrency group forever.
+    expect(WORKFLOW).toContain("timeout-minutes: 10");
+  });
+
   it("the migration is additive: two columns, service-role-only RPCs, no enum or RLS changes", () => {
     expect(MIGRATION).toContain("add column if not exists scheduled_at timestamptz");
     expect(MIGRATION).toContain("add column if not exists timezone text");
