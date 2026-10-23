@@ -63,7 +63,7 @@ select p.proname as function_name,
 --    manual 20261123, the rest via older applied migrations).
 select c.relname as table_name
   from pg_class c
-  join pg_namespace n on n.oid = c.oid
+  join pg_namespace n on n.oid = c.relnamespace
  where n.nspname = 'public'
    and c.relname in (
      -- expected ABSENT pre-fix:
