@@ -2809,18 +2809,25 @@ export async function setCampaignSender(
  * All campaigns that have drainable work now (or have it coming), in tick
  * priority order — the input for the cron tick.
  *
- * DUE-AWARE selection (regression fix for scheduled batches): a PENDING
- * scheduled batch carries started_at = NULL by design (the first REAL claim
- * stamps it), so the old single `ORDER BY started_at ASC` — Postgres NULLS
- * LAST for ascending — always listed it AFTER every in-flight campaign and,
- * behind the tick's bounded campaign cap, a batch that was now due could be
- * starved by idle in-flight campaigns. The tick now selects, in order:
+ * DUE-FIRST priority (regression fix for scheduled batches): the tick's wall
+ * budget (SOFT_BUDGET_MS) fits roughly ONE full batch — ~5 sends × 6 s
+ * pacing ≈ 50 s vs the 45 s budget — so the LIST ORDER is the de-facto
+ * priority. A DUE scheduled batch carries an explicit promise to the user
+ * ("send at this instant"), while an in-flight campaign has no time promise,
+ * so due batches go FIRST. A pending scheduled batch carries started_at =
+ * NULL by design (the first REAL claim stamps it); the earlier
+ * in-flight-first merge therefore handed the tick's only batch slot to
+ * in-flight backlogs tick after tick, and a now-due batch went out only when
+ * an open browser's 3 s poll drained it — the reported "scheduled e-mails
+ * send only when I open the website" symptom. Order per tick:
  *
- *   1. IN-FLIGHT campaigns (started_at set) — oldest start first (the
- *      previous FIFO; finishing an already-draining campaign keeps priority);
- *   2. DUE scheduled campaigns (started_at NULL, scheduled_at <= now) —
+ *   1. DUE scheduled campaigns (started_at NULL, scheduled_at <= now) —
  *      nearest due instant first; these are exactly the batches the tick
  *      exists to release at their instant;
+ *   2. IN-FLIGHT campaigns (started_at set) — oldest start first (FIFO).
+ *      They keep draining in the meantime, and once fully drained they
+ *      self-heal to a terminal state (refreshCampaignCounters) and LEAVE
+ *      this list — so they can never hold a slot permanently;
  *   3. anomalous sending rows with NEITHER timestamp (legacy/manual) — last:
  *      drained (never stranded) without outrunning real work.
  *
@@ -2883,9 +2890,12 @@ export async function listSendingBewCampaigns(
       user_id: r.user_id,
     }));
   }
+  // DUE-FIRST: scheduled batches with an explicit promise lead the tick's
+  // single batch slot; in-flight FIFO and legacy rows follow. See the
+  // function doc for why order == priority under the wall budget.
   const merged: Candidate[] = [
-    ...((inFlight.data ?? []) as Candidate[]),
     ...((dueScheduled.data ?? []) as Candidate[]),
+    ...((inFlight.data ?? []) as Candidate[]),
     ...((legacy.data ?? []) as Candidate[]),
   ];
   return merged.slice(0, limit).map((r) => ({ id: r.id, user_id: r.user_id }));

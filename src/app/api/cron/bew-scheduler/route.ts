@@ -29,12 +29,15 @@ export const maxDuration = 60;
 
 // How many campaigns ONE tick may scan. Each scan is itself bounded (≤
 // BATCH_SIZE messages, 5–6 s pacing each) and the tick's WALL budget
-// (SOFT_BUDGET_MS) is the hard cap either way. The list is DUE-AWARE
-// (listSendingBewCampaigns: in-flight first, then scheduled batches that
-// are now due, then timestamp-less legacy rows), so a larger scan cap
-// cannot let idle in-flight campaigns starve a due scheduled batch behind
-// the cap — with the old cap of 3 they could (regression: the pending
-// batch's started_at is NULL and Postgres orders NULLS LAST for ASC).
+// (SOFT_BUDGET_MS) is the hard cap either way — it fits ~one batch per
+// tick, so the list order IS the priority. The list is DUE-FIRST
+// (listSendingBewCampaigns: scheduled batches that are NOW DUE, then
+// in-flight FIFO, then timestamp-less legacy rows): a due batch carries an
+// explicit send-instant promise, so in-flight backlogs can never hold the
+// tick's slot against it. (Regression history: with the pending batch's
+// started_at NULL and an in-flight-first merge, the tick's single batch
+// went to in-flight campaigns and the due batch drained only via a live
+// browser poll — "sends only when I open the website".)
 const MAX_CAMPAIGNS = 10;
 const BATCH_SIZE = 5;
 const SOFT_BUDGET_MS = 45_000;
