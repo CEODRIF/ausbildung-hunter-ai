@@ -220,6 +220,13 @@ explicit "Apply" action.
   is released at its instant as soon as the user's page is active. Both
   drivers share the same `FOR UPDATE SKIP LOCKED` claim core, so overlapping
   drains can never double-send.
+- Tick cadence is BEST-EFFORT, not exact: GitHub's `schedule` trigger
+  (finest granularity 5 min, UTC) is throttled under load. Observed in this
+  repository (74 schedule runs, 2026-10-10 → 2026-10-23): ≈6 runs/day instead
+  of 288 — gaps 12 min → ≈9.7 h, median ≈4.3 h. A due batch is therefore sent
+  at the next tick that actually runs — minutes to (rarely) hours after its
+  scheduled instant, never before (the claim predicate gates on the instant).
+  `workflow_dispatch` provides a controlled on-demand tick any time.
 
 ## 10. Explicit confirmations
 
