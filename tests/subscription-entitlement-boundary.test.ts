@@ -78,6 +78,7 @@ const {
   NON_COMMERCIAL_FEATURE_LIMITS,
 } = await import("@/lib/billing/entitlement-service");
 const { COMMERCIAL_PLANS } = await import("@/lib/billing/commercial-plans");
+const { activateTrial } = await import("@/lib/billing/trial");
 
 const coverLetterRoute = await import("@/app/api/ai/cover-letter/route");
 const generateFileRoute = await import("@/app/api/ai/generate-file/route");
@@ -1128,5 +1129,111 @@ describe("scanner route · canonical deny statuses", () => {
     );
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({ code: "quota_unavailable" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Trial exclusivity — a valid paid subscription and the free trial must
+// never coexist as entitlements (server-authoritative model, 2026-10-25).
+// The DB-level proof (one row, one plan; consume-then-paid preserves the
+// historical stamp; re-activation refused) lives in billing-rls-pg.test.ts.
+// ---------------------------------------------------------------------------
+
+describe("trial exclusivity — paid and trial never coexist", () => {
+  const plusPlanRow = {
+    plan_id: "plus",
+    emails_per_day: 150,
+    ai_requests_per_day: 400,
+    price_cents: null,
+    duration_kind: null,
+    duration_value: null,
+    is_commercial: false,
+    feature_limits: {
+      cover_letter: 25,
+      resume_ai: 20,
+      scanner: 20,
+      deckblatt: 15,
+      email_drafts: 60,
+      opportunity_search: 150,
+      saved_opportunities: 200,
+      saved_applications: 200,
+      salary_calculator: null,
+      automation: 100,
+      upload: 15,
+    },
+  };
+
+  it("active paid row + consumed-trial stamp ⇒ PAID entitlements only (no trial coexistence)", async () => {
+    holder.admin = makeAdmin({
+      subscriptions: (f) =>
+        f.user_id === USER_A
+          ? subRow({
+              plan: "plus",
+              provider: "manual",
+              trial_activated_at: "2026-10-01T00:00:00.000Z",
+            })
+          : null,
+      plans: (f) => (f.plan_id === "plus" ? plusPlanRow : null),
+    });
+    const sub = await resolveSubscription(USER_A, NOW);
+    expect(sub).toMatchObject({
+      planId: "plus",
+      status: "active",
+      trialUsed: true,
+    });
+    // The effective plan is the paid one — never the trial:
+    expect(sub.planId).not.toBe("trial");
+    const e = await checkFeature(USER_A, "cover_letter", NOW);
+    expect(e).toMatchObject({ allowed: true, limit: 25 }); // plus matrix, NOT the trial's 1
+  });
+
+  it("expired paid row + consumed trial ⇒ no-entitlement state; the trial is NOT re-enabled", async () => {
+    holder.admin = makeAdmin({
+      subscriptions: (f) =>
+        f.user_id === USER_A
+          ? subRow({
+              plan: "plus",
+              provider: "manual",
+              current_period_end: PAST_END,
+              trial_activated_at: "2026-10-01T00:00:00.000Z",
+            })
+          : null,
+      plans: () => null,
+    });
+    const sub = await resolveSubscription(USER_A, NOW);
+    expect(sub).toMatchObject({
+      planId: "free",
+      status: "expired",
+      trialUsed: true,
+    });
+    expect(sub.planId).not.toBe("trial");
+    const e = await checkFeature(USER_A, "cover_letter", NOW);
+    expect(e).toMatchObject({
+      allowed: false,
+      limit: 0,
+      reason: "plan_expired",
+    });
+  });
+
+  it("activateTrial maps a paid_active RPC refusal to a NON-activation outcome (the server never activates a trial on top of paid)", async () => {
+    holder.admin = makeAdmin({
+      rpc: {
+        activate_trial: {
+          data: {
+            status: "paid_active",
+            plan_id: "plus",
+            current_period_end: FUTURE_END,
+          },
+        },
+      },
+    });
+    const outcome = await activateTrial(USER_A);
+    expect(outcome).toMatchObject({
+      ok: true,
+      status: "paid_active",
+      planId: "plus",
+    });
+    if (!outcome.ok) throw new Error("expected an ok outcome");
+    expect(outcome.status).not.toBe("activated");
   });
 });
