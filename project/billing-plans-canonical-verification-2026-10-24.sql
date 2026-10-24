@@ -73,12 +73,23 @@ select plan,
  order by plan, status, provider;
 
 -- V3) Mock checkout must remain service-role-only (disabled for users) ----
-select 'create_mock_checkout  service_role=' || has_function_privilege('service_role', 'public.create_mock_checkout(uuid, text, text)')
-       || ' authenticated=' || has_function_privilege('authenticated', 'public.create_mock_checkout(uuid, text, text)')
-       || ' anon=' || has_function_privilege('anon', 'public.create_mock_checkout(uuid, text, text)') as create_grants,
-       'complete_mock_checkout service_role=' || has_function_privilege('service_role', 'public.complete_mock_checkout(uuid, uuid, text)')
-       || ' authenticated=' || has_function_privilege('authenticated', 'public.complete_mock_checkout(uuid, uuid, text)')
-       || ' anon=' || has_function_privilege('anon', 'public.complete_mock_checkout(uuid, uuid, text)') as complete_grants;
+-- NOTE: uses the 3-ARG form has_function_privilege(user, regproc,
+-- 'execute') with the OID resolved from pg_proc. The 2-arg form
+-- has_function_privilege(user, 'funcname(args)') is BROKEN in this
+-- PostgreSQL build family (Supabase PostgreSQL and Ubuntu PG 14.24): it
+-- fails with 22P02 "expected a left parenthesis" even for 'now'.
+select p.proname || '(' ||
+       (select string_agg(t.typname, ', ' order by a.ord)
+          from unnest(p.proargtypes) with ordinality as a(oid, ord)
+          join pg_type t on t.oid = a.oid) || ')' as function,
+       has_function_privilege('service_role', p.oid, 'execute') as service_role,
+       has_function_privilege('authenticated', p.oid, 'execute') as authenticated,
+       has_function_privilege('anon', p.oid, 'execute') as anon
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public'
+   and p.proname in ('create_mock_checkout', 'complete_mock_checkout')
+ order by p.proname;
 
 -- ============================================================================
 -- EXPECTED (canonical, matches repo seeds + commercial-plans.ts):
@@ -90,6 +101,7 @@ select 'create_mock_checkout  service_role=' || has_function_privilege('service_
 --         gate. Do not "fix" these values.)
 --   V2: pro | active | manual → 1 row, all_ends_future_or_null = true
 --       (plus any free/trial/premium rows that exist)
---   V3: create_grants  service_role=t authenticated=f anon=f
---       complete_grants service_role=t authenticated=f anon=f
+--   V3: 2 rows, each with service_role=t authenticated=f anon=f
+--       (complete_mock_checkout(uuid, uuid, text),
+--        create_mock_checkout(uuid, text, text))
 -- ============================================================================
