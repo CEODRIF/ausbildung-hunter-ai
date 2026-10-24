@@ -32,8 +32,8 @@ const API_ROUTE = read("src/app/api/admin/users/[id]/route.ts");
 const ALL_ACTION_BUTTONS = [
   {
     action: "set_plan",
-    label: "admin.plus30",
-    extra: 'plan: "plus", periodDays: 30',
+    label: "admin.plus10",
+    extra: 'plan: "plus", periodDays: 10',
   },
   {
     action: "set_plan",
@@ -44,7 +44,9 @@ const ALL_ACTION_BUTTONS = [
   {
     action: "reactivate_subscription",
     label: "admin.reactivate",
-    extra: 'plan: "plus", periodDays: 30',
+    // Per-plan reactivation: previousPlan's canonical duration
+    // (plus → 10 days, pro → 30 days — enforced server-side too).
+    extra: 'plan: previousPlan, periodDays: reactivationDays',
   },
   { action: "grant_admin", label: "admin.grantAdmin", extra: "{}" },
   { action: "revoke_admin", label: "admin.revokeAdmin", extra: "{}" },

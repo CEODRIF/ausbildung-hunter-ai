@@ -191,4 +191,52 @@ describe("admin confirmation — behavioral (render + interaction)", () => {
     expect(body).not.toHaveProperty("actorId");
     expect(body).not.toHaveProperty("actor_id");
   });
+
+  it("Plus button posts the canonical pairing { plan: 'plus', periodDays: 10 } (premium_10d tier)", async () => {
+    render(<AdminUserActions actorId={ACTOR_ID} row={activeRow} />);
+    fireEvent.click(screen.getByRole("button", { name: /Plus/i }));
+    const confirmText = await screen.findByText(/correct-target@example\.com/);
+    expect(confirmText.textContent).toContain("Plus · 10 Tage");
+    fireEvent.click(screen.getByRole("button", { name: "Bestätigen" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body).toEqual({
+      action: "set_plan",
+      plan: "plus",
+      periodDays: 10,
+    });
+  });
+
+  it.each([
+    ["plus", 10],
+    ["pro", 30],
+  ] as const)(
+    "reactivating a canceled %s row re-grants the per-plan duration (%d days)",
+    async (plan, days) => {
+      render(
+        <AdminUserActions
+          actorId={ACTOR_ID}
+          row={{
+            ...activeRow,
+            subscription: {
+              ...activeRow.subscription,
+              plan,
+              status: "canceled",
+              canceled_at: "2026-10-20T00:00:00.000Z",
+            },
+          }}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Reaktivieren/i }));
+      await screen.findByText(/correct-target@example\.com/);
+      fireEvent.click(screen.getByRole("button", { name: "Bestätigen" }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+      expect(body).toEqual({
+        action: "reactivate_subscription",
+        plan,
+        periodDays: days,
+      });
+    },
+  );
 });
