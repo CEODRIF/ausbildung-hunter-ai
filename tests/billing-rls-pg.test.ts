@@ -13,7 +13,9 @@
  *      own fix branch + production repair);
  *   4. re-verifies the invariants the text-based suite pins, at the
  *      DATABASE level: net pg_policies, pg_class.relrowsecurity, and
- *      has_function_privilege for the mock checkout RPCs;
+ *      has_function_privilege for the mock checkout RPCs, plus a LIVE
+ *      cross-user isolation probe under SET ROLE (authenticated sees
+ *      only its own rows; service_role bypasses, matching Supabase);
  *   5. drops the disposable database.
  *
  * HONEST-SKIP CONTRACT: if PostgreSQL is not available, the suite is
@@ -60,6 +62,10 @@ const STUBS = [
   "  if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;",
   "  if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;",
   "  if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;",
+  // Roles are cluster-scoped (they survive the disposable database), so
+  // BYPASSRLS — which Supabase grants service_role — must be enforced
+  // idempotently, not only at role creation.
+  "  alter role service_role bypassrls;",
   "end $$;",
   "create schema if not exists auth;",
   "create table if not exists auth.users (id uuid primary key, email text unique, email_confirmed_at timestamptz, raw_user_meta_data jsonb not null default '{}'::jsonb, created_at timestamptz not null default now());",
@@ -172,14 +178,16 @@ describeMaybe(
       const rows = out.split("\n").filter(Boolean);
       expect(rows).toHaveLength(ALL_BILLING_TABLES.length);
       for (const row of rows) {
-        expect(row.endsWith("|t"), row).toBe(true);
+        // psql -A (unaligned) renders booleans as true/false, not t/f.
+        const [name, flag] = row.split("|");
+        expect(flag, `RLS not enabled on ${name ?? row}`).toBe("true");
       }
     });
 
     it("net pg_policies: exactly one SELECT policy per self-scoped billing table", () => {
       const list = SELF_SCOPED_TABLES.map((t) => `'${t}'`).join(", ");
       const out = q(
-        `select tablename || '|' || cmd || '|' || coalesce(qual, '') from pg_policies where schemaname = 'public' and tablename in (${list}) order by 1, 2;`,
+        `select tablename || '|' || cmd || '|' || coalesce(qual, '') from pg_policies where schemaname = 'public' and tablename in (${list}) order by tablename, cmd;`,
       );
       const rows = out.split("\n").filter(Boolean);
       expect(rows).toHaveLength(SELF_SCOPED_TABLES.length);
@@ -212,6 +220,54 @@ describeMaybe(
       for (const row of rows) {
         expect(row.endsWith("|0|0|1"), row).toBe(true);
       }
+    });
+
+    it("LIVE cross-user isolation: authenticated sees only own rows; service_role bypasses", () => {
+      const UA = "11111111-1111-4111-8111-111111111111";
+      const UB = "22222222-2222-4222-8222-222222222222";
+      // Rebind auth.uid() to a session GUC — the same per-session claim
+      // mechanism Supabase uses for the JWT sub — so a disposable DB can
+      // simulate an authenticated user without any Supabase runtime.
+      q(`create or replace function auth.uid() returns uuid
+         language sql stable as $$
+           select nullif(current_setting('app.pgrls.test_uid', true), '')::uuid
+         $$;`);
+      // Fixture seeding only: the repo's invitation-only registration
+      // trigger (handle_new_user) is irrelevant to RLS and is toggled
+      // atomically within one transaction for the duration of the insert.
+      q(
+        `alter table auth.users disable trigger on_auth_user_created;
+         insert into auth.users (id, email) values ('${UA}', 'rls-a@test.invalid'), ('${UB}', 'rls-b@test.invalid');
+         alter table auth.users enable trigger on_auth_user_created;`,
+      );
+      q(
+        `insert into public.daily_usage (user_id, date, emails_sent, ai_requests)
+         values ('${UA}', date '2026-10-24', 1, 0), ('${UB}', date '2026-10-24', 5, 2);`,
+      );
+      // One session, one implicit transaction: act AS user A.
+      // Expect "1|0|1": total visible = 1 (B's row is RLS-hidden even
+      // though it exists), explicit ask for B's rows = 0, explicit ask
+      // for A's rows = 1.
+      const asA = q(
+        `set local "app.pgrls.test_uid" = '${UA}';
+         set role authenticated;
+         select (select count(*) from public.daily_usage) || '|' ||
+                (select count(*) from public.daily_usage where user_id = '${UB}') || '|' ||
+                (select count(*) from public.daily_usage where user_id = '${UA}');`,
+      );
+      expect(asA.trim(), asA).toBe("1|0|1");
+      // service_role (BYPASSRLS in Supabase, mirrored in the stub) sees
+      // every row once it has table access — the service-side boundary
+      // works in the opposite direction of the client-side self-scoping.
+      // (Repo migrations grant service_role per-table; this fixture grant
+      // establishes access so the assertion isolates the BYPASSRLS
+      // property itself, not grant management.)
+      q(`grant select on public.daily_usage to service_role;`);
+      const asSvc = q(
+        `set role service_role;
+         select count(*) from public.daily_usage;`,
+      );
+      expect(asSvc.trim(), asSvc).toBe("2");
     });
   },
 );
