@@ -674,3 +674,67 @@ describe("rerun-safety and additive-only DDL", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Legacy plan rows (free/plus/pro) — the production-shape guard
+//
+// Production billing_plans shows free/plus/pro with price_cents = 0,
+// is_commercial = false, feature_limits = '{}'. That is the CANONICAL
+// shape: v1 (20261001) seeded only the historic limit columns, and v2
+// (20261120) added the commercial columns with legacy-safe DEFAULTS
+// without ever UPDATE-ing the legacy rows. Do not "fix" those values —
+// the entitlement service keys the legacy path on the PLAN ID and the
+// legacy columns, and is_commercial=false is what keeps legacy plans out
+// of mock checkout. These pins fail if that intent is broken.
+// ---------------------------------------------------------------------------
+
+describe("legacy plan rows stay untouched by v2 (canonical production shape)", () => {
+  const V1_FILE = "20261001000000_billing_and_admin.sql";
+  const v1Sql = read(`supabase/migrations/${V1_FILE}`);
+  const v1Flat = flatten(v1Sql);
+
+  it("v1 seeds exactly free/plus/pro with the historic limit pairs", () => {
+    const marker =
+      "insert into public.billing_plans (plan_id, label, emails_per_day, ai_requests_per_day) values";
+    const start = v1Flat.indexOf(marker);
+    expect(start, "v1 seed statement not found").toBeGreaterThanOrEqual(0);
+    const end = v1Flat.indexOf(";", start);
+    expect(end).toBeGreaterThan(start);
+    const rows = topLevelItems(v1Flat.slice(start + marker.length, end)).map((t) =>
+      topLevelItems(unwrapTuple(t)),
+    );
+    expect(rows.map((r) => unquoteLiteral(r[0]))).toEqual(["free", "plus", "pro"]);
+    expect(rows.map((r) => [Number(r[2]), Number(r[3])])).toEqual([
+      [50, 100],
+      [150, 400],
+      [500, 1500],
+    ]);
+  });
+
+  it("v2 adds the commercial columns with legacy-safe defaults (0 / 'none' / 0 / false / '{}')", () => {
+    expect(v2Flat).toContain("add column if not exists price_cents integer not null default 0");
+    expect(v2Flat).toContain("add column if not exists duration_kind text not null default 'none'");
+    expect(v2Flat).toContain("add column if not exists duration_value integer not null default 0");
+    expect(v2Flat).toContain("add column if not exists is_commercial boolean not null default false");
+    expect(v2Flat).toContain("add column if not exists feature_limits jsonb not null default '{}'::jsonb");
+  });
+
+  it("v2 never UPDATEs billing_plans; its upsert covers only the commercial plan ids", () => {
+    expect(v2Flat).not.toContain("update public.billing_plans");
+    expect(v2Ddl).not.toContain("update public.billing_plans");
+
+    const seedMarker =
+      "insert into public.billing_plans (plan_id, label, emails_per_day, ai_requests_per_day, price_cents, duration_kind, duration_value, is_commercial, feature_limits) values";
+    const start = v2Flat.indexOf(seedMarker);
+    expect(start, "v2 seed statement not found").toBeGreaterThanOrEqual(0);
+    const end = v2Flat.indexOf("on conflict (plan_id) do update set", start);
+    expect(end).toBeGreaterThan(start);
+    const ids = topLevelItems(v2Flat.slice(start + seedMarker.length, end)).map((t) =>
+      unquoteLiteral(topLevelItems(unwrapTuple(t))[0]),
+    );
+    expect(ids).toHaveLength(COMMERCIAL_PLAN_IDS.length);
+    for (const legacy of ["free", "plus", "pro"]) {
+      expect(ids, `v2 must not seed legacy id '${legacy}'`).not.toContain(legacy);
+    }
+  });
+});

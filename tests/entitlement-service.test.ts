@@ -41,6 +41,11 @@ const {
   resolveSubscription,
   utcDateKey,
 } = await import("@/lib/billing/entitlement-service");
+const {
+  COMMERCIAL_PLAN_IDS,
+  isCommercialPlanId,
+  uploadLimitMbForPlan,
+} = await import("@/lib/billing/commercial-plans");
 
 const USER = "11111111-1111-4111-8111-411111111111";
 const NOW = Date.parse("2026-10-15T12:00:00.000Z");
@@ -1550,5 +1555,97 @@ describe("assertSavedApplicationCapacity — the server gate", () => {
       setup({ rpc: spec as never });
       await expect(assertSavedApplicationCapacity(USER, 1)).rejects.toThrow("SAVE_FAILED");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy plan registry — production-shape guard (free / plus / pro rows)
+//
+// Production billing_plans holds the legacy rows with price_cents = 0,
+// is_commercial = false, feature_limits = '{}' (v1 seeds 20261001 + the
+// v2 column DEFAULTS; migration 20261120 intentionally never updates the
+// legacy rows). These tests pin that this shape is INTENDED and resolves
+// correctly end to end: the subscription is visible in the UI and the
+// entitlements follow the documented legacy matrix (legacy columns for
+// AI/e-mails, unmetered items, 2 deckblatt/day, 10 MB upload, automation
+// commercial-only). They fail if someone "corrects" the legacy rows
+// (marks them commercial, invents feature_limits) or regresses the legacy
+// fallback path.
+// ---------------------------------------------------------------------------
+
+describe("legacy plan rows (production shape: price 0, non-commercial, empty feature_limits)", () => {
+  const LEGACY_WINDOW = {
+    start: "2026-09-01T00:00:00.000Z",
+    end: "2026-12-31T00:00:00.000Z",
+  };
+  const legacyPro = () =>
+    planRow({ planId: "pro", emails: 500, ai: 1500, priceCents: 0, isCommercial: false, featureLimits: {} });
+  const legacyPlus = () =>
+    planRow({ planId: "plus", emails: 150, ai: 400, priceCents: 0, isCommercial: false, featureLimits: {} });
+
+  it("pro: visible in the UI (planId 'pro', label Pro, active) with the pro legacy columns", async () => {
+    const { admin } = setup({
+      sub: subRow({ plan: "pro", provider: "manual", ...LEGACY_WINDOW }),
+      plan: legacyPro(),
+    });
+    const s = (await withEnv(
+      { MOCK_PAYMENTS_ENABLED: undefined, NODE_ENV: "test", VERCEL_ENV: undefined },
+      () => getBillingStatus(USER, NOW),
+    )) as Awaited<ReturnType<typeof getBillingStatus>>;
+    expect(s).toMatchObject({
+      planId: "pro",
+      planLabel: "Pro",
+      status: "active",
+      provider: "manual",
+      lookupFailed: false,
+      aiPerDay: 1500,
+      emailsPerDay: 500,
+    });
+    expect(queryCalls(admin.calls, "billing_plans")[0]?.filters).toEqual({ plan_id: "pro" });
+  });
+
+  it("pro: legacy entitlement matrix (AI from legacy column, items unmetered, deckblatt 2, upload 10 MB, automation commercial-only)", async () => {
+    setup({
+      sub: subRow({ plan: "pro", provider: "manual", ...LEGACY_WINDOW }),
+      plan: legacyPro(),
+    });
+    const s = (await withEnv(
+      { MOCK_PAYMENTS_ENABLED: undefined, NODE_ENV: "test", VERCEL_ENV: undefined },
+      () => getBillingStatus(USER, NOW),
+    )) as Awaited<ReturnType<typeof getBillingStatus>>;
+    expect(s.features.ai_assistant).toMatchObject({ allowed: true, reason: "ok", limit: 1500 });
+    expect(s.features.cover_letter).toMatchObject({ allowed: true, reason: "ok_legacy_unmetered", limit: null });
+    expect(s.features.email_drafts).toMatchObject({ allowed: true, reason: "ok_legacy_unmetered", limit: null });
+    expect(s.features.saved_applications).toMatchObject({ allowed: true, reason: "ok_legacy_unmetered", limit: null });
+    expect(s.features.deckblatt).toMatchObject({ allowed: true, reason: "ok", limit: 2 });
+    expect(s.features.upload).toMatchObject({ allowed: true, limit: 10 });
+    expect(s.features.automation).toMatchObject({ allowed: false, reason: "feature_disabled", limit: 0 });
+    expect(s.features.salary_calculator).toMatchObject({ allowed: true });
+  });
+
+  it("plus: same legacy semantics with the plus columns (150 e-mails / 400 AI)", async () => {
+    setup({
+      sub: subRow({ plan: "plus", provider: "manual", ...LEGACY_WINDOW }),
+      plan: legacyPlus(),
+    });
+    const s = (await withEnv(
+      { MOCK_PAYMENTS_ENABLED: undefined, NODE_ENV: "test", VERCEL_ENV: undefined },
+      () => getBillingStatus(USER, NOW),
+    )) as Awaited<ReturnType<typeof getBillingStatus>>;
+    expect(s).toMatchObject({ planId: "plus", planLabel: "Plus", status: "active", aiPerDay: 400, emailsPerDay: 150 });
+    expect(s.features.ai_assistant).toMatchObject({ allowed: true, limit: 400 });
+    expect(s.features.automation).toMatchObject({ allowed: false, reason: "feature_disabled", limit: 0 });
+  });
+
+  it("legacy ids are NOT commercial: no checkout eligibility, no upload bump", () => {
+    for (const id of ["free", "plus", "pro"]) {
+      expect(isCommercialPlanId(id), `${id} must not be a commercial plan id`).toBe(false);
+      expect(uploadLimitMbForPlan(id), `${id} keeps the historic 10 MB`).toBe(10);
+    }
+    // The commercial set is exactly the sold plans — legacy ids are absent,
+    // so legacy plans can never be offered or purchased in the UI.
+    expect([...COMMERCIAL_PLAN_IDS].sort()).toEqual(["premium_10d", "premium_monthly", "trial"]);
+    // The DB-side checkout gate (create_mock_checkout) additionally requires
+    // is_commercial = true AND price_cents > 0 — doubly closed for legacy.
   });
 });
