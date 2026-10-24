@@ -375,10 +375,10 @@ describeMaybe(
         ).toBe("4");
       });
 
-      it("set_plan on a fresh user → ok, provider=manual (an admin grant, NOT a payment), exact 30-day span, created_by=actor, ONE audit row with before/after, ONE billing event", () => {
+      it("set_plan on a fresh user → ok, provider=manual (an admin grant, NOT a payment), exact 10-day span (plus = premium_10d tier), created_by=actor, ONE audit row with before/after, ONE billing event", () => {
         const out = JSON.parse(
           q(
-            `select public.manage_subscription('${ACTOR}','${TGT1}','set_plan','plus',30,'pg_test')`,
+            `select public.manage_subscription('${ACTOR}','${TGT1}','set_plan','plus',10,'pg_test')`,
           ),
         ) as Record<string, unknown>;
         expect(out.status).toBe("ok");
@@ -394,7 +394,7 @@ describeMaybe(
         expect(subField(TGT1, "status")).toBe("active");
         expect(subField(TGT1, "provider")).toBe("manual");
         expect(subField(TGT1, "created_by")).toBe(ACTOR);
-        expect(subSpanSec(TGT1)).toBe("2592000"); // 30 d, exactly
+        expect(subSpanSec(TGT1)).toBe("864000"); // 10 d, exactly (plus)
         // Start is "now" (server clock), not client-supplied:
         expect(
           one(
@@ -429,7 +429,7 @@ describeMaybe(
       it("set_plan again (different plan + duration) UPDATES the same single row (one canonical row; before/after captured)", () => {
         const out = JSON.parse(
           q(
-            `select public.manage_subscription('${ACTOR}','${TGT1}','set_plan','pro',1,'pg_test')`,
+            `select public.manage_subscription('${ACTOR}','${TGT1}','set_plan','pro',30,'pg_test')`,
           ),
         ) as Record<string, unknown>;
         expect(out.status).toBe("ok");
@@ -438,7 +438,7 @@ describeMaybe(
 
         expect(subCount(TGT1), "still exactly one row").toBe("1");
         expect(subField(TGT1, "plan")).toBe("pro");
-        expect(subSpanSec(TGT1)).toBe("86400"); // 1 d, exactly
+        expect(subSpanSec(TGT1)).toBe("2592000"); // 30 d, exactly (pro)
         expect(auditCount(TGT1)).toBe("2");
         expect(eventsCount(TGT1)).toBe("2");
       });
@@ -466,13 +466,15 @@ describeMaybe(
 
         const r = JSON.parse(
           q(
-            `select public.manage_subscription('${ACTOR}','${TGT1}','reactivate_subscription','plus',30,'pg_test')`,
+            `select public.manage_subscription('${ACTOR}','${TGT1}','reactivate_subscription','plus',10,'pg_test')`,
           ),
         ) as Record<string, unknown>;
         expect(r.status).toBe("ok");
         expect(r.before).toMatchObject({ status: "canceled" });
         expect(subField(TGT1, "status")).toBe("active");
         expect(subField(TGT1, "plan")).toBe("plus");
+        // Reactivation re-grants the canonical plus duration (10 d):
+        expect(subSpanSec(TGT1)).toBe("864000");
         expect(
           one(
             `select canceled_at is null from public.subscriptions where user_id = '${TGT1}'`,
@@ -485,23 +487,23 @@ describeMaybe(
         const calls: Array<[string, string]> = [
           [
             "invalid_args",
-            `select public.manage_subscription(null, '${TGT2}', 'set_plan', 'plus', 30, 'x')`,
+            `select public.manage_subscription(null, '${TGT2}', 'set_plan', 'plus', 10, 'x')`,
           ],
           [
             "invalid_action",
-            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'frobnicate', 'plus', 30, 'x')`,
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'frobnicate', 'plus', 10, 'x')`,
           ],
           [
             "invalid_plan(trial)",
-            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'trial', 30, 'x')`,
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'trial', 10, 'x')`,
           ],
           [
             "invalid_plan(free)",
-            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'free', 30, 'x')`,
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'free', 10, 'x')`,
           ],
           [
             "invalid_plan(unknown)",
-            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'enterprise', 30, 'x')`,
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'enterprise', 10, 'x')`,
           ],
           [
             "invalid_period(31)",
@@ -510,6 +512,26 @@ describeMaybe(
           [
             "invalid_period(0)",
             `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'plus', 0, 'x')`,
+          ],
+          [
+            "invalid_period(plus+30)",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'plus', 30, 'x')`,
+          ],
+          [
+            "invalid_period(pro+10)",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'pro', 10, 'x')`,
+          ],
+          [
+            "invalid_period(plus+1-retired)",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'plus', 1, 'x')`,
+          ],
+          [
+            "invalid_period(pro+365-retired)",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'pro', 365, 'x')`,
+          ],
+          [
+            "invalid_period(null)",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'plus', null, 'x')`,
           ],
           [
             "no_subscription",
@@ -540,7 +562,7 @@ describeMaybe(
         try {
           const out = JSON.parse(
             q(
-              `select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',30,'pg_atomic')`,
+              `select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',10,'pg_atomic')`,
             ),
           ) as Record<string, string>;
           expect(out.status).toBe("db_error");
@@ -558,7 +580,7 @@ describeMaybe(
       it("concurrent set_plan from two parallel sessions → BOTH succeed, exactly ONE canonical row remains (FOR UPDATE serializes)", async () => {
         const [a, b] = await Promise.all([
           psqlPar(
-            `select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',30,'pg_conc_a')`,
+            `select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',10,'pg_conc_a')`,
           ),
           psqlPar(
             `select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','pro',30,'pg_conc_b')`,
@@ -575,7 +597,7 @@ describeMaybe(
 
       it("DB-level grant enforcement: authenticated and anon CANNOT execute the RPC (denied, zero writes); service_role CAN", () => {
         const asAuth = qSoft(
-          `set role authenticated; select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',30,'pg_denied');`,
+          `set role authenticated; select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',10,'pg_denied');`,
         );
         expect(asAuth.ok).toBe(false);
         expect(asAuth.out).toContain(
@@ -583,7 +605,7 @@ describeMaybe(
         );
 
         const asAnon = qSoft(
-          `set role anon; select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',30,'pg_denied');`,
+          `set role anon; select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',10,'pg_denied');`,
         );
         expect(asAnon.ok).toBe(false);
         expect(asAnon.out).toContain(
@@ -597,7 +619,7 @@ describeMaybe(
         // The service-role grant is what the app's admin client uses:
         const asSvc = JSON.parse(
           q(
-            `set role service_role; select public.manage_subscription('${ACTOR}','${TGT2}','reactivate_subscription','plus',30,'pg_service_role')`,
+            `set role service_role; select public.manage_subscription('${ACTOR}','${TGT2}','reactivate_subscription','plus',10,'pg_service_role')`,
           ),
         ) as Record<string, string>;
         expect(asSvc.status).toBe("ok");

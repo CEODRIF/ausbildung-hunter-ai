@@ -8,7 +8,7 @@ const { createAdminClient } = await import("@/lib/supabase/admin");
 const { POST } = await import("@/app/api/admin/users/[id]/route");
 const { GET } = await import("@/app/api/admin/users/route");
 const webhookRoute = await import("@/app/api/billing/webhook/route");
-const { isMissingFunctionError, sanitizeDbDiagnostic } =
+const { executeAdminAction, isMissingFunctionError, sanitizeDbDiagnostic } =
   await import("@/lib/billing/admin");
 
 const ADMIN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -295,12 +295,12 @@ describe("admin authorization", () => {
   });
 
   it.each([
-    [{ action: "set_plan", plan: "plus", periodDays: 30, user_id: OTHER_ID }],
+    [{ action: "set_plan", plan: "plus", periodDays: 10, user_id: OTHER_ID }],
     [
       {
         action: "set_plan",
         plan: "plus",
-        periodDays: 30,
+        periodDays: 10,
         entitlements: { admin: true },
       },
     ],
@@ -316,6 +316,34 @@ describe("admin authorization", () => {
       mock.calls.filter((c) => ["insert", "upsert", "delete"].includes(c.op)),
     ).toEqual([]);
   });
+
+  it.each([
+    // Unsupported plan/duration pairs (the flat 1|30|365 allowlist is gone):
+    [{ action: "set_plan", plan: "plus", periodDays: 30 }],
+    [{ action: "set_plan", plan: "pro", periodDays: 10 }],
+    [{ action: "set_plan", plan: "plus", periodDays: 1 }],
+    [{ action: "set_plan", plan: "pro", periodDays: 365 }],
+    // Plan-changing actions require their documented pair — no partials:
+    [{ action: "set_plan", plan: "plus" }],
+    [{ action: "set_plan", periodDays: 10 }],
+    [{ action: "reactivate_subscription", plan: "plus", periodDays: 30 }],
+    [{ action: "reactivate_subscription", plan: "pro", periodDays: 10 }],
+  ])(
+    "rejects an unsupported plan/duration pair %# → 400, nothing reaches the DB",
+    async (body) => {
+      mockSession(ADMIN_ID);
+      const mock = mockAdminData(adminLookupHandlers());
+      const response = await post(body);
+      expect(response.status).toBe(400);
+      expect(
+        mock.rpcCalls.filter((c) => c.name === "manage_subscription"),
+        "no manage_subscription RPC for an invalid pair",
+      ).toEqual([]);
+      expect(
+        mock.calls.filter((c) => ["insert", "upsert", "delete"].includes(c.op)),
+      ).toEqual([]);
+    },
+  );
 
   it("cancel without a subscription → 409 (RPC reports no_subscription)", async () => {
     mockSession(ADMIN_ID);
@@ -365,6 +393,131 @@ describe("admin authorization", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Per-plan assignment durations (migration 20261128 pairing):
+//   Plus = exactly 10 days (canonical premium_10d tier)
+//   Pro  = exactly 30 days (preserved intended duration)
+// The pairing is enforced at the route (zod) AND in executeAdminAction
+// (the service layer) — and, authoritatively, in the RPC itself
+// (tests/billing-rls-pg.test.ts, real PostgreSQL).
+// ---------------------------------------------------------------------------
+
+describe("per-plan assignment durations (plus=10d, pro=30d)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("set_plan plus + 10 days → 200, the RPC receives p_plan=plus, p_period_days=10", async () => {
+    mockSession(ADMIN_ID);
+    const mock = mockAdminData(
+      adminLookupHandlers({
+        rpc: (name) =>
+          name === "manage_subscription" ? { status: "ok" } : null,
+      }),
+    );
+    const response = await post({
+      action: "set_plan",
+      plan: "plus",
+      periodDays: 10,
+    });
+    expect(response.status).toBe(200);
+    const rpc = mock.rpcCalls.find((c) => c.name === "manage_subscription");
+    expect(rpc?.args).toMatchObject({
+      p_action: "set_plan",
+      p_plan: "plus",
+      p_period_days: 10,
+    });
+  });
+
+  it("set_plan pro + 30 days → 200 (Pro's intended duration is preserved)", async () => {
+    mockSession(ADMIN_ID);
+    const mock = mockAdminData(
+      adminLookupHandlers({
+        rpc: (name) =>
+          name === "manage_subscription" ? { status: "ok" } : null,
+      }),
+    );
+    const response = await post({
+      action: "set_plan",
+      plan: "pro",
+      periodDays: 30,
+    });
+    expect(response.status).toBe(200);
+    const rpc = mock.rpcCalls.find((c) => c.name === "manage_subscription");
+    expect(rpc?.args).toMatchObject({
+      p_action: "set_plan",
+      p_plan: "pro",
+      p_period_days: 30,
+    });
+  });
+
+  it("reactivate_subscription plus + 10 / pro + 30 → 200 (per-plan reactivation)", async () => {
+    mockSession(ADMIN_ID);
+    const mock = mockAdminData(
+      adminLookupHandlers({
+        rpc: (name) =>
+          name === "manage_subscription" ? { status: "ok" } : null,
+      }),
+    );
+    const r1 = await post({
+      action: "reactivate_subscription",
+      plan: "plus",
+      periodDays: 10,
+    });
+    expect(r1.status).toBe(200);
+    const r2 = await post({
+      action: "reactivate_subscription",
+      plan: "pro",
+      periodDays: 30,
+    });
+    expect(r2.status).toBe(200);
+    const rpcs = mock.rpcCalls.filter((c) => c.name === "manage_subscription");
+    expect(rpcs).toHaveLength(2);
+    expect(rpcs[0]?.args).toMatchObject({
+      p_action: "reactivate_subscription",
+      p_plan: "plus",
+      p_period_days: 10,
+    });
+    expect(rpcs[1]?.args).toMatchObject({
+      p_action: "reactivate_subscription",
+      p_plan: "pro",
+      p_period_days: 30,
+    });
+  });
+
+  it.each([
+    [{ plan: "plus", periodDays: 30 }],
+    [{ plan: "pro", periodDays: 10 }],
+    [{ plan: "plus", periodDays: 1 }],
+    [{ plan: "plus", periodDays: 365 }],
+    [{ plan: "pro", periodDays: 365 }],
+    [{ plan: "plus", periodDays: undefined }],
+  ])(
+    "executeAdminAction rejects %# with invalid_period and NEVER calls the RPC",
+    async (params) => {
+      const mock = mockAdminData(
+        adminLookupHandlers({
+          rpcThrow: (name) =>
+            name === "manage_subscription"
+              ? new Error("RPC MUST NOT BE CALLED FOR AN INVALID PAIR")
+              : null,
+        }),
+      );
+      const result = await executeAdminAction(
+        ADMIN_ID,
+        TARGET_ID,
+        "set_plan",
+        params,
+      );
+      expect(result).toEqual({ ok: false, reason: "invalid_period" });
+      expect(
+        mock.rpcCalls.filter((c) => c.name === "manage_subscription"),
+      ).toEqual([]);
+      expect(
+        mock.calls.filter((c) => ["insert", "upsert", "delete"].includes(c.op)),
+      ).toEqual([]);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Error transparency — production incident 2026-10-25
 //
 // The deployed admin UI showed an opaque "db_error" for every subscription
@@ -411,7 +564,7 @@ describe("admin action error transparency (incident 2026-10-25)", () => {
     const response = await post({
       action: "set_plan",
       plan: "plus",
-      periodDays: 30,
+      periodDays: 10,
     });
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: "rpc_unavailable" });

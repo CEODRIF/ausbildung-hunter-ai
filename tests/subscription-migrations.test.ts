@@ -762,3 +762,85 @@ describe("rerun-safety and additive-only DDL", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// 20261128 — per-plan admin grant durations for manage_subscription.
+// Forward-only create-or-replace of the 20261126 RPC: plus = 10 days
+// (canonical premium_10d tier), pro = 30 days. The applied 20261126 file
+// must stay byte-identical to its applied state — never edit it.
+// ---------------------------------------------------------------------------
+
+const ADMIN_RPC_FILE = "20261126000000_admin_manage_subscription.sql";
+const ADMIN_PAIRING_FILE = "20261128000000_admin_plan_duration_pairing.sql";
+const adminRpcSql = read(`supabase/migrations/${ADMIN_RPC_FILE}`);
+const adminPairingSql = read(`supabase/migrations/${ADMIN_PAIRING_FILE}`);
+const adminRpcFlat = flatten(adminRpcSql);
+const adminPairingFlat = flatten(adminPairingSql);
+const adminPairingDdl = flatten(ddlOnly(adminPairingSql));
+
+const MANAGE_SUB_SIGNATURE =
+  "create or replace function public.manage_subscription( p_actor_id uuid, p_target_id uuid, p_action text, p_plan text default null, p_period_days integer default null, p_reason text default null ) returns jsonb language plpgsql security definer set search_path = public";
+
+describe(`${ADMIN_PAIRING_FILE} — per-plan durations (plus=10d, pro=30d)`, () => {
+  it("redefines manage_subscription with the IDENTICAL signature (app callers unchanged)", () => {
+    expect(adminPairingFlat).toContain(MANAGE_SUB_SIGNATURE);
+    expect(adminRpcFlat).toContain(MANAGE_SUB_SIGNATURE);
+  });
+
+  it("enforces the per-plan pairing: plus→10, pro→30 (is distinct from rejects NULL too)", () => {
+    expect(adminPairingFlat).toContain(
+      "if p_plan = 'plus' and p_period_days is distinct from 10 then",
+    );
+    expect(adminPairingFlat).toContain(
+      "if p_plan = 'pro' and p_period_days is distinct from 30 then",
+    );
+    // The flat allowlist is gone from the NEW file:
+    expect(adminPairingFlat).not.toContain("not in (1, 30, 365)");
+  });
+
+  it("the applied 20261126 history is untouched (forward-only: replace, never edit)", () => {
+    expect(adminRpcFlat).toContain("if p_period_days not in (1, 30, 365) then");
+  });
+
+  it("keeps the 20261126 security posture: service_role only, definer, pinned search_path", () => {
+    expect(adminPairingFlat).toContain(
+      "revoke all on function public.manage_subscription(uuid, uuid, text, text, integer, text) from public, anon, authenticated;",
+    );
+    expect(adminPairingFlat).toContain(
+      "grant execute on function public.manage_subscription(uuid, uuid, text, text, integer, text) to service_role;",
+    );
+    expect(adminPairingFlat).not.toContain(
+      "grant execute on function public.manage_subscription(uuid, uuid, text, text, integer, text) to authenticated",
+    );
+    expect(adminPairingFlat).not.toContain(
+      "grant execute on function public.manage_subscription(uuid, uuid, text, text, integer, text) to anon",
+    );
+  });
+
+  it("keeps the atomic audit + event writes inside the function (no audit regression)", () => {
+    expect(adminPairingFlat).toContain(
+      "insert into public.admin_audit_log (actor_id, target_user_id, action, details)",
+    );
+    expect(adminPairingFlat).toContain(
+      "insert into public.subscription_events (user_id, action, plan_id, provider, details)",
+    );
+    expect(adminPairingFlat).toContain(
+      "'before', before_json, 'after', after_json",
+    );
+    expect(adminPairingFlat).toContain("for update;"); // row-lock serialization retained
+  });
+
+  it("is DDL-only and data-neutral: no tables, no updates, no deletes outside the function body", () => {
+    expect(adminPairingDdl).not.toMatch(/create\s+table/i);
+    expect(adminPairingDdl).not.toMatch(/alter\s+table/i);
+    expect(adminPairingDdl).not.toMatch(/\bdrop\b/i);
+    expect(adminPairingDdl).not.toMatch(/\bupdate\s+public\./i);
+    expect(adminPairingDdl).not.toMatch(/\bdelete\s+from\s+public\./i);
+    expect(adminPairingDdl).not.toMatch(/\binsert\s+into\s+public\./i);
+  });
+
+  it("does not touch billing_plans or feature limits (production's manual limit update stays intact)", () => {
+    expect(adminPairingDdl).not.toMatch(/\bbilling_plans\b/i);
+    expect(adminPairingDdl).not.toMatch(/\bplan_feature_limit\b/i);
+  });
+});

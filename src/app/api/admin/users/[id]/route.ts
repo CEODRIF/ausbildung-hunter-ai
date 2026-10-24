@@ -13,11 +13,25 @@ const actionSchema = z
       "revoke_admin",
     ]),
     plan: z.enum(["plus", "pro"]).optional(),
-    periodDays: z
-      .union([z.literal(1), z.literal(30), z.literal(365)])
-      .optional(),
+    // Strict plan↔duration pairing: Plus = 10 days (the canonical
+    // premium_10d tier), Pro = 30 days. The former flat 1|30|365 list is
+    // gone. The pairing is re-enforced in executeAdminAction (billing) and
+    // in the manage_subscription RPC (migration 20261128) — the schema is
+    // the first gate, never the only one.
+    periodDays: z.union([z.literal(10), z.literal(30)]).optional(),
   })
-  .strict();
+  .strict()
+  .refine((body) => {
+    if (
+      body.action !== "set_plan" &&
+      body.action !== "reactivate_subscription"
+    ) {
+      return true;
+    }
+    if (body.plan === "plus") return body.periodDays === 10;
+    if (body.plan === "pro") return body.periodDays === 30;
+    return false; // plan-changing action without a plan
+  });
 
 /**
  * Admin actions. The ACTOR is always the authenticated admin (session);

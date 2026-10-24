@@ -66,6 +66,11 @@ export function AdminUserActions({
       ? row.subscription.plan
       : "plus";
 
+  // Strict plan↔duration pairing (Plus = 10 days, Pro = 30 days). The
+  // server enforces it (executeAdminAction + the manage_subscription RPC,
+  // migration 20261128) — the UI only ever sends the documented pairs.
+  const reactivationDays = previousPlan === "pro" ? 30 : 10;
+
   const call = async (
     action: string,
     extra: { plan?: string; periodDays?: number } = {},
@@ -149,10 +154,10 @@ export function AdminUserActions({
       <div className="flex flex-wrap items-center gap-1.5">
         {actionButton(
           "set_plan",
-          "admin.plus30",
-          { plan: "plus", periodDays: 30 },
+          "admin.plus10",
+          { plan: "plus", periodDays: 10 },
           "admin.detailPlan",
-          { plan: "Plus", days: 30 },
+          { plan: "Plus", days: 10 },
         )}
         {actionButton(
           "set_plan",
@@ -175,9 +180,12 @@ export function AdminUserActions({
           actionButton(
             "reactivate_subscription",
             "admin.reactivate",
-            { plan: previousPlan, periodDays: 30 },
+            { plan: previousPlan, periodDays: reactivationDays },
             "admin.detailPlan",
-            { plan: previousPlan === "pro" ? "Pro" : "Plus", days: 30 },
+            {
+              plan: previousPlan === "pro" ? "Pro" : "Plus",
+              days: reactivationDays,
+            },
           )}
         {row.is_admin ? (
           row.id === actorId ? (

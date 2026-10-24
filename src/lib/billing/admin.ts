@@ -3,7 +3,7 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { Profile } from "@/lib/auth";
-import { isAssignablePlan } from "./plans";
+import { isAssignablePlan, type AssignablePlan } from "./plans";
 
 /**
  * Phase 10 — admin foundation.
@@ -214,15 +214,23 @@ async function targetExists(targetUserId: string): Promise<boolean> {
   return data !== null;
 }
 
-const PERIOD_DAYS = [1, 30, 365] as const;
-export function isPeriodDays(
-  value: unknown,
-): value is (typeof PERIOD_DAYS)[number] {
-  return (
-    typeof value === "number" &&
-    (PERIOD_DAYS as readonly number[]).includes(value)
-  );
-}
+/**
+ * Per-plan assignment durations — the app-layer source of truth.
+ *
+ *   * Plus = EXACTLY 10 days, aligned with the canonical `premium_10d`
+ *     tier (fixed_days 10 — commercial-plans.ts, seeded by 20261120).
+ *   * Pro  = EXACTLY 30 days (Pro's intended duration, unchanged).
+ *
+ * The flat 1|30|365 allowlist from the 20261126 era is retired: 1-day and
+ * 365-day grants were never UI-exposed, and any plan/duration pairing that
+ * is not plus→10 or pro→30 is rejected at EVERY layer — this check, the
+ * route's zod schema, and (authoritatively) the `manage_subscription` RPC
+ * as redefined by migration 20261128000000.
+ */
+export const PLAN_PERIOD_DAYS: Record<AssignablePlan, number> = {
+  plus: 10,
+  pro: 30,
+};
 
 /**
  * Executes one audited admin action. `actorId` must be a verified
@@ -257,7 +265,10 @@ export async function executeAdminAction(
       if (!isAssignablePlan(params.plan)) {
         return { ok: false, reason: "invalid_plan" };
       }
-      if (!isPeriodDays(params.periodDays)) {
+      // Strict plan↔duration pairing (server-side; the RPC re-checks it —
+      // migration 20261128): plus is granted for exactly 10 days, pro for
+      // exactly 30. Any other combination is rejected before any DB call.
+      if (params.periodDays !== PLAN_PERIOD_DAYS[params.plan]) {
         return { ok: false, reason: "invalid_period" };
       }
     }
