@@ -8,6 +8,7 @@ import { SearchOrb } from "@/components/ui/search-orb";
 import type {
   DashboardData,
   DashboardRecommendations,
+  DashboardSubscription,
   MatchingSummary,
   RecommendationItem,
   SavedPreviewItem,
@@ -20,7 +21,11 @@ import type {
 import { EmailAccountCard } from "@/components/email-account-card";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
 import { getServerT, getRequestLang } from "@/lib/i18n/server";
-import { localeForLang, type Language, type TranslateVars } from "@/lib/i18n/core";
+import {
+  localeForLang,
+  type Language,
+  type TranslateVars,
+} from "@/lib/i18n/core";
 
 type T = (path: string, vars?: TranslateVars) => string;
 
@@ -33,6 +38,7 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
     usage,
     usageSnapshot,
     aiLimit,
+    subscription,
     applicationsCount,
     emailAccount,
     hasCompletedScan,
@@ -44,9 +50,7 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
     recommendations,
   } = data;
   const isAusbildung = profile.selected_goal === "ausbildung";
-  const goalLabel = t(
-    isAusbildung ? "dash.goalAusbildung" : "dash.goalArbeit",
-  );
+  const goalLabel = t(isAusbildung ? "dash.goalAusbildung" : "dash.goalArbeit");
   const completion = getProfileCompletion(profile);
   const firstName = profile.full_name.trim().split(" ")[0] || "";
   const remaining = Math.max(usageSnapshot.remaining, 0);
@@ -65,7 +69,10 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
       {/* Hero + discovery launcher — the two primary actions.               */}
       {/* ----------------------------------------------------------------- */}
       <section className="grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
-        <GlassCard variant="surface-elevated" className="relative overflow-hidden p-6 anim-fade-up sm:p-10">
+        <GlassCard
+          variant="surface-elevated"
+          className="relative overflow-hidden p-6 anim-fade-up sm:p-10"
+        >
           <div className="hero-orb pointer-events-none absolute -end-24 -top-24 h-80 w-80 rounded-full" />
           <div className="grid-fade pointer-events-none absolute inset-x-0 bottom-0 h-40 opacity-40 [mask-image:linear-gradient(to_bottom,transparent,black)]" />
           <div className="relative">
@@ -121,7 +128,11 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
             <Link href="/opportunities" className="mt-6 inline-block">
               <Button size="md" className="rounded-2xl">
                 {t("premium.hero.ctaStart")}
-                <Icon name="arrowRight" size={15} className="rtl:-scale-x-100" />
+                <Icon
+                  name="arrowRight"
+                  size={15}
+                  className="rtl:-scale-x-100"
+                />
               </Button>
             </Link>
           </div>
@@ -142,19 +153,28 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
           icon="scan"
           title={t("dash.features.scanner.title")}
           text={t("dash.features.scanner.text")}
-          action={{ label: t("dash.features.scanner.action"), href: "/bewerbung-scanner" }}
+          action={{
+            label: t("dash.features.scanner.action"),
+            href: "/bewerbung-scanner",
+          }}
         />
         <FeatureCard
           icon="target"
           title={t("dash.features.opportunities.title")}
           text={t("dash.features.opportunities.text")}
-          action={{ label: t("dash.features.opportunities.action"), href: "/opportunities" }}
+          action={{
+            label: t("dash.features.opportunities.action"),
+            href: "/opportunities",
+          }}
         />
         <FeatureCard
           icon="briefcase"
           title={t("dash.features.applications.title")}
           text={t("dash.features.applications.text")}
-          action={{ label: t("dash.features.applications.action"), href: "/applications" }}
+          action={{
+            label: t("dash.features.applications.action"),
+            href: "/applications",
+          }}
         />
       </section>
 
@@ -219,7 +239,11 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
       {/* ----------------------------------------------------------------- */}
       <section className="mt-6 grid gap-5 xl:grid-cols-[1.3fr_0.7fr]">
         <div className="min-w-0">
-          <RecommendationsCard recommendations={recommendations} t={t} locale={locale} />
+          <RecommendationsCard
+            recommendations={recommendations}
+            t={t}
+            locale={locale}
+          />
           <SavedPreviewCard items={savedPreview} t={t} />
           <MatchingCard matching={matching} t={t} locale={locale} />
         </div>
@@ -233,7 +257,9 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
           <GlassCard className="mt-5 p-5 sm:p-6" as="section">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="font-bold text-ink">{t("dash.sections.account.title")}</h2>
+                <h2 className="font-bold text-ink">
+                  {t("dash.sections.account.title")}
+                </h2>
                 <p className="mt-1 text-xs text-muted">
                   {t("dash.sections.account.hint")}
                 </p>
@@ -243,7 +269,10 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
               </span>
             </div>
             <dl className="mt-6 space-y-3.5 text-sm">
-              <Detail label={t("dash.detail.fullName")} value={profile.full_name} />
+              <Detail
+                label={t("dash.detail.fullName")}
+                value={profile.full_name}
+              />
               <Detail label={t("dash.detail.email")} value={profile.email} />
               <Detail label={t("dash.detail.goal")} value={goalLabel} />
               <Detail
@@ -258,14 +287,19 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
               />
             </dl>
           </GlassCard>
+          {subscription && (
+            <SubscriptionCard
+              subscription={subscription}
+              t={t}
+              locale={locale}
+            />
+          )}
         </div>
       </section>
 
       <EmailAccountCard account={emailAccount} />
       {!emailAccount && hasCompletedScan && (
-        <p className="mt-2 text-xs text-faint">
-          {t("dash.connectEmailHint")}
-        </p>
+        <p className="mt-2 text-xs text-faint">{t("dash.connectEmailHint")}</p>
       )}
     </div>
   );
@@ -278,8 +312,14 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
 function NextActionCard({ action, t }: { action: NextAction; t: T }) {
   return (
     <section className="mt-5">
-      <GlassCard variant="surface-elevated" className="flex flex-col gap-4 overflow-hidden p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-        <div className="pointer-events-none absolute inset-y-0 start-0 w-1.5" style={{ backgroundImage: "var(--gradient-neon)" }} />
+      <GlassCard
+        variant="surface-elevated"
+        className="flex flex-col gap-4 overflow-hidden p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6"
+      >
+        <div
+          className="pointer-events-none absolute inset-y-0 start-0 w-1.5"
+          style={{ backgroundImage: "var(--gradient-neon)" }}
+        />
         <div className="flex min-w-0 items-start gap-4 ps-2">
           <span className="hidden h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-accent sm:flex">
             <Icon name="arrowRight" size={21} className="rtl:-scale-x-100" />
@@ -325,7 +365,9 @@ function RecommendationsCard({
       <GlassCard variant="surface" className="overflow-hidden" as="section">
         <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-5 sm:px-6">
           <div>
-            <h2 className="font-bold tracking-tight text-ink">{t("dash.sections.recommended.title")}</h2>
+            <h2 className="font-bold tracking-tight text-ink">
+              {t("dash.sections.recommended.title")}
+            </h2>
             <p className="mt-1 text-xs text-muted">
               {t("dash.sections.recommended.hint")}
             </p>
@@ -341,7 +383,12 @@ function RecommendationsCard({
           recommendations.items.length > 0 ? (
             <div className="divide-y divide-line">
               {recommendations.items.map((item) => (
-                <RecommendationRow key={item.opportunity.id} item={item} t={t} locale={locale} />
+                <RecommendationRow
+                  key={item.opportunity.id}
+                  item={item}
+                  t={t}
+                  locale={locale}
+                />
               ))}
             </div>
           ) : (
@@ -408,7 +455,9 @@ function RecommendationRow({
               opportunity.company_name,
               opportunity.location,
               opportunity.posted_at
-                ? t("dash.posted", { date: formatDate(opportunity.posted_at, locale) })
+                ? t("dash.posted", {
+                    date: formatDate(opportunity.posted_at, locale),
+                  })
                 : null,
               opportunity.salary?.label ?? null,
             ]
@@ -456,19 +505,15 @@ function RecommendationRow({
 // Saved preview (Phase 7 snapshot/staleness semantics)
 // ---------------------------------------------------------------------------
 
-function SavedPreviewCard({
-  items,
-  t,
-}: {
-  items: SavedPreviewItem[];
-  t: T;
-}) {
+function SavedPreviewCard({ items, t }: { items: SavedPreviewItem[]; t: T }) {
   return (
     <section className="mt-5">
       <GlassCard variant="surface" className="overflow-hidden" as="section">
         <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-5 sm:px-6">
           <div>
-            <h2 className="font-bold tracking-tight text-ink">{t("dash.sections.saved.title")}</h2>
+            <h2 className="font-bold tracking-tight text-ink">
+              {t("dash.sections.saved.title")}
+            </h2>
             <p className="mt-1 text-xs text-muted">
               {t("dash.sections.saved.hint")}
             </p>
@@ -571,7 +616,9 @@ function CompletenessCard({
     <GlassCard variant="surface" className="p-5 sm:p-6" as="section">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="font-bold tracking-tight text-ink">{t("completeness.title")}</h2>
+          <h2 className="font-bold tracking-tight text-ink">
+            {t("completeness.title")}
+          </h2>
           <p className="mt-1 text-xs text-muted">{t("completeness.hint")}</p>
         </div>
         {hasProfile && completeness && (
@@ -586,7 +633,10 @@ function CompletenessCard({
             icon="user"
             title={t("completeness.noProfile")}
             body={t("completeness.noProfileBody")}
-            cta={{ label: t("completeness.scanNow"), href: "/bewerbung-scanner" }}
+            cta={{
+              label: t("completeness.scanNow"),
+              href: "/bewerbung-scanner",
+            }}
           />
         </div>
       ) : (
@@ -646,19 +696,69 @@ function CompletenessCard({
 // ---------------------------------------------------------------------------
 
 function WorkflowNav({ goalLabel, t }: { goalLabel: string; t: T }) {
-  const items: Array<{ key: string; icon: IconName; href: string; label: string; desc: string }> = [
-    { key: "scan", icon: "scan", href: "/bewerbung-scanner", label: t("workflow.scan.label"), desc: t("workflow.scan.desc") },
-    { key: "find", icon: "search", href: "/opportunities", label: t("workflow.find.label", { goal: goalLabel }), desc: t("workflow.find.desc") },
-    { key: "assistant", icon: "spark", href: "/ai", label: t("workflow.assistant.label"), desc: t("workflow.assistant.desc") },
-    { key: "saved", icon: "bookmark", href: "/opportunities/saved", label: t("workflow.saved.label"), desc: t("workflow.saved.desc") },
-    { key: "newApplication", icon: "edit", href: "/applications/new", label: t("workflow.newApplication.label"), desc: t("workflow.newApplication.desc") },
-    { key: "email", icon: "mail", href: "/settings/email", label: t("workflow.email.label"), desc: t("workflow.email.desc") },
-    { key: "usage", icon: "settings", href: "/settings/usage", label: t("workflow.usage.label"), desc: t("workflow.usage.desc") },
+  const items: Array<{
+    key: string;
+    icon: IconName;
+    href: string;
+    label: string;
+    desc: string;
+  }> = [
+    {
+      key: "scan",
+      icon: "scan",
+      href: "/bewerbung-scanner",
+      label: t("workflow.scan.label"),
+      desc: t("workflow.scan.desc"),
+    },
+    {
+      key: "find",
+      icon: "search",
+      href: "/opportunities",
+      label: t("workflow.find.label", { goal: goalLabel }),
+      desc: t("workflow.find.desc"),
+    },
+    {
+      key: "assistant",
+      icon: "spark",
+      href: "/ai",
+      label: t("workflow.assistant.label"),
+      desc: t("workflow.assistant.desc"),
+    },
+    {
+      key: "saved",
+      icon: "bookmark",
+      href: "/opportunities/saved",
+      label: t("workflow.saved.label"),
+      desc: t("workflow.saved.desc"),
+    },
+    {
+      key: "newApplication",
+      icon: "edit",
+      href: "/applications/new",
+      label: t("workflow.newApplication.label"),
+      desc: t("workflow.newApplication.desc"),
+    },
+    {
+      key: "email",
+      icon: "mail",
+      href: "/settings/email",
+      label: t("workflow.email.label"),
+      desc: t("workflow.email.desc"),
+    },
+    {
+      key: "usage",
+      icon: "settings",
+      href: "/settings/usage",
+      label: t("workflow.usage.label"),
+      desc: t("workflow.usage.desc"),
+    },
   ];
   return (
     <GlassCard variant="surface" className="mt-5 overflow-hidden" as="section">
       <div className="border-b border-line px-5 py-5 sm:px-6">
-        <h2 className="font-bold tracking-tight text-ink">{t("workflow.title")}</h2>
+        <h2 className="font-bold tracking-tight text-ink">
+          {t("workflow.title")}
+        </h2>
         <p className="mt-1 text-xs text-muted">
           {t("workflow.hint", { goal: goalLabel.toLowerCase() })}
         </p>
@@ -763,7 +863,9 @@ function MetricCard({
   return (
     <div className="surface-elevated rounded-3xl p-5 transition-shadow duration-300 hover:shadow-[var(--shadow-float)]">
       <div className="flex items-start justify-between">
-        <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${toneStyles[tone]}`}>
+        <span
+          className={`flex h-10 w-10 items-center justify-center rounded-xl ${toneStyles[tone]}`}
+        >
           <Icon name={icon} size={17} />
         </span>
         <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
@@ -821,9 +923,7 @@ function ProfileMetricCard({
         </>
       ) : (
         <>
-          <p className="num mt-5 text-4xl font-extrabold text-faint">
-            —
-          </p>
+          <p className="num mt-5 text-4xl font-extrabold text-faint">—</p>
           <p className="mt-1 text-sm font-semibold text-ink-soft">
             {t("dash.metrics.profileMissing")}
           </p>
@@ -859,8 +959,12 @@ function MatchingCard({
         <GlassCard variant="surface" className="p-5 sm:p-6" as="section">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="min-w-0">
-              <h2 className="font-bold tracking-tight text-ink">{t("matching.title")}</h2>
-              <p className="mt-1 text-xs text-muted">{t("matching.noProfile")}</p>
+              <h2 className="font-bold tracking-tight text-ink">
+                {t("matching.title")}
+              </h2>
+              <p className="mt-1 text-xs text-muted">
+                {t("matching.noProfile")}
+              </p>
             </div>
             <Link
               href="/bewerbung-scanner"
@@ -878,7 +982,9 @@ function MatchingCard({
       <GlassCard variant="surface" className="p-5 sm:p-6" as="section">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="font-bold tracking-tight text-ink">{t("matching.title")}</h2>
+            <h2 className="font-bold tracking-tight text-ink">
+              {t("matching.title")}
+            </h2>
             <p className="mt-1 max-w-md text-xs leading-5 text-muted">
               {t("matching.hint")}
             </p>
@@ -892,16 +998,28 @@ function MatchingCard({
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <div className="rounded-2xl bg-surface-2 p-3.5">
-            <p className="text-xs font-semibold text-muted">{t("matching.evaluated")}</p>
-            <p className="num mt-1 text-2xl font-extrabold text-ink">{matching.savedTotal}</p>
+            <p className="text-xs font-semibold text-muted">
+              {t("matching.evaluated")}
+            </p>
+            <p className="num mt-1 text-2xl font-extrabold text-ink">
+              {matching.savedTotal}
+            </p>
           </div>
           <div className="rounded-2xl bg-success-soft p-3.5">
-            <p className="text-xs font-semibold text-success">{t("matching.complete")}</p>
-            <p className="num mt-1 text-2xl font-extrabold text-ink">{matching.completeCount}</p>
+            <p className="text-xs font-semibold text-success">
+              {t("matching.complete")}
+            </p>
+            <p className="num mt-1 text-2xl font-extrabold text-ink">
+              {matching.completeCount}
+            </p>
           </div>
           <div className="rounded-2xl bg-warning-soft p-3.5">
-            <p className="text-xs font-semibold text-warning">{t("matching.incomplete")}</p>
-            <p className="num mt-1 text-2xl font-extrabold text-ink">{matching.incompleteCount}</p>
+            <p className="text-xs font-semibold text-warning">
+              {t("matching.incomplete")}
+            </p>
+            <p className="num mt-1 text-2xl font-extrabold text-ink">
+              {matching.incompleteCount}
+            </p>
           </div>
         </div>
         {matching.top.length > 0 && (
@@ -930,6 +1048,116 @@ function MatchingCard({
         )}
       </GlassCard>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Subscription card — display-only summary of the user's own subscription.
+// Never grants anything: plan identity comes from the server-resolved
+// BillingStatus row (historical plans keep their label), entitlements are
+// decided exclusively by the entitlement service elsewhere.
+// ---------------------------------------------------------------------------
+
+/** Exported for behavioral tests: the card is display-only — it renders
+ *  the server-resolved summary and nothing else (no entitlement logic). */
+export function SubscriptionCard({
+  subscription,
+  t,
+  locale,
+}: {
+  subscription: DashboardSubscription;
+  t: T;
+  locale: string;
+}) {
+  const statusKey =
+    subscription.status === "active"
+      ? "statusActive"
+      : subscription.status === "canceled"
+        ? "statusCanceled"
+        : subscription.status === "expired"
+          ? "statusExpired"
+          : "statusNone";
+  const tone =
+    subscription.status === "active"
+      ? "bg-success-soft text-success"
+      : subscription.status === "none"
+        ? "bg-line/60 text-muted"
+        : "bg-warning-soft text-warning";
+  return (
+    <GlassCard className="mt-5 p-5 sm:p-6" as="section">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-bold text-ink">{t("dash.subscription.title")}</h2>
+        <Link
+          href="/settings/billing"
+          className="text-xs font-semibold text-accent hover:underline"
+        >
+          {t("dash.subscription.manage")}
+        </Link>
+      </div>
+      {subscription.lookupFailed ? (
+        <p className="mt-3 text-xs leading-5 text-muted">
+          {t("billing.currentPlan.lookupFailed")}
+        </p>
+      ) : (
+        <>
+          <div className="mt-4 flex flex-wrap items-center gap-2.5">
+            <span className="text-base font-bold text-ink">
+              {subscription.planLabel}
+            </span>
+            <span
+              className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] ${tone}`}
+            >
+              {t(`billing.currentPlan.${statusKey}`)}
+            </span>
+          </div>
+          {subscription.status === "none" && (
+            <p className="mt-2.5 text-xs text-muted">
+              {t("dash.subscription.none")}
+            </p>
+          )}
+          {(subscription.status === "canceled" ||
+            subscription.status === "expired") && (
+            <p className="mt-2.5 text-xs text-muted">
+              {t("dash.subscription.lapsed")}
+            </p>
+          )}
+          {(subscription.periodStartMs !== null ||
+            subscription.periodEndMs !== null ||
+            subscription.provider !== null) && (
+            <dl className="mt-5 space-y-3.5 text-sm">
+              {subscription.periodStartMs !== null && (
+                <Detail
+                  label={t("billing.currentPlan.periodStart")}
+                  value={formatDate(
+                    new Date(subscription.periodStartMs).toISOString(),
+                    locale,
+                  )}
+                />
+              )}
+              {subscription.periodEndMs !== null && (
+                <Detail
+                  label={t("billing.currentPlan.periodEnd")}
+                  value={formatDate(
+                    new Date(subscription.periodEndMs).toISOString(),
+                    locale,
+                  )}
+                />
+              )}
+              {subscription.provider !== null && (
+                <Detail
+                  label={t("billing.currentPlan.provider")}
+                  value={
+                    subscription.provider === "mock"
+                      ? t("billing.currentPlan.providerMock")
+                      : subscription.provider
+                  }
+                />
+              )}
+            </dl>
+          )}
+        </>
+      )}
+    </GlassCard>
   );
 }
 

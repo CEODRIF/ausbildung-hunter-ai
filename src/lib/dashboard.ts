@@ -3,7 +3,11 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { AI_DAILY_REQUEST_LIMIT } from "@/lib/ai-service";
-import { checkFeature } from "@/lib/billing/entitlement-service";
+import {
+  checkFeature,
+  displayPlanLabel,
+  resolveSubscription,
+} from "@/lib/billing/entitlement-service";
 import type { Profile } from "@/lib/auth";
 import type { SafeEmailAccount } from "@/lib/email-oauth";
 import { getUsageSnapshot, type UsageSnapshot } from "@/lib/email-campaigns";
@@ -123,11 +127,27 @@ export interface DashboardRecommendations {
   items: RecommendationItem[];
 }
 
+/** Display-only subscription summary for the dashboard card.
+ *  The label keeps the persisted row's plan identity in historical states
+ *  (canceled/expired); the entitlements themselves are decided elsewhere
+ *  and NEVER derive from this type. */
+export type DashboardSubscription = {
+  planLabel: string;
+  status: "none" | "active" | "canceled" | "expired";
+  provider: string | null;
+  periodStartMs: number | null;
+  periodEndMs: number | null;
+  lookupFailed: boolean;
+};
+
 export type DashboardData = {
   profile: Profile;
   usage: DailyUsage;
   usageSnapshot: UsageSnapshot;
   aiLimit: number;
+  /** Display-only subscription state (null = could not be resolved → the
+   *  card is omitted rather than guessing). */
+  subscription: DashboardSubscription | null;
   /** Count of application campaigns (the real data source). */
   applicationsCount: number;
   activities: ActivityLog[];
@@ -381,6 +401,25 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
         : null,
   });
 
+  // Display-only subscription summary for the dashboard card.
+  // resolveSubscription never throws; the outer try/catch still covers
+  // admin-client construction. On ANY failure the card is omitted
+  // (subscription = null) — the dashboard never guesses a billing state.
+  let subscription: DashboardSubscription | null = null;
+  try {
+    const sub = await resolveSubscription(userId);
+    subscription = {
+      planLabel: displayPlanLabel(sub),
+      status: sub.status,
+      provider: sub.provider,
+      periodStartMs: sub.periodStartMs,
+      periodEndMs: sub.periodEndMs,
+      lookupFailed: sub.lookupFailed,
+    };
+  } catch {
+    subscription = null;
+  }
+
   // Plan-aware AI limit (billing meter): commercial plans surface their
   // feature_limits value; legacy users the plan row's ai_requests_per_day
   // (free → 100). Display-only — when the meter cannot be read
@@ -397,6 +436,7 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     usage: usageResult.data,
     usageSnapshot,
     aiLimit,
+    subscription,
     applicationsCount: applicationsResult.count ?? 0,
     activities: (activityResult.data ?? []) as ActivityLog[],
     emailAccount: emailAccountResult.data as SafeEmailAccount | null,
