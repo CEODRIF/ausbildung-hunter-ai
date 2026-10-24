@@ -16,8 +16,10 @@
  *
  * Safety model:
  *   - Both tables have NO RLS policies (service-role only). The only access
- *     path is this server-side facade over `createAdminClient()`, filtered
- *     to the session user's own rows.
+ *     path is this server-side facade over `createAdminClient()`, scoped to
+ *     the session user in TWO layers: the query filters by
+ *     user_id/target_user_id AND every returned row is re-validated
+ *     against the expected user id before it may be rendered.
  *   - NEVER INVENTS DATA: the UI renders exactly the persisted rows that
  *     pass shape validation; invalid rows are dropped, and empty results
  *     render the honest empty state — no placeholder transactions, no
@@ -40,11 +42,7 @@ import { isUuidShape, parseIsoUtcMs } from "./trial";
 // ---------------------------------------------------------------------------
 
 export type OnlinePaymentStatus =
-  | "pending"
-  | "succeeded"
-  | "failed"
-  | "canceled"
-  | "expired";
+  "pending" | "succeeded" | "failed" | "canceled" | "expired";
 
 const ONLINE_STATUSES: readonly string[] = [
   "pending",
@@ -55,9 +53,7 @@ const ONLINE_STATUSES: readonly string[] = [
 ];
 
 export type ManualGrantAction =
-  | "set_plan"
-  | "reactivate_subscription"
-  | "cancel_subscription";
+  "set_plan" | "reactivate_subscription" | "cancel_subscription";
 
 const MANUAL_ACTIONS: readonly ManualGrantAction[] = [
   "set_plan",
@@ -104,11 +100,22 @@ const HISTORY_LIMIT = 50;
 
 // ---------------------------------------------------------------------------
 // Row validation (never trust the wire)
+//
+// TWO LAYERS of user scoping:
+//   1. The query itself filters by user_id / target_user_id (primary).
+//   2. The returned row is re-checked against the expected user id
+//      (defense in depth) — if a query filter were ever removed or
+//      bypassed, another user's rows would still be dropped here, not
+//      rendered. The scoping column is therefore selected explicitly.
 // ---------------------------------------------------------------------------
 
-function parseOnlineRow(value: unknown): OnlinePaymentEntry | null {
+function parseOnlineRow(
+  value: unknown,
+  expectedUserId: string,
+): OnlinePaymentEntry | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const obj = value as Record<string, unknown>;
+  if (obj.user_id !== expectedUserId) return null; // layer 2
   if (!isUuidShape(obj.id)) return null;
   if (typeof obj.plan_id !== "string" || obj.plan_id.length === 0) return null;
   if (
@@ -134,16 +141,22 @@ function parseOnlineRow(value: unknown): OnlinePaymentEntry | null {
   };
 }
 
-function parseManualRow(value: unknown): ManualGrantEntry | null {
+function parseManualRow(
+  value: unknown,
+  expectedUserId: string,
+): ManualGrantEntry | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const obj = value as Record<string, unknown>;
+  if (obj.target_user_id !== expectedUserId) return null; // layer 2
   if (
     typeof obj.action !== "string" ||
     !MANUAL_ACTIONS.includes(obj.action as ManualGrantAction)
   )
     return null;
   const details =
-    obj.details && typeof obj.details === "object" && !Array.isArray(obj.details)
+    obj.details &&
+    typeof obj.details === "object" &&
+    !Array.isArray(obj.details)
       ? (obj.details as Record<string, unknown>)
       : null;
   const plan =
@@ -197,7 +210,9 @@ export async function getPaymentHistory(
   try {
     onlineRes = (await admin
       .from("mock_checkouts")
-      .select("id, plan_id, amount_cents, currency, status, is_mock, created_at")
+      .select(
+        "id, user_id, plan_id, amount_cents, currency, status, is_mock, created_at",
+      )
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(HISTORY_LIMIT)) as { data: unknown; error: unknown };
@@ -211,7 +226,7 @@ export async function getPaymentHistory(
   try {
     manualRes = (await admin
       .from("admin_audit_log")
-      .select("action, details, created_at")
+      .select("action, target_user_id, details, created_at")
       .eq("target_user_id", userId)
       .in("action", [...MANUAL_ACTIONS])
       .order("created_at", { ascending: false })
@@ -226,10 +241,10 @@ export async function getPaymentHistory(
     ok: true,
     history: {
       onlinePayments: onlineRows
-        .map(parseOnlineRow)
+        .map((row) => parseOnlineRow(row, userId))
         .filter((row): row is OnlinePaymentEntry => row !== null),
       manualGrants: manualRows
-        .map(parseManualRow)
+        .map((row) => parseManualRow(row, userId))
         .filter((row): row is ManualGrantEntry => row !== null),
       providerConfigured: empty.providerConfigured,
     },

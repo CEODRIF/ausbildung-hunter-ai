@@ -18,12 +18,12 @@ No mock checkout is enabled in production; no real payment provider is connected
 
 ## 2. Persisted payment/subscription data
 
-| Table | Contents | RLS | Read path |
-|---|---|---|---|
-| `subscriptions` | One row per user: plan, status, provider (`manual` today; `mock` reserved), period, `trial_activated_at` | self-read only; **no user write policy** | `resolveSubscription` (service role, user-scoped) |
-| `mock_checkouts` | Simulated demo transactions. DB-constrained `is_mock = true`, `currency = 'USD'`, positive amount | **no policies — service-role only** | `getPaymentHistory` / `getMockCheckout` (user-scoped SELECT) |
-| `subscription_events` | Append-only lifecycle events (trial, mock checkout lifecycle) written by the RPCs | **no policies — service-role only** | not exposed in the UI (internal audit) |
-| `admin_audit_log` | Every admin action (set_plan, cancel, reactivate, grant/revoke admin) with actor, target, details, timestamp | **no policies — service-role only** | `getPaymentHistory` (target-scoped SELECT) |
+| Table                 | Contents                                                                                                     | RLS                                      | Read path                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------- | ------------------------------------------------------------ |
+| `subscriptions`       | One row per user: plan, status, provider (`manual` today; `mock` reserved), period, `trial_activated_at`     | self-read only; **no user write policy** | `resolveSubscription` (service role, user-scoped)            |
+| `mock_checkouts`      | Simulated demo transactions. DB-constrained `is_mock = true`, `currency = 'USD'`, positive amount            | **no policies — service-role only**      | `getPaymentHistory` / `getMockCheckout` (user-scoped SELECT) |
+| `subscription_events` | Append-only lifecycle events (trial, mock checkout lifecycle) written by the RPCs                            | **no policies — service-role only**      | not exposed in the UI (internal audit)                       |
+| `admin_audit_log`     | Every admin action (set_plan, cancel, reactivate, grant/revoke admin) with actor, target, details, timestamp | **no policies — service-role only**      | `getPaymentHistory` (target-scoped SELECT)                   |
 
 - `mock_checkouts` is **always empty in production**: creation is gated by
   `mockPaymentsEnabled()`, which requires `MOCK_PAYMENTS_ENABLED=true` **and**
@@ -36,6 +36,7 @@ No mock checkout is enabled in production; no real payment provider is connected
 ## 3. What the UI shows (and honestly omits)
 
 `/settings/billing` → "Payment & subscription history" section:
+
 - Online payments: exactly the persisted `mock_checkouts` rows of the
   session user (newest 50), each labeled simulated; **honest empty state**
   when none exist.
@@ -62,3 +63,18 @@ No mock checkout is enabled in production; no real payment provider is connected
   the server session only.
 - No subscription is ever transferred between users (admin `set_plan`
   writes the target user's own row; there is no transfer action).
+- **Two-layer user scoping**: every history query filters by
+  `user_id`/`target_user_id` AND the facade re-validates the scoping
+  column on each returned row — a regression in either layer cannot
+  render another user's transactions (test-pinned with a
+  filter-ignoring database emulation).
+
+## 6. History scope honesty
+
+The "Manual subscription changes" list contains EXACTLY the three
+subscription actions that are audited (`set_plan`,
+`reactivate_subscription`, `cancel_subscription`) — it is NOT a complete
+subscription lifecycle event feed (e.g. trial activation and mock
+checkout lifecycle live in `subscription_events`, which is an internal
+audit table and is intentionally not exposed per-user). The UI must not
+imply otherwise.

@@ -31,12 +31,12 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 const { getPaymentHistory } = await import("@/lib/billing/payment-history");
-const { dictionaries, SUPPORTED_LANGUAGES } = await import(
-  "@/lib/i18n/dictionaries"
-);
+const { dictionaries, SUPPORTED_LANGUAGES } =
+  await import("@/lib/i18n/dictionaries");
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const read = (relative: string) => readFileSync(resolve(root, relative), "utf8");
+const read = (relative: string) =>
+  readFileSync(resolve(root, relative), "utf8");
 
 const FACADE = read("src/lib/billing/payment-history.ts");
 const PAGE = read("src/app/settings/billing/page.tsx");
@@ -69,7 +69,8 @@ function makeAdmin(opts: AdminOpts = {}) {
     let limit: number | null = null;
     const run = async () => {
       calls.push({ table, filters: { ...filters }, limit });
-      if (opts.throwTable === table) throw new Error("simulated client failure");
+      if (opts.throwTable === table)
+        throw new Error("simulated client failure");
       if (opts.errorTable === table)
         return { data: null, error: { message: "simulated query error" } };
       return { data: opts.rows?.[table] ?? [], error: null };
@@ -89,17 +90,22 @@ function makeAdmin(opts: AdminOpts = {}) {
         limit = n;
         return chain;
       },
-      then: (res: ((v: unknown) => unknown) | null, rej: ((e: unknown) => unknown) | null) =>
-        run().then(res ?? undefined, rej ?? undefined),
+      then: (
+        res: ((v: unknown) => unknown) | null,
+        rej: ((e: unknown) => unknown) | null,
+      ) => run().then(res ?? undefined, rej ?? undefined),
     };
     return chain;
   };
   return { from, calls };
 }
 
+const OTHER_USER = "99999999-9999-4999-8999-999999999999";
+
 function onlineRow(over: Record<string, unknown> = {}) {
   return {
     id: "22222222-2222-4222-8222-222222222222",
+    user_id: USER, // the facade re-validates this (defense in depth)
     plan_id: "premium_monthly",
     amount_cents: 2000,
     currency: "USD",
@@ -113,6 +119,7 @@ function onlineRow(over: Record<string, unknown> = {}) {
 function manualRow(over: Record<string, unknown> = {}) {
   return {
     action: "set_plan",
+    target_user_id: USER, // the facade re-validates this (defense in depth)
     details: { plan: "pro", period_days: 30 },
     created_at: D1,
     ...over,
@@ -127,7 +134,10 @@ describe("getPaymentHistory — persisted rows only", () => {
   it("returns valid online rows in order, isMock forced", async () => {
     holder.admin = makeAdmin({
       rows: {
-        mock_checkouts: [onlineRow({ status: "pending", created_at: D2 }), onlineRow()],
+        mock_checkouts: [
+          onlineRow({ status: "pending", created_at: D2 }),
+          onlineRow(),
+        ],
         admin_audit_log: [],
       },
     });
@@ -171,7 +181,11 @@ describe("getPaymentHistory — persisted rows only", () => {
       rows: {
         mock_checkouts: [],
         admin_audit_log: [
-          manualRow({ action: "cancel_subscription", details: {}, created_at: D2 }),
+          manualRow({
+            action: "cancel_subscription",
+            details: {},
+            created_at: D2,
+          }),
           manualRow({
             action: "reactivate_subscription",
             details: { plan: "pro", period_days: 30 },
@@ -209,6 +223,95 @@ describe("getPaymentHistory — persisted rows only", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Cross-user exclusion — the mock admin client IGNORES query filters and
+// returns the fixture rows verbatim (a hostile/emulated "filter bypass").
+// Only the facade's second-layer user check must exclude foreign rows.
+// ---------------------------------------------------------------------------
+
+describe("getPaymentHistory — cross-user exclusion (filter-ignoring DB emulation)", () => {
+  it("drops online rows whose user_id is not the session user", async () => {
+    holder.admin = makeAdmin({
+      rows: {
+        mock_checkouts: [
+          onlineRow(),
+          onlineRow({
+            user_id: OTHER_USER,
+            id: "33333333-3333-4333-8333-333333333333",
+          }),
+          onlineRow({ user_id: null }),
+          onlineRow({ user_id: "not-a-uuid" }),
+        ],
+        admin_audit_log: [],
+      },
+    });
+    const res = await getPaymentHistory(USER);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.history.onlinePayments).toHaveLength(1);
+    // The scoping column must never leak into the rendered entry:
+    expect(Object.keys(res.history.onlinePayments[0])).not.toContain("user_id");
+    expect(res.history.onlinePayments[0].id).toBe(
+      "22222222-2222-4222-8222-222222222222",
+    );
+  });
+
+  it("drops manual-grant rows whose target_user_id is not the session user", async () => {
+    holder.admin = makeAdmin({
+      rows: {
+        mock_checkouts: [],
+        admin_audit_log: [
+          manualRow(),
+          manualRow({
+            target_user_id: OTHER_USER,
+            action: "cancel_subscription",
+            details: {},
+            created_at: D2,
+          }),
+          manualRow({
+            target_user_id: null,
+            action: "reactivate_subscription",
+          }),
+        ],
+      },
+    });
+    const res = await getPaymentHistory(USER);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.history.manualGrants).toHaveLength(1);
+    expect(res.history.manualGrants[0].action).toBe("set_plan");
+    expect(Object.keys(res.history.manualGrants[0])).not.toContain(
+      "target_user_id",
+    );
+  });
+
+  it("treats non-array payloads as empty (no crash, no data)", async () => {
+    // A thenable chain (Supabase builders are awaitable at any step)
+    // that resolves a bogus, non-array "data" payload for both tables:
+    const chainFactory = () => {
+      const result = { data: { bogus: "shape" }, error: null };
+      const chain = {
+        select: () => chain,
+        eq: () => chain,
+        in: () => chain,
+        order: () => chain,
+        limit: () => chain,
+        then: (
+          res: ((v: unknown) => unknown) | null,
+          rej: ((e: unknown) => unknown) | null,
+        ) => Promise.resolve(result).then(res ?? undefined, rej ?? undefined),
+      };
+      return chain;
+    };
+    holder.admin = { from: () => chainFactory(), calls: [] };
+    const res = await getPaymentHistory(USER);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.history.onlinePayments).toEqual([]);
+    expect(res.history.manualGrants).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 2. Facade — user-scoped, capped, fail-explicit
 // ---------------------------------------------------------------------------
 
@@ -241,9 +344,15 @@ describe("getPaymentHistory — scoping and failure", () => {
 
   it("query error → {ok:false, failed} (page shows unavailable, nothing fabricated)", async () => {
     holder.admin = makeAdmin({ errorTable: "mock_checkouts" });
-    expect(await getPaymentHistory(USER)).toEqual({ ok: false, error: "failed" });
+    expect(await getPaymentHistory(USER)).toEqual({
+      ok: false,
+      error: "failed",
+    });
     holder.admin = makeAdmin({ throwTable: "admin_audit_log" });
-    expect(await getPaymentHistory(USER)).toEqual({ ok: false, error: "failed" });
+    expect(await getPaymentHistory(USER)).toEqual({
+      ok: false,
+      error: "failed",
+    });
   });
 });
 
@@ -324,9 +433,9 @@ describe("i18n — billing.history parity", () => {
       "unavailable",
     ]);
     for (const lang of SUPPORTED_LANGUAGES) {
-      const section = (
-        dictionaries[lang].billing as Record<string, unknown>
-      )["history"] as Record<string, string>;
+      const section = (dictionaries[lang].billing as Record<string, unknown>)[
+        "history"
+      ] as Record<string, string>;
       expect(Object.keys(section).sort()).toEqual(deKeys);
       for (const key of deKeys) {
         expect(section[key]).toBeTypeOf("string");
@@ -337,9 +446,9 @@ describe("i18n — billing.history parity", () => {
 
   it("periodDays carries the {days} placeholder in every language", () => {
     for (const lang of SUPPORTED_LANGUAGES) {
-      const section = (
-        dictionaries[lang].billing as Record<string, unknown>
-      )["history"] as Record<string, string>;
+      const section = (dictionaries[lang].billing as Record<string, unknown>)[
+        "history"
+      ] as Record<string, string>;
       expect(section["periodDays"]).toContain("{days}");
     }
   });
