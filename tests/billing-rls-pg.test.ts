@@ -818,6 +818,167 @@ describeMaybe(
         ).toBe("quota_exhausted");
       });
     });
+    // -----------------------------------------------------------------------
+    // Trial exclusivity (2026-10-25): a valid paid subscription and the free
+    // trial must never coexist. One row, one plan — paid activation REPLACES
+    // the trial plan, PRESERVES the historical trial_activated_at stamp and
+    // the audit/event trail, and the consumed trial can never be re-granted.
+    // -----------------------------------------------------------------------
+    describe("trial exclusivity — paid and trial never coexist (DB level)", () => {
+      const one = (sql: string) => q(sql).trim();
+      // Fresh fixture ids — distinct from every other suite's fixtures
+      // (the manage_subscription block above owns dddddddd-… as TGT3;
+      // reusing it would collide on users_pkey in the same disposable DB).
+      const T3 = "33333333-3333-4333-8333-333333333333"; // trial → paid
+      const T4 = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"; // paid → trial attempt
+      const MC1 = "11111111-1111-4111-8111-111111111111";
+      const ACT = "ffffffff-ffff-4fff-8fff-ffffffffffff"; // admin (this block)
+
+      it("paid activation on top of a consumed trial: entitlement flips to paid, trial stamp + history PRESERVED, trial can never be re-activated", () => {
+        // Idempotent fixture setup: wipe any residual rows for THIS test's
+        // ids (defensive against a partially-failed prior iteration; the
+        // disposable database itself is created fresh per run).
+        q(
+          `delete from public.subscription_events where user_id = '${T3}';
+           delete from public.admin_audit_log where target_user_id = '${T3}';
+           delete from public.mock_checkouts where user_id = '${T3}' or id = '${MC1}';
+           delete from public.subscriptions where user_id = '${T3}';
+           delete from auth.users where id = '${T3}';`,
+        );
+        // Fixture seeding: the invitation-only registration trigger is
+        // toggled atomically within one transaction (same pattern as the
+        // suite's user seeding above).
+        q(
+          `alter table auth.users disable trigger on_auth_user_created;
+           insert into auth.users (id, email) values ('${T3}', 'trial3@test.invalid') on conflict (id) do nothing;
+           alter table auth.users enable trigger on_auth_user_created;`,
+        );
+        // 1) One-shot 72 h trial
+        const a1 = JSON.parse(
+          q(`select public.activate_trial('${T3}')`),
+        ) as Record<string, unknown>;
+        expect(a1.status).toBe("activated");
+        expect(
+          one(`select plan from public.subscriptions where user_id = '${T3}'`),
+        ).toBe("trial");
+        expect(
+          one(
+            `select extract(epoch from current_period_end - current_period_start)::bigint from public.subscriptions where user_id = '${T3}'`,
+          ),
+        ).toBe("259200"); // 72 h
+        expect(
+          one(
+            `select trial_activated_at is not null from public.subscriptions where user_id = '${T3}'`,
+          ),
+        ).toBe("t");
+
+        // 2) Mock checkout (premium_10d) succeeds on top of the trial row
+        q(
+          `insert into public.mock_checkouts (id, user_id, plan_id, amount_cents, status, idempotency_key, is_mock, expires_at) values ('${MC1}', '${T3}', 'premium_10d', 1000, 'pending', 'pg_trial_excl_t3', true, (timezone('utc', now()) + interval '10 minutes'))`,
+        );
+        const a2 = JSON.parse(
+          q(
+            `select public.complete_mock_checkout('${MC1}', '${T3}', 'success')`,
+          ),
+        ) as Record<string, unknown>;
+        expect(a2.status).toBe("succeeded");
+
+        // 3) The single canonical row is now the PAID plan — the trial
+        //    entitlement is gone (one row, one plan: no coexistence)
+        expect(
+          one(`select plan from public.subscriptions where user_id = '${T3}'`),
+        ).toBe("premium_10d");
+        expect(
+          one(
+            `select status from public.subscriptions where user_id = '${T3}'`,
+          ),
+        ).toBe("active");
+        expect(
+          one(
+            `select provider from public.subscriptions where user_id = '${T3}'`,
+          ),
+        ).toBe("mock");
+        expect(
+          one(
+            `select extract(epoch from current_period_end - current_period_start)::bigint from public.subscriptions where user_id = '${T3}'`,
+          ),
+        ).toBe("864000"); // premium_10d = exactly 10 days
+
+        // 4) Historical trial record + audit trail preserved (nothing deleted)
+        expect(
+          one(
+            `select trial_activated_at is not null from public.subscriptions where user_id = '${T3}'`,
+          ),
+        ).toBe("t");
+        for (const ev of [
+          "trial_activated",
+          "mock_checkout_succeeded",
+          "subscription_activated",
+        ]) {
+          expect(
+            one(
+              `select count(*) from public.subscription_events where user_id = '${T3}' and action = '${ev}'`,
+            ),
+          ).toBe("1");
+        }
+
+        // 5) The consumed trial is NEVER re-activated, paid or not
+        const a3 = JSON.parse(
+          q(`select public.activate_trial('${T3}')`),
+        ) as Record<string, unknown>;
+        expect(a3.status).toBe("trial_already_used");
+        expect(
+          one(`select plan from public.subscriptions where user_id = '${T3}'`),
+        ).toBe("premium_10d"); // still paid — untouched by the refused retry
+      });
+
+      it("activate_trial against a valid paid (plus, 10 d) subscription → 'paid_active' with ZERO trial writes", () => {
+        // Idempotent fixture setup (same defensive pattern as test 1).
+        q(
+          `delete from public.subscription_events where user_id = '${T4}';
+           delete from public.admin_audit_log where target_user_id = '${T4}' or actor_id = '${ACT}';
+           delete from public.subscriptions where user_id = '${T4}';
+           delete from auth.users where id in ('${T4}', '${ACT}');`,
+        );
+        q(
+          `alter table auth.users disable trigger on_auth_user_created;
+           insert into auth.users (id, email) values ('${T4}', 'trial4@test.invalid'), ('${ACT}', 'admin-trial@test.invalid') on conflict (id) do nothing;
+           alter table auth.users enable trigger on_auth_user_created;`,
+        );
+        const g = JSON.parse(
+          q(
+            `select public.manage_subscription('${ACT}', '${T4}', 'set_plan', 'plus', 10, 'pg_trial_excl')`,
+          ),
+        ) as Record<string, unknown>;
+        expect(g.status).toBe("ok");
+
+        const a = JSON.parse(
+          q(`select public.activate_trial('${T4}')`),
+        ) as Record<string, unknown>;
+        expect(a.status).toBe("paid_active");
+        expect(a.plan_id).toBe("plus");
+
+        // No trial stamp written; the paid row untouched:
+        expect(
+          one(
+            `select trial_activated_at is null from public.subscriptions where user_id = '${T4}'`,
+          ),
+        ).toBe("t");
+        expect(
+          one(`select plan from public.subscriptions where user_id = '${T4}'`),
+        ).toBe("plus");
+        expect(
+          one(
+            `select extract(epoch from current_period_end - current_period_start)::bigint from public.subscriptions where user_id = '${T4}'`,
+          ),
+        ).toBe("864000"); // plus stays exactly 10 days
+        expect(
+          one(
+            `select count(*) from public.subscription_events where user_id = '${T4}' and action = 'trial_activated'`,
+          ),
+        ).toBe("0");
+      });
+    });
   },
 );
 

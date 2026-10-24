@@ -49,13 +49,13 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: () => holder.user,
 }));
 
-const { dictionaries, SUPPORTED_LANGUAGES } = await import(
-  "@/lib/i18n/dictionaries"
-);
+const { dictionaries, SUPPORTED_LANGUAGES } =
+  await import("@/lib/i18n/dictionaries");
 const { ALL_FEATURE_IDS } = await import("@/lib/billing/entitlement-service");
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const read = (relative: string) => readFileSync(resolve(root, relative), "utf8");
+const read = (relative: string) =>
+  readFileSync(resolve(root, relative), "utf8");
 
 const PAGE = read("src/app/settings/billing/page.tsx");
 const ACTIONS = read("src/app/settings/billing/actions.ts");
@@ -144,7 +144,7 @@ describe("billing page — offer cards", () => {
 // ---------------------------------------------------------------------------
 
 describe("billing server actions", () => {
-  it("is a \"use server\" module", () => {
+  it('is a "use server" module', () => {
     expect(ACTIONS.trimStart().startsWith('"use server"')).toBe(true);
   });
 
@@ -154,9 +154,9 @@ describe("billing server actions", () => {
   });
 
   it("reads only intent fields from formData — never an identity", () => {
-    const fields = [
-      ...ACTIONS.matchAll(/formData\.get\(\s*"([^"]+)"/g),
-    ].map((m) => m[1]);
+    const fields = [...ACTIONS.matchAll(/formData\.get\(\s*"([^"]+)"/g)].map(
+      (m) => m[1],
+    );
     expect(fields.length).toBeGreaterThanOrEqual(4);
     const allowed = ["plan_id", "idempotency_key", "checkout_id", "outcome"];
     for (const field of fields) {
@@ -170,8 +170,12 @@ describe("billing server actions", () => {
 
   it("delegates every decision to the service facades (no table access)", () => {
     expect(ACTIONS).toContain("activateTrial(userId)");
-    expect(ACTIONS).toContain("createMockCheckout(userId, planId, idempotencyKey)");
-    expect(ACTIONS).toContain("completeMockCheckout(userId, checkoutId, outcome)");
+    expect(ACTIONS).toContain(
+      "createMockCheckout(userId, planId, idempotencyKey)",
+    );
+    expect(ACTIONS).toContain(
+      "completeMockCheckout(userId, checkoutId, outcome)",
+    );
     // The actions never issue Supabase queries themselves.
     expect(ACTIONS).not.toContain(".from(");
     expect(ACTIONS).not.toContain(".rpc(");
@@ -252,14 +256,17 @@ describe("billing dictionaries — 4-language parity", () => {
 
   for (const section of BILLING_SECTIONS) {
     it(`every language has de's exact key set for billing.${section} (non-empty)`, () => {
-      const deSection = dictionaries.de.billing[
-        section
-      ] as Record<string, string>;
+      const deSection = dictionaries.de.billing[section] as Record<
+        string,
+        string
+      >;
       const deKeys = Object.keys(deSection).sort();
       expect(deKeys.length).toBeGreaterThan(0);
       for (const lang of SUPPORTED_LANGUAGES) {
-        const sectionObj =
-          dictionaries[lang].billing[section] as Record<string, string>;
+        const sectionObj = dictionaries[lang].billing[section] as Record<
+          string,
+          string
+        >;
         expect(Object.keys(sectionObj).sort()).toEqual(deKeys);
         for (const key of deKeys) {
           expect(sectionObj[key]).toBeTypeOf("string");
@@ -274,7 +281,9 @@ describe("billing dictionaries — 4-language parity", () => {
       expect(dictionaries[lang].billing.offers.durationHours).toContain(
         "{hours}",
       );
-      expect(dictionaries[lang].billing.offers.durationDays).toContain("{days}");
+      expect(dictionaries[lang].billing.offers.durationDays).toContain(
+        "{days}",
+      );
       expect(dictionaries[lang].billing.usage.usedOf).toContain("{used}");
       expect(dictionaries[lang].billing.usage.usedOf).toContain("{limit}");
     }
@@ -282,12 +291,70 @@ describe("billing dictionaries — 4-language parity", () => {
 
   it("billing.featureNames covers every ALL_FEATURE_IDS entry in every language", () => {
     for (const lang of SUPPORTED_LANGUAGES) {
-      const names =
-        dictionaries[lang].billing.featureNames as Record<string, string>;
+      const names = dictionaries[lang].billing.featureNames as Record<
+        string,
+        string
+      >;
       for (const featureId of ALL_FEATURE_IDS) {
         expect(names[featureId]).toBeTypeOf("string");
         expect(names[featureId]?.trim()).not.toHaveLength(0);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Active-plan display — canonical mapping + green current state (2026-10-25)
+// ---------------------------------------------------------------------------
+
+const { canonicalCommercialPlanId, LEGACY_TO_COMMERCIAL } =
+  await import("@/lib/billing/commercial-plans");
+
+describe("billing page — active-plan display (server-derived only)", () => {
+  it("derives the current offer card from the canonical plan mapping, only while the row is ACTIVE", () => {
+    expect(PAGE).toContain("canonicalCommercialPlanId(billing.planId)");
+    expect(PAGE).toMatch(
+      /billing\.status === "active"\s*\?\s*canonicalCommercialPlanId/,
+    );
+  });
+
+  it("canonicalCommercialPlanId maps only documented pairs (fail-closed otherwise)", () => {
+    expect(canonicalCommercialPlanId("plus")).toBe("premium_10d");
+    expect(canonicalCommercialPlanId("pro")).toBe("premium_monthly");
+    expect(canonicalCommercialPlanId("trial")).toBe("trial");
+    expect(canonicalCommercialPlanId("premium_10d")).toBe("premium_10d");
+    expect(canonicalCommercialPlanId("premium_monthly")).toBe(
+      "premium_monthly",
+    );
+    expect(canonicalCommercialPlanId("free")).toBeNull();
+    expect(LEGACY_TO_COMMERCIAL).toEqual({
+      plus: "premium_10d",
+      pro: "premium_monthly",
+    });
+  });
+
+  it("highlights the active card in green with an 'active plan' label and a NON-PURCHASING current-plan state", () => {
+    expect(PAGE).toContain("border-success ring-1 ring-success/30");
+    expect(PAGE).toContain('t("billing.offers.yourActivePlan")');
+    // The current-plan state is a plain div (aria-disabled), not a link:
+    expect(PAGE).toContain('aria-disabled="true"');
+    expect(PAGE).toContain('t("billing.offers.current")');
+    // The purchase Link is now conditional (only non-current offers):
+    expect(PAGE).toMatch(/\) : isCurrent \? \(/);
+  });
+
+  it("shows the persisted start/end dates and remaining time on the active card", () => {
+    expect(PAGE).toContain('t("billing.currentPlan.periodStart")');
+    expect(PAGE).toContain('t("billing.currentPlan.periodEnd")');
+    expect(PAGE).toContain('t("billing.offers.remaining")');
+    expect(PAGE).toContain('t("billing.offers.remainingDays"');
+    expect(PAGE).toContain('t("billing.offers.remainingHours"');
+    expect(PAGE).toContain('t("billing.currentPlan.remaining")');
+  });
+
+  it("the paid-active trial hint covers admin plus/pro rows (canonical mapping, not just premium ids)", () => {
+    expect(PAGE).toContain(
+      'canonicalPlan === "premium_10d" || canonicalPlan === "premium_monthly"',
+    );
   });
 });

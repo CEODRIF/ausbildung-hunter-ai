@@ -69,7 +69,8 @@ export type FeatureId =
   | "automation"
   | "upload";
 
-export type QuotaKind = "per_day" | "per_cycle" | "items" | "none" | "static_mb";
+export type QuotaKind =
+  "per_day" | "per_cycle" | "items" | "none" | "static_mb";
 
 /** How each feature's quota behaves (independent of plan). */
 export const FEATURE_QUOTA_KIND: Record<FeatureId, QuotaKind> = {
@@ -245,10 +246,45 @@ export function isCommercialPlanId(value: unknown): value is CommercialPlanId {
   );
 }
 
-export function getCommercialPlan(
-  id: CommercialPlanId,
-): CommercialPlanDef {
+export function getCommercialPlan(id: CommercialPlanId): CommercialPlanDef {
   return COMMERCIAL_PLANS[id];
+}
+
+/**
+ * DISPLAY-ONLY canonical mapping: the legacy admin-granted plan ids
+ * (plus/pro) to the commercial offer each one corresponds to.
+ *
+ * This is the documented D1 decision (plans.ts + docs/
+ * subscription-system-design-2026-10-24.md): Plus mirrors the
+ * Premium-10d feature set and Pro mirrors the Premium-Monthly feature
+ * set (identical matrices in billing_plans since migration 20261125),
+ * with durations aligned by 20261128 (plus = 10 days, pro = 30 days).
+ *
+ * Used ONLY by the billing page to mark the current offer card. The
+ * entitlement plane (resolveSubscription / checkFeature) is unaffected:
+ * entitlements always follow the persisted row's own plan.
+ */
+export const LEGACY_TO_COMMERCIAL: Partial<Record<PlanId, CommercialPlanId>> = {
+  plus: "premium_10d",
+  pro: "premium_monthly",
+};
+
+/**
+ * The commercial offer a plan id is displayed as on the billing page:
+ * itself for the commercial ids (trial / premium_*), the mapped offer
+ * for legacy plus/pro, and null for everything else (free → no card).
+ */
+export function canonicalCommercialPlanId(
+  planId: PlanId,
+): CommercialPlanId | null {
+  if (
+    planId === "trial" ||
+    planId === "premium_10d" ||
+    planId === "premium_monthly"
+  ) {
+    return planId;
+  }
+  return LEGACY_TO_COMMERCIAL[planId] ?? null;
 }
 
 /** Effective upload cap in MB for a plan id. Legacy plans and the free

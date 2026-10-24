@@ -7,6 +7,7 @@ import {
   COMMERCIAL_PLAN_IDS,
   COMMERCIAL_PLANS,
   FEATURE_QUOTA_KIND,
+  canonicalCommercialPlanId,
   type CommercialPlanId,
 } from "@/lib/billing/commercial-plans";
 import {
@@ -18,7 +19,7 @@ import {
   getPaymentHistory,
   type GetPaymentHistoryResult,
 } from "@/lib/billing/payment-history";
-import { localeForLang } from "@/lib/i18n/core";
+import { localeForLang, type TranslateVars } from "@/lib/i18n/core";
 import { getServerT, getRequestLang } from "@/lib/i18n/server";
 
 import { TrialActivationForm } from "./trial-activation-form";
@@ -32,6 +33,24 @@ function Row({ label, value }: { label: string; value: string }) {
       <dd className="text-xs font-semibold text-ink-soft">{value}</dd>
     </div>
   );
+}
+
+/** Plain (non-component) helper: remaining time until the persisted period
+ *  end, measured with the server clock (fresh per request — the page is
+ *  force-dynamic, so no client cache is involved). The impure `Date.now()`
+ *  lives HERE, outside the component body, so render stays pure under
+ *  react-hooks/purity (same pattern as describePlanCell in
+ *  admin/users/page.tsx and the campaign page's isFuture helper). */
+function remainingLabel(
+  t: (path: string, vars?: TranslateVars) => string,
+  endMs: number | null,
+): string {
+  if (endMs === null) return "—";
+  const ms = Math.max(0, endMs - Date.now());
+  const days = Math.floor(ms / 86_400_000);
+  if (days >= 1) return t("billing.offers.remainingDays", { days });
+  const hours = Math.max(1, Math.ceil(ms / 3_600_000));
+  return t("billing.offers.remainingHours", { hours });
 }
 
 /**
@@ -113,10 +132,18 @@ export default async function BillingSettingsPage() {
           ? "statusExpired"
           : "statusNone";
 
+  // The commercial offer the user's ACTIVE subscription displays as —
+  // server-resolved from the persisted row: plus → premium_10d,
+  // pro → premium_monthly, commercial ids → themselves, else null.
+  // This is the ONLY source that marks an offer card "current" (never
+  // client selection or cached state).
+  const canonicalPlan =
+    billing !== null && billing.status === "active"
+      ? canonicalCommercialPlanId(billing.planId)
+      : null;
+
   const hasActivePaidPlan =
-    billing !== null &&
-    (billing.planId === "premium_10d" || billing.planId === "premium_monthly") &&
-    billing.status === "active";
+    canonicalPlan === "premium_10d" || canonicalPlan === "premium_monthly";
 
   const hasMeteredUsage =
     billing !== null &&
@@ -133,14 +160,11 @@ export default async function BillingSettingsPage() {
 
   const usageCell = (fid: (typeof ALL_FEATURE_IDS)[number]) => {
     const entitlement = billing!.features[fid];
-    if (!entitlement)
-      return <span className="text-xs text-muted">—</span>;
+    if (!entitlement) return <span className="text-xs text-muted">—</span>;
     const kind = FEATURE_QUOTA_KIND[fid];
     if (kind === "none")
       return (
-        <span className="text-xs text-muted">
-          {t("billing.usage.noLimit")}
-        </span>
+        <span className="text-xs text-muted">{t("billing.usage.noLimit")}</span>
       );
     if (kind === "static_mb")
       return (
@@ -150,9 +174,7 @@ export default async function BillingSettingsPage() {
       );
     if (entitlement.limit === null)
       return (
-        <span className="text-xs text-muted">
-          {t("billing.usage.noLimit")}
-        </span>
+        <span className="text-xs text-muted">{t("billing.usage.noLimit")}</span>
       );
     if (entitlement.limit === 0)
       return (
@@ -165,7 +187,10 @@ export default async function BillingSettingsPage() {
 
     const percent =
       entitlement.limit > 0
-        ? Math.min(100, Math.round((entitlement.used / entitlement.limit) * 100))
+        ? Math.min(
+            100,
+            Math.round((entitlement.used / entitlement.limit) * 100),
+          )
         : 0;
     const resetKey =
       entitlement.resetsAt === null
@@ -265,11 +290,19 @@ export default async function BillingSettingsPage() {
                 value={formatDate(billing.periodEndMs)}
               />
               <Row
+                label={t("billing.currentPlan.remaining")}
+                value={
+                  billing.status === "active"
+                    ? remainingLabel(t, billing.periodEndMs)
+                    : "—"
+                }
+              />
+              <Row
                 label={t("billing.currentPlan.provider")}
                 value={
                   billing.provider === "mock"
                     ? t("billing.currentPlan.providerMock")
-                    : billing.provider ?? "—"
+                    : (billing.provider ?? "—")
                 }
               />
               <Row
@@ -313,15 +346,14 @@ export default async function BillingSettingsPage() {
           <div className="mt-3 grid gap-4 lg:grid-cols-3">
             {COMMERCIAL_PLAN_IDS.map((planId) => {
               const plan = COMMERCIAL_PLANS[planId];
-              const isCurrent =
-                billing !== null &&
-                billing.planId === planId &&
-                billing.status === "active";
+              // Server-derived only: the persisted row's plan (plus →
+              // premium_10d, pro → premium_monthly) while active.
+              const isCurrent = canonicalPlan === planId;
               return (
                 <Card
                   key={planId}
                   className={`flex flex-col p-5 ${
-                    isCurrent ? "border-accent" : ""
+                    isCurrent ? "border-success ring-1 ring-success/30" : ""
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -335,7 +367,7 @@ export default async function BillingSettingsPage() {
                     </div>
                     {isCurrent && (
                       <span className="shrink-0 rounded-lg bg-success-soft px-2 py-0.5 text-[10px] font-bold text-success">
-                        {t("billing.offers.current")}
+                        {t("billing.offers.yourActivePlan")}
                       </span>
                     )}
                   </div>
@@ -348,6 +380,31 @@ export default async function BillingSettingsPage() {
                   <p className="mt-0.5 text-xs text-muted">
                     {durationLabel(planId)}
                   </p>
+
+                  {isCurrent && billing !== null && (
+                    // Actual persisted period (never client state):
+                    // start, end and remaining time of the active plan.
+                    <div className="mt-3 space-y-0.5 rounded-lg bg-surface-2 px-3 py-2 text-[11px] leading-5">
+                      <p className="text-muted">
+                        {t("billing.currentPlan.periodStart")}:{" "}
+                        <span className="font-semibold text-ink-soft">
+                          {formatDate(billing.periodStartMs)}
+                        </span>
+                      </p>
+                      <p className="text-muted">
+                        {t("billing.currentPlan.periodEnd")}:{" "}
+                        <span className="font-semibold text-ink-soft">
+                          {formatDate(billing.periodEndMs)}
+                        </span>
+                      </p>
+                      <p className="text-muted">
+                        {t("billing.offers.remaining")}:{" "}
+                        <span className="font-semibold text-success">
+                          {remainingLabel(t, billing.periodEndMs)}
+                        </span>
+                      </p>
+                    </div>
+                  )}
 
                   <ul className="mt-4 flex-1 space-y-1.5">
                     {plan.marketing.bullets.map((bullet) => (
@@ -362,7 +419,8 @@ export default async function BillingSettingsPage() {
 
                   <div className="mt-5">
                     {planId === "trial" ? (
-                      billing === null || billing.lookupFailed ? null : isCurrent ? null : !billing.trialUsed ? (
+                      billing === null ||
+                      billing.lookupFailed ? null : isCurrent ? null : !billing.trialUsed ? (
                         <TrialActivationForm />
                       ) : hasActivePaidPlan ? (
                         <p className="text-xs leading-5 text-muted">
@@ -373,6 +431,16 @@ export default async function BillingSettingsPage() {
                           {t("billing.trial.resultTrialUsed")}
                         </p>
                       )
+                    ) : isCurrent ? (
+                      // Non-purchasing "current plan" state: the active
+                      // offer is highlighted, never re-purchasable from
+                      // its own card.
+                      <div
+                        aria-disabled="true"
+                        className="block h-11 rounded-xl bg-success-soft text-center text-sm font-semibold leading-[2.75rem] text-success"
+                      >
+                        {t("billing.offers.current")}
+                      </div>
                     ) : (
                       <Link
                         href={`/settings/billing/checkout?plan=${planId}`}
@@ -442,7 +510,9 @@ export default async function BillingSettingsPage() {
                               {t("billing.history.simulated")}
                             </span>
                             <span className="text-xs text-muted">
-                              {t(`billing.history.${onlineStatusKey(p.status)}`)}{" "}
+                              {t(
+                                `billing.history.${onlineStatusKey(p.status)}`,
+                              )}{" "}
                               · {formatDate(p.createdAtMs)}
                             </span>
                           </li>
@@ -464,7 +534,9 @@ export default async function BillingSettingsPage() {
                             className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line px-3 py-2"
                           >
                             <span className="text-xs font-semibold text-ink-soft">
-                              {t(`billing.history.${manualActionKey(g.action)}`)}
+                              {t(
+                                `billing.history.${manualActionKey(g.action)}`,
+                              )}
                               {g.plan
                                 ? ` — ${g.plan}${
                                     g.periodDays !== null
