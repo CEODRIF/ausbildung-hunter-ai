@@ -5,22 +5,51 @@ claim below as a regression guard. Baseline: `main` @ `e27fd83`.
 
 ## 1. RLS matrix (billing schema)
 
-| Table | RLS | Policies | Who can read |
-|---|---|---|---|
-| `billing_plans` | on | 1 — `select` `to authenticated` `using (true)` | anyone authenticated (public catalogue) |
-| `subscriptions` | on | 1 — `select` own row `using (user_id = auth.uid())` | self only. **No insert/update/delete policy** — only the service-role admin layer writes subscription state |
-| `admins` | on | **none** | service role only (no self-elevation path from the browser) |
-| `admin_audit_log` | on | **none** | service role only |
-| `subscription_events` | on | **none** | service role only |
-| `mock_checkouts` | on | **none** | service role only |
-| `feature_usage` | on | 1 — `select` own row | self only |
-| `feature_usage_runs` | on | 1 — `select` own row | self only |
+**Verification scope (audit pass 2):** the invariants below are test-pinned
+against the **entire migration directory** (all 66 files, filename =
+application order), as a NET inventory — `CREATE POLICY` minus
+`DROP POLICY`, including **dynamically executed** policies
+(`execute 'create policy …'` inside plpgsql, e.g. `daily_usage` in
+`20261009000000_restore_dashboard_access.sql`). The parser is hardened
+against its pass-1 silent-miss classes (missing `USING`, `WITH CHECK`,
+unquoted names, quoted identifiers, schema-less tables, case, commented-out
+DDL) and is pinned by its own self-test fixtures in
+`tests/billing-security-isolation.test.ts`.
 
-**Invariant (test-pinned):** every policy in the billing migrations is
-`select`; no user write path exists on any billing table; audit/event/mock
-tables have zero policies.
+Core billing tables:
 
-Note: RLS is the *last* line of defense. The application does not rely on it
+| Table                 | RLS | Net policies                                        | Who can read                                                                                                |
+| --------------------- | --- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `billing_plans`       | on  | 1 — `select` `to authenticated` `using (true)`      | anyone authenticated (public catalogue)                                                                     |
+| `subscriptions`       | on  | 1 — `select` own row `using (user_id = auth.uid())` | self only. **No insert/update/delete policy** — only the service-role admin layer writes subscription state |
+| `admins`              | on  | **zero**                                            | service role only (no self-elevation path from the browser)                                                 |
+| `admin_audit_log`     | on  | **zero**                                            | service role only                                                                                           |
+| `subscription_events` | on  | **zero**                                            | service role only                                                                                           |
+| `mock_checkouts`      | on  | **zero**                                            | service role only                                                                                           |
+| `feature_usage`       | on  | 1 — `select` own row                                | self only                                                                                                   |
+| `feature_usage_runs`  | on  | 1 — `select` own row                                | self only                                                                                                   |
+
+Quota/usage metering tables (same invariant — no user write path via
+PostgREST; writes happen inside RPCs): `daily_usage`,
+`user_quota_upgrades`, `user_search_credits`, `credit_transactions`,
+`searches`, `ai_deckblatt_usage`, `ai_deckblatt_runs`,
+`housing_web_search_usage`, `housing_web_search_runs` — each exactly one
+self-scoped `select` policy.
+
+**Invariant (test-pinned):** across ALL migrations, every net policy on
+these 17 tables is `select` (13 self-scoped + 1 public catalog read + 4
+tables with zero policies); no user write path exists; no
+`WITH CHECK` clause anywhere in the billing set.
+
+**Database-level verification:** `tests/billing-rls-pg.test.ts` re-checks
+the same invariants against a disposable local PostgreSQL (full chain
+applied, `pg_policies` + `relrowsecurity` + 3-arg
+`has_function_privilege` for the mock RPCs). It **skips honestly** when no
+local PostgreSQL is reachable — on the host where this audit was executed
+PostgreSQL was unavailable, so database-level verification was NOT
+performed there (see §6.2).
+
+Note: RLS is the _last_ line of defense. The application does not rely on it
 for user reads — the billing UI reads through the service-role client with
 explicit user-scoped filters (service role bypasses RLS by design), so a
 policy drift would degrade to "no rows visible", never to "other users'
@@ -28,13 +57,13 @@ rows visible".
 
 ## 2. RPC permission matrix
 
-| Function | Grants | Notes |
-|---|---|---|
-| `create_mock_checkout` / `complete_mock_checkout` | **service_role only** (`revoke … from public, authenticated` + `grant … to service_role`) | additionally env-gated by `mockPaymentsEnabled()` — disabled in every production runtime (matrix test-pinned) |
-| `reserve_feature_op` / `complete_feature_op` / `release_feature_op` / `feature_quota_status` / `feature_capacity_status` | service_role only | quota accounting never runs with a user token |
-| `activate_trial` | service_role only | one-shot per user, 72h, event logged |
-| `reserve_deckblatt_generation` / `complete_…` | `authenticated` with `auth.uid()` guard | pre-existing user-session RPCs, plan-aware |
-| `reserve_search_credits` / `refund_search_credits` | `authenticated` with `auth.uid()` guard | same pattern |
+| Function                                                                                                                 | Grants                                                                                    | Notes                                                                                                         |
+| ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `create_mock_checkout` / `complete_mock_checkout`                                                                        | **service_role only** (`revoke … from public, authenticated` + `grant … to service_role`) | additionally env-gated by `mockPaymentsEnabled()` — disabled in every production runtime (matrix test-pinned) |
+| `reserve_feature_op` / `complete_feature_op` / `release_feature_op` / `feature_quota_status` / `feature_capacity_status` | service_role only                                                                         | quota accounting never runs with a user token                                                                 |
+| `activate_trial`                                                                                                         | service_role only                                                                         | one-shot per user, 72h, event logged                                                                          |
+| `reserve_deckblatt_generation` / `complete_…`                                                                            | `authenticated` with `auth.uid()` guard                                                   | pre-existing user-session RPCs, plan-aware                                                                    |
+| `reserve_search_credits` / `refund_search_credits`                                                                       | `authenticated` with `auth.uid()` guard                                                   | same pattern                                                                                                  |
 
 All RPCs are `security definer` and run `set search_path = public`
 (structural guards in `subscription-migrations.test.ts`).
@@ -89,11 +118,14 @@ All RPCs are `security definer` and run `set search_path = public`
    `project/production-repair-runbook-2026-10-24.md`) is approved & applied.
    NOT re-implemented by this work.
 2. **CI has no PostgreSQL**: this repo's test matrix (vitest/tsc/eslint/
-   build) pins the SQL *text* and the *service behavior*; behavioral RLS /
-   RPC concurrency verification was done locally on PG14 (clean DB +
-   production-like clone, 67-file chain) in prior sessions and is not
-   re-runnable in CI. The PG assertions for the repair branch are kept in
-   that branch's tooling.
+   build) pins the SQL _text_ (full-directory, drop-netted, parser
+   self-tested) and the _service behavior_. Database-level verification is
+   available via `tests/billing-rls-pg.test.ts` on any machine with a local
+   PostgreSQL — it skips honestly when unavailable, and a green CI suite
+   never claims DB-level verification it did not run. (Prior sessions
+   verified the RLS/RPC surface on local PG14 — clean DB + production-like
+   clone — from the earlier host; that host is no longer the audit
+   environment.)
 3. **One production data issue open**: the `pro | active | manual` row whose
    `user_id` ≠ intended account. Resolution is two deliberate admin actions
    (grant to intended user, cancel orphan) — never a transfer, never
