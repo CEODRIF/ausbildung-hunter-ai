@@ -330,7 +330,7 @@ Profile-driven search over the same public source, with live progress and an Exc
 
 **Saved preview**: last 5 saved opportunities with snapshot score, "Stand" date, and the Phase 7 **stale indicator** (profile revision or matcher version newer than the snapshot → flagged, never silently current).
 
-**Usage & AI status**: email usage comes from the server-side quota RPC (`getUsageSnapshot` — reserved + sent, quota upgrades included); AI usage uses the shared `AI_DAILY_REQUEST_LIMIT` constant (single source of truth with the quota RPCs). No quota logic is duplicated, no browser-provided values are trusted.
+**Usage & AI status**: email usage comes from the server-side quota RPC (`getUsageSnapshot` — reserved + sent, quota upgrades included); the displayed AI limit is the server-resolved entitlement (`checkFeature("ai_assistant")` — plan row's `ai_requests_per_day`, 0 when no active plan). There is NO permanent Free plan (removed 2026-10-24, PR #72 revision): users without an active trial / Plus / Pro show 0 and are denied server-side. No quota logic is duplicated, no browser-provided values are trusted.
 
 **Activity**: existing `activity_logs` system, now also logging `opportunity_saved` / `opportunity_removed` (best-effort — a failed audit insert never fails the user action). No sensitive content is logged.
 

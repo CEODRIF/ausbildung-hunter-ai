@@ -872,8 +872,10 @@ describe("getDashboardData", () => {
     expect(data.nextAction.href).toBe("/applications/campaign/camp-1");
 
     // Usage comes from the server-side quota function, not the browser.
+    // No subscription row in this fixture → the displayed AI limit is the
+    // real entitlement: 0 (D9: no permanent Free plan, no 100/day default).
     expect(data.usageSnapshot.remaining).toBe(18);
-    expect(data.aiLimit).toBe(100);
+    expect(data.aiLimit).toBe(0);
     expect(data.activities).toHaveLength(1);
   });
 

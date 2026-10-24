@@ -42,7 +42,12 @@ export interface GateDiagnostics {
 export type AdminAccess =
   | { status: "ok"; profile: Profile }
   | { status: "unauthenticated" }
-  | { status: "forbidden"; reason: "no_membership" | "no_profile"; userId: string; diag: GateDiagnostics };
+  | {
+      status: "forbidden";
+      reason: "no_membership" | "no_profile";
+      userId: string;
+      diag: GateDiagnostics;
+    };
 
 /** Session user + admin check with a diagnostic reason (server-side only). */
 export async function diagnoseAdminAccess(): Promise<AdminAccess> {
@@ -175,83 +180,67 @@ export async function executeAdminAction(
     return { ok: false, reason: "user_not_found" };
   }
   const admin = createAdminClient();
-  const now = new Date().toISOString();
 
-  if (action === "set_plan" || action === "reactivate_subscription") {
-    if (!isAssignablePlan(params.plan)) {
-      return { ok: false, reason: "invalid_plan" };
+  // Subscription actions run through the atomic `manage_subscription` RPC
+  // (migration 20261126): row lock → validated write → admin_audit_log with
+  // before/after + reason → subscription_events, all in ONE transaction.
+  // The actor id is the SESSION-derived administrator (requireAdmin ran
+  // first); the browser never supplies it.
+  if (
+    action === "set_plan" ||
+    action === "reactivate_subscription" ||
+    action === "cancel_subscription"
+  ) {
+    if (action !== "cancel_subscription") {
+      if (!isAssignablePlan(params.plan)) {
+        return { ok: false, reason: "invalid_plan" };
+      }
+      if (!isPeriodDays(params.periodDays)) {
+        return { ok: false, reason: "invalid_period" };
+      }
     }
-    if (!isPeriodDays(params.periodDays)) {
-      return { ok: false, reason: "invalid_period" };
+    let data: unknown;
+    let error: { message?: string } | null = null;
+    try {
+      const res = await admin.rpc("manage_subscription", {
+        p_actor_id: actorId,
+        p_target_id: targetUserId,
+        p_action: action,
+        p_plan: action === "cancel_subscription" ? null : params.plan,
+        p_period_days:
+          action === "cancel_subscription" ? null : params.periodDays,
+        p_reason: "admin_ui",
+      });
+      data = res.data;
+      error = res.error;
+    } catch {
+      return { ok: false, reason: "db_error" };
     }
-    const periodEnd = new Date(
-      Date.now() + params.periodDays * 86_400_000,
-    ).toISOString();
-    const existing = await admin
-      .from("subscriptions")
-      .select("id")
-      .eq("user_id", targetUserId)
-      .maybeSingle();
-    if (action === "set_plan" && existing?.data) {
-      const { error } = await admin
-        .from("subscriptions")
-        .update({
-          plan: params.plan,
-          status: "active",
-          canceled_at: null,
-          current_period_start: now,
-          current_period_end: periodEnd,
-          updated_at: now,
-        })
-        .eq("id", existing.data.id as string);
-      if (error) return { ok: false, reason: "db_error" };
-    } else {
-      const { error } = await admin.from("subscriptions").upsert(
-        {
-          user_id: targetUserId,
-          plan: params.plan,
-          status: "active",
-          provider: "manual",
-          current_period_start: now,
-          current_period_end: periodEnd,
-          canceled_at: null,
-          created_by: actorId,
-          updated_at: now,
-        },
-        { onConflict: "user_id" },
-      );
-      if (error) return { ok: false, reason: "db_error" };
-    }
-    await appendAudit(actorId, targetUserId, action, {
-      plan: params.plan,
-      period_days: params.periodDays,
-    });
-    return {
-      ok: true,
-      message: `Plan ${params.plan} activated for ${params.periodDays} day(s).`,
-    };
-  }
-
-  if (action === "cancel_subscription") {
-    const { data: sub } = await admin
-      .from("subscriptions")
-      .select("id, status")
-      .eq("user_id", targetUserId)
-      .maybeSingle();
-    if (!sub) return { ok: false, reason: "no_subscription" };
-    const { error } = await admin
-      .from("subscriptions")
-      .update({
-        status: "canceled",
-        canceled_at: now,
-        updated_at: now,
-      })
-      .eq("id", sub.id as string);
     if (error) return { ok: false, reason: "db_error" };
-    await appendAudit(actorId, targetUserId, "cancel_subscription", {});
+    const result = (Array.isArray(data) ? data[0] : data) as Record<
+      string,
+      unknown
+    > | null;
+    const status =
+      typeof result?.["status"] === "string"
+        ? (result["status"] as string)
+        : "db_error";
+    if (status === "no_subscription") {
+      return { ok: false, reason: "no_subscription" };
+    }
+    if (status !== "ok") return { ok: false, reason: "db_error" };
+    if (action === "cancel_subscription") {
+      return {
+        ok: true,
+        message:
+          "Subscription canceled (entitlements revert to the Free state).",
+      };
+    }
     return {
       ok: true,
-      message: "Subscription canceled (entitlements revert to Free).",
+      message: `Plan ${String(params.plan)} activated for ${String(
+        params.periodDays,
+      )} day(s) — administrator grant (not a customer payment).`,
     };
   }
 

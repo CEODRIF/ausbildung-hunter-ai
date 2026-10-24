@@ -228,7 +228,11 @@ describe("7. nothing else changed, nothing was deleted", () => {
     expect(shell).toContain(
       '{ labelKey: "nav.deckblatt", href: "/deckblatt", icon: "image" }',
     );
-    expect(shell).toContain('heading: { titleKey: "pages.deckblatt.title"');
+    // Whitespace-tolerant: the heading object may be formatted on one or
+    // several lines — the contract is that the deckblatt heading survives.
+    expect(shell.replace(/\s+/g, "")).toContain(
+      'heading:{titleKey:"pages.deckblatt.title",subtitleKey:"pages.deckblatt.subtitle"',
+    );
   });
 
   it("keeps every backend file of the feature on disk", () => {

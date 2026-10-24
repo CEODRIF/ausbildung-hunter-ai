@@ -37,6 +37,7 @@ function makeMock(handlers: {
     args: unknown[];
     filters: Filters;
   }> = [];
+  const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const make = (table: string) => {
     const filters: Filters = {};
     const record = (op: string, args: unknown[] = []) =>
@@ -106,14 +107,18 @@ function makeMock(handlers: {
   return {
     client: {
       from: make,
-      rpc: (name: string, args: Record<string, unknown>) => ({
-        single: async () => ({
+      // Faithful to the real Supabase client: .rpc() is directly awaitable
+      // and resolves to { data, error } (the codebase awaits it that way).
+      rpc: (name: string, args: Record<string, unknown>) => {
+        rpcCalls.push({ name, args: { ...args } });
+        return Promise.resolve({
           data: handlers.rpc?.(name, args) ?? null,
           error: null,
-        }),
-      }),
+        });
+      },
     },
     calls,
+    rpcCalls,
   };
 }
 
@@ -152,6 +157,10 @@ function adminLookupHandlers(
       table: string,
       filters: Filters,
     ) => Record<string, unknown> | null;
+    rpc?: (
+      name: string,
+      args: Record<string, unknown>,
+    ) => Record<string, unknown> | null;
   } = {},
 ) {
   return {
@@ -166,6 +175,7 @@ function adminLookupHandlers(
         return { ...PROFILE_ROW, id: TARGET_ID, email: "target@example.com" };
       return extra.single?.(table, filters) ?? null;
     },
+    rpc: extra.rpc,
   };
 }
 
@@ -208,10 +218,11 @@ describe("admin authorization", () => {
     mockSession(ADMIN_ID);
     const mock = mockAdminData(
       adminLookupHandlers({
-        single: (table, filters) =>
-          table === "subscriptions" && filters["user_id"] === TARGET_ID
-            ? null
-            : null,
+        // The write happens INSIDE the atomic manage_subscription RPC; the
+        // app layer no longer performs its own subscriptions upsert or audit
+        // insert (the RPC does both in one transaction).
+        rpc: (name) =>
+          name === "manage_subscription" ? { status: "ok" } : null,
       }),
     );
     const response = await post({
@@ -220,22 +231,17 @@ describe("admin authorization", () => {
       periodDays: 30,
     });
     expect(response.status).toBe(200);
-    const upsert = mock.calls.find(
-      (c) => c.table === "subscriptions" && c.op === "upsert",
-    );
-    expect(upsert).toBeDefined();
-    const payload = upsert?.args[0] as Record<string, unknown>;
-    expect(payload.user_id).toBe(TARGET_ID); // target from URL param
-    expect(payload.plan).toBe("pro");
-    expect(payload.created_by).toBe(ADMIN_ID); // actor from session
-    const audit = mock.calls.find(
-      (c) => c.table === "admin_audit_log" && c.op === "insert",
-    );
-    const auditPayload = audit?.args[0] as Record<string, unknown>;
-    expect(auditPayload).toMatchObject({
-      actor_id: ADMIN_ID,
-      target_user_id: TARGET_ID,
-      action: "set_plan",
+    // No application-level subscriptions write — everything is in the RPC.
+    expect(mock.calls.filter((c) => c.table === "subscriptions")).toEqual([]);
+    expect(mock.calls.filter((c) => c.table === "admin_audit_log")).toEqual([]);
+    const rpc = mock.rpcCalls.find((c) => c.name === "manage_subscription");
+    expect(rpc).toBeDefined();
+    expect(rpc?.args).toMatchObject({
+      p_actor_id: ADMIN_ID, // actor derived from the SESSION
+      p_target_id: TARGET_ID, // target from the URL param
+      p_action: "set_plan",
+      p_plan: "pro",
+      p_period_days: 30,
     });
   });
 
@@ -290,18 +296,21 @@ describe("admin authorization", () => {
     ).toEqual([]);
   });
 
-  it("cancel without a subscription → 409", async () => {
+  it("cancel without a subscription → 409 (RPC reports no_subscription)", async () => {
     mockSession(ADMIN_ID);
     mockAdminData(
       adminLookupHandlers({
-        single: (table, filters) =>
-          table === "subscriptions" && filters["user_id"] === TARGET_ID
-            ? null
-            : null,
+        // The atomic RPC is the source of truth: with no active
+        // subscription it returns status 'no_subscription', which the app
+        // maps to a 409.
+        rpc: (name) =>
+          name === "manage_subscription" ? { status: "no_subscription" } : null,
       }),
     );
     const response = await post({ action: "cancel_subscription" });
     expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe("no_subscription");
   });
 
   it("self-revocation is blocked (lockout guard)", async () => {
@@ -374,13 +383,19 @@ describe("admin user list (cross-user isolation)", () => {
         if (table === "admins") return [];
         return null;
       },
-      rpc: () => ({
-        date: "2026-10-01",
-        emails_sent: 1,
-        emails_reserved: 0,
-        daily_limit: 500,
-        remaining: 499,
-      }),
+      // Name-aware: the rate limiter reads a different shape than the
+      // usage snapshot (the mock is faithful — both are awaited directly).
+      rpc: (name) => {
+        if (name === "check_rate_limit")
+          return { allowed: true, count: 1, limit: 30, retry_after: 0 };
+        return {
+          date: "2026-10-01",
+          emails_sent: 1,
+          emails_reserved: 0,
+          daily_limit: 500,
+          remaining: 499,
+        };
+      },
     });
     const response = await GET(
       new Request("http://localhost/api/admin/users") as never,

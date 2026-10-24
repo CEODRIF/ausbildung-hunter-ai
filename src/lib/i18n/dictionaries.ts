@@ -30,6 +30,9 @@ const de = {
   },
   // ---- Billing / subscription (plans, demo checkout, usage) --------------
   billing: {
+    trialExpired:
+      "Deine kostenlose 3-Tage-Testphase ist abgelaufen. Wähle einen Plan, um die geschützten Funktionen weiterzuverwenden.",
+    trialExpiredCta: "Plan wählen",
     featureNames: {
       ai_assistant: "KI-Assistent",
       cover_letter: "Anschreiben",
@@ -79,7 +82,7 @@ const de = {
       simulatedNotice:
         "Die Zahlung wird nur simuliert. Es werden keine echten Daten erhoben, keine echten Beträge berechnet und kein echter Zahlungsdienstleister kontaktiert.",
       inertNotice:
-        "Demo-Zahlungen sind in dieser Umgebung deaktiviert. Die Kaufsteuerung ist daher inaktiv — es werden keine Berechtigungen aktiviert.",
+        "Demo-Zahlungen sind in dieser Umgebung deaktiviert. Die Kaufsteuerung ist daher inaktiv — es werden keine Berechtigungen aktiviert. Nächster Schritt: Nutze die kostenlose 3-Tage-Testphase oder kontaktiere den Support, um eine Zahlungsmethode zu vereinbaren.",
       startButton: "Demo-Kauf starten",
       startPending: "Wird gestartet …",
       pendingTitle: "Simulierte Verarbeitung",
@@ -667,9 +670,8 @@ const de = {
     subscription: {
       title: "Abonnement",
       manage: "Verwalten",
-      none: "Kein Abonnement — Free-Plan-Limits aktiv.",
-      lapsed:
-        "Abonnement nicht mehr aktiv — Free-Plan-Limits gelten.",
+      none: "Kein aktiver Plan — geschützte Funktionen sind gesperrt. Bitte einen Plan wählen.",
+      lapsed: "Plan nicht mehr aktiv — geschützte Funktionen sind gesperrt.",
     },
     greeting: {
       morning: "Guten Morgen, {name}.",
@@ -1237,8 +1239,22 @@ const de = {
     actionFailed: "Aktion fehlgeschlagen ({error}).",
     networkError: "Netzwerkfehler — bitte erneut versuchen.",
     confirmBody: "Bestätigen: {action} für {email}?",
+    confirmDetail: "Details: {detail}",
+    detailPlan: "Plan {plan} · {days} Tage",
+    detailCancel: "Aktueller Plan: {plan}",
     confirmYes: "Bestätigen",
     confirmNo: "Abbrechen",
+    audit: "Audit-Protokoll",
+    auditLoading: "Wird geladen …",
+    auditError: "Audit-Protokoll konnte nicht geladen werden.",
+    auditEmpty: "Keine Einträge.",
+    auditTransition: "von {before} zu {after}",
+    stateActiveUntil: "aktiv bis {date}",
+    stateCanceled: "gekündigt ({date})",
+    stateExpired: "abgelaufen ({date})",
+    grantedByAdmin: "Admin-Vergabe",
+    trialRange: "Testzeitraum: {start} → {end}",
+    noPlan: "Kein Plan — Auswahl erforderlich",
     navUsers: "Benutzer",
   },
 
@@ -2117,6 +2133,9 @@ const en: Dict = {
     
   },
   billing: {
+    trialExpired:
+      "Your free trial has expired. Choose a plan to continue using protected features.",
+    trialExpiredCta: "Choose a plan",
     featureNames: {
       ai_assistant: "AI Assistant",
       cover_letter: "Cover Letter",
@@ -2166,7 +2185,7 @@ const en: Dict = {
       simulatedNotice:
         "Payment processing is fully simulated. No real data is collected, no real charge is made, and no real payment provider is contacted.",
       inertNotice:
-        "Demo payments are disabled in this environment. The checkout controls are therefore inert — no entitlements can be activated.",
+        "Mock payments are disabled in this environment, so the buy control is inert — no entitlements are activated. Next step: use the free 3-day trial or contact support to arrange a payment method.",
       startButton: "Start demo checkout",
       startPending: "Starting …",
       pendingTitle: "Simulated processing",
@@ -2724,8 +2743,8 @@ const en: Dict = {
     subscription: {
       title: "Subscription",
       manage: "Manage",
-      none: "No subscription — free plan limits apply.",
-      lapsed: "Subscription no longer active — free plan limits apply.",
+      none: "No active plan — protected features are locked. Please choose a plan.",
+      lapsed: "Plan no longer active — protected features are locked.",
     },
     greeting: {
       morning: "Good morning, {name}.",
@@ -3276,8 +3295,22 @@ const en: Dict = {
     actionFailed: "Action failed ({error}).",
     networkError: "Network error — please retry.",
     confirmBody: "Confirm: {action} for {email}?",
+    confirmDetail: "Details: {detail}",
+    detailPlan: "Plan {plan} · {days} days",
+    detailCancel: "Current plan: {plan}",
     confirmYes: "Confirm",
     confirmNo: "Cancel",
+    audit: "Audit trail",
+    auditLoading: "Loading…",
+    auditError: "Could not load the audit trail.",
+    auditEmpty: "No entries.",
+    auditTransition: "from {before} to {after}",
+    stateActiveUntil: "active until {date}",
+    stateCanceled: "canceled ({date})",
+    stateExpired: "expired ({date})",
+    grantedByAdmin: "admin-granted",
+    trialRange: "trial period: {start} → {end}",
+    noPlan: "No plan — selection required",
     navUsers: "Users",
   },
 
@@ -4140,6 +4173,9 @@ const fr: Dict = {
 
   },
   billing: {
+    trialExpired:
+      "Votre essai gratuit de 3 jours a expiré. Choisissez une formule pour continuer à utiliser les fonctions protégées.",
+    trialExpiredCta: "Choisir une formule",
     featureNames: {
       ai_assistant: "Assistant IA",
       cover_letter: "Lettre de motivation",
@@ -4191,7 +4227,7 @@ const fr: Dict = {
       simulatedNotice:
         "Le traitement du paiement est entièrement simulé. Aucune donnée réelle n'est collectée, aucun débit réel n'est effectué et aucun vrai prestataire de paiement n'est contacté.",
       inertNotice:
-        "Les paiements démo sont désactivés dans cet environnement. Les contrôles de paiement sont donc inactifs — aucun accès ne peut être activé.",
+        "Les paiements simulés sont désactivés dans cet environnement, le bouton d'achat est donc inerte — aucune autorisation n'est activée. Prochaine étape : utilisez l'essai gratuit de 3 jours ou contactez le support pour convenir d'un moyen de paiement.",
       startButton: "Démarrer le paiement démo",
       startPending: "Démarrage …",
       pendingTitle: "Traitement simulé",
@@ -4753,8 +4789,8 @@ const fr: Dict = {
     subscription: {
       title: "Abonnement",
       manage: "Gérer",
-      none: "Aucun abonnement — limites du plan gratuit.",
-      lapsed: "Abonnement non actif — limites du plan gratuit.",
+      none: "Aucun plan actif — fonctions protégées verrouillées. Veuillez choisir un plan.",
+      lapsed: "Plan plus actif — fonctions protégées verrouillées.",
     },
     greeting: {
       morning: "Bonjour, {name}.",
@@ -5306,8 +5342,22 @@ const fr: Dict = {
     actionFailed: "Action échouée ({error}).",
     networkError: "Erreur réseau — veuillez réessayer.",
     confirmBody: "Confirmer : {action} pour {email} ?",
+    confirmDetail: "Détails : {detail}",
+    detailPlan: "Formule {plan} · {days} jours",
+    detailCancel: "Formule actuelle : {plan}",
     confirmYes: "Confirmer",
     confirmNo: "Annuler",
+    audit: "Journal d'audit",
+    auditLoading: "Chargement…",
+    auditError: "Impossible de charger le journal d'audit.",
+    auditEmpty: "Aucune entrée.",
+    auditTransition: "de {before} à {after}",
+    stateActiveUntil: "active jusqu'au {date}",
+    stateCanceled: "résiliée ({date})",
+    stateExpired: "expirée ({date})",
+    grantedByAdmin: "accordée par l'admin",
+    trialRange: "période d'essai : {start} → {end}",
+    noPlan: "Aucune formule — sélection requise",
     navUsers: "Utilisateurs",
   },
 
@@ -6175,6 +6225,9 @@ const ar: Dict = {
 
   },
   billing: {
+    trialExpired:
+      "انتهت فترة تجربتك المجانية البالغة 3 أيام. اختر خطة للمتابعة باستخدام الميزات المحمية.",
+    trialExpiredCta: "اختر خطة",
     featureNames: {
       ai_assistant: "المساعد الذكي",
       cover_letter: "خطاب التقديم",
@@ -6224,7 +6277,7 @@ const ar: Dict = {
       simulatedNotice:
         "معالجة الدفع محاكاة بالكامل. لا يتم جمع أي بيانات حقيقية، ولا يتم أي خصم حقيقي، ولا يتم التواصل مع أي مزود مدفوعات حقيقي.",
       inertNotice:
-        "مدفوعات العرض التجريبي معطلة في هذه البيئة. لذلك عناصر الشراء غير نشطة — لا يمكن تفعيل أي صلاحيات.",
+        "الدفع التجريبي معطّل في هذه البيئة، لذا فإن زر الشراء غير فعّال — لا يتم تفعيل أي صلاحيات. الخطوة التالية: استخدم فترة التجربة المجانية لمدة 3 أيام، أو تواصل مع الدعم لاتفاق على طريقة دفع.",
       startButton: "بدء الشراء التجريبي",
       startPending: "جارٍ البدء …",
       pendingTitle: "معالجة محاكاة",
@@ -6771,8 +6824,8 @@ const ar: Dict = {
     subscription: {
       title: "الاشتراك",
       manage: "إدارة",
-      none: "لا يوجد اشتراك — تُطبَّق حدود الخطة المجانية.",
-      lapsed: "الاشتراك لم يعد نشطًا — تُطبَّق حدود الخطة المجانية.",
+      none: "لا توجد خطة نشطة — الميزات المحمية مقفلة. يرجى اختيار خطة.",
+      lapsed: "الخطة لم تعد نشطة — الميزات المحمية مقفلة.",
     },
     greeting: {
       morning: "صباح الخير، {name}.",
@@ -7308,8 +7361,22 @@ const ar: Dict = {
     actionFailed: "فشل الإجراء ({error}).",
     networkError: "خطأ في الشبكة — يرجى إعادة المحاولة.",
     confirmBody: "تأكيد: {action} لـ {email}؟",
+    confirmDetail: "التفاصيل: {detail}",
+    detailPlan: "الخطة {plan} · {days} يوم",
+    detailCancel: "الخطة الحالية: {plan}",
     confirmYes: "تأكيد",
     confirmNo: "إلغاء",
+    audit: "سجل التدقيق",
+    auditLoading: "جارٍ التحميل…",
+    auditError: "تعذّر تحميل سجل التدقيق.",
+    auditEmpty: "لا توجد إدخالات.",
+    auditTransition: "من {before} إلى {after}",
+    stateActiveUntil: "نشطة حتى {date}",
+    stateCanceled: "ملغاة ({date})",
+    stateExpired: "منتهية ({date})",
+    grantedByAdmin: "منحها المسؤول",
+    trialRange: "فترة التجربة: {start} → {end}",
+    noPlan: "لا توجد خطة — يجب الاختيار",
     navUsers: "المستخدمون",
   },
 

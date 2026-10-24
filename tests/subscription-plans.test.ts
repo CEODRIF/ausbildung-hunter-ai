@@ -4,7 +4,9 @@
  * Pure tests (no Supabase access): they pin the single typed source of truth
  * (`commercial-plans.ts` + `plans.ts` + `duration.ts`) against the agreed
  * spec table, the calendar-month semantics, and the regression-sensitive
- * legacy constants (free 50/100, deckblatt 2/day, upload 10 MB).
+ * legacy baseline (upload 10 MB account cap). Since 2026-10-24 (PR #72
+ * revision, decision D9) there is NO permanent Free plan and NO free-limits
+ * constants — the absence of those constants is itself a regression guard.
  *
  * The DB-seed mirror (migration 20261120000000) is asserted against this
  * catalogue in tests/subscription-migrations.test.ts.
@@ -26,13 +28,12 @@ import {
 import { computePeriodEnd, periodDays } from "@/lib/billing/duration";
 import {
   ASSIGNABLE_PLANS,
-  DECKBLATT_LEGACY_DAILY_LIMIT,
-  FREE_PLAN_LIMITS,
   PLAN_IDS,
   PLAN_LABELS,
   isAssignablePlan,
   isPlanId,
 } from "@/lib/billing/plans";
+import * as plansCatalogue from "@/lib/billing/plans";
 
 const ALL_FEATURES: FeatureId[] = [
   "ai_assistant",
@@ -299,13 +300,17 @@ describe("marketing copy (spec-mandated strings)", () => {
   });
 });
 
-describe("legacy fallback constants (regression guards)", () => {
-  it("free fallback stays 50 emails / 100 AI — zero behavior change", () => {
-    expect(FREE_PLAN_LIMITS).toEqual({ emailsPerDay: 50, aiPerDay: 100 });
+describe("no-entitlement policy (D9: permanent Free plan removed)", () => {
+  it("no shared free-limits constants exist (a missing mapping can never become a grant)", () => {
+    expect("FREE_PLAN_LIMITS" in plansCatalogue).toBe(false);
+    expect("DECKBLATT_LEGACY_DAILY_LIMIT" in plansCatalogue).toBe(false);
   });
 
-  it("deckblatt legacy cap stays 2/day", () => {
-    expect(DECKBLATT_LEGACY_DAILY_LIMIT).toBe(2);
+  it("'free' is still a known historical plan id, but never assignable", () => {
+    expect(isPlanId("free")).toBe(true); // readable legacy row state
+    expect(isAssignablePlan("free")).toBe(false);
+    expect(ASSIGNABLE_PLANS).toEqual(["plus", "pro"]);
+    expect(PLAN_IDS).toContain("free"); // constraint history, not an offer
   });
 
   it("upload cap helpers and per-plan values", () => {

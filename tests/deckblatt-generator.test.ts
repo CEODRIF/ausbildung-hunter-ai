@@ -75,7 +75,10 @@ describe("auth", () => {
   });
 
   it("reuses the global AppShell (no new header/nav system)", () => {
-    expect(layout).toContain("<AppShell profile={profile}>");
+    // Whitespace-tolerant, and open to extra server-supplied props (the
+    // plan-gate banner): the contract is that the page is wrapped in the
+    // GLOBAL shell, not a new header/nav system.
+    expect(layout.replace(/\s+/g, "")).toContain("<AppShellprofile={profile}");
     expect(layout).toContain('export const dynamic = "force-dynamic"');
   });
 });
@@ -882,7 +885,10 @@ describe("responsive layout", () => {
     // The shell is untouched: the nav item joins the existing model.
     const shell = read("src/components/app-shell.tsx");
     expect(shell).toContain('{ labelKey: "nav.deckblatt", href: "/deckblatt", icon: "image" }');
-    expect(shell).toContain('titleKey: "pages.deckblatt.title", subtitleKey: "pages.deckblatt.subtitle"');
+    // Whitespace-tolerant (the heading object may reflow across lines):
+    expect(shell.replace(/\s+/g, "")).toContain(
+      'titleKey:"pages.deckblatt.title",subtitleKey:"pages.deckblatt.subtitle"',
+    );
   });
 });
 

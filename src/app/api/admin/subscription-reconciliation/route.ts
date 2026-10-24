@@ -137,6 +137,30 @@ export async function GET(): Promise<NextResponse> {
     }
     for (const [key, n] of countByEmail) if (n > 1) sharedEmails.add(key);
   }
+  // Pending payments (state v2): an in-flight mock checkout is "payment
+  // pending" — it grants NOTHING until verified completion (which writes
+  // the subscription row). Listed separately so the report can classify
+  // "pending payment" accounts even before any subscription row exists.
+  let pendingCheckouts: Array<{
+    user_id: string;
+    plan_id: string;
+    status: string;
+    created_at: string | null;
+    expires_at: string | null;
+  }> = [];
+  try {
+    const { data: pcData, error: pcError } = await admin
+      .from("mock_checkouts")
+      .select("user_id, plan_id, status, created_at, expires_at")
+      .eq("status", "pending")
+      .limit(REPORT_LIMIT);
+    if (!pcError && pcData)
+      pendingCheckouts = pcData as (typeof pendingCheckouts)[number][];
+  } catch {
+    pendingCheckouts = []; // advisory section — the report itself must not fail
+  }
+  const pendingByUser = new Set(pendingCheckouts.map((c) => c.user_id));
+
   const nowMs = Date.now();
   const totals: Record<string, number> = {
     none: 0,
@@ -145,6 +169,7 @@ export async function GET(): Promise<NextResponse> {
     expired: 0,
     invalid: 0,
   };
+  const stateTotals: Record<string, number> = {};
   const report = rows.map((r) => {
     const profile = profiles.get(r.user_id) ?? null;
     const classified = classifyRawSubscription(
@@ -156,6 +181,37 @@ export async function GET(): Promise<NextResponse> {
       { nowMs },
     );
     totals[classified] = (totals[classified] ?? 0) + 1;
+
+    // State v2 (docs/subscription-system-design-2026-10-24 §2/§7): the
+    // fine-grained classification the reconciliation report must show.
+    const endMs = r.current_period_end
+      ? Date.parse(r.current_period_end)
+      : null;
+    const computedExpired =
+      r.status === "active" &&
+      endMs !== null &&
+      !Number.isNaN(endMs) &&
+      endMs <= nowMs;
+    let state: string;
+    if (classified === "canceled") state = "canceled";
+    else if (classified === "expired")
+      state = r.plan === "trial" ? "trial_expired" : "expired";
+    else if (classified === "active") {
+      if (r.plan === "trial") state = "trial_active";
+      else if (r.provider === "manual") state = "admin_granted";
+      else state = "paid_active";
+    } else if (classified === "none") {
+      // An existing row that grants no plan entitlement:
+      //   plan 'free'  → "legacy_free": the historical permanent-Free row
+      //     state (removed 2026-10-24, PR #72 revision). Grants nothing;
+      //     the account is subject to the plan-selection gate. NOT an error.
+      //   any other value (unknown plan) → "invalid": a truly inconsistent
+      //     row, also flagged via the unknown_plan flag for manual review.
+      state = r.plan === "free" ? "legacy_free" : "invalid";
+    } else state = classified; // 'invalid' (lookup failure — not expected on raw rows)
+    if (computedExpired && classified === "active")
+      state = r.plan === "trial" ? "trial_expired" : "expired";
+    stateTotals[state] = (stateTotals[state] ?? 0) + 1;
 
     const flags: string[] = [];
     if (!isPlanId(r.plan)) flags.push("unknown_plan");
@@ -186,6 +242,8 @@ export async function GET(): Promise<NextResponse> {
       canceled_at: r.canceled_at,
       trial_activated_at: r.trial_activated_at,
       classified,
+      state,
+      pending_checkout: pendingByUser.has(r.user_id),
       flags,
     };
   });
@@ -195,6 +253,13 @@ export async function GET(): Promise<NextResponse> {
     read_only: true,
     truncated: rows.length >= REPORT_LIMIT,
     totals,
+    stateTotals,
+    pendingCheckouts,
+    // Accounts with NO subscription row at all (never selected a plan,
+    // one-trial never used) do not appear in this row-based report — they
+    // are the `selection_required` population, handled per-user by the
+    // plan gate at request time (src/lib/billing/plan-gate.ts).
+    note: "Row-based report: accounts without any subscription row (never selected a plan) are not listed; they are enforced per-user by the plan-selection gate.",
     rows: report,
   });
 }

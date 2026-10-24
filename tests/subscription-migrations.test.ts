@@ -60,11 +60,13 @@ const V2_FILE = "20261120000000_subscription_billing_v2.sql";
 const QUOTAS_FILE = "20261121000000_feature_quotas.sql";
 const DECKBLATT_FILE = "20261020000000_deckblatt_usage.sql";
 const MOCK_FILE = "20261122000000_mock_checkout_complete.sql";
+const FREE_FALLBACK_FILE = "20261127000000_remove_free_deckblatt_fallback.sql";
 
 const v2Sql = read(`supabase/migrations/${V2_FILE}`);
 const quotasSql = read(`supabase/migrations/${QUOTAS_FILE}`);
 const deckblattSql = read(`supabase/migrations/${DECKBLATT_FILE}`);
 const mockSql = read(`supabase/migrations/${MOCK_FILE}`);
+const freeSql = read(`supabase/migrations/${FREE_FALLBACK_FILE}`);
 
 /** Collapse whitespace runs to single spaces (formatting-independent pins). */
 function flatten(sql: string): string {
@@ -82,6 +84,7 @@ function ddlOnly(sql: string): string {
 const v2Flat = flatten(v2Sql);
 const quotasFlat = flatten(quotasSql);
 const deckblattFlat = flatten(deckblattSql);
+const freeFlat = flatten(freeSql);
 const v2Ddl = flatten(ddlOnly(v2Sql));
 const quotasDdl = flatten(ddlOnly(quotasSql));
 const mockFlat = flatten(mockSql);
@@ -165,6 +168,7 @@ describe("migration files", () => {
     expect(files).toContain(V2_FILE);
     expect(files).toContain(QUOTAS_FILE);
     expect(files).toContain(MOCK_FILE);
+    expect(files).toContain(FREE_FALLBACK_FILE);
   });
 
   it("files are substantial (negative control against empty files)", () => {
@@ -441,12 +445,96 @@ describe(`${QUOTAS_FILE} — structure`, () => {
     );
   });
 
+  it("the applied 20261121 migration is NOT rewritten (its 2/day fallback stays in the file — history is immutable)", () => {
+    expect(quotasFlat).toContain(
+      "coalesce(public.plan_feature_limit(target_user_id, 'deckblatt'), 2)",
+    );
+  });
+
   it("lists all twelve feature ids and matches the TS feature universe", () => {
     expect([...ALL_FEATURE_IDS].sort()).toEqual(Object.keys(FEATURE_QUOTA_KIND).sort());
     for (const feature of Object.keys(FEATURE_QUOTA_KIND)) {
       const occurrences = quotasFlat.split(`'${feature}'`).length - 1;
       expect(occurrences, `feature id ${feature} under-represented`).toBeGreaterThanOrEqual(2);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 20261127 — removing the permanent Free plan's DB-level deckblatt fallback
+// (D9). Additive: three create-or-replace function bodies, fallback 2 → 0.
+// ---------------------------------------------------------------------------
+
+describe(`${FREE_FALLBACK_FILE} — structure (no free fallback at DB level)`, () => {
+  it("replaces exactly the three deckblatt RPCs (status / reserve / release), nothing else", () => {
+    for (const fn of [
+      "create or replace function public.get_deckblatt_usage_status(target_user_id uuid)",
+      "create or replace function public.reserve_deckblatt_generation( target_user_id uuid, p_run_id uuid )",
+      "create or replace function public.release_deckblatt_generation( target_user_id uuid, p_run_id uuid )",
+    ]) {
+      expect(freeFlat, fn).toContain(fn);
+    }
+    // complete_deckblatt_generation stays untouched (as in 20261121).
+    expect(freeFlat).not.toContain("complete_deckblatt_generation");
+  });
+
+  it("the fallback is 0 in ALL three functions (no-plan = denied, never granted 2/day)", () => {
+    const occurrences =
+      freeFlat.split(
+        "coalesce(public.plan_feature_limit(target_user_id, 'deckblatt'), 0)",
+      ).length - 1;
+    expect(occurrences).toBe(3);
+    expect(freeFlat).not.toContain(
+      "coalesce(public.plan_feature_limit(target_user_id, 'deckblatt'), 2)",
+    );
+  });
+
+  it("signatures and return shapes are unchanged (callers keep working)", () => {
+    expect(freeFlat).toContain(
+      "returns table ( daily_limit integer, used integer, remaining integer, usage_date date )",
+    );
+    expect(
+      freeFlat.split(
+        "returns table (status text, used integer, remaining integer)",
+      ).length - 1,
+    ).toBe(2);
+  });
+
+  it("security posture is unchanged: security definer + pinned search_path + authenticated-only grants", () => {
+    expect(
+      freeFlat.split(
+        "language plpgsql security definer set search_path = public",
+      ).length - 1,
+    ).toBe(3);
+    for (const grant of [
+      "grant execute on function public.get_deckblatt_usage_status(uuid) to authenticated;",
+      "grant execute on function public.reserve_deckblatt_generation(uuid, uuid) to authenticated;",
+      "grant execute on function public.release_deckblatt_generation(uuid, uuid) to authenticated;",
+    ]) {
+      expect(freeFlat, grant).toContain(grant);
+    }
+    for (const revoke of [
+      "revoke execute on function public.get_deckblatt_usage_status(uuid) from public, anon;",
+      "revoke execute on function public.reserve_deckblatt_generation(uuid, uuid) from public, anon;",
+      "revoke execute on function public.release_deckblatt_generation(uuid, uuid) from public, anon;",
+    ]) {
+      expect(freeFlat, revoke).toContain(revoke);
+    }
+  });
+
+  it("the reserve keeps its zero-limit denial BEFORE any row write (no-plan users leave no traces)", () => {
+    // Inside the reserve body: the guard must still short-circuit at 0.
+    expect(freeFlat).toContain("if plan_limit <= 0 then");
+    expect(freeFlat).toContain("select 'quota_exhausted'::text, plan_limit, 0;");
+  });
+
+  it("is DDL- and data-neutral: no tables, no updates, no deletes outside function bodies", () => {
+    const ddl = flatten(ddlOnly(freeSql));
+    expect(ddl).not.toMatch(/create\s+table/i);
+    expect(ddl).not.toMatch(/alter\s+table/i);
+    expect(ddl).not.toMatch(/\bdrop\b/i);
+    expect(ddl).not.toMatch(/update\s+public\./i);
+    expect(ddl).not.toMatch(/delete\s+from\s+public\./i);
   });
 });
 

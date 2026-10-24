@@ -2,7 +2,6 @@ import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { AI_DAILY_REQUEST_LIMIT } from "@/lib/ai-service";
 import {
   checkFeature,
   displayPlanLabel,
@@ -420,16 +419,14 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     subscription = null;
   }
 
-  // Plan-aware AI limit (billing meter): commercial plans surface their
-  // feature_limits value; legacy users the plan row's ai_requests_per_day
-  // (free → 100). Display-only — when the meter cannot be read
-  // (lookup_error) or is unmetered (limit null), show the legacy default
-  // instead of a bogus 0.
+  // Plan-aware AI limit (billing meter): active plans surface their
+  // ai_requests_per_day value. Display-only and honest — there is NO
+  // permanent Free plan (removed 2026-10-24, PR #72 revision), so a
+  // no-entitlement state or a lookup failure displays 0 (the feature is
+  // denied; checkFeature already resolves both to limit 0). An unmetered
+  // AI plan (limit null — none in the current catalogue) also displays 0.
   const aiEntitlement = await checkFeature(userId, "ai_assistant");
-  const aiLimit =
-    aiEntitlement.reason === "lookup_error" || aiEntitlement.limit === null
-      ? AI_DAILY_REQUEST_LIMIT
-      : aiEntitlement.limit;
+  const aiLimit = aiEntitlement.limit ?? 0;
 
   return {
     profile: profileResult.data,

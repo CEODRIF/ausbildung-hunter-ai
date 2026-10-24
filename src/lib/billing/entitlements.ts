@@ -1,15 +1,17 @@
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { FREE_PLAN_LIMITS, isPlanId, PLAN_LABELS, type PlanId } from "./plans";
+import { isPlanId, PLAN_LABELS, type PlanId } from "./plans";
 
 /**
- * Phase 10 — server-side entitlement resolution.
+ * Phase 10 — server-side entitlement resolution (LEGACY DAILY COUNTERS).
  *
  * Entitlements are ALWAYS derived from persisted, server-readable state
  * (the user's subscription row + the plan catalog). Nothing is accepted
- * from the browser. A failed lookup degrades to the FREE plan (the most
- * restrictive limits) — never to an upgraded state.
+ * from the browser. When no ACTIVE non-free plan resolves (no row, free row,
+ * canceled, expired, unknown plan, or a failed lookup) the effective limits
+ * are 0 — there is NO permanent Free plan (removed 2026-10-24, PR #72
+ * revision). This never upgrades a state; it only denies.
  */
 
 export interface SubscriptionState {
@@ -65,8 +67,11 @@ export async function getEntitlements(
   const fallback = (subscription: SubscriptionState | null): Entitlements => ({
     planId: "free",
     planLabel: PLAN_LABELS.free,
-    emailsPerDay: FREE_PLAN_LIMITS.emailsPerDay,
-    aiPerDay: FREE_PLAN_LIMITS.aiPerDay,
+    // NO PERMANENT FREE PLAN (2026-10-24): no active trial / Plus / Pro row
+    // grants no daily quota at all. `planId: "free"` is a HISTORICAL sentinel
+    // state (display + "no entitlements"), never a purchasable free tier.
+    emailsPerDay: 0,
+    aiPerDay: 0,
     subscription,
     source: "default",
   });
