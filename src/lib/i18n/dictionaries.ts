@@ -183,6 +183,27 @@ const de = {
         "Wir konnten deinen Abonnementstatus nicht laden. Die Pläne unten bleiben sichtbar — bitte versuche es gleich erneut.",
       retry: "Erneut versuchen",
     },
+    history: {
+      title: "Zahlungs- & Abo-Historie",
+      unavailable:
+        "Die Historie konnte nicht geladen werden — es wird nichts angezeigt.",
+      noProvider:
+        "Es ist kein Online-Zahlungsanbieter verbunden. Abos werden ausschließlich manuell verwaltet — es existieren keine echten Online-Zahlungen.",
+      onlineTitle: "Online-Zahlungen",
+      onlineEmpty: "Keine Online-Zahlungstransaktionen gespeichert.",
+      simulated: "Simuliert (Demo)",
+      statusPending: "Ausstehend",
+      statusSucceeded: "Erfolgreich",
+      statusFailed: "Fehlgeschlagen",
+      statusCanceled: "Storniert",
+      statusExpired: "Abgelaufen",
+      manualTitle: "Manuelle Abo-Änderungen",
+      manualEmpty: "Keine manuellen Abo-Änderungen gespeichert.",
+      actionGrant: "Abonnement gewährt",
+      actionReactivate: "Abonnement reaktiviert",
+      actionCancel: "Abonnement gekündigt",
+      periodDays: "{days} Tage",
+    },
   },
   // ---- Shell: sidebar sections + navigation ------------------------------
   nav: {
@@ -2238,6 +2259,27 @@ const en: Dict = {
         "We couldn't load your subscription status. The plans below remain visible — please try again shortly.",
       retry: "Try again",
     },
+    history: {
+      title: "Payment & subscription history",
+      unavailable:
+        "History could not be loaded — nothing is shown.",
+      noProvider:
+        "No online payment provider is connected. Subscriptions are managed manually — no real online charges exist.",
+      onlineTitle: "Online payments",
+      onlineEmpty: "No online payment transactions stored.",
+      simulated: "Simulated (demo)",
+      statusPending: "Pending",
+      statusSucceeded: "Succeeded",
+      statusFailed: "Failed",
+      statusCanceled: "Canceled",
+      statusExpired: "Expired",
+      manualTitle: "Manual subscription changes",
+      manualEmpty: "No manual subscription changes recorded.",
+      actionGrant: "Subscription granted",
+      actionReactivate: "Subscription reactivated",
+      actionCancel: "Subscription canceled",
+      periodDays: "{days} days",
+    },
   },
   nav: {
 
@@ -4233,6 +4275,27 @@ const fr: Dict = {
       errorBody:
         "Impossible de charger le statut de votre abonnement. Les plans ci-dessous restent visibles — veuillez réessayer dans un instant.",
       retry: "Réessayer",
+    },
+    history: {
+      title: "Historique des paiements et de l'abonnement",
+      unavailable:
+        "L'historique n'a pas pu être chargé — rien n'est affiché.",
+      noProvider:
+        "Aucun fournisseur de paiement en ligne n'est connecté. Les abonnements sont gérés manuellement — aucune vraie transaction en ligne n'existe.",
+      onlineTitle: "Paiements en ligne",
+      onlineEmpty: "Aucune transaction de paiement en ligne enregistrée.",
+      simulated: "Simulé (démo)",
+      statusPending: "En attente",
+      statusSucceeded: "Réussi",
+      statusFailed: "Échoué",
+      statusCanceled: "Annulé",
+      statusExpired: "Expiré",
+      manualTitle: "Modifications d'abonnement manuelles",
+      manualEmpty: "Aucune modification d'abonnement manuelle enregistrée.",
+      actionGrant: "Abonnement accordé",
+      actionReactivate: "Abonnement réactivé",
+      actionCancel: "Abonnement annulé",
+      periodDays: "{days} jours",
     },
   },
   nav: {
@@ -6233,6 +6296,26 @@ const ar: Dict = {
       errorBody:
         "تعذر تحميل حالة اشتراكك. تبقى الخطط أدناه ظاهرة — يرجى المحاولة مرة أخرى بعد قليل.",
       retry: "حاول مرة أخرى",
+    },
+    history: {
+      title: "سجل المدفوعات والاشتراك",
+      unavailable: "تعذّر تحميل السجل — لا يُعرض شيء.",
+      noProvider:
+        "لا يوجد مزوّد مدفوعات عبر الإنترنت متصل. تُدار الاشتراكات يدويًا — لا توجد عمليات دفع حقيقية.",
+      onlineTitle: "مدفوعات عبر الإنترنت",
+      onlineEmpty: "لا توجد معاملات دفع عبر الإنترنت محفوظة.",
+      simulated: "محاكاة (تجريبي)",
+      statusPending: "قيد الانتظار",
+      statusSucceeded: "ناجحة",
+      statusFailed: "فاشلة",
+      statusCanceled: "ملغاة",
+      statusExpired: "منتهية الصلاحية",
+      manualTitle: "تغييرات اشتراك يدوية",
+      manualEmpty: "لا توجد تغييرات اشتراك يدوية مسجلة.",
+      actionGrant: "تم منح اشتراك",
+      actionReactivate: "تمت إعادة تفعيل اشتراك",
+      actionCancel: "تم إلغاء اشتراك",
+      periodDays: "{days} يومًا",
     },
   },
   nav: {

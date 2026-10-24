@@ -14,6 +14,10 @@ import {
   getBillingStatus,
   type BillingStatus,
 } from "@/lib/billing/entitlement-service";
+import {
+  getPaymentHistory,
+  type GetPaymentHistoryResult,
+} from "@/lib/billing/payment-history";
 import { localeForLang } from "@/lib/i18n/core";
 import { getServerT, getRequestLang } from "@/lib/i18n/server";
 
@@ -65,6 +69,16 @@ export default async function BillingSettingsPage() {
     billing = await getBillingStatus(user.id);
   } catch {
     billing = null; // degraded view below
+  }
+
+  // Read-only payment/subscription history (persisted rows only — the
+  // facade never invents a transaction; failure = explicit unavailable
+  // note, never empty-by-assumption).
+  let history: GetPaymentHistoryResult;
+  try {
+    history = await getPaymentHistory(user.id);
+  } catch {
+    history = { ok: false, error: "failed" };
   }
 
   const priceUsd = (cents: number) =>
@@ -374,6 +388,104 @@ export default async function BillingSettingsPage() {
           </div>
         </section>
 
+        {(() => {
+          const h = history.ok ? history.history : null;
+          const onlineStatusKey = (s: string) =>
+            s === "succeeded"
+              ? "statusSucceeded"
+              : s === "failed"
+                ? "statusFailed"
+                : s === "canceled"
+                  ? "statusCanceled"
+                  : s === "expired"
+                    ? "statusExpired"
+                    : "statusPending";
+          const manualActionKey = (a: string) =>
+            a === "reactivate_subscription"
+              ? "actionReactivate"
+              : a === "cancel_subscription"
+                ? "actionCancel"
+                : "actionGrant";
+          return (
+            <section className="mt-6">
+              <Card className="p-6">
+                <h2 className="text-xs font-bold uppercase tracking-[0.1em] text-faint">
+                  {t("billing.history.title")}
+                </h2>
+                {h === null ? (
+                  <p className="mt-3 text-xs leading-5 text-muted">
+                    {t("billing.history.unavailable")}
+                  </p>
+                ) : (
+                  <>
+                    {!h.providerConfigured && (
+                      <p className="mt-3 text-xs leading-5 text-muted">
+                        {t("billing.history.noProvider")}
+                      </p>
+                    )}
+                    <h3 className="mt-5 text-xs font-bold uppercase tracking-[0.08em] text-faint">
+                      {t("billing.history.onlineTitle")}
+                    </h3>
+                    {h.onlinePayments.length === 0 ? (
+                      <p className="mt-2 text-xs leading-5 text-muted">
+                        {t("billing.history.onlineEmpty")}
+                      </p>
+                    ) : (
+                      <ul className="mt-2 space-y-2">
+                        {h.onlinePayments.map((p) => (
+                          <li
+                            key={p.id}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line px-3 py-2"
+                          >
+                            <span className="text-xs font-semibold text-ink-soft">
+                              {p.planId} · {priceUsd(p.amountCents)} ·{" "}
+                              {t("billing.history.simulated")}
+                            </span>
+                            <span className="text-xs text-muted">
+                              {t(`billing.history.${onlineStatusKey(p.status)}`)}{" "}
+                              · {formatDate(p.createdAtMs)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <h3 className="mt-5 text-xs font-bold uppercase tracking-[0.08em] text-faint">
+                      {t("billing.history.manualTitle")}
+                    </h3>
+                    {h.manualGrants.length === 0 ? (
+                      <p className="mt-2 text-xs leading-5 text-muted">
+                        {t("billing.history.manualEmpty")}
+                      </p>
+                    ) : (
+                      <ul className="mt-2 space-y-2">
+                        {h.manualGrants.map((g, i) => (
+                          <li
+                            key={`${g.createdAtMs}-${i}`}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line px-3 py-2"
+                          >
+                            <span className="text-xs font-semibold text-ink-soft">
+                              {t(`billing.history.${manualActionKey(g.action)}`)}
+                              {g.plan
+                                ? ` — ${g.plan}${
+                                    g.periodDays !== null
+                                      ? ` · ${t("billing.history.periodDays", { days: g.periodDays })}`
+                                      : ""
+                                  }`
+                                : ""}
+                            </span>
+                            <span className="text-xs text-muted">
+                              {formatDate(g.createdAtMs)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </Card>
+            </section>
+          );
+        })()}
         {billing !== null && !billing.lookupFailed && (
           <section className="mt-6">
             <Card className="p-6">
