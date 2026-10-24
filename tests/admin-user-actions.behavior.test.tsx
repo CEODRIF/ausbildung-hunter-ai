@@ -45,6 +45,11 @@ vi.mock("@/lib/i18n", () => ({
   useI18n: () => ({ t: makeT(), lang: "de" }),
 }));
 
+// The component refreshes the server data after a successful mutation.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
+
 const { AdminUserActions } = await import("@/components/admin-user-actions");
 
 const ROW_ID = "22222222-2222-4222-8222-222222222222";
@@ -55,7 +60,15 @@ const activeRow = {
   id: ROW_ID,
   email: TARGET_EMAIL,
   is_admin: false,
-  subscription: { plan: "pro", status: "active" },
+  subscription: {
+    plan: "pro",
+    status: "active",
+    provider: "manual",
+    current_period_start: "2026-10-01T00:00:00.000Z",
+    current_period_end: "2026-10-31T00:00:00.000Z",
+    canceled_at: null,
+    trial_activated_at: null,
+  },
 };
 
 function okResponse(body: Record<string, unknown> = { message: "ok" }) {

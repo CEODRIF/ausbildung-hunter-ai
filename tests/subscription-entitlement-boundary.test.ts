@@ -19,6 +19,7 @@ const holder = vi.hoisted(() => ({
   generateFileImpl: null as null | ((...args: unknown[]) => Promise<unknown>),
   reconRows: null as null | Array<Record<string, unknown>>,
   reconProfiles: null as null | Array<Record<string, unknown>>,
+  reconPending: null as null | Array<Record<string, unknown>>,
   reconCalls: [] as Array<Record<string, unknown>>,
 }));
 
@@ -201,6 +202,9 @@ function makeAdmin(spec: AdminSpec = {}) {
                 : all.filter((p) => vals.includes(p.id as string));
             return resolve({ data, error: null });
           }
+          if (table === "mock_checkouts")
+            // Advisory pending-checkout section (2026-10-24 reconciliation v2).
+            return resolve({ data: holder.reconPending ?? [], error: null });
         }
         return resolve({
           data: null,
@@ -302,6 +306,7 @@ beforeEach(() => {
   holder.generateFileImpl = null;
   holder.reconRows = null;
   holder.reconProfiles = null;
+  holder.reconPending = null;
   holder.reconCalls.length = 0;
   vi.mocked(runScan).mockReset();
 });
@@ -932,9 +937,14 @@ describe("S13/S14 · reconciliation endpoint (service-role path)", () => {
     // Mis-link signature: U5 and U6 share one email and U5 holds a sub row.
     expect(byUser[U5].flags).toContain("email_shared_with_other_account");
     // No mutation surface was ever called (the mock exposes only reads).
+    // The report reads exactly three tables: subscriptions (the rows),
+    // profiles (ownership / mis-link signature) and mock_checkouts (the
+    // advisory "pending payment" section, reconciliation v2).
     const admin = holder.admin as AdminMock;
     for (const q of admin.queries)
-      expect(["subscriptions", "profiles"]).toContain(q.table as string);
+      expect(["subscriptions", "profiles", "mock_checkouts"]).toContain(
+        q.table as string,
+      );
   });
 });
 

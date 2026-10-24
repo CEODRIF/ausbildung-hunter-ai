@@ -699,16 +699,36 @@ describe("checkFeature — active premium_monthly", () => {
     expect(e).toMatchObject({ allowed: true, limit: 15 });
   });
 
-  it("a missing feature_limits key means UNMETERED, not a crash (legacy-style gap)", async () => {
+  it("a missing key in a NON-EMPTY matrix means UNMETERED, not a crash", async () => {
+    // The matrix is present (so the plan is matrix-driven) but simply omits
+    // cover_letter — that omission is an explicit "unmetered" for the feature.
     setup({
       ...base,
-      plan: commercialRow("premium_monthly", { feature_limits: {} }),
+      plan: commercialRow("premium_monthly", {
+        feature_limits: { automation: 250 },
+      }),
     });
     const e = await checkFeature(USER, "cover_letter", NOW);
     expect(e).toMatchObject({
       allowed: true,
       reason: "ok_legacy_unmetered",
       limit: null,
+    });
+  });
+
+  it("an EMPTY feature_limits matrix on a commercial plan FAILS CLOSED (2026-10-24: nothing is unmetered by accident)", async () => {
+    // An empty matrix is an inconsistent state (every seeded commercial plan
+    // lists every metered feature). It must NOT degrade to unlimited access;
+    // it falls through to the explicit fail-closed policy.
+    setup({
+      ...base,
+      plan: commercialRow("premium_monthly", { feature_limits: {} }),
+    });
+    const e = await checkFeature(USER, "cover_letter", NOW);
+    expect(e).toMatchObject({
+      allowed: false,
+      reason: "feature_disabled",
+      limit: 0,
     });
   });
 });
@@ -1883,8 +1903,8 @@ describe("assertSavedApplicationCapacity — the server gate", () => {
 
   it("commercial states reach the RPC and pass 'ok' / 'unmetered'", async () => {
     // 'ok': the plan has a numeric saved_applications limit (500 monthly).
-    // 'unmetered': commercial plan whose feature_limits lacks the key —
-    // the documented legacy-style gap stays pass-through.
+    // 'unmetered': a NON-EMPTY matrix that omits the saved_applications key —
+    // the documented "explicitly unmetered" gap stays pass-through.
     const cases: Array<{
       status: "ok" | "unmetered";
       plan: Record<string, unknown>;
@@ -1892,7 +1912,9 @@ describe("assertSavedApplicationCapacity — the server gate", () => {
       { status: "ok", plan: commercialRow("premium_monthly") },
       {
         status: "unmetered",
-        plan: commercialRow("premium_monthly", { feature_limits: {} }),
+        plan: commercialRow("premium_monthly", {
+          feature_limits: { automation: 250 },
+        }),
       },
     ];
     for (const c of cases) {
@@ -1909,6 +1931,24 @@ describe("assertSavedApplicationCapacity — the server gate", () => {
         assertSavedApplicationCapacity(USER, 1),
       ).resolves.toBeUndefined();
     }
+  });
+
+  it("an EMPTY commercial matrix denies the capacity gate BEFORE the RPC (2026-10-24: never unmetered by accident)", async () => {
+    const { admin } = setup({
+      sub: subRow(),
+      plan: commercialRow("premium_monthly", { feature_limits: {} }),
+      rpc: {
+        check_saved_application_capacity: {
+          data: [capRow({ status: "unmetered" })],
+        },
+      },
+    });
+    await expect(assertSavedApplicationCapacity(USER, 1)).rejects.toThrow(
+      "CAPACITY_EXCEEDED",
+    );
+    expect(
+      rpcCalls(admin.calls, "check_saved_application_capacity"),
+    ).toHaveLength(0);
   });
 
   it("denies 'exceeded' with the STABLE code CAPACITY_EXCEEDED", async () => {

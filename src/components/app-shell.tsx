@@ -438,9 +438,14 @@ function NavSectionList({
 export function AppShell({
   children,
   profile,
+  topNotice,
 }: {
   children: React.ReactNode;
   profile?: Profile | null;
+  /** Optional server-rendered notice rendered between the header and the
+   *  main content (e.g. the trial-expired banner). Supplied by the
+   *  authenticated layouts from SERVER data — never client state. */
+  topNotice?: React.ReactNode;
 }) {
   const pathname = usePathname();
   const { t } = useI18n();
@@ -623,6 +628,12 @@ export function AppShell({
             </div>
           </div>
         </header>
+
+        {/* ------------------------------------------------ notice --------- */}
+        {/* Server-supplied, above the main content: the trial-expired banner
+            lives here so it is prominent on every authenticated page while
+            it applies, without touching the page's own layout. */}
+        {topNotice}
 
         {/* ------------------------------------------------ content -------- */}
         {/* pb-28 keeps page content clear of the fixed bottom nav on phones;

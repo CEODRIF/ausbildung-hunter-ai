@@ -107,7 +107,14 @@ function seedCommercial(limit: number) {
  *  'unmetered' branches under test. */
 function seedCommercialWithoutKey() {
   db.subscriptions.push({ ...COMMERCIAL_SUB_ROW, user_id: USER });
-  db.billing_plans.push({ ...COMMERCIAL_PLAN_ROW, feature_limits: {} });
+  // A NON-EMPTY matrix that simply omits saved_applications — the explicit
+  // "unmetered for this feature" case (gate limit null → the RPC decides).
+  // An EMPTY matrix is a different, inconsistent state that now fails
+  // closed (pinned in the dedicated test below, 2026-10-24).
+  db.billing_plans.push({
+    ...COMMERCIAL_PLAN_ROW,
+    feature_limits: { automation: 100 },
+  });
 }
 
 let db: DB;
@@ -605,6 +612,19 @@ describe("A — the three plans at the exact boundary", () => {
     }
     expect(contentCount(USER)).toBe(5); // more than the trial limit — allowed
     expect(db.capacityCalls.every((c) => c.status === "unmetered")).toBe(true);
+  });
+
+  it("an EMPTY commercial matrix fails CLOSED at the gate (2026-10-24: nothing is unmetered by accident) — the RPC is never reached", async () => {
+    db.subscriptions.push({ ...COMMERCIAL_SUB_ROW, user_id: USER });
+    db.billing_plans.push({ ...COMMERCIAL_PLAN_ROW, feature_limits: {} });
+    db.capacity.set(USER, 0); // irrelevant — the gate must not reach the RPC
+    seedCampaign();
+    await expectCode(
+      () => addBewCompany(USER, CAMPAIGN, adText(1)),
+      "CAPACITY_EXCEEDED",
+    );
+    expect(db.capacityCalls).toHaveLength(0);
+    expect(db.bew_applications).toHaveLength(0);
   });
 
   it("disabled (limit 0): every content write is CAPACITY_EXCEEDED", async () => {

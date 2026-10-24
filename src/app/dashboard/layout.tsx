@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import { TrialExpiredNotice } from "@/components/plan-state-notice";
 import { getCurrentUserAndProfile } from "@/lib/auth";
+import { getPlanGate } from "@/lib/billing/plan-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -19,9 +21,18 @@ export default async function DashboardLayout({
   // (the on_auth_user_email_confirmed trigger activates the profile; a
   // confirmed user in this state has inconsistent account data).
   if (!profile || profile.account_status === "pending") redirect("/verify");
-    if (!profile.selected_goal) redirect("/onboarding");
+  if (!profile.selected_goal) redirect("/onboarding");
+  // Mandatory plan selection (server-authoritative, no client state): an
+  // account that never selected a plan lands on the plan page; an expired
+  // trial keeps access and shows the red banner instead. The settings area
+  // (plan selection itself, sign-out, support) is never gated → no loop.
+  const gate = await getPlanGate(user.id);
+  if (gate.selectionRequired) redirect("/settings/billing");
   return (
-    <AppShell profile={profile}>
+    <AppShell
+      profile={profile}
+      topNotice={gate.trialExpired ? <TrialExpiredNotice /> : undefined}
+    >
       {children}
     </AppShell>
   );

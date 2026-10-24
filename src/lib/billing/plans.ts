@@ -57,6 +57,71 @@ export const FREE_PLAN_LIMITS = {
  *  migration 20261121000000. Guarded by tests. */
 export const DECKBLATT_LEGACY_DAILY_LIMIT = 2;
 
+/**
+ * Admin-assigned plus/pro per-feature matrix — TS MIRROR of migration
+ * 20261125000000 (drift-guarded by tests/subscription-migrations.test.ts).
+ *
+ * DECISION D1 (docs/subscription-system-design-2026-10-24.md): no canonical
+ * per-feature values for plus/pro existed, so this is a documented
+ * PROPOSAL awaiting product sign-off: Plus mirrors the Premium-10d feature
+ * set, Pro mirrors the Premium-Monthly feature set, while each plan keeps
+ * its own historic (higher) AI/e-mail per-day columns (400/150 AI,
+ * 150/500 e-mails — NOT part of this matrix). `ai_assistant` is
+ * deliberately absent: the engine reads AI limits from
+ * `billing_plans.ai_requests_per_day` for every matrix plan.
+ * Changing these values later = edit this constant + one UPDATE on
+ * `billing_plans.feature_limits`; no other code path reads plan-specific
+ * feature values.
+ */
+export const PLUS_PRO_FEATURE_LIMITS: Record<
+  "plus" | "pro",
+  Record<Exclude<FeatureIdLite, "ai_assistant">, number | null>
+> = {
+  plus: {
+    cover_letter: 25,
+    resume_ai: 20,
+    scanner: 20,
+    deckblatt: 15,
+    email_drafts: 60,
+    opportunity_search: 150,
+    saved_opportunities: 200,
+    saved_applications: 200,
+    salary_calculator: null,
+    automation: 100,
+    upload: 15,
+  },
+  pro: {
+    cover_letter: 50,
+    resume_ai: 60,
+    scanner: 60,
+    deckblatt: 30,
+    email_drafts: 120,
+    opportunity_search: 300,
+    saved_opportunities: 500,
+    saved_applications: 500,
+    salary_calculator: null,
+    automation: 250,
+    upload: 15,
+  },
+};
+
+/** Local alias so this file does not import the commercial-plans module
+ *  (FeatureId is otherwise defined there; keep the plan catalogue
+ *  dependency-free). */
+type FeatureIdLite =
+  | "ai_assistant"
+  | "cover_letter"
+  | "resume_ai"
+  | "scanner"
+  | "deckblatt"
+  | "email_drafts"
+  | "opportunity_search"
+  | "saved_opportunities"
+  | "saved_applications"
+  | "salary_calculator"
+  | "automation"
+  | "upload";
+
 export function isPlanId(value: unknown): value is PlanId {
   return (
     typeof value === "string" && (PLAN_IDS as readonly string[]).includes(value)

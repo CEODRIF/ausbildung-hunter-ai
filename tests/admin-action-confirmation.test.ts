@@ -23,37 +23,59 @@ import { describe, expect, it } from "vitest";
 import { dictionaries, SUPPORTED_LANGUAGES } from "@/lib/i18n/dictionaries";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const read = (relative: string) => readFileSync(resolve(root, relative), "utf8");
+const read = (relative: string) =>
+  readFileSync(resolve(root, relative), "utf8");
 
 const ACTIONS = read("src/components/admin-user-actions.tsx");
 const API_ROUTE = read("src/app/api/admin/users/[id]/route.ts");
 
 const ALL_ACTION_BUTTONS = [
-  { action: "set_plan", label: "admin.plus30", extra: 'plan: "plus", periodDays: 30' },
-  { action: "set_plan", label: "admin.pro30", extra: 'plan: "pro", periodDays: 30' },
+  {
+    action: "set_plan",
+    label: "admin.plus30",
+    extra: 'plan: "plus", periodDays: 30',
+  },
+  {
+    action: "set_plan",
+    label: "admin.pro30",
+    extra: 'plan: "pro", periodDays: 30',
+  },
   { action: "cancel_subscription", label: "admin.cancelSub", extra: "{}" },
-  { action: "reactivate_subscription", label: "admin.reactivate", extra: 'plan: "plus", periodDays: 30' },
+  {
+    action: "reactivate_subscription",
+    label: "admin.reactivate",
+    extra: 'plan: "plus", periodDays: 30',
+  },
   { action: "grant_admin", label: "admin.grantAdmin", extra: "{}" },
   { action: "revoke_admin", label: "admin.revokeAdmin", extra: "{}" },
 ];
 
 describe("admin actions — two-step confirmation (source contract)", () => {
+  // Formatting-tolerant matching: the contract is about WHICH action is
+  // wired through the helper, not about line breaks. Compacting whitespace
+  // keeps the assertion stable across prettier reflows while still
+  // requiring the exact action + label to be passed to `actionButton`.
+  const COMPACT = ACTIONS.replace(/\s+/g, "");
+
   it("routes every access-changing action through the pending state", () => {
     for (const { action, label } of ALL_ACTION_BUTTONS) {
       // Each action is wired as: actionButton("<action>", "<label>", ...)
-      expect(ACTIONS).toContain(`actionButton("${action}", "${label}"`);
+      expect(COMPACT).toContain(`actionButton("${action}","${label}"`);
     }
   });
 
   it("no button may POST directly on first click (all fire setPending)", () => {
     // The only place that builds the fetch request is `call()`, and the
     // only caller of `call()` is the confirmed `confirm()` path.
-    expect(ACTIONS).toContain("const confirm = async () => {");
-    expect(ACTIONS).toContain("await call(action.action, action.extra)");
-    // Buttons go through the helper, which only sets pending state:
-    expect(ACTIONS).toContain("setPending({ action, labelKey, extra })");
+    expect(COMPACT).toContain("constconfirm=async()=>{");
+    expect(COMPACT).toContain("awaitcall(action.action,action.extra)");
+    // Buttons go through the helper, which only sets pending state (the
+    // pending object always carries action + labelKey + extra; it may also
+    // carry the confirmation detail — plan + duration — added for the
+    // stronger wrong-user guard).
+    expect(COMPACT).toContain("setPending({action,labelKey,extra");
     // There must be no onClick that invokes call() directly:
-    expect(ACTIONS).not.toMatch(/onClick=\{.*call\(/);
+    expect(ACTIONS).not.toMatch(/onClick=\{[^}]*call\(/);
   });
 
   it("the confirmation names the target e-mail and the action", () => {
@@ -69,7 +91,7 @@ describe("admin actions — two-step confirmation (source contract)", () => {
   });
 
   it("actor identity is still never sent; only action + documented params", () => {
-    expect(ACTIONS).toContain('body: JSON.stringify({ action, ...extra })');
+    expect(ACTIONS).toContain("body: JSON.stringify({ action, ...extra })");
     // The actor (received as a prop for the self-row guard) must not leak
     // into the request body in any form:
     expect(ACTIONS).not.toMatch(/JSON\.stringify\([^)]*actorId/);

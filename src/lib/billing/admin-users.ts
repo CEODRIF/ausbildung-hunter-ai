@@ -13,7 +13,14 @@ export interface AdminUserListRow {
   subscription: {
     plan: string;
     status: string;
+    /** 'manual' = administrator entitlement grant (never a customer
+     *  payment); 'mock' = verified mock-checkout completion. */
+    provider: string | null;
+    current_period_start: string | null;
     current_period_end: string | null;
+    canceled_at: string | null;
+    /** One-trial stamp: set once the account's 72 h trial was activated. */
+    trial_activated_at: string | null;
   } | null;
   usage_today: { emails_sent: number; ai_requests: number };
 }
@@ -40,7 +47,9 @@ export async function listAdminUsers(
   const [subs, admins] = await Promise.all([
     admin
       .from("subscriptions")
-      .select("user_id, plan, status, current_period_end")
+      .select(
+        "user_id, plan, status, provider, current_period_start, current_period_end, canceled_at, trial_activated_at",
+      )
       .in("user_id", ids),
     admin.from("admins").select("user_id").in("user_id", ids),
   ]);
@@ -68,7 +77,11 @@ export async function listAdminUsers(
         user_id: string;
         plan: string;
         status: string;
+        provider: string | null;
+        current_period_start: string | null;
         current_period_end: string | null;
+        canceled_at: string | null;
+        trial_activated_at: string | null;
       }>
     ).map((row) => [row.user_id, row]),
   );
@@ -93,7 +106,11 @@ export async function listAdminUsers(
         ? {
             plan: sub.plan,
             status: sub.status,
+            provider: sub.provider,
+            current_period_start: sub.current_period_start,
             current_period_end: sub.current_period_end,
+            canceled_at: sub.canceled_at,
+            trial_activated_at: sub.trial_activated_at,
           }
         : null,
       usage_today: usageById.get(id) ?? { emails_sent: 0, ai_requests: 0 },

@@ -24,10 +24,11 @@
  * performed. No production credentials are used: local server only,
  * disposable database, stub rows only.
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -137,6 +138,16 @@ describeMaybe(
           `disposable db creation failed: ${created.out.slice(0, 300)}`,
         );
       psql([...withServer(db), "-c", STUBS]);
+      // Production fidelity: Supabase database sessions run in UTC. The
+      // codebase's `timezone('utc', now())` idiom (all created_at defaults,
+      // activate_trial, manage_subscription) computes correct absolute
+      // instants ONLY in a UTC session; pin the disposable DB to UTC so
+      // every timestamp assertion is deterministic and production-like.
+      psql([
+        ...withServer(db),
+        "-c",
+        `alter database ${db} set timezone = 'utc';`,
+      ]);
       const files = readdirSync(resolve(root, "supabase/migrations"))
         .filter((f) => f.endsWith(".sql"))
         .sort();
@@ -268,6 +279,411 @@ describeMaybe(
          select count(*) from public.daily_usage;`,
       );
       expect(asSvc.trim(), asSvc).toBe("2");
+    });
+
+    // ======================================================================
+    // manage_subscription — the atomic, audited admin plan RPC, verified on
+    // REAL PostgreSQL (disposable DB, full migration chain already applied).
+    // These are the database-level proofs for spec §4 (admin) and §2 (trial):
+    // one canonical row per user, all-or-nothing writes, audit per change,
+    // serialization of concurrent actions, service-role-only execution,
+    // and every documented validation rejection.
+    // ======================================================================
+    describe("manage_subscription — atomic admin plan RPC (real PG)", () => {
+      const execFileP = promisify(execFile);
+      const q = (sql: string) => psql([...withServer(db), "-c", sql]);
+      const qSoft = (sql: string) => psqlSoft([...withServer(db), "-c", sql]);
+      const one = (sql: string) => q(sql).trim();
+      const psqlPar = (sql: string) =>
+        execFileP("psql", [...withServer(db), "-c", sql], {
+          timeout: 60_000,
+          encoding: "utf8",
+        }).then(({ stdout }) => stdout.trim());
+
+      // Fixture identities — never reused anywhere else in this file.
+      const ACTOR = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // the admin
+      const TGT1 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      const TGT2 = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+      const TGT3 = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+      const subCount = (uid: string) =>
+        one(
+          `select count(*) from public.subscriptions where user_id = '${uid}'`,
+        );
+      const subField = (uid: string, col: string) =>
+        one(
+          `select ${col} from public.subscriptions where user_id = '${uid}' limit 1`,
+        );
+      // Exact span in EPOCH SECONDS (PostgreSQL's text rendering of an
+      // interval is unit-dependent: 72 h renders as '3 days' — never assert
+      // on the rendering).
+      const subSpanSec = (uid: string) =>
+        one(
+          `select extract(epoch from current_period_end - current_period_start)::bigint from public.subscriptions where user_id = '${uid}' limit 1`,
+        );
+      const auditCount = (uid: string) =>
+        one(
+          `select count(*) from public.admin_audit_log where target_user_id = '${uid}'`,
+        );
+      const eventsCount = (uid: string) =>
+        one(
+          `select count(*) from public.subscription_events where user_id = '${uid}'`,
+        );
+
+      it("P0 pin: subscriptions(user_id) carries the UNIQUE constraint that ON CONFLICT (user_id) targets", () => {
+        // An inline column-level `unique` produces a unique CONSTRAINT
+        // (contype 'u') — exactly what the RPC's upsert conflict target
+        // requires. Without it the RPC would fail at runtime.
+        const n = one(
+          `select count(*) from pg_constraint c
+            join pg_class r on r.oid = c.conrelid
+            join pg_namespace ns on ns.oid = r.relnamespace
+           where r.relname = 'subscriptions' and ns.nspname = 'public' and c.contype = 'u'
+             and c.conkey = array[(
+                   select a.attnum from pg_attribute a
+                    where a.attrelid = 'public.subscriptions'::regclass
+                      and a.attname = 'user_id')]`,
+        );
+        expect(n, "unique constraint on subscriptions.user_id").toBe("1");
+        // And the period oracle produces EXACT spans (epoch seconds, exact):
+        expect(
+          one(
+            `select extract(epoch from public.subscription_period_end(now(), 'fixed_hours', 72) - now())::bigint`,
+          ),
+        ).toBe("259200"); // 72 h, exactly
+        expect(
+          one(
+            `select extract(epoch from public.subscription_period_end(now(), 'fixed_days', 30) - now())::bigint`,
+          ),
+        ).toBe("2592000"); // 30 d, exactly
+      });
+
+      it("fixture: seed auth.users (FK targets for subscriptions / subscription_events)", () => {
+        q(
+          `alter table auth.users disable trigger on_auth_user_created;
+           insert into auth.users (id, email) values
+             ('${ACTOR}', 'pg-admin@test.invalid'),
+             ('${TGT1}', 'pg-t1@test.invalid'),
+             ('${TGT2}', 'pg-t2@test.invalid'),
+             ('${TGT3}', 'pg-t3@test.invalid');
+           alter table auth.users enable trigger on_auth_user_created;`,
+        );
+        expect(
+          one(
+            `select count(*) from auth.users where id in ('${ACTOR}','${TGT1}','${TGT2}','${TGT3}')`,
+          ),
+        ).toBe("4");
+      });
+
+      it("set_plan on a fresh user → ok, provider=manual (an admin grant, NOT a payment), exact 30-day span, created_by=actor, ONE audit row with before/after, ONE billing event", () => {
+        const out = JSON.parse(
+          q(
+            `select public.manage_subscription('${ACTOR}','${TGT1}','set_plan','plus',30,'pg_test')`,
+          ),
+        ) as Record<string, unknown>;
+        expect(out.status).toBe("ok");
+        expect(out.before, "no prior state for a fresh user").toEqual({});
+        expect(out.after).toMatchObject({
+          plan: "plus",
+          status: "active",
+          provider: "manual",
+        });
+
+        expect(subCount(TGT1)).toBe("1");
+        expect(subField(TGT1, "plan")).toBe("plus");
+        expect(subField(TGT1, "status")).toBe("active");
+        expect(subField(TGT1, "provider")).toBe("manual");
+        expect(subField(TGT1, "created_by")).toBe(ACTOR);
+        expect(subSpanSec(TGT1)).toBe("2592000"); // 30 d, exactly
+        // Start is "now" (server clock), not client-supplied:
+        expect(
+          one(
+            `select (now() - current_period_start) < interval '5 minutes' from public.subscriptions where user_id = '${TGT1}'`,
+          ),
+        ).toBe("t");
+
+        expect(auditCount(TGT1)).toBe("1");
+        const audit = JSON.parse(
+          one(
+            `select jsonb_build_object('actor', actor_id, 'action', action, 'reason', details->>'reason', 'before', details->'before', 'after', details->'after') from public.admin_audit_log where target_user_id = '${TGT1}'`,
+          ),
+        ) as Record<string, unknown>;
+        expect(audit.actor).toBe(ACTOR);
+        expect(audit.action).toBe("set_plan");
+        expect(audit.reason).toBe("pg_test");
+        expect(audit.before).toEqual({});
+        expect(audit.after).toMatchObject({
+          plan: "plus",
+          status: "active",
+          provider: "manual",
+        });
+
+        expect(eventsCount(TGT1)).toBe("1");
+        expect(
+          one(
+            `select action || '|' || provider from public.subscription_events where user_id = '${TGT1}'`,
+          ),
+        ).toBe("subscription_activated|manual");
+      });
+
+      it("set_plan again (different plan + duration) UPDATES the same single row (one canonical row; before/after captured)", () => {
+        const out = JSON.parse(
+          q(
+            `select public.manage_subscription('${ACTOR}','${TGT1}','set_plan','pro',1,'pg_test')`,
+          ),
+        ) as Record<string, unknown>;
+        expect(out.status).toBe("ok");
+        expect(out.before).toMatchObject({ plan: "plus", status: "active" });
+        expect(out.after).toMatchObject({ plan: "pro", status: "active" });
+
+        expect(subCount(TGT1), "still exactly one row").toBe("1");
+        expect(subField(TGT1, "plan")).toBe("pro");
+        expect(subSpanSec(TGT1)).toBe("86400"); // 1 d, exactly
+        expect(auditCount(TGT1)).toBe("2");
+        expect(eventsCount(TGT1)).toBe("2");
+      });
+
+      it("cancel → canceled + canceled_at set (row PRESERVED for history, period end kept for display) + event; reactivate → active again, canceled_at cleared", () => {
+        const c = JSON.parse(
+          q(
+            `select public.manage_subscription('${ACTOR}','${TGT1}','cancel_subscription',null,null,'pg_test')`,
+          ),
+        ) as Record<string, unknown>;
+        expect(c.status).toBe("ok");
+        expect(c.after).toMatchObject({ status: "canceled" });
+        expect(subField(TGT1, "status")).toBe("canceled");
+        expect(
+          one(
+            `select canceled_at is not null from public.subscriptions where user_id = '${TGT1}'`,
+          ),
+        ).toBe("t");
+        expect(subCount(TGT1), "cancel keeps the row").toBe("1");
+        expect(
+          one(
+            `select action from public.subscription_events where user_id = '${TGT1}' order by created_at desc limit 1`,
+          ),
+        ).toBe("subscription_canceled");
+
+        const r = JSON.parse(
+          q(
+            `select public.manage_subscription('${ACTOR}','${TGT1}','reactivate_subscription','plus',30,'pg_test')`,
+          ),
+        ) as Record<string, unknown>;
+        expect(r.status).toBe("ok");
+        expect(r.before).toMatchObject({ status: "canceled" });
+        expect(subField(TGT1, "status")).toBe("active");
+        expect(subField(TGT1, "plan")).toBe("plus");
+        expect(
+          one(
+            `select canceled_at is null from public.subscriptions where user_id = '${TGT1}'`,
+          ),
+        ).toBe("t");
+        expect(subCount(TGT1)).toBe("1");
+      });
+
+      it("every documented validation rejection short-circuits with ZERO writes (invalid_args / invalid_action / invalid_plan / invalid_period / no_subscription)", () => {
+        const calls: Array<[string, string]> = [
+          [
+            "invalid_args",
+            `select public.manage_subscription(null, '${TGT2}', 'set_plan', 'plus', 30, 'x')`,
+          ],
+          [
+            "invalid_action",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'frobnicate', 'plus', 30, 'x')`,
+          ],
+          [
+            "invalid_plan(trial)",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'trial', 30, 'x')`,
+          ],
+          [
+            "invalid_plan(free)",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'free', 30, 'x')`,
+          ],
+          [
+            "invalid_plan(unknown)",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'enterprise', 30, 'x')`,
+          ],
+          [
+            "invalid_period(31)",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'plus', 31, 'x')`,
+          ],
+          [
+            "invalid_period(0)",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'set_plan', 'plus', 0, 'x')`,
+          ],
+          [
+            "no_subscription",
+            `select public.manage_subscription('${ACTOR}', '${TGT2}', 'cancel_subscription', null, null, 'x')`,
+          ],
+        ];
+        for (const [label, sql] of calls) {
+          const out = JSON.parse(q(sql)) as Record<string, string>;
+          expect(out.status, label).toBe(label.split("(")[0]);
+        }
+        // And NOTHING was written for TGT2:
+        expect(subCount(TGT2)).toBe("0");
+        expect(auditCount(TGT2)).toBe("0");
+        expect(eventsCount(TGT2)).toBe("0");
+      });
+
+      it("atomicity: a forced audit-insert failure rolls back the subscription write too (db_error, no partial state)", () => {
+        // Force the failure AFTER the subscription upsert but BEFORE the
+        // function returns: the plpgsql exception handler must roll back
+        // the function's whole subtransaction.
+        q(
+          `create or replace function pg_test_fail_audit() returns trigger
+              language plpgsql as $$ begin raise exception 'forced pg test failure'; end $$;
+           drop trigger if exists pg_test_fail on public.admin_audit_log;
+           create trigger pg_test_fail before insert on public.admin_audit_log
+             for each row execute function pg_test_fail_audit();`,
+        );
+        try {
+          const out = JSON.parse(
+            q(
+              `select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',30,'pg_atomic')`,
+            ),
+          ) as Record<string, string>;
+          expect(out.status).toBe("db_error");
+          // All-or-nothing: the upsert that already happened is rolled back.
+          expect(subCount(TGT2), "subscription write rolled back").toBe("0");
+          expect(auditCount(TGT2)).toBe("0");
+          expect(eventsCount(TGT2)).toBe("0");
+        } finally {
+          q(
+            `drop trigger if exists pg_test_fail on public.admin_audit_log; drop function if exists pg_test_fail_audit();`,
+          );
+        }
+      });
+
+      it("concurrent set_plan from two parallel sessions → BOTH succeed, exactly ONE canonical row remains (FOR UPDATE serializes)", async () => {
+        const [a, b] = await Promise.all([
+          psqlPar(
+            `select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',30,'pg_conc_a')`,
+          ),
+          psqlPar(
+            `select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','pro',30,'pg_conc_b')`,
+          ),
+        ]);
+        expect(JSON.parse(a).status).toBe("ok");
+        expect(JSON.parse(b).status).toBe("ok");
+        expect(subCount(TGT2), "exactly one canonical row").toBe("1");
+        expect(["plus", "pro"]).toContain(subField(TGT2, "plan"));
+        expect(subField(TGT2, "status")).toBe("active");
+        expect(auditCount(TGT2), "both actions audited").toBe("2");
+        expect(eventsCount(TGT2)).toBe("2");
+      });
+
+      it("DB-level grant enforcement: authenticated and anon CANNOT execute the RPC (denied, zero writes); service_role CAN", () => {
+        const asAuth = qSoft(
+          `set role authenticated; select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',30,'pg_denied');`,
+        );
+        expect(asAuth.ok).toBe(false);
+        expect(asAuth.out).toContain(
+          "permission denied for function manage_subscription",
+        );
+
+        const asAnon = qSoft(
+          `set role anon; select public.manage_subscription('${ACTOR}','${TGT2}','set_plan','plus',30,'pg_denied');`,
+        );
+        expect(asAnon.ok).toBe(false);
+        expect(asAnon.out).toContain(
+          "permission denied for function manage_subscription",
+        );
+
+        // The denied attempts wrote nothing:
+        expect(subCount(TGT2)).toBe("1");
+        expect(auditCount(TGT2)).toBe("2");
+
+        // The service-role grant is what the app's admin client uses:
+        const asSvc = JSON.parse(
+          q(
+            `set role service_role; select public.manage_subscription('${ACTOR}','${TGT2}','reactivate_subscription','plus',30,'pg_service_role')`,
+          ),
+        ) as Record<string, string>;
+        expect(asSvc.status).toBe("ok");
+        expect(subField(TGT2, "status")).toBe("active");
+      });
+
+      it("target isolation: each target's row/audit holds EXACTLY the result of its own actions — nothing leaked across targets", () => {
+        // TGT1's whole history was its own 4 actions (set plus, set pro,
+        // cancel, reactivate plus). After every TGT2 action above, its
+        // state must be precisely that — no stray row, no extra audit.
+        expect(
+          one(
+            `select plan || '|' || status || '|' || provider || '|' || coalesce(canceled_at::text, '-') || '|' || coalesce(trial_activated_at::text, '-') from public.subscriptions where user_id = '${TGT1}'`,
+          ),
+          "TGT1 final row = its own cycle result",
+        ).toBe("plus|active|manual|-|-");
+        expect(auditCount(TGT1), "TGT1: exactly its own 4 audits").toBe("4");
+        expect(eventsCount(TGT1), "TGT1: exactly its own 4 events").toBe("4");
+
+        // TGT2's whole history: 2 concurrent set_plans + 1 service-role
+        // reactivate → one row (plus/active/manual), 3 audits, 3 events.
+        expect(
+          one(
+            `select plan || '|' || status || '|' || provider from public.subscriptions where user_id = '${TGT2}'`,
+          ),
+          "TGT2 final row = its own actions",
+        ).toBe("plus|active|manual");
+        expect(auditCount(TGT2), "TGT2: exactly its own 3 audits").toBe("3");
+        expect(eventsCount(TGT2), "TGT2: exactly its own 3 events").toBe("3");
+
+        // Every audit row references the same actor (server-derived in the
+        // app layer) and never a null/foreign target:
+        expect(
+          one(
+            `select count(*) from public.admin_audit_log where actor_id is null or target_user_id is null`,
+          ),
+        ).toBe("0");
+      });
+
+      it("trial (spec §2 at the DB level): two CONCURRENT first activations → exactly one 'activated' + one 'trial_already_used'; the stored span is EXACTLY 72 hours", async () => {
+        expect(subCount(TGT3), "TGT3 starts with no subscription").toBe("0");
+        const [a, b] = await Promise.all([
+          psqlPar(`select public.activate_trial('${TGT3}')`),
+          psqlPar(`select public.activate_trial('${TGT3}')`),
+        ]);
+        const statuses = [JSON.parse(a).status, JSON.parse(b).status].sort();
+        expect(statuses).toEqual(["activated", "trial_already_used"]);
+        expect(subCount(TGT3), "exactly one trial row").toBe("1");
+        expect(subField(TGT3, "plan")).toBe("trial");
+        expect(subField(TGT3, "status")).toBe("active");
+        expect(subSpanSec(TGT3), "exactly 72 hours").toBe("259200");
+        expect(
+          one(
+            `select trial_activated_at is not null from public.subscriptions where user_id = '${TGT3}'`,
+          ),
+        ).toBe("t");
+      });
+
+      it("trial cannot be restarted: a repeated sequential activation is 'trial_already_used' and does NOT move the stored start/end", async () => {
+        const startBefore = subField(TGT3, "current_period_start");
+        const out = JSON.parse(
+          q(`select public.activate_trial('${TGT3}')`),
+        ) as Record<string, unknown>;
+        expect(out.status).toBe("trial_already_used");
+        expect(subField(TGT3, "current_period_start"), "start unchanged").toBe(
+          startBefore,
+        );
+        expect(subSpanSec(TGT3)).toBe("259200");
+        expect(subCount(TGT3)).toBe("1");
+      });
+
+      it("a valid paid subscription is never downgraded by a trial request (paid_active, row untouched)", () => {
+        const before = one(
+          `select plan || '|' || status || '|' || trial_activated_at::text from public.subscriptions where user_id = '${TGT2}'`,
+        );
+        const out = JSON.parse(
+          q(`select public.activate_trial('${TGT2}')`),
+        ) as Record<string, string>;
+        expect(out.status).toBe("paid_active");
+        expect(out.plan_id).toBe(subField(TGT2, "plan"));
+        expect(
+          one(
+            `select plan || '|' || status || '|' || trial_activated_at::text from public.subscriptions where user_id = '${TGT2}'`,
+          ),
+        ).toBe(before);
+      });
     });
   },
 );

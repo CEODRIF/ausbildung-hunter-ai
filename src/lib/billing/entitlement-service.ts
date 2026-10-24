@@ -22,10 +22,16 @@
  *     end (when set) is still in the future. Only a valid row with a known
  *     plan id grants that plan; everything else (no row, canceled, expired,
  *     unknown plan) falls back to the internal 'free' state.
- *   - Commercial plans (trial / premium_10d / premium_monthly): per-feature
- *     limits come from the plan row's `feature_limits` jsonb. A missing or
- *     null key means "unmetered" (no plan quota); 0 means "disabled".
- *   - Legacy plus/pro (and the free fallback): ai_assistant uses the
+ *   - Matrix plans — any active plan whose billing_plans row carries a
+ *     non-empty `feature_limits` jsonb (trial / premium_10d / premium_monthly
+ *     from the commercial catalogue, plus the admin-assigned plus/pro tiers
+ *     since migration 20261125, decision D1): per-feature limits come from
+ *     that matrix; ai_assistant comes from the row's
+ *     `ai_requests_per_day` column (the matrix omits it on purpose). A
+ *     missing or null key means "unmetered" (no plan quota); 0 means
+ *     "disabled".
+ *   - No-matrix states (the free fallback row, and plus/pro rows on a
+ *     pre-20261125 database): ai_assistant uses the
  *     `billing_plans.ai_requests_per_day` column (free fallback 100),
  *     deckblatt keeps its historic 2/day, and the upload cap keeps 10 MB.
  *     EVERY other feature is DISABLED (0) for non-commercial states —
@@ -62,7 +68,6 @@ import {
 } from "./plans";
 import {
   FEATURE_QUOTA_KIND,
-  isCommercialPlanId,
   isFeatureId,
   LEGACY_UPLOAD_MB,
   ONE_MB,
@@ -477,6 +482,25 @@ export const NON_COMMERCIAL_FEATURE_LIMITS: Record<
 };
 
 /**
+ * A plan row "defines a matrix" when its feature_limits jsonb is a non-empty
+ * object. Matrix plans: trial / premium_10d / premium_monthly (the
+ * commercial catalogue) AND — since migration 20261125, decision D1 — the
+ * admin-assigned plus/pro tiers. The 'free' row keeps '{}' = no matrix, and
+ * plus/pro rows on a pre-20261125 database are still '{}' = no matrix: both
+ * fall through to the explicit fail-closed matrix below. Nothing is
+ * unmetered by accident.
+ */
+export function hasPlanMatrix(row: PlanRow | null | undefined): boolean {
+  return (
+    row !== null &&
+    row !== undefined &&
+    typeof row.feature_limits === "object" &&
+    row.feature_limits !== null &&
+    Object.keys(row.feature_limits).length > 0
+  );
+}
+
+/**
  * The effective limit for one feature on the resolved subscription.
  * `null` = unmetered, `0` = explicitly disabled.
  */
@@ -484,18 +508,26 @@ export function effectiveFeatureLimit(
   sub: ResolvedSubscription,
   featureId: FeatureId,
 ): number | null {
-  if (isCommercialPlanId(sub.planId)) {
-    // Server-authoritative: the DB row's feature_limits matrix wins.
-    // (A missing planRow means lookupFailed, which callers deny first.)
-    const limits = sub.planRow?.feature_limits;
-    if (limits && Object.prototype.hasOwnProperty.call(limits, featureId)) {
+  if (hasPlanMatrix(sub.planRow)) {
+    const row = sub.planRow!;
+    // AI requests come from the plan row's canonical per-day COLUMN (single
+    // source of truth — the matrix deliberately omits ai_assistant:
+    // trial 5, premium 100/200, plus 400, pro 1500).
+    if (featureId === "ai_assistant") {
+      const ai = row.ai_requests_per_day;
+      return typeof ai === "number" && Number.isFinite(ai) ? ai : null;
+    }
+    const limits = row.feature_limits!;
+    if (Object.prototype.hasOwnProperty.call(limits, featureId)) {
       const value = limits[featureId];
       return typeof value === "number" && Number.isFinite(value) ? value : null;
     }
+    // Key absent from an operator-managed matrix = explicitly unmetered
+    // (documented; every seeded plan row lists every metered feature).
     return null;
   }
-  // Non-commercial states (free fallback, legacy plus / pro): the explicit
-  // matrix — nothing is unmetered by accident.
+  // Non-commercial states (free fallback, and plus/pro rows whose matrix is
+  // not seeded yet): the explicit matrix — nothing is unmetered by accident.
   switch (featureId) {
     case "ai_assistant":
       return sub.planRow?.ai_requests_per_day ?? FREE_PLAN_LIMITS.aiPerDay;
