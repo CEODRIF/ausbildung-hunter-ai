@@ -18,11 +18,7 @@ import {
 } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
 import { localeForLang } from "@/lib/i18n/core";
-import {
-  BEW_PLATFORM_DAILY_CAP,
-  computeSendPlan,
-  isBewEmailComplete,
-} from "@/lib/bewerbung-automation";
+import { computeSendPlan, isBewEmailComplete } from "@/lib/bewerbung-automation";
 import {
   formatScheduledLocal,
   offsetLabelAt,
@@ -93,13 +89,16 @@ export const SendStep = memo(function SendStep({ view, refresh, pump, selectedId
   );
   const n = eligibleSelected.length;
 
+  // null = the quota read failed — no plan preview is computed (never a
+  // fabricated 0; the confirm sheet shows an honest unknown state).
   const plan = useMemo(
     () =>
-      computeSendPlan({
-        requested: n,
-        remaining: view.usage.remaining,
-        platformCap: BEW_PLATFORM_DAILY_CAP,
-      }),
+      view.usage.remaining === null
+        ? null
+        : computeSendPlan({
+            requested: n,
+            remaining: view.usage.remaining,
+          }),
     [n, view.usage.remaining],
   );
 
@@ -374,13 +373,18 @@ export const SendStep = memo(function SendStep({ view, refresh, pump, selectedId
                 label={t("bewauto.confirmAttachments", { n: certCount + 1 })}
               />
               <ConfirmRow
-                label={t("bewauto.confirmQuota", {
-                  remaining: view.usage.remaining,
-                  limit: view.usage.daily_limit || BEW_PLATFORM_DAILY_CAP,
-                })}
+                label={
+                  view.usage.remaining === null ||
+                  view.usage.daily_limit === null
+                    ? t("bewauto.confirmQuotaUnknown")
+                    : t("bewauto.confirmQuota", {
+                        remaining: view.usage.remaining,
+                        limit: view.usage.daily_limit,
+                      })
+                }
               />
             </dl>
-            {plan.overLimit && (
+            {plan?.overLimit && (
               <p role="alert" className="mt-4 rounded-xl border border-danger/30 bg-danger-soft px-3 py-2.5 text-xs leading-5 text-danger">
                 {t("bewauto.overLimitNote", { batch: plan.batch, total: n, deferred: plan.deferred })}
               </p>

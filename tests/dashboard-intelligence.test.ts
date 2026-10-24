@@ -874,7 +874,10 @@ describe("getDashboardData", () => {
     // Usage comes from the server-side quota function, not the browser.
     // No subscription row in this fixture → the displayed AI limit is the
     // real entitlement: 0 (D9: no permanent Free plan, no 100/day default).
-    expect(data.usageSnapshot.remaining).toBe(18);
+    // P0 quota audit: the snapshot is null ONLY when the read failed — a
+    // successful read (as here) must surface, never a fabricated 0-of-0.
+    expect(data.usageSnapshot).not.toBeNull();
+    expect(data.usageSnapshot?.remaining).toBe(18);
     expect(data.aiLimit).toBe(0);
     expect(data.activities).toHaveLength(1);
   });

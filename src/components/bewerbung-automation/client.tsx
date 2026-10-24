@@ -24,7 +24,7 @@ import { useI18n } from "@/lib/i18n";
 import { isValidEmail } from "@/lib/bewerbung-automation";
 import { Card } from "@/components/ui";
 import { GradientMesh } from "@/components/ui/surfaces";
-import { StatusPill } from "@/components/ui/feedback";
+import { QuotaIndicator, makeQuotaLabels } from "@/components/quota-indicator";
 import { Icon } from "@/components/icon";
 import {
   appSendFlags,
@@ -344,9 +344,24 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <StatusPill
-              tone={usageTone(view)}
-              label={t("bewauto.usageLeft", { n: view.usage.remaining })}
+            {/* Shared green quota indicator (P0 quota audit): used/limit,
+                remaining and the UTC reset label from the SERVER view —
+                the old StatusPill only showed the remaining count and an
+                arbitrary "unverified" tone below 10. Nulls = honest
+                unknown state (never a fabricated 0). */}
+            <QuotaIndicator
+              data={{
+                used:
+                  view.usage.remaining !== null && view.usage.daily_limit !== null
+                    ? view.usage.daily_limit - view.usage.remaining
+                    : null,
+                limit: view.usage.daily_limit,
+                remaining: view.usage.remaining,
+              }}
+              unit={t("quota.unitEmails")}
+              resetLabel={t("quota.resetsDaily")}
+              labels={makeQuotaLabels(t)}
+              upgradeHint={t("quota.upgrade")}
             />
             {/* No series management here on purpose: the primary entry point
                 is the Smart Input on step 1, and series creation has no UI
@@ -457,11 +472,12 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
   );
 }
 
-function usageTone(view: BewViewDTO): "success" | "unverified" | "blocked" {
-  if (view.usage.remaining <= 0) return "blocked";
-  if (view.usage.remaining < 10) return "unverified";
-  return "success";
-}
+// NOTE (P0 quota audit 2026-10-25): the old `usageTone` helper (success /
+// unverified / blocked / neutral, with an arbitrary "warn below 10
+// remaining" rule) was removed — quota state is now rendered by the shared
+// QuotaIndicator, whose tone rules live in ONE place for all 13 surfaces.
+// null = the quota read failed = the indicator's honest unknown state
+// (never a fabricated 0 / blocked tone).
 
 /**
  * The page-level error banner. Dismissible: an error that already happened

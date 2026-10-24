@@ -10,7 +10,10 @@ import {
   type FeatureId,
   type QuotaKind,
 } from "@/lib/billing/commercial-plans";
-import { mockPaymentsEnabled } from "@/lib/billing/entitlement-service";
+import {
+  UPLOAD_PLATFORM_CAP_MB,
+  mockPaymentsEnabled,
+} from "@/lib/billing/entitlement-service";
 import { getServerT, getRequestLang } from "@/lib/i18n/server";
 import { localeForLang } from "@/lib/i18n/core";
 
@@ -106,7 +109,13 @@ export default async function CheckoutPage({ searchParams }: CheckoutPageProps) 
       case "items":
         return t("billing.checkout.items", { value: limit });
       case "static_mb":
-        return t("billing.checkout.mb", { value: limit });
+        // TRUE enforceable cap: the 10 MB platform safety ceiling is applied
+        // before the plan cap on every upload path, so a nominal 15 MB
+        // premium value would promise a size the server rejects (P0 quota
+        // audit, upload-size copy).
+        return t("billing.checkout.mb", {
+          value: Math.min(limit, UPLOAD_PLATFORM_CAP_MB),
+        });
       default:
         return t("billing.checkout.unlimited");
     }

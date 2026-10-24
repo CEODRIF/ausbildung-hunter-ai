@@ -6,6 +6,7 @@ import {
   checkFeature,
   displayPlanLabel,
   resolveSubscription,
+  type FeatureEntitlement,
 } from "@/lib/billing/entitlement-service";
 import type { Profile } from "@/lib/auth";
 import type { SafeEmailAccount } from "@/lib/email-oauth";
@@ -142,8 +143,21 @@ export type DashboardSubscription = {
 export type DashboardData = {
   profile: Profile;
   usage: DailyUsage;
-  usageSnapshot: UsageSnapshot;
+  /**
+   * Today's e-mail usage snapshot, or NULL when the read failed. A failed
+   * read must surface as an honest "unknown" quota state in the UI — the
+   * previous fallback fabricated `daily_limit: 0 / remaining: 0`, which
+   * told users "0 of 0" while the plan may have had capacity (P0 quota
+   * audit, fabricated-zero error states).
+   */
+  usageSnapshot: UsageSnapshot | null;
   aiLimit: number;
+  /**
+   * Full AI entitlement (limit/used/remaining/resetsAt/reason) — the
+   * canonical source for the dashboard AI indicator. `aiLimit` stays as a
+   * scalar convenience (0 on any unknown/disabled state).
+   */
+  aiEntitlement: FeatureEntitlement;
   /** Display-only subscription state (null = could not be resolved → the
    *  card is omitted rather than guessing). */
   subscription: DashboardSubscription | null;
@@ -340,13 +354,11 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
   const savedKeys = new Set(saved.map((row) => row.opportunity_key));
   const matching = buildMatchingSummary(Boolean(candidateProfile), saved);
 
-  const usageSnapshot = usageSnapshotResult ?? {
-    date: usageResult.data.date,
-    emails_sent: usageResult.data.emails_sent,
-    emails_reserved: 0,
-    daily_limit: 0,
-    remaining: 0,
-  };
+  // NO zero-fabrication fallback: getUsageSnapshot failure → null → the
+  // dashboard renders the shared indicator's honest "unknown" state
+  // (P0 quota audit). The legacy `usageResult` row is used only for the
+  // "sent today" headline number, which it still reports truthfully.
+  const usageSnapshot = usageSnapshotResult;
 
   // Recent applications: campaigns (post-migration) or, pre-migration,
   // the historical draft + campaign/message join.
@@ -433,6 +445,7 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     usage: usageResult.data,
     usageSnapshot,
     aiLimit,
+    aiEntitlement,
     subscription,
     applicationsCount: applicationsResult.count ?? 0,
     activities: (activityResult.data ?? []) as ActivityLog[],

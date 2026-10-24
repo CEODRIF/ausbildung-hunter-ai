@@ -16,6 +16,7 @@ import {
   decideScope,
   detectUILanguage,
   isCoverLetterRequest,
+  isResumeRequest,
   SCOPE_REDIRECTS,
 } from "@/lib/ai-scope";
 import { buildSearchContextBlock } from "@/lib/germany-knowledge";
@@ -78,7 +79,8 @@ export async function POST(request: Request) {
   // Quota settlement state (declared before the try so the catch can
   // release a reservation when the generation fails before any chunk is
   // delivered — a failed op must not consume quota).
-  let coverLetterRunId: string | null = null;
+  let dedicatedRunId: string | null = null;
+  let dedicatedFeature: "cover_letter" | "resume_ai" | null = null;
   let aiReserved = false;
   let delivered = false;
   try {
@@ -93,22 +95,34 @@ export async function POST(request: Request) {
     // for every in-scope request.
     const history = await recentMessages(user.id, body.conversationId);
     const scope = decideScope(body.content || "", fileIds.length > 0, history);
-    // Cover-letter requests are metered against the DEDICATED cover-letter
-    // quota (one operation = one generated letter) — they must not bypass
-    // it by riding the general AI quota. The reservation happens BEFORE any
-    // model call and is released when nothing is delivered.
-    const isCoverLetter = isCoverLetterRequest(body.content || "");
-    if (isCoverLetter) {
-      coverLetterRunId = crypto.randomUUID();
+    // Cover-letter AND resume requests are metered against their DEDICATED
+    // per-feature quotas (one operation = one generated/improved/analyzed
+    // document) — they must not bypass them by riding the general AI quota.
+    // The reservation happens BEFORE any model call and is released when
+    // nothing is delivered. Cover letters take precedence when a message
+    // matches both (existing behavior).
+    const content = body.content || "";
+    const dedicated: "cover_letter" | "resume_ai" | null =
+      isCoverLetterRequest(content)
+        ? "cover_letter"
+        : isResumeRequest(content)
+          ? "resume_ai"
+          : null;
+    if (dedicated) {
+      dedicatedFeature = dedicated;
+      dedicatedRunId = crypto.randomUUID();
       const reserved = await reserveFeatureOp(
         user.id,
-        "cover_letter",
-        coverLetterRunId,
+        dedicated,
+        dedicatedRunId,
       );
       if (reserved.outcome === "quota_exhausted") {
         return NextResponse.json(
           {
-            error: "Cover letter limit reached. It resets daily (UTC).",
+            error:
+              dedicated === "cover_letter"
+                ? "Cover letter limit reached. It resets daily (UTC)."
+                : "Resume limit reached for your current plan period.",
             code: "quota_exhausted",
           },
           { status: 429 },
@@ -118,7 +132,9 @@ export async function POST(request: Request) {
         return NextResponse.json(
           {
             error:
-              "Cover letter generation is not available on your current plan.",
+              dedicated === "cover_letter"
+                ? "Cover letter generation is not available on your current plan."
+                : "Resume AI is not available on your current plan.",
             code: "feature_disabled",
           },
           { status: 403 },
@@ -139,16 +155,17 @@ export async function POST(request: Request) {
       await prepareChat(
         user.id,
         body.conversationId,
-        body.content || "",
+        content,
         fileIds,
-        { skipAiReservation: isCoverLetter },
+        { skipAiReservation: dedicated !== null },
       );
       // prepareChat succeeded: the AI reservation (regular chat) is live.
-      aiReserved = !isCoverLetter;
+      aiReserved = dedicated === null;
     } catch (error) {
-      if (coverLetterRunId) {
-        await releaseFeatureOp(user.id, "cover_letter", coverLetterRunId);
-        coverLetterRunId = null;
+      if (dedicatedRunId && dedicatedFeature) {
+        await releaseFeatureOp(user.id, dedicatedFeature, dedicatedRunId);
+        dedicatedRunId = null;
+        dedicatedFeature = null;
       }
       throw error;
     }
@@ -180,10 +197,11 @@ export async function POST(request: Request) {
           : undefined,
       );
     } else {
-      if (coverLetterRunId) {
+      if (dedicatedRunId && dedicatedFeature) {
         // A scope redirect executes no generation — release the operation.
-        await releaseFeatureOp(user.id, "cover_letter", coverLetterRunId);
-        coverLetterRunId = null;
+        await releaseFeatureOp(user.id, dedicatedFeature, dedicatedRunId);
+        dedicatedRunId = null;
+        dedicatedFeature = null;
       }
       console.info(
         "[ai-chat] out-of-scope request redirected",
@@ -194,17 +212,20 @@ export async function POST(request: Request) {
     let complete = "";
     let persisted = false;
     const encoder = new TextEncoder();
-    // Settle the cover-letter reservation exactly once: a letter that was
-    // actually generated (any content delivered) is consumed; an empty
-    // stream is released so a failed op costs nothing.
-    const settleCoverLetter = async (contentDelivered: boolean) => {
-      if (!coverLetterRunId) return;
-      const runId = coverLetterRunId;
-      coverLetterRunId = null;
+    // Settle the dedicated-feature reservation (cover letter or resume)
+    // exactly once: a document that was actually generated (any content
+    // delivered) is consumed; an empty stream is released so a failed op
+    // costs nothing.
+    const settleDedicated = async (contentDelivered: boolean) => {
+      if (!dedicatedRunId || !dedicatedFeature) return;
+      const runId = dedicatedRunId;
+      const feature = dedicatedFeature;
+      dedicatedRunId = null;
+      dedicatedFeature = null;
       if (contentDelivered) {
-        await completeFeatureOp(user.id, "cover_letter", runId);
+        await completeFeatureOp(user.id, feature, runId);
       } else {
-        await releaseFeatureOp(user.id, "cover_letter", runId);
+        await releaseFeatureOp(user.id, feature, runId);
       }
     };
     // The stream ends exactly once — either cleanly (flush) or because the
@@ -239,7 +260,7 @@ export async function POST(request: Request) {
       },
       async flush(controller) {
         const saved = await persist();
-        await settleCoverLetter(complete.trim().length > 0);
+        await settleDedicated(complete.trim().length > 0);
         // Final metadata frame (NUL-delimited): the client extracts the
         // persisted message id so the committed bubble carries the real
         // database identity instead of a local placeholder.
@@ -255,7 +276,7 @@ export async function POST(request: Request) {
       async cancel() {
         // Client aborted mid-stream: persist the partial answer.
         await persist();
-        await settleCoverLetter(complete.trim().length > 0);
+        await settleDedicated(complete.trim().length > 0);
       },
     };
     const transformed = stream.pipeThrough(new TransformStream(transformer));
@@ -272,12 +293,12 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     // A generation that failed before ANY chunk reached the client must not
-    // consume quota — release the live reservation (cover-letter or the
-    // general AI counter). Partial/complete deliveries keep it (conservative:
-    // the user did receive a generated answer).
+    // consume quota — release the live reservation (dedicated feature or
+    // the general AI counter). Partial/complete deliveries keep it
+    // (conservative: the user did receive a generated answer).
     if (!delivered) {
-      if (coverLetterRunId) {
-        await releaseFeatureOp(user.id, "cover_letter", coverLetterRunId);
+      if (dedicatedRunId && dedicatedFeature) {
+        await releaseFeatureOp(user.id, dedicatedFeature, dedicatedRunId);
       } else if (aiReserved) {
         await releaseFeatureOp(user.id, "ai_assistant").catch(() => undefined);
       }

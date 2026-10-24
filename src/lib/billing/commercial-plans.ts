@@ -114,10 +114,12 @@ export interface CommercialPlanDef {
   currency: "USD";
   duration: PlanDuration;
   /** Legacy per-day counters in billing_plans (used by the email/AI
-   *  capacity RPCs). Trial's email floor is documented in the migration:
-   *  effective_daily_email_limit() floors at the profile base (50), so a
-   *  trial user can still queue up to 50 campaign emails; automation
-   *  (the metered spec item) is 0 for trial. */
+   *  capacity RPCs). Since migration 20261129000000,
+   *  effective_daily_email_limit() is entitlement-only: the value
+   *  below is the user's campaign e-mail allowance for that plan
+   *  (trial 3, premium_10d 100, premium_monthly 250; no valid plan →
+   *  0, invitation upgrades still apply on top). automation
+   *  (the metered feature-limit spec item) is 0 for trial. */
   emailsPerDay: number;
   aiRequestsPerDay: number;
   featureLimits: FeatureLimits;

@@ -124,6 +124,7 @@ function makeView(apps: BewApplicationDTO[], campaignStatus = "draft"): BewViewD
     applications: apps,
     documents: [],
     usage: { remaining: 50, daily_limit: 50 },
+    uploadLimitMb: null,
     senderEmail: "sender@gmail.com",
   };
 }

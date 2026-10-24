@@ -979,6 +979,227 @@ describeMaybe(
         ).toBe("0");
       });
     });
+
+    // ---------------------------------------------------------------------
+    // P0 quota audit (2026-10-25) — DB-level regressions:
+    //   R3: effective_daily_email_limit is ENTITLEMENT-ONLY (20261129):
+    //       no plan 0, historical free row 0, trial 3, premium_10d 100,
+    //       premium_monthly 250, plus 150, pro 500, expired 0, canceled 0,
+    //       invitation-code upgrades apply as max(plan, upgrade).
+    //   Concurrency: parallel reserves cannot exceed the daily limit.
+    //   Idempotency: the same run_id charges exactly once.
+    //   UTC boundary: only the current UTC day counts.
+    //   Release: a refund returns exactly one unit (no leak from the race).
+    //   (The per_day quota architecture is verified through the deckblatt
+    //   RPCs — the 20261121 `reserve_feature_op` body carries the
+    //   documented function-body defect and is out of scope here.)
+    // ---------------------------------------------------------------------
+    describe("P0 quota audit — email limit entitlement-only + concurrency/UTC (DB level)", () => {
+      const one = (sql: string) => q(sql).trim();
+
+      // Fixture identities — never reused anywhere else in this file.
+      const EL1 = "88888888-8888-4888-8888-888888880001"; // no subscription row
+      const EL2 = "88888888-8888-4888-8888-888888880002"; // historical 'free' row
+      const EL3 = "88888888-8888-4888-8888-888888880003"; // active trial (RPC)
+      const EL4 = "88888888-8888-4888-8888-888888880004"; // premium_10d
+      const EL5 = "88888888-8888-4888-8888-888888880005"; // premium_monthly
+      const EL6 = "88888888-8888-4888-8888-888888880006"; // plus
+      const EL7 = "88888888-8888-4888-8888-888888880007"; // pro
+      const EL8 = "88888888-8888-4888-8888-888888880008"; // expired premium_10d
+      const EL9 = "88888888-8888-4888-8888-888888880009"; // canceled premium_monthly
+      const EL10 = "88888888-8888-4888-8888-888888880010"; // upgrade code only
+      const EL11 = "88888888-8888-4888-8888-888888880011"; // trial (concurrency)
+      const EL_CODE_A = "88888888-8888-4888-8888-8888888800f0";
+      const EL_CODE_B = "88888888-8888-4888-8888-8888888800f1";
+
+      it("fixture: seed users + the limit matrix (trials via the canonical RPC)", () => {
+        q(`
+          alter table auth.users disable trigger on_auth_user_created;
+          insert into auth.users (id, email) values
+            ('${EL1}', 'pg-el1@test.invalid'), ('${EL2}', 'pg-el2@test.invalid'),
+            ('${EL3}', 'pg-el3@test.invalid'), ('${EL4}', 'pg-el4@test.invalid'),
+            ('${EL5}', 'pg-el5@test.invalid'), ('${EL6}', 'pg-el6@test.invalid'),
+            ('${EL7}', 'pg-el7@test.invalid'), ('${EL8}', 'pg-el8@test.invalid'),
+            ('${EL9}', 'pg-el9@test.invalid'), ('${EL10}', 'pg-el10@test.invalid'),
+            ('${EL11}', 'pg-el11@test.invalid')
+          on conflict (id) do nothing;
+          alter table auth.users enable trigger on_auth_user_created;
+        `);
+        q(`
+          insert into public.subscriptions (user_id, plan, status, provider, current_period_start, current_period_end) values
+            ('${EL2}', 'free', 'active', 'manual', timezone('utc', now()) - interval '30 days', null),
+            ('${EL4}', 'premium_10d', 'active', 'mock', timezone('utc', now()) - interval '1 day', timezone('utc', now()) + interval '9 days'),
+            ('${EL5}', 'premium_monthly', 'active', 'mock', timezone('utc', now()) - interval '1 day', timezone('utc', now()) + interval '29 days'),
+            ('${EL6}', 'plus', 'active', 'manual', timezone('utc', now()) - interval '1 day', timezone('utc', now()) + interval '29 days'),
+            ('${EL7}', 'pro', 'active', 'manual', timezone('utc', now()) - interval '1 day', timezone('utc', now()) + interval '29 days'),
+            ('${EL8}', 'premium_10d', 'active', 'mock', timezone('utc', now()) - interval '11 days', timezone('utc', now()) - interval '1 day'),
+            ('${EL9}', 'premium_monthly', 'canceled', 'mock', timezone('utc', now()) - interval '5 days', timezone('utc', now()) + interval '25 days')
+          on conflict (user_id) do nothing;
+        `);
+        for (const trialUser of [EL3, EL11]) {
+          const out = JSON.parse(
+            q(`select public.activate_trial('${trialUser}')`),
+          ) as Record<string, string>;
+          expect(out.status, `activate_trial(${trialUser})`).toBe("activated");
+        }
+      });
+
+      it("R3: NO subscription row → 0 (the former 50/day default floor is gone)", () => {
+        expect(one(`select public.effective_daily_email_limit('${EL1}')`)).toBe(
+          "0",
+        );
+      });
+
+      it("R3+R4: historical 'free' row → 0 (free is history, never a grant)", () => {
+        expect(one(`select public.effective_daily_email_limit('${EL2}')`)).toBe(
+          "0",
+        );
+      });
+
+      it("R3: active entitlement plans keep their documented emails_per_day values", () => {
+        expect(one(`select public.effective_daily_email_limit('${EL3}')`)).toBe(
+          "3",
+        ); // trial
+        expect(one(`select public.effective_daily_email_limit('${EL4}')`)).toBe(
+          "100",
+        ); // premium_10d
+        expect(one(`select public.effective_daily_email_limit('${EL5}')`)).toBe(
+          "250",
+        ); // premium_monthly
+        expect(one(`select public.effective_daily_email_limit('${EL6}')`)).toBe(
+          "150",
+        ); // plus
+        expect(one(`select public.effective_daily_email_limit('${EL7}')`)).toBe(
+          "500",
+        ); // pro
+      });
+
+      it("R3: expired / canceled subscriptions → 0 (no stale capacity)", () => {
+        expect(one(`select public.effective_daily_email_limit('${EL8}')`)).toBe(
+          "0",
+        );
+        expect(one(`select public.effective_daily_email_limit('${EL9}')`)).toBe(
+          "0",
+        );
+      });
+
+      it("R3: invitation-code upgrades apply as max(plan, upgrade) — never a downgrade", () => {
+        q(`
+          insert into public.invitation_codes (id, code, type, daily_email_limit, is_active, max_uses)
+          values ('${EL_CODE_A}', 'PGTESTQA', 'quota_upgrade', 200, true, 10),
+                 ('${EL_CODE_B}', 'PGTESTQB', 'quota_upgrade', 10, true, 10)
+          on conflict (id) do nothing;
+          insert into public.user_quota_upgrades (user_id, code_id)
+          values ('${EL10}', '${EL_CODE_A}'), ('${EL4}', '${EL_CODE_B}')
+          on conflict (user_id, code_id) do nothing;
+        `);
+        // No plan: the upgrade alone grants its value (documented rule).
+        expect(
+          one(`select public.effective_daily_email_limit('${EL10}')`),
+        ).toBe("200");
+        // Upgrade BELOW the plan: the plan value wins.
+        expect(one(`select public.effective_daily_email_limit('${EL4}')`)).toBe(
+          "100",
+        );
+      });
+
+      it("concurrency: 3 PARALLEL reserves → exactly ONE 'reserved', the rest 'quota_exhausted', counter = 1", async () => {
+        const runs = [
+          "88888888-8888-4888-8888-888888880101",
+          "88888888-8888-4888-8888-888888880102",
+          "88888888-8888-4888-8888-888888880103",
+        ];
+        const reserve = (run: string) =>
+          new Promise<string>((resolve) => {
+            execFile(
+              "psql",
+              [
+                ...withServer(db),
+                "-c",
+                `select status from public.reserve_deckblatt_generation('${EL11}', '${run}')`,
+              ],
+              { encoding: "utf8", timeout: 60_000 },
+              (err, stdout) =>
+                resolve((err ? String(err.message) : stdout).trim()),
+            );
+          });
+        const results = await Promise.all(runs.map(reserve));
+        expect(results.filter((r) => r === "reserved")).toHaveLength(1);
+        expect(results.filter((r) => r === "quota_exhausted")).toHaveLength(2);
+        // The daily counter holds EXACTLY 1 — the race could not oversell.
+        expect(
+          one(
+            `select generations_used from public.ai_deckblatt_usage where user_id = '${EL11}' and usage_date = (timezone('utc', now()))::date`,
+          ),
+        ).toBe("1");
+        expect(
+          one(
+            `select count(*) from public.ai_deckblatt_runs where user_id = '${EL11}'`,
+          ),
+        ).toBe("1");
+      });
+
+      it("idempotency: repeating the winning run_id → 'already_reserved', counter stays 1", () => {
+        const winner = one(
+          `select run_id::text from public.ai_deckblatt_runs where user_id = '${EL11}'`,
+        );
+        expect(winner).toMatch(/^[0-9a-f-]{36}$/);
+        expect(
+          one(
+            `select status from public.reserve_deckblatt_generation('${EL11}', '${winner}')`,
+          ),
+        ).toBe("already_reserved");
+        expect(
+          one(
+            `select generations_used from public.ai_deckblatt_usage where user_id = '${EL11}' and usage_date = (timezone('utc', now()))::date`,
+          ),
+        ).toBe("1");
+      });
+
+      it("UTC boundary: yesterday's (UTC) usage rows do NOT count toward today", () => {
+        q(`
+          insert into public.ai_deckblatt_usage (user_id, usage_date, generations_used)
+          values ('${EL11}', (timezone('utc', now()) - interval '1 day')::date, 5)
+          on conflict (user_id, usage_date) do update set generations_used = 5;
+        `);
+        // The status RPC is a table function: read the columns explicitly.
+        const [usedV, remainingV, limitV, dateV] = one(
+          `select used || '|' || remaining || '|' || daily_limit || '|' || usage_date::text from public.get_deckblatt_usage_status('${EL11}')`,
+        ).split("|");
+        expect(dateV).toBe(one(`select (timezone('utc', now()))::date::text`));
+        expect(usedV).toBe("1"); // only today's UTC day — not 1 + 5
+        expect(remainingV).toBe("0");
+        expect(limitV).toBe("1"); // trial matrix value, server-side
+      });
+
+      it("release refunds exactly one unit — no quota leak from the race", () => {
+        const winner = one(
+          `select run_id::text from public.ai_deckblatt_runs where user_id = '${EL11}' and status = 'reserved'`,
+        );
+        expect(winner).toMatch(/^[0-9a-f-]{36}$/);
+        expect(
+          one(
+            `select status from public.release_deckblatt_generation('${EL11}', '${winner}')`,
+          ),
+        ).toBe("released");
+        expect(
+          one(
+            `select generations_used from public.ai_deckblatt_usage where user_id = '${EL11}' and usage_date = (timezone('utc', now()))::date`,
+          ),
+        ).toBe("0");
+        // The refunded unit is usable again — and then the day is truly full.
+        expect(
+          one(
+            `select status from public.reserve_deckblatt_generation('${EL11}', '88888888-8888-4888-8888-888888880104')`,
+          ),
+        ).toBe("reserved");
+        expect(
+          one(
+            `select status from public.reserve_deckblatt_generation('${EL11}', '88888888-8888-4888-8888-888888880105')`,
+          ),
+        ).toBe("quota_exhausted");
+      });
+    });
   },
 );
 

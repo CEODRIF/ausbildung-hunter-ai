@@ -4,6 +4,7 @@ import { Card } from "@/components/ui";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { getUsageSnapshot } from "@/lib/email-campaigns";
 import { getServerT } from "@/lib/i18n/server";
+import { QuotaIndicator, makeQuotaLabels } from "@/components/quota-indicator";
 import { activateQuota } from "@/app/settings/usage/actions";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +38,23 @@ export default async function UsageSettingsPage({
         )}
         {params.error && <ErrorNotice message={params.error} />}
         <Card className="mt-4 p-6">
+          {/* Shared green quota indicator (P0 quota audit): same component
+              and state rules as all other quota surfaces. The stats below
+              stay as the detailed numbers (same server-derived source). */}
+          <div className="mb-5">
+            <QuotaIndicator
+              variant="bar"
+              data={{
+                used: usage.emails_sent,
+                limit: usage.daily_limit,
+                remaining: usage.remaining,
+              }}
+              unit={t("quota.unitEmails")}
+              resetLabel={t("quota.resetsDaily")}
+              labels={makeQuotaLabels(t)}
+              upgradeHint={t("quota.upgrade")}
+            />
+          </div>
           <div className="grid gap-5 sm:grid-cols-3">
             <Stat
               label={t("account.dailyLimit")}

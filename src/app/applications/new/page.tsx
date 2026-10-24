@@ -20,6 +20,7 @@ import {
   hasCampaignOwnedContent,
   supportsPraktikumGoal,
 } from "@/lib/contact-name-support";
+import { effectiveUploadLimitMbForUser } from "@/lib/billing/entitlement-service";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,12 @@ export default async function NewApplicationPage({
   const data = await getApplicationComposerData();
   if (!data) return null;
   const t = await getServerT();
+  // TRUE per-file upload cap for this plan (server-derived). The platform
+  // safety ceiling (10 MB) is enforced BEFORE the plan cap on every upload
+  // path, so the attachment hint must show min(plan cap, ceiling): trial
+  // users get 2 MB and must not be told "10 MB" (P0 quota audit,
+  // upload-size copy).
+  const uploadLimitMb = await effectiveUploadLimitMbForUser(data.userId);
   if (!data.accounts.length)
     return (
       <div className="px-4 py-6 sm:px-6 lg:px-10">
@@ -141,6 +148,7 @@ export default async function NewApplicationPage({
               prefillNotice={prefillNotice}
               prefillError={prefillError}
               praktikumSupported={praktikumSupported}
+              uploadLimitMb={uploadLimitMb}
             />
           </div>
         </div>
@@ -220,13 +228,14 @@ export default async function NewApplicationPage({
     <div className="px-4 py-6 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-7xl">
         <div className="mt-2">
-          <ApplicationComposer
-            draft={activeDraft}
-            accounts={data.accounts}
-            prefillNotice={prefillNotice}
-            prefillError={prefillError}
-            praktikumSupported={praktikumSupported}
-          />
+            <ApplicationComposer
+              draft={activeDraft}
+              accounts={data.accounts}
+              prefillNotice={prefillNotice}
+              prefillError={prefillError}
+              praktikumSupported={praktikumSupported}
+              uploadLimitMb={uploadLimitMb}
+            />
         </div>
       </div>
     </div>

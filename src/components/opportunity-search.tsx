@@ -27,11 +27,24 @@ import {
 } from "@/lib/opportunities/types";
 import { useI18n } from "@/lib/i18n";
 import { localeForLang } from "@/lib/i18n/core";
+import {
+  QuotaIndicator,
+  makeQuotaLabels,
+  quotaDataFromEntitlement,
+} from "@/components/quota-indicator";
+import type { FeatureEntitlement } from "@/lib/billing/entitlement-service";
 
 interface OpportunitySearchProps {
   defaultGoal: "ausbildung" | "arbeit";
   /** Validated, whitelisted query state from the URL (may be empty). */
   initialUrlState: string;
+  /**
+   * Canonical `opportunity_search` entitlement (server-derived; a failed
+   * read arrives as `lookup_error` → the indicator's honest unknown
+   * state). P0 quota audit: this surface previously showed no quota state
+   * at all.
+   */
+  searchEntitlement?: FeatureEntitlement | null;
 }
 
 const PAGE_SIZE = 20;
@@ -168,6 +181,7 @@ function ViewDetailsButton({
 export function OpportunitySearch({
   defaultGoal,
   initialUrlState,
+  searchEntitlement,
 }: OpportunitySearchProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -888,6 +902,16 @@ export function OpportunitySearch({
                   })}
               </p>
               <div className="flex flex-wrap items-center gap-2">
+                {/* Shared green quota indicator (P0 quota audit). */}
+                {searchEntitlement ? (
+                  <QuotaIndicator
+                    data={quotaDataFromEntitlement(searchEntitlement)}
+                    unit={t("quota.unitSearches")}
+                    resetLabel={t("quota.resetsDaily")}
+                    labels={makeQuotaLabels(t)}
+                    upgradeHint={t("quota.upgrade")}
+                  />
+                ) : null}
                 {mode === "scan" && scanTruncated && (
                   <span className="rounded-xl bg-warning-soft px-3 py-2 text-xs font-semibold text-warning">
                     {t("search.scanTruncated")}

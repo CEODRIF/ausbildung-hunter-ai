@@ -12,6 +12,7 @@ import {
 } from "@/lib/billing/commercial-plans";
 import {
   ALL_FEATURE_IDS,
+  UPLOAD_PLATFORM_CAP_MB,
   getBillingStatus,
   type BillingStatus,
 } from "@/lib/billing/entitlement-service";
@@ -21,8 +22,28 @@ import {
 } from "@/lib/billing/payment-history";
 import { localeForLang, type TranslateVars } from "@/lib/i18n/core";
 import { getServerT, getRequestLang } from "@/lib/i18n/server";
+import {
+  QuotaIndicator,
+  makeQuotaLabels,
+  quotaDataFromEntitlement,
+} from "@/components/quota-indicator";
+import type { FeatureId } from "@/lib/billing/commercial-plans";
 
 import { TrialActivationForm } from "./trial-activation-form";
+
+/** Per-feature unit noun for the shared indicator (quota.* keys). */
+const BILLING_FEATURE_UNIT: Partial<Record<FeatureId, string>> = {
+  ai_assistant: "unitAi",
+  email_drafts: "unitEmailDrafts",
+  cover_letter: "unitCoverLetters",
+  resume_ai: "unitResumes",
+  scanner: "unitScans",
+  deckblatt: "unitDesigns",
+  opportunity_search: "unitSearches",
+  saved_opportunities: "unitSavedOpportunities",
+  saved_applications: "unitSavedApplications",
+  automation: "unitEmails",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -166,60 +187,42 @@ export default async function BillingSettingsPage() {
       return (
         <span className="text-xs text-muted">{t("billing.usage.noLimit")}</span>
       );
-    if (kind === "static_mb")
+    if (kind === "static_mb") {
+      // Show the TRUE enforceable cap: the platform safety ceiling (10 MB)
+      // is applied before the plan cap on every upload path, so a nominal
+      // 15 MB matrix value would promise a file size the server rejects
+      // (P0 quota audit, upload-size copy).
+      const mb =
+        entitlement.limit !== null
+          ? Math.min(entitlement.limit, UPLOAD_PLATFORM_CAP_MB)
+          : null;
       return (
         <span className="text-xs font-semibold text-ink-soft">
-          {entitlement.limit !== null ? `${entitlement.limit} MB` : "—"}
+          {mb !== null ? `${mb} MB` : "—"}
         </span>
       );
-    if (entitlement.limit === null)
-      return (
-        <span className="text-xs text-muted">{t("billing.usage.noLimit")}</span>
-      );
-    if (entitlement.limit === 0)
-      return (
-        <span className="text-xs text-muted">
-          {t("billing.usage.disabled")}
-        </span>
-      );
-    if (entitlement.reason === "lookup_error")
-      return <span className="text-xs text-muted">—</span>;
-
-    const percent =
-      entitlement.limit > 0
-        ? Math.min(
-            100,
-            Math.round((entitlement.used / entitlement.limit) * 100),
-          )
-        : 0;
+    }
+    // Shared green indicator (P0 quota audit): the SAME component, state
+    // rules and tokens as every other quota surface. Server-derived data
+    // only — lookup_error maps to the honest "unknown" state, limit 0 to
+    // "unavailable + upgrade hint", limit null to "unlimited".
+    const data = quotaDataFromEntitlement(entitlement);
+    const unitKey = BILLING_FEATURE_UNIT[fid] ?? "unitDocuments";
     const resetKey =
-      entitlement.resetsAt === null
-        ? "noReset"
-        : kind === "per_day"
-          ? "resetsDaily"
-          : "resetsOnExpiry";
-
+      kind === "per_day"
+        ? "resetsDaily"
+        : kind === "per_cycle"
+          ? "resetsOnExpiry"
+          : "noReset";
     return (
-      <div>
-        <div className="flex items-center justify-between gap-3 text-xs">
-          <span className="font-semibold text-ink-soft">
-            {t("billing.usage.usedOf", {
-              used: entitlement.used,
-              limit: entitlement.limit,
-            })}
-          </span>
-          <span className="text-faint">{t(`billing.usage.${resetKey}`)}</span>
-        </div>
-        <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-surface-2">
-          <div
-            className="h-full rounded-full bg-accent"
-            style={{ width: `${percent}%` }}
-          />
-        </div>
-        <p className="mt-1 text-[11px] text-faint">
-          {t("billing.usage.remaining")}: {entitlement.remaining ?? 0}
-        </p>
-      </div>
+      <QuotaIndicator
+        variant="bar"
+        data={data}
+        unit={t(`quota.${unitKey}`)}
+        resetLabel={t(`quota.${resetKey}`)}
+        labels={makeQuotaLabels(t)}
+        upgradeHint={t("quota.upgrade")}
+      />
     );
   };
 

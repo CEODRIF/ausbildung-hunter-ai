@@ -9,6 +9,12 @@ import {
   type ScanGoal,
 } from "@/lib/bewerbung-scan-request";
 import { useI18n } from "@/lib/i18n";
+import {
+  QuotaIndicator,
+  makeQuotaLabels,
+  quotaDataFromEntitlement,
+} from "@/components/quota-indicator";
+import type { FeatureEntitlement } from "@/lib/billing/entitlement-service";
 
 type Goal = ScanGoal;
 /** Upload endpoint response; `size_bytes` is UI-only (file list label) and
@@ -20,9 +26,30 @@ type ScanFile = {
   size_bytes: number;
 };
 
-export function BewerbungScannerUpload({ profile }: { profile: Profile }) {
+export function BewerbungScannerUpload({
+  profile,
+  fileLimitMb,
+  scannerEntitlement,
+}: {
+  profile: Profile;
+  /**
+   * TRUE per-file upload cap in MB for this plan (server-computed,
+   * min(plan cap, 10 MB platform ceiling)). The drop hint and the local
+   * pre-check must not promise 10 MB to a trial user whose plan cap is
+   * 2 MB (P0 quota audit, upload-size copy). Safe default: 10 (the
+   * universal ceiling — also the enforced value when the read degrades).
+   */
+  fileLimitMb?: number;
+  /**
+   * Canonical scanner entitlement (server-derived; a failed read arrives
+   * as `lookup_error` → the indicator's honest unknown state). P0 quota
+   * audit: this surface previously showed no quota state at all.
+   */
+  scannerEntitlement?: FeatureEntitlement | null;
+}) {
   const router = useRouter();
   const { t } = useI18n();
+  const limitMb = fileLimitMb ?? 10;
   const [goal, setGoal] = useState<Goal>(profile.selected_goal ?? "ausbildung");
   const [files, setFiles] = useState<ScanFile[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -49,8 +76,10 @@ export function BewerbungScannerUpload({ profile }: { profile: Profile }) {
     try {
       const uploaded: ScanFile[] = [];
       for (const file of incoming) {
-        if (!isAllowedScanFile(file))
-          throw new Error(t("account.scannerFileTypes"));
+        // Plan cap on top of the universal type/size rules (the server
+        // re-checks both via uploadAIFile — this only fails fast).
+        if (!isAllowedScanFile(file) || file.size > limitMb * 1024 * 1024)
+          throw new Error(t("account.scannerFileTypes", { value: limitMb }));
         const form = new FormData();
         form.set("file", file);
         const response = await fetch("/api/bewerbung-scanner/files", {
@@ -168,8 +197,22 @@ export function BewerbungScannerUpload({ profile }: { profile: Profile }) {
                 {t("account.scannerDropTitle")}
               </h2>
               <p className="mt-2 text-xs text-muted">
-                {t("account.scannerDropHint")}
+                {t("account.scannerDropHint", { value: limitMb })}
               </p>
+              {/* Shared green quota indicator (P0 quota audit): the scanner
+                  quota is per plan cycle (per_cycle), so the reset label is
+                  the plan-period expiry — server-derived. */}
+              {scannerEntitlement ? (
+                <div className="mt-3">
+                  <QuotaIndicator
+                    data={quotaDataFromEntitlement(scannerEntitlement)}
+                    unit={t("quota.unitScans")}
+                    resetLabel={t("quota.resetsOnExpiry")}
+                    labels={makeQuotaLabels(t)}
+                    upgradeHint={t("quota.upgrade")}
+                  />
+                </div>
+              ) : null}
               <button
                 type="button"
                 onClick={() => inputRef.current?.click()}

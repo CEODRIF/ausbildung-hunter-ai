@@ -44,6 +44,7 @@ export function ApplicationComposer({
   prefillNotice,
   prefillError,
   praktikumSupported,
+  uploadLimitMb,
 }: {
   draft: ApplicationDraft;
   accounts: SafeEmailAccount[];
@@ -59,6 +60,13 @@ export function ApplicationComposer({
    * contact_name regression). Safe default: hidden.
    */
   praktikumSupported?: boolean;
+  /**
+   * TRUE per-file upload cap in MB for this plan (server-computed,
+   * min(plan cap, 10 MB platform ceiling)). The hint must not promise a
+   * size the server rejects — trial users get 2 MB (P0 quota audit,
+   * upload-size copy). Safe default: 10 (the universal ceiling).
+   */
+  uploadLimitMb?: number;
   }) {
   const { t } = useI18n();
   const [draft] = useState(initialDraft);
@@ -275,7 +283,8 @@ export function ApplicationComposer({
               <div>
                 <h2 className="font-bold text-ink-soft">Attachments</h2>
                 <p className="mt-1 text-xs text-muted">
-                  PDF, DOC, DOCX, PNG, JPG · up to 10 MB each
+                  PDF, DOC, DOCX, PNG, JPG · up to {uploadLimitMb ?? 10} MB
+                  each
                 </p>
               </div>
               <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-xs font-bold text-accent shadow-[var(--shadow-card)] transition-colors hover:border-accent">

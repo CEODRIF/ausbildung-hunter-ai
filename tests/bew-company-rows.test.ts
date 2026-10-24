@@ -385,6 +385,7 @@ function renderStep(appsList: BewApplicationDTO[], campaign: { status?: string }
     applications: appsList,
     documents: [],
     usage: { remaining: 50, daily_limit: 50 },
+    uploadLimitMb: null,
     senderEmail: "sender@gmail.com",
   };
   return renderToString(

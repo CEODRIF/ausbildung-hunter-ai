@@ -4,7 +4,6 @@ import {
   BEW_MAX_COUNT,
   BEW_MIN_COUNT,
   BEW_NEUTRAL_GREETING,
-  BEW_PLATFORM_DAILY_CAP,
   assembleLetter,
   autoMapColumns,
   buildCompanyRow,
@@ -277,27 +276,20 @@ describe("computeSendPlan", () => {
     expect(plan.binding).toBe("quota");
   });
 
-  it("clamps to the platform cap (binding=platform)", () => {
-    const plan = computeSendPlan({
-      requested: 100,
-      remaining: 500,
-      platformCap: BEW_PLATFORM_DAILY_CAP,
-    });
-    // remaining 500 > cap 100, requested 100 = cap -> not over limit
+  // M4 regression (P0 quota audit 2026-10-25): the fixed 100/day platform
+  // cap must NOT truncate plans whose canonical quota is higher.
+  it("no longer truncates a 250-allowance plan at 100 (M4)", () => {
+    const plan = computeSendPlan({ requested: 100, remaining: 250 });
     expect(plan.batch).toBe(100);
+    expect(plan.deferred).toBe(0);
     expect(plan.overLimit).toBe(false);
+    expect(plan.binding).toBe("requested");
   });
 
-  it("platform cap binds when remaining exceeds it and requested exceeds cap", () => {
-    const plan = computeSendPlan({
-      requested: 100,
-      remaining: 200,
-      platformCap: 80,
-    });
-    expect(plan.batch).toBe(80);
-    expect(plan.deferred).toBe(20);
-    expect(plan.overLimit).toBe(true);
-    expect(plan.binding).toBe("platform");
+  it("no longer truncates a 500-allowance plan at 100 (M4)", () => {
+    const plan = computeSendPlan({ requested: 100, remaining: 500 });
+    expect(plan.batch).toBe(100);
+    expect(plan.overLimit).toBe(false);
   });
 
   it("never sends more than requested", () => {

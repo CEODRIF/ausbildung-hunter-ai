@@ -54,6 +54,7 @@ function previousView(): BewViewDTO {
     applications: [],
     documents: [],
     usage: { remaining: 9, daily_limit: 50 },
+    uploadLimitMb: null,
     senderEmail: "sender@gmail.com",
   };
 }

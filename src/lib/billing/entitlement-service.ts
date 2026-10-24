@@ -956,6 +956,11 @@ export async function releaseFeatureOp(
 /**
  * Effective per-file upload cap in BYTES. Commercial: 2/15/15 MB; legacy
  * plus/pro/free: 10 MB; lookup failure: 10 MB (never an upgrade).
+ *
+ * NOTE: every upload path enforces the platform safety ceiling
+ * (UPLOAD_PLATFORM_CAP_MB, 10 MB) BEFORE this plan cap, so on premium plans
+ * the value actually enforced is min(this, 10 MB) — see
+ * `effectiveUploadLimitMbForUser` for the display-honest value.
  */
 export async function effectiveUploadLimitBytes(
   userId: string,
@@ -965,6 +970,39 @@ export async function effectiveUploadLimitBytes(
   if (sub.lookupFailed) return LEGACY_UPLOAD_MB * ONE_MB;
   const mb = effectiveFeatureLimit(sub, "upload") ?? LEGACY_UPLOAD_MB;
   return mb * ONE_MB;
+}
+
+/**
+ * The platform per-file safety ceiling (MB). Hard-coded 10 MB in every
+ * upload path (ai-service `MAX_FILE_SIZE`, application-drafts
+ * `MAX_ATTACHMENT_SIZE`, ai-chat-files `AI_CHAT_MAX_FILE_SIZE`,
+ * bewerbering `validateDocumentInput`) and enforced BEFORE the plan cap —
+ * so it is the maximum file size that can ever be accepted on ANY plan.
+ * Lifting it for premium plans (matrix nominal 15 MB) is a business
+ * decision, not a display change.
+ */
+export const UPLOAD_PLATFORM_CAP_MB = 10;
+
+/**
+ * The TRUE enforceable per-file upload cap in MB for this user — the only
+ * value display copy may show (P0 quota audit: displays must never
+ * promise more than the server accepts). = min(plan cap, platform
+ * ceiling): trial 2 MB; free / legacy plus/pro / lookup failure 10 MB;
+ * premium plans 10 MB today (their nominal 15 MB is clamped by the
+ * ceiling). Degrades to 10 MB on failure, exactly like
+ * `effectiveUploadLimitBytes` — never an upgrade.
+ */
+export async function effectiveUploadLimitMbForUser(
+  userId: string,
+  nowMs: number = Date.now(),
+): Promise<number> {
+  let bytes: number;
+  try {
+    bytes = await effectiveUploadLimitBytes(userId, nowMs);
+  } catch {
+    bytes = LEGACY_UPLOAD_MB * ONE_MB;
+  }
+  return Math.min(bytes / ONE_MB, UPLOAD_PLATFORM_CAP_MB);
 }
 
 /**
