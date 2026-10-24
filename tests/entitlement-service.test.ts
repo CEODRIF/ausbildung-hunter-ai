@@ -1367,6 +1367,100 @@ describe("getBillingStatus", () => {
     expect(s.features.salary_calculator?.allowed).toBe(true);
     expect(s.features.upload).toMatchObject({ allowed: true, limit: 10 });
   });
+
+  // ---------------------------------------------------------------------
+  // Subscription visibility (prod incident: one pro/active/manual row
+  // existed but the UI showed no subscription). Every state in which a
+  // persisted row must remain VISIBLE to its owner is pinned here: the
+  // label shows the row's plan; the entitlements stay fail-closed.
+  // ---------------------------------------------------------------------
+
+  it("pro/active with a future period end → visible (Pro label, pro entitlements)", async () => {
+    const { admin } = setup({
+      sub: subRow({
+        plan: "pro",
+        provider: "manual",
+        start: "2026-09-01T00:00:00.000Z",
+        end: "2026-12-31T00:00:00.000Z",
+      }),
+      plan: planRow({ planId: "pro", emails: 500, ai: 1500 }),
+    });
+    const s = (await withEnv(
+      { MOCK_PAYMENTS_ENABLED: undefined, NODE_ENV: "test", VERCEL_ENV: undefined },
+      () => getBillingStatus(USER, NOW),
+    )) as Awaited<ReturnType<typeof getBillingStatus>>;
+    expect(s).toMatchObject({
+      planId: "pro",
+      planLabel: "Pro",
+      rowPlanId: "pro",
+      status: "active",
+      provider: "manual",
+      lookupFailed: false,
+    });
+    expect(queryCalls(admin.calls, "billing_plans")[0]?.filters).toEqual({ plan_id: "pro" });
+  });
+
+  it("computed expiry (DB row still status 'active', period end past) → entitlements stay FREE but the UI keeps the Pro identity", async () => {
+    setup({
+      sub: subRow({
+        plan: "pro",
+        provider: "manual",
+        start: "2026-09-15T00:00:00.000Z",
+        end: "2026-10-15T00:00:00.000Z", // before NOW (2026-10-15T12:00Z)
+      }),
+      plan: planRow({ planId: "pro", emails: 500, ai: 1500 }),
+    });
+    const s = await getBillingStatus(USER, NOW);
+    // Display: the subscription is still visible as Pro — with the
+    // 'expired' status chip and its period dates (the page renders them).
+    expect(s).toMatchObject({
+      planLabel: "Pro",
+      rowPlanId: "pro",
+      status: "expired",
+      provider: "manual",
+      periodEndMs: Date.parse("2026-10-15T00:00:00.000Z"),
+    });
+    // Access control: effective plan is still the free fallback
+    // (the lapsed plan must NOT keep granting pro limits).
+    expect(s).toMatchObject({ planId: "free", aiPerDay: 100, emailsPerDay: 50 });
+    expect(s.features.ai_assistant).toMatchObject({ allowed: true, limit: 100 });
+  });
+
+  it("no row for this user (row.user_id ≠ authenticated id) → 'none', Free, null rowPlanId, no plan lookup", async () => {
+    const { admin } = setup({
+      sub: null, // the admin query filtered by user_id found nothing
+      plan: planRow({ planId: "pro", emails: 500, ai: 1500 }),
+    });
+    const s = await getBillingStatus(USER, NOW);
+    expect(s).toMatchObject({
+      planId: "free",
+      planLabel: "Free",
+      rowPlanId: null,
+      status: "none",
+      provider: null,
+    });
+    expect(queryCalls(admin.calls, "billing_plans")).toHaveLength(0);
+  });
+
+  it("canceled pro row → Pro identity retained, free entitlements", async () => {
+    setup({
+      sub: subRow({
+        plan: "pro",
+        provider: "manual",
+        status: "canceled",
+        canceledAt: "2026-10-01T00:00:00.000Z",
+      }),
+    });
+    const s = await getBillingStatus(USER, NOW);
+    expect(s).toMatchObject({
+      planId: "free",
+      planLabel: "Pro",
+      rowPlanId: "pro",
+      status: "canceled",
+      aiPerDay: 100,
+      emailsPerDay: 50,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

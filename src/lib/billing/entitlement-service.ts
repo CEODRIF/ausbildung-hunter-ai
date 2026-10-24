@@ -143,7 +143,16 @@ export interface QuotaOperationResult {
 
 export interface BillingStatus {
   planId: PlanId;
+  /** DISPLAY label. Shows the persisted row's plan even when the effective
+   *  plan has fallen back to 'free' (computed expiry, canceled, unknown
+   *  plan, lookup failure) — a subscription must never disappear from the
+   *  UI as a bare "Free" without its identity. `planId` above stays the
+   *  ENTITLEMENT plan: it is never widened for display. */
   planLabel: string;
+  /** The plan on the persisted subscription row (any status), or null when
+   *  the user has no row at all (e.g. the row belongs to a different user
+   *  id, or they never subscribed). Display-only. */
+  rowPlanId: PlanId | null;
   status: ResolvedSubscription["status"];
   provider: string | null;
   periodStartMs: number | null;
@@ -792,7 +801,15 @@ export async function getBillingStatus(
 
   return {
     planId: sub.planId,
-    planLabel: PLAN_LABELS[sub.planId],
+    // Display the ROW's plan identity whenever one exists (sub.row.plan is
+    // already normalized to a known PlanId). Access control is unaffected:
+    // planId/planRow keep the fail-closed 'free' fallback in every state
+    // where the row does not grant entitlements (expired/canceled/unknown).
+    planLabel:
+      sub.row && sub.row.plan !== "free"
+        ? PLAN_LABELS[sub.row.plan]
+        : PLAN_LABELS[sub.planId],
+    rowPlanId: sub.row?.plan ?? null,
     status: sub.status,
     provider: sub.provider,
     periodStartMs: sub.periodStartMs,
