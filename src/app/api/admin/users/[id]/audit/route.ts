@@ -43,7 +43,9 @@ export async function GET(
   }
 
   const query = new URL(request.url).searchParams;
-  const parsed = querySchema.safeParse({ limit: query.get("limit") ?? undefined });
+  const parsed = querySchema.safeParse({
+    limit: query.get("limit") ?? undefined,
+  });
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid query" }, { status: 400 });
   }
@@ -57,32 +59,30 @@ export async function GET(
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) {
-    return NextResponse.json(
-      { error: "audit_unavailable" },
-      { status: 503 },
-    );
+    return NextResponse.json({ error: "audit_unavailable" }, { status: 503 });
   }
 
-  const entries: AuditEntry[] = ((data ?? []) as Array<Record<string, unknown>>).map(
-    (row) => {
-      const details = (row.details as Record<string, unknown> | null) ?? {};
-      const before = details["before"] as Record<string, unknown> | null | undefined;
-      const after = details["after"] as Record<string, unknown> | null | undefined;
-      return {
-        created_at: String(row.created_at ?? ""),
-        action: String(row.action ?? ""),
-        plan:
-          typeof details["plan"] === "string" ? details["plan"] : null,
-        period_days:
-          typeof details["period_days"] === "number"
-            ? details["period_days"]
-            : null,
-        reason: typeof details["reason"] === "string" ? details["reason"] : null,
-        before: before && typeof before === "object" ? before : null,
-        after: after && typeof after === "object" ? after : null,
-      };
-    },
-  );
+  const entries: AuditEntry[] = (
+    (data ?? []) as Array<Record<string, unknown>>
+  ).map((row) => {
+    const details = (row.details as Record<string, unknown> | null) ?? {};
+    const before = details["before"] as
+      Record<string, unknown> | null | undefined;
+    const after = details["after"] as
+      Record<string, unknown> | null | undefined;
+    return {
+      created_at: String(row.created_at ?? ""),
+      action: String(row.action ?? ""),
+      plan: typeof details["plan"] === "string" ? details["plan"] : null,
+      period_days:
+        typeof details["period_days"] === "number"
+          ? details["period_days"]
+          : null,
+      reason: typeof details["reason"] === "string" ? details["reason"] : null,
+      before: before && typeof before === "object" ? before : null,
+      after: after && typeof after === "object" ? after : null,
+    };
+  });
 
   return NextResponse.json({ entries });
 }
