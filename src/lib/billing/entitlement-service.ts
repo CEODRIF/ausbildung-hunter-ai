@@ -761,6 +761,19 @@ export async function effectiveUploadLimitBytes(
   return mb * ONE_MB;
 }
 
+/**
+ * Display-only plan label for a resolved subscription: the persisted row's
+ * plan identity whenever a row exists (so historical/expired/canceled
+ * subscriptions keep their name), otherwise the effective plan's label
+ * (the free fallback). Access control is UNAFFECTED — `sub.planId`/`sub.planRow`
+ * remain the fail-closed entitlement decision and never read this label.
+ */
+export function displayPlanLabel(sub: ResolvedSubscription): string {
+  return sub.row && sub.row.plan !== "free"
+    ? PLAN_LABELS[sub.row.plan]
+    : PLAN_LABELS[sub.planId];
+}
+
 // ---------------------------------------------------------------------------
 // Billing page aggregate (one subscription lookup, not N+1)
 // ---------------------------------------------------------------------------
@@ -805,10 +818,7 @@ export async function getBillingStatus(
     // already normalized to a known PlanId). Access control is unaffected:
     // planId/planRow keep the fail-closed 'free' fallback in every state
     // where the row does not grant entitlements (expired/canceled/unknown).
-    planLabel:
-      sub.row && sub.row.plan !== "free"
-        ? PLAN_LABELS[sub.row.plan]
-        : PLAN_LABELS[sub.planId],
+    planLabel: displayPlanLabel(sub),
     rowPlanId: sub.row?.plan ?? null,
     status: sub.status,
     provider: sub.provider,
