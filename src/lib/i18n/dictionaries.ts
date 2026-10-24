@@ -1207,6 +1207,9 @@ const de = {
     noSubscription: "Für diesen Benutzer existiert kein Abonnement.",
     actionFailed: "Aktion fehlgeschlagen ({error}).",
     networkError: "Netzwerkfehler — bitte erneut versuchen.",
+    confirmBody: "Bestätigen: {action} für {email}?",
+    confirmYes: "Bestätigen",
+    confirmNo: "Abbrechen",
     navUsers: "Benutzer",
   },
 
@@ -3215,6 +3218,9 @@ const en: Dict = {
     noSubscription: "No subscription exists for this user.",
     actionFailed: "Action failed ({error}).",
     networkError: "Network error — please retry.",
+    confirmBody: "Confirm: {action} for {email}?",
+    confirmYes: "Confirm",
+    confirmNo: "Cancel",
     navUsers: "Users",
   },
 
@@ -5214,6 +5220,9 @@ const fr: Dict = {
     noSubscription: "Aucun abonnement n'existe pour cet utilisateur.",
     actionFailed: "Action échouée ({error}).",
     networkError: "Erreur réseau — veuillez réessayer.",
+    confirmBody: "Confirmer : {action} pour {email} ?",
+    confirmYes: "Confirmer",
+    confirmNo: "Annuler",
     navUsers: "Utilisateurs",
   },
 
@@ -7186,6 +7195,9 @@ const ar: Dict = {
     noSubscription: "لا يوجد اشتراك لهذا المستخدم.",
     actionFailed: "فشل الإجراء ({error}).",
     networkError: "خطأ في الشبكة — يرجى إعادة المحاولة.",
+    confirmBody: "تأكيد: {action} لـ {email}؟",
+    confirmYes: "تأكيد",
+    confirmNo: "إلغاء",
     navUsers: "المستخدمون",
   },
 
