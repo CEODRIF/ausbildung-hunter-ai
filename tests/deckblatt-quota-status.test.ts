@@ -7,8 +7,12 @@
  *   GET/POST /api/deckblatt/* → quota RPC → error → null → 503
  *   { code: "usage_unavailable" } → client error "usage_unavailable".
  *
- * This suite pins the whole chain down:
- *   1. status for a new user → 0/2 (no error)
+ * This suite pins the whole chain down (the mocked RPC rows simulate a user
+ * whose plan limit is 2 — a sample value; the wrapper is plan-agnostic.
+ * Since 2026-10-24, D9, a user WITHOUT a plan gets daily_limit 0 from the
+ * real RPC — pinned in tests/subscription-migrations.test.ts and the PG
+ * suite):
+ *   1. status with 0 used → 0/2 (no error)
  *   2. status after one success → 1/2
  *   3. status after two successes → 2/2
  *   4. status is READ-ONLY (never reserves/consumes)

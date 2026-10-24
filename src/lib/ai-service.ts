@@ -418,17 +418,16 @@ export async function deleteAIFile(fileId: string) {
     .catch(() => undefined);
 }
 
-/** Free-plan AI daily request limit (Phase 10). Subscription plans raise
- *  the effective limit — `getEntitlements` resolves it server-side and
- *  passes it to the quota RPC, which remains the single enforcement
- *  point. The dashboard must never trust browser-provided usage values. */
-export const AI_DAILY_REQUEST_LIMIT = 100;
-
 /** Atomic, plan-aware AI quota reservation. Exported so the AI search
- *  pipeline reuses the SAME single enforcement point as chat/scanner. */
+ *  pipeline reuses the SAME single enforcement point as chat/scanner.
+ *  `getEntitlements` resolves the limit server-side and passes it to the
+ *  quota RPC. There is NO permanent Free plan (removed 2026-10-24, PR #72
+ *  revision): no active trial / Plus / Pro row, unknown plan, or a failed
+ *  lookup all resolve to 0 → the reservation is denied. The dashboard
+ *  must never trust browser-provided usage values. */
 export async function reserveAIUsage(userId: string) {
   const admin = createAdminClient();
-  // Server-side entitlement (plan-aware; falls back to the free limit).
+  // Server-side entitlement (plan-aware; no-plan states resolve to 0).
   const entitlements = await getEntitlements(userId);
   const { error } = await admin.rpc("reserve_ai_request", {
     target_user_id: userId,

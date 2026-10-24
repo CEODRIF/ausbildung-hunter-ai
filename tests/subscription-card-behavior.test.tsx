@@ -7,7 +7,8 @@
  *     renders safely and distinctly;
  *   - historical labels (canceled pro, expired premium_10d) show the plan
  *     identity WITHOUT any "active/entitled" signal — the lapsed hint
- *     (free-plan limits apply) is rendered;
+ *     (no active plan → protected features locked; D9: there is no free
+ *     fallback) is rendered;
  *   - the lookup-failure state renders the explicit no-entitlement notice;
  *   - the card links to /settings/billing and labels the mock provider as
  *     a demo.
@@ -60,7 +61,14 @@ describe("SubscriptionCard — rendered states (behavioral)", () => {
     render(<SubscriptionCard subscription={sub({})} t={t} locale="de" />);
     expect(screen.getByText("Free")).toBeInTheDocument();
     expect(screen.getByText("Kein Abonnement")).toBeInTheDocument();
-    expect(screen.getByText(/Free-Plan-Limits aktiv/)).toBeInTheDocument();
+    // D9: the hint says "no active plan / protected features locked" —
+    // there is no free-plan-limits text anymore.
+    expect(
+      screen.getByText(
+        /Kein aktiver Plan — geschützte Funktionen sind gesperrt/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Free-Plan-Limits/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Verlängern/i)).not.toBeInTheDocument();
   });
 
@@ -87,7 +95,10 @@ describe("SubscriptionCard — rendered states (behavioral)", () => {
     // mock provider must be labeled as a demo, never as a real provider:
     expect(screen.getByText("Demo (simuliert)")).toBeInTheDocument();
     // no lapsed/none hints in the active state:
-    expect(screen.queryByText(/Free-Plan-Limits/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/geschützte Funktionen sind gesperrt/),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Free-Plan-Limits/i)).not.toBeInTheDocument();
   });
 
   it("CANCELED pro: historical label 'Pro' + 'Gekündigt' + lapsed hint, never 'Aktiv'", () => {
@@ -106,7 +117,11 @@ describe("SubscriptionCard — rendered states (behavioral)", () => {
     );
     expect(screen.getByText("Pro")).toBeInTheDocument();
     expect(screen.getByText("Gekündigt")).toBeInTheDocument();
-    expect(screen.getByText(/Free-Plan-Limits gelten/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Plan nicht mehr aktiv — geschützte Funktionen sind gesperrt/,
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Aktiv")).not.toBeInTheDocument();
   });
 
@@ -126,7 +141,11 @@ describe("SubscriptionCard — rendered states (behavioral)", () => {
     );
     expect(screen.getByText("Premium 10 Days")).toBeInTheDocument();
     expect(screen.getByText("Abgelaufen")).toBeInTheDocument();
-    expect(screen.getByText(/Free-Plan-Limits gelten/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Plan nicht mehr aktiv — geschützte Funktionen sind gesperrt/,
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Aktiv")).not.toBeInTheDocument();
   });
 

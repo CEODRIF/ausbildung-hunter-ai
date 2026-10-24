@@ -201,8 +201,13 @@ export async function GET(): Promise<NextResponse> {
       else if (r.provider === "manual") state = "admin_granted";
       else state = "paid_active";
     } else if (classified === "none") {
-      // An existing row that grants no plan entitlements (plan 'free').
-      state = "invalid";
+      // An existing row that grants no plan entitlement:
+      //   plan 'free'  → "legacy_free": the historical permanent-Free row
+      //     state (removed 2026-10-24, PR #72 revision). Grants nothing;
+      //     the account is subject to the plan-selection gate. NOT an error.
+      //   any other value (unknown plan) → "invalid": a truly inconsistent
+      //     row, also flagged via the unknown_plan flag for manual review.
+      state = r.plan === "free" ? "legacy_free" : "invalid";
     } else state = classified; // 'invalid' (lookup failure — not expected on raw rows)
     if (computedExpired && classified === "active")
       state = r.plan === "trial" ? "trial_expired" : "expired";

@@ -138,7 +138,13 @@ function describePlanCell(
   const endIso = sub.current_period_end;
   const endMs = endIso ? Date.parse(endIso) : null;
   let state: string;
-  if (sub.status === "canceled") {
+  if (sub.plan === "free") {
+    // The permanent Free plan was removed (2026-10-24, PR #72 revision): a
+    // historical `free` row grants NOTHING and is no longer a valid plan —
+    // the account is subject to the plan-selection gate. Show it as "no
+    // plan" rather than a live free tier.
+    state = t("admin.noPlan");
+  } else if (sub.status === "canceled") {
     state = t("admin.stateCanceled", {
       date: sub.canceled_at ? fmt(sub.canceled_at) : "—",
     });

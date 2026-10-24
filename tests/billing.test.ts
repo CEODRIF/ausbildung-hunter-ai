@@ -6,11 +6,10 @@ vi.mock("@/lib/supabase/admin", () => ({
 
 const { createAdminClient } = await import("@/lib/supabase/admin");
 const { getEntitlements } = await import("@/lib/billing/entitlements");
-const { FREE_PLAN_LIMITS, isAssignablePlan, isPlanId, PLAN_LABELS } =
+const { isAssignablePlan, isPlanId, PLAN_LABELS } =
   await import("@/lib/billing/plans");
 const { getBillingProvider, verifyBillingWebhook } =
   await import("@/lib/billing/provider");
-const { AI_DAILY_REQUEST_LIMIT } = await import("@/lib/ai-service");
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const NOW = Date.parse("2026-10-01T12:00:00.000Z");
@@ -72,15 +71,15 @@ describe("plan resolution & entitlements", () => {
     vi.clearAllMocks();
   });
 
-  it("no subscription → free plan with the pre-Phase-10 defaults", async () => {
+  it("no subscription → the historical 'free' sentinel with ZERO daily quotas (D9: no permanent Free plan)", async () => {
     const mock = makeAdminMock({ single: () => null });
     vi.mocked(createAdminClient).mockReturnValue(mock.admin as never);
     const result = await getEntitlements(USER, NOW);
-    expect(result.planId).toBe("free");
+    expect(result.planId).toBe("free"); // historical sentinel, not a tier
     expect(result.source).toBe("default");
     expect(result.subscription).toBeNull();
-    expect(result.emailsPerDay).toBe(50);
-    expect(result.aiPerDay).toBe(100);
+    expect(result.emailsPerDay).toBe(0);
+    expect(result.aiPerDay).toBe(0);
   });
 
   it("active subscription within its period → plan entitlements", async () => {
@@ -105,7 +104,7 @@ describe("plan resolution & entitlements", () => {
     expect(result.subscription?.status).toBe("active");
   });
 
-  it("expired period → entitlements revert to free (row kept as state)", async () => {
+  it("expired period → entitlements are revoked to ZERO (row kept as state, no free fallback — D9)", async () => {
     const mock = makeAdminMock({
       single: (table) =>
         table === "subscriptions"
@@ -116,10 +115,12 @@ describe("plan resolution & entitlements", () => {
     });
     vi.mocked(createAdminClient).mockReturnValue(mock.admin as never);
     const result = await getEntitlements(USER, NOW);
-    expect(result.planId).toBe("free");
+    expect(result.planId).toBe("free"); // sentinel: "no entitlements"
     expect(result.source).toBe("default");
+    expect(result.subscription?.plan).toBe("plus"); // row identity preserved
     expect(result.subscription?.status).toBe("active"); // row state, not entitlement
-    expect(result.emailsPerDay).toBe(50);
+    expect(result.emailsPerDay).toBe(0);
+    expect(result.aiPerDay).toBe(0);
   });
 
   it("canceled subscription → free entitlements, status surfaced", async () => {
@@ -139,13 +140,14 @@ describe("plan resolution & entitlements", () => {
     expect(result.subscription?.canceled_at).toBe("2026-10-01T09:00:00.000Z");
   });
 
-  it("database failure → fail-closed to free (never an upgrade)", async () => {
+  it("database failure → fail-closed to zero quotas (never an upgrade, never a free grant)", async () => {
     const mock = makeAdminMock({ throw: true });
     vi.mocked(createAdminClient).mockReturnValue(mock.admin as never);
     const result = await getEntitlements(USER, NOW);
     expect(result.planId).toBe("free");
     expect(result.source).toBe("default");
-    expect(result.emailsPerDay).toBe(FREE_PLAN_LIMITS.emailsPerDay);
+    expect(result.emailsPerDay).toBe(0);
+    expect(result.aiPerDay).toBe(0);
   });
 
   it("is deterministic for the same inputs", async () => {
@@ -172,15 +174,25 @@ describe("plan resolution & entitlements", () => {
     expect(a).toEqual(b);
   });
 
-  it("free-plan fallback equals the pre-Phase-10 defaults (regression guard)", () => {
-    expect(FREE_PLAN_LIMITS.emailsPerDay).toBe(50); // profile base default
-    expect(FREE_PLAN_LIMITS.aiPerDay).toBe(100);
-    expect(FREE_PLAN_LIMITS.aiPerDay).toBe(AI_DAILY_REQUEST_LIMIT);
-    expect(isPlanId("free")).toBe(true);
+  it("plan catalogue: no shared free-limits constant, 'free' is historical only (D9 regression guard)", async () => {
+    // The permanent Free plan is removed (2026-10-24): there is deliberately
+    // NO "free limits" constant to fall back to — a missing mapping can
+    // never silently become a grant. The historical 'free' id stays a known
+    // (readable) plan id but is never assignable.
+    const plansModule = await import("@/lib/billing/plans");
+    expect("FREE_PLAN_LIMITS" in plansModule).toBe(false);
+    expect("DECKBLATT_LEGACY_DAILY_LIMIT" in plansModule).toBe(false);
+    expect(isPlanId("free")).toBe(true); // historical row state, readable
     expect(isPlanId("enterprise")).toBe(false);
     expect(isAssignablePlan("plus")).toBe(true);
     expect(isAssignablePlan("free")).toBe(false);
     expect(PLAN_LABELS.pro).toBe("Pro");
+    // And the resolver really gives zero quotas in the no-plan state:
+    const mock = makeAdminMock({ single: () => null });
+    vi.mocked(createAdminClient).mockReturnValue(mock.admin as never);
+    const result = await getEntitlements(USER, NOW);
+    expect(result.emailsPerDay).toBe(0);
+    expect(result.aiPerDay).toBe(0);
   });
 });
 

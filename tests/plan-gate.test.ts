@@ -5,11 +5,14 @@
  * Pinned behavior (docs/subscription-system-design-2026-10-24 §2/§5):
  *   - NO subscription row at all (new user, or existing user who never
  *     selected) → selectionRequired (redirect to /settings/billing).
- *   - Any historical row (trial, free, plus/pro, active/canceled/expired,
+ *   - Only a historical `free` row (permanent Free plan REMOVED, 2026-10-24
+ *     revision / D9) → ALSO selectionRequired: a `free` row grants nothing
+ *     and is no longer a valid selection (unknown plan ids normalize to it).
+ *   - Any OTHER historical row (trial, plus/pro, active/canceled/expired,
  *     admin-granted or mock-verified) → NOT selectionRequired: a selection
  *     exists; the entitlement engine alone decides what it grants (fail
  *     closed for metered features in every lapsed state).
- *   - expired TRAIL row → trialExpired (the prominent red banner), which is
+ *   - expired TRIAL row → trialExpired (the prominent red banner), which is
  *     the plan-nudge mechanism — never a forced redirect.
  *   - lookup failure → NEITHER flag: a transient DB error must not bounce
  *     users who do have a plan; metered features are denied fail-closed by
@@ -122,7 +125,7 @@ describe("getPlanGate — the server-authoritative mapping", () => {
     expect(gate).toEqual({ selectionRequired: false, trialExpired: true });
   });
 
-  it("expired PAID plan → no banner (the banner is trial-specific) and no selection redirect (historical choice; free-plan limits apply via the engine)", async () => {
+  it("expired PAID plan → no banner (the banner is trial-specific) and no selection redirect (historical choice; the engine grants NO entitlements)", async () => {
     resolveMock.mockResolvedValue(
       resolved({
         planId: "free",
@@ -149,7 +152,7 @@ describe("getPlanGate — the server-authoritative mapping", () => {
     expect(gate).toEqual({ selectionRequired: false, trialExpired: false });
   });
 
-  it("an explicit 'free' row → neither flag (a recorded selection; the engine applies the free-plan limits, never unlimited)", async () => {
+  it("a historical 'free' row → selectionRequired (D9: the permanent Free plan was removed — a free row grants nothing and is no longer a valid selection)", async () => {
     resolveMock.mockResolvedValue(
       resolved({
         planId: "free",
@@ -158,7 +161,19 @@ describe("getPlanGate — the server-authoritative mapping", () => {
       }),
     );
     const gate = await getPlanGate(USER, NOW);
-    expect(gate).toEqual({ selectionRequired: false, trialExpired: false });
+    expect(gate).toEqual({ selectionRequired: true, trialExpired: false });
+  });
+
+  it("an unknown plan value (normalized to the 'free' sentinel by the resolver) → selectionRequired, fail safe toward plan selection, never toward a grant", async () => {
+    resolveMock.mockResolvedValue(
+      resolved({
+        planId: "free",
+        status: "active",
+        row: row({ plan: "gold" }), // not a known plan id
+      }),
+    );
+    const gate = await getPlanGate(USER, NOW);
+    expect(gate).toEqual({ selectionRequired: true, trialExpired: false });
   });
 
   it("subscription LOOKUP FAILURE (no row visible) → neither flag: no forced redirect AND no expired-trial banner (expiration unknown)", async () => {

@@ -670,9 +670,8 @@ const de = {
     subscription: {
       title: "Abonnement",
       manage: "Verwalten",
-      none: "Kein Abonnement — Free-Plan-Limits aktiv.",
-      lapsed:
-        "Abonnement nicht mehr aktiv — Free-Plan-Limits gelten.",
+      none: "Kein aktiver Plan — geschützte Funktionen sind gesperrt. Bitte einen Plan wählen.",
+      lapsed: "Plan nicht mehr aktiv — geschützte Funktionen sind gesperrt.",
     },
     greeting: {
       morning: "Guten Morgen, {name}.",
@@ -2744,8 +2743,8 @@ const en: Dict = {
     subscription: {
       title: "Subscription",
       manage: "Manage",
-      none: "No subscription — free plan limits apply.",
-      lapsed: "Subscription no longer active — free plan limits apply.",
+      none: "No active plan — protected features are locked. Please choose a plan.",
+      lapsed: "Plan no longer active — protected features are locked.",
     },
     greeting: {
       morning: "Good morning, {name}.",
@@ -4790,8 +4789,8 @@ const fr: Dict = {
     subscription: {
       title: "Abonnement",
       manage: "Gérer",
-      none: "Aucun abonnement — limites du plan gratuit.",
-      lapsed: "Abonnement non actif — limites du plan gratuit.",
+      none: "Aucun plan actif — fonctions protégées verrouillées. Veuillez choisir un plan.",
+      lapsed: "Plan plus actif — fonctions protégées verrouillées.",
     },
     greeting: {
       morning: "Bonjour, {name}.",
@@ -6825,8 +6824,8 @@ const ar: Dict = {
     subscription: {
       title: "الاشتراك",
       manage: "إدارة",
-      none: "لا يوجد اشتراك — تُطبَّق حدود الخطة المجانية.",
-      lapsed: "الاشتراك لم يعد نشطًا — تُطبَّق حدود الخطة المجانية.",
+      none: "لا توجد خطة نشطة — الميزات المحمية مقفلة. يرجى اختيار خطة.",
+      lapsed: "الخطة لم تعد نشطة — الميزات المحمية مقفلة.",
     },
     greeting: {
       morning: "صباح الخير، {name}.",

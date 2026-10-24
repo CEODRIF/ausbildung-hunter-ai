@@ -8,6 +8,12 @@ system: mandatory plan selection, the 72-hour trial, paid selection (pending
 until verified), admin plan management, the canonical entitlement engine, and
 the read-only reconciliation report.
 
+**Revision (2026-10-24, PR #72): the permanent Free plan is REMOVED.** The
+system now has exactly three plan states — one-shot 72 h Free Trial, paid
+Plus, paid Pro. The historical `free` row value survives ONLY as a read-only
+legacy state: it grants nothing, is never written by new code, and is treated
+as "no valid selection" by the plan gate (see §2, §3, decision D9, §9).
+
 ---
 
 ## 1. Facts from the codebase (what already exists)
@@ -64,17 +70,22 @@ client state, labels, or cached values.
 
 Rules (all evaluated server-side, per request):
 
-1. **NO_PLAN** — no subscription row and `trial_activated_at` null. → **mandatory
-   plan selection**: protected app areas redirect to `/settings/billing`.
-   (After the one trial is used, `trial_activated_at` is set ⇒ the row exists ⇒
-   the user is in TRIAL_EXPIRED, never back in NO_PLAN.)
+1. **NO_PLAN** — no subscription row and `trial_activated_at` null, **OR only
+   the historical `free` row** (D9: the permanent Free plan was removed — a
+   `free` row grants nothing and is no longer a valid selection). →
+   **mandatory plan selection**: protected app areas redirect to
+   `/settings/billing`. (After the one trial is used, `trial_activated_at` is
+   set ⇒ the row is a trial row ⇒ the user is in TRIAL_EXPIRED, never back in
+   NO_PLAN.)
 2. **TRIAL_ACTIVE** — row `plan='trial'`, `status='active'`, `current_period_end
    > now` (UTC). Trial = exactly 72 h after activation (`fixed_hours/72`, the
    > canonical duration — NOT calendar days). One per account (RPC-enforced).
 3. **TRIAL_EXPIRED** — row `plan='trial'` whose period end has passed. Trial-only
-   entitlements revoked by the engine (falls back to the explicit non-commercial
-   matrix). Red localized banner; account/settings/plan selection/sign-out
-   remain reachable.
+   entitlements revoked by the engine (the row resolves to the explicit
+   NO-ENTITLEMENT matrix — every protected feature 0, D9). There is NO
+   fallback Free tier. Red localized banner; authentication, account, own data
+   (RLS reads), settings, plan selection and sign-out remain reachable; no
+   account or data is deleted or deactivated.
 4. **PENDING_CHECKOUT** — a `mock_checkouts` row with `status='pending'` for the
    user (no subscription row yet). Grants NOTHING. Derivable state, not a
    subscription status (the `subscription_status` enum is unchanged).
@@ -103,26 +114,29 @@ states. Quota kinds (reset semantics): per_day = 00:00 UTC; per_cycle = the
 active window (72 h / 10 d / month / 30 d admin grant); items = concurrent
 stored rows; none = never metered; static_mb = per-file cap.
 
-| Feature (quota kind)         | NO_PLAN & invalid | FREE fallback* | TRIAL (72 h)                            | PLUS (admin) | PRO (admin) | PREMIUM 10D | PREMIUM MONTHLY |
-| ---------------------------- | ----------------- | -------------- | --------------------------------------- | ------------ | ----------- | ----------- | --------------- |
-| ai_assistant (per_day)       | **deny (lookup)** | 100/d          | 5/d                                     | 400/d        | 1500/d      | 100/d       | 200/d           |
-| cover_letter (per_day)       | **deny**          | 0 (403)        | 1/d                                     | 25/d         | 50/d        | 25/d        | 50/d            |
-| resume_ai (per_cycle)        | **deny**          | 0 (403)        | 1                                       | 20           | 60          | 20          | 60              |
-| scanner (per_cycle)          | **deny**          | 0 (403)        | 1                                       | 20           | 60          | 20          | 60              |
-| deckblatt (per_day)          | **deny**          | 2/d            | 1/d                                     | 15/d         | 30/d        | 15/d        | 30/d            |
-| email_drafts (per_day)       | **deny**          | 0 (403)        | 3/d                                     | 60/d         | 120/d       | 60/d        | 120/d           |
-| opportunity_search (per_day) | **deny**          | 0 (403)        | 5/d                                     | 150/d        | 300/d       | 150/d       | 300/d           |
-| saved_opportunities (items)  | **deny**          | 0 (403)        | 3                                       | 200          | 500         | 200         | 500             |
-| saved_applications (items)   | **deny**          | 0 (403)        | 3                                       | 200          | 500         | 200         | 500             |
-| salary_calculator (none)     | allow             | allow          | allow                                   | allow        | allow       | allow       | allow           |
-| automation (per_day)         | **deny**          | 0 (403)        | 0 (403)                                 | 100/d        | 250/d       | 100/d       | 250/d           |
-| upload (static_mb)           | 10 MB             | 10 MB          | 2 MB                                    | 15 MB        | 15 MB       | 15 MB       | 15 MB           |
-| emails/campaign (legacy)     | **deny**          | 50/d           | 3/d (floor 50 for campaigns, canonical) | 150/d        | 500/d       | 100/d       | 250/d           |
+| Feature (quota kind)         | NO_PLAN & invalid | NO ENTITLEMENT* (D9) | TRIAL (72 h)                            | PLUS (admin) | PRO (admin) | PREMIUM 10D | PREMIUM MONTHLY |
+| ---------------------------- | ----------------- | -------------------- | --------------------------------------- | ------------ | ----------- | ----------- | --------------- |
+| ai_assistant (per_day)       | **deny (lookup)** | 0 (denied)           | 5/d                                     | 400/d        | 1500/d      | 100/d       | 200/d           |
+| cover_letter (per_day)       | **deny**          | 0 (403)              | 1/d                                     | 25/d         | 50/d        | 25/d        | 50/d            |
+| resume_ai (per_cycle)        | **deny**          | 0 (403)              | 1                                       | 20           | 60          | 20          | 60              |
+| scanner (per_cycle)          | **deny**          | 0 (403)              | 1                                       | 20           | 60          | 20          | 60              |
+| deckblatt (per_day)          | **deny**          | 0 (denied)           | 1/d                                     | 15/d         | 30/d        | 15/d        | 30/d            |
+| email_drafts (per_day)       | **deny**          | 0 (403)              | 3/d                                     | 60/d         | 120/d       | 60/d        | 120/d           |
+| opportunity_search (per_day) | **deny**          | 0 (403)              | 5/d                                     | 150/d        | 300/d       | 150/d       | 300/d           |
+| saved_opportunities (items)  | **deny**          | 0 (403)              | 3                                       | 200          | 500         | 200         | 500             |
+| saved_applications (items)   | **deny**          | 0 (403)              | 3                                       | 200          | 500         | 200         | 500             |
+| salary_calculator (none)     | allow             | allow                | allow                                   | allow        | allow       | allow       | allow           |
+| automation (per_day)         | **deny**          | 0 (403)              | 0 (403)                                 | 100/d        | 250/d       | 100/d       | 250/d           |
+| upload (static_mb)           | 10 MB             | 10 MB                | 2 MB                                    | 15 MB        | 15 MB       | 15 MB       | 15 MB           |
+| emails/campaign (legacy)     | **deny**          | 0 (denied)           | 3/d (floor 50 for campaigns, canonical) | 150/d        | 500/d       | 100/d       | 250/d           |
 
-\* "FREE fallback" = any resolved state WITHOUT a feature matrix: never-selected
-is unreachable (gate redirects), lookup-failed is the deny column, and after the
-PR this PR ships, an active row's plan always has a matrix (plus/pro get one —
-see decision D1). Canceled/expired rows resolve to this column.
+\* "NO ENTITLEMENT" = any resolved state WITHOUT an active entitled plan:
+the historical `free` row (D9), canceled / expired / unknown-plan rows, and
+no row (unreachable in tool areas — the gate redirects). There is NO Free
+fallback: ai_assistant and deckblatt are 0 (previously 100/d and 2/d), not a
+grant. The 10 MB upload cap stays — it is an account baseline, not a plan
+entitlement — and the quota-free salary calculator stays available.
+Lookup-failed is the separate deny column (503, stricter).
 
 **Plus/Pro columns = decision D1 below** (no canonical per-feature values exist
 in the product configuration today; the mapping is explicit, documented, and
@@ -171,6 +185,33 @@ non-sensitive messages.
   in the working environment; the existing page (user/e-mail · goal · plan+
   status · usage today · role · actions) is extended in place, keeping its
   structure.
+- **D9 — The permanent Free plan is REMOVED (product decision, 2026-10-24).**
+  Exactly three plan states exist: one-shot 72 h Trial, paid Plus, paid Pro.
+  Consequences, all enforced server-side:
+  - The engine's no-matrix states (no row, historical `free` row, canceled,
+    expired, unknown plan) grant **ZERO** for every protected feature — the
+    former free grants (100 AI/d, 50 e-mails/d, 2 Deckblatt/d) are gone from
+    `NON_COMMERCIAL_FEATURE_LIMITS`, the legacy counter resolver
+    (`entitlements.ts` fallback 0/0), and the dashboard display (0, not 100).
+    Kept: authentication, profile, own-data reads (RLS), sign-out, settings,
+    plan page, support contact, the 10 MB upload baseline (account
+    functionality), the quota-free salary calculator.
+  - The plan gate treats a historical `free` row as **no valid selection**
+    (redirect to `/settings/billing`); unknown plan ids normalize to the
+    no-entitlement state — fail safe toward selection, never toward a grant.
+  - DB level: migration `20261127000000_remove_free_deckblatt_fallback.sql`
+    replaces the three deckblatt RPCs with the legacy fallback 0 instead of 2
+    (additive `create or replace`, identical signatures/grants; 20261121 is
+    not rewritten).
+  - The `free` value stays in `subscriptions.plan`'s CHECK constraint —
+    historical production rows must keep reading. It is history, not an
+    offer: no code path ever writes `plan='free'` again, the admin RPC only
+    accepts `{plus, pro}`, and no UI offers a Free card.
+  - Reconciliation reports classify `free` rows as `legacy_free` (not
+    `invalid` — they are expected, not errors); the admin user table shows
+    them as "Kein Plan".
+  - Admins can neither reactivate an expired trial (D7 unchanged) nor grant a
+    free entitlement (D4: only plus/pro, audited).
 
 ## 5. Enforced flows
 
@@ -188,6 +229,8 @@ verified entitlements.
   banner (trial rows only) and the engine denying metered tools; the plan
   page is one step away;
 - NO_PLAN (no row, trial never used) → **redirect to plan selection**;
+- historical `free` row (D9 — permanent Free removed) → **redirect to plan
+  selection**, exactly like NO_PLAN (the row is display identity only);
 - LOOKUP_FAILED → in (D6), tools denied fail-closed.
 
 **Safe exits (never gated):** `/settings/*` (incl. plan selection itself),
@@ -247,10 +290,14 @@ body; it calls the RPC with the SESSION-derived actor id. Grant/revoke admin
 
 Extends PR #71's `GET /api/admin/subscription-reconciliation`:
 classifies each account as `no_selection | trial_active | trial_expired |
-paid_active | admin_granted | pending_payment | canceled | expired | invalid`,
-adds trial start/end + period fields, the `email_shared_with_other_account`
-flag (mis-link signature, kept), and a `selection_required` flag (=
-NO_PLAN). Still: SELECT only, capped, admin-only, no mutation.
+paid_active | admin_granted | pending_payment | canceled | expired |
+legacy_free | invalid`, adds trial start/end + period fields, the
+`email_shared_with_other_account` flag (mis-link signature, kept), and a
+`selection_required` flag (= NO_PLAN, incl. legacy `free` rows per D9).
+`legacy_free` = the historical permanent-Free row state (expected, grants
+nothing, selection required); `invalid` is reserved for rows with an UNKNOWN
+plan value or a lookup failure. Still: SELECT only, capped, admin-only, no
+mutation.
 
 ## 8. Out of scope (explicit)
 
@@ -259,3 +306,49 @@ NO_PLAN). Still: SELECT only, capped, admin-only, no mutation.
 - No trial resets, no automatic plan assignment, no reassignment of the
   mis-linked Pro account (stays a separate identity-resolution incident).
 - No price/label/billing-rule changes (canonical values preserved).
+- No destructive migration of historical `free` rows (see §9: they are
+  re-interpreted by the application, never rewritten or deleted).
+
+## 9. Removing the permanent Free plan — strategy & deployment order (D9)
+
+**Production records with `plan='free'`:** re-interpreted in the application
+layer only. The engine never grants them anything (no-matrix → zero
+entitlements), the plan gate treats them as "no valid selection" (redirect to
+plan selection), the reconciliation report lists them as `legacy_free`, and
+the admin table shows them as "Kein Plan". No UPDATE, no DELETE, no
+constraint change: the `free` value remains readable historical state (the
+CHECK constraint keeps it), and users' rows, profiles, applications and all
+stored data are untouched.
+
+**What changed where (all in this PR):**
+
+| Layer | Change |
+| ----- | ------ |
+| Engine (`entitlement-service.ts`) | No-matrix states grant 0 for every protected feature (AI, e-mail drafts, cover letter, resume AI, scanner, Deckblatt, opportunity search, saved items, automation); former `FREE_PLAN_LIMITS` (50 e-mails/100 AI) and `DECKBLATT_LEGACY_DAILY_LIMIT` (2/d) constants deleted — a missing mapping can no longer become a grant |
+| Legacy counters (`entitlements.ts`) | Fallback `emailsPerDay`/`aiPerDay` 0/0 (was 50/100); the `reserve_ai_request` RPC then denies at the DB level |
+| Plan gate (`plan-gate.ts`) | `free` row ⇒ `selectionRequired` (was: counted as a valid selection) |
+| Deckblatt DB RPCs | `20261127000000` — legacy fallback 2 → 0 in `get_deckblatt_usage_status` / `reserve_deckblatt_generation` / `release_deckblatt_generation` (identical signatures, security, grants; `create or replace` only) |
+| Reconciliation | `free` row ⇒ `legacy_free` state (was `invalid`) |
+| Admin UI | `free` row shown as "Kein Plan — Auswahl erforderlich" |
+| UI text (de/en/fr/ar) | "free plan limits apply" → "no active plan — protected features are locked" |
+| Dashboard display | AI limit shown = real entitlement (0 when no plan), not the former 100 default |
+
+**Deployment order (documented, NOT executed):**
+
+1. **Apply the new migrations first** (20261125 plus/pro matrix if not yet,
+   then 20261127 deckblatt fallback). They are additive and idempotent; the
+   old app code keeps working (it already denied no-plan users for
+   engine-checked features; the deckblatt RPC becomes stricter, never more
+   permissive).
+2. **Deploy the application** (this PR). After this step the app-level
+   engine denies every protected feature for no-plan users, and the gate
+   redirects `free`-row users to plan selection.
+3. **Verify** (read-only): reconciliation report shows `legacy_free` for the
+   historical rows; no `invalid`/`unknown_plan` spikes; trial + plus/pro
+   entitlements unchanged (compare before/after `stateTotals`).
+
+Either order is safe: whichever lands first only DENIES more, never grants
+more. Rollback = revert the app deployment; the DB migration is harmless on
+its own (users without an entitled plan simply cannot reserve Deckblatt
+generations until the app is rolled forward again or the old RPC bodies are
+re-installed from 20261121).

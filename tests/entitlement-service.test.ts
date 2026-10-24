@@ -8,10 +8,13 @@
  *   - plan resolution is server-side only (no client-supplied identifiers);
  *   - expiry is checked from timestamps on every decision (no job needed);
  *   - lookup failures fail closed (metered features denied, never upgraded);
- *   - non-commercial states (free fallback, legacy plus/pro) keep ONLY the
- *     explicitly defined values (ai 100/day, deckblatt 2/day, upload 10 MB)
- *     and are DISABLED (0) for every other feature — the 2026-10-24 fix
- *     that removed the "unmetered legacy" default;
+ *   - no-entitlement states (the historical `free` row, canceled / expired /
+ *     unknown plans, matrix-less plus/pro rows) grant ZERO for EVERY
+ *     protected feature — the permanent Free plan was removed 2026-10-24
+ *     (PR #72 revision, decision D9), superseding the earlier "explicit
+ *     free values (ai 100/day, deckblatt 2/day)" policy. Only the 10 MB
+ *     upload baseline (account functionality, not a plan entitlement) and
+ *     the quota-free salary calculator stay available;
  *   - reserve/complete/release outcomes map 1:1 to the RPC contracts.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -435,25 +438,47 @@ describe("resolveSubscription", () => {
 });
 
 // ---------------------------------------------------------------------------
-// checkFeature — free fallback (no subscription row)
+// checkFeature — no-entitlement state (no subscription row)
 // ---------------------------------------------------------------------------
 
-describe("checkFeature — free fallback", () => {
-  it("ai_assistant below the limit → allowed, resets at next UTC midnight", async () => {
+describe("checkFeature — no-entitlement state (D9: no permanent Free plan)", () => {
+  it("ai_assistant → feature_disabled with ZERO (the former 100/day free fallback is gone) and NO meter read", async () => {
     const { admin } = setup({
+      meters: { ai_assistant: { used: 3, resets_at: null } },
+    });
+    const e = await checkFeature(USER, "ai_assistant", NOW);
+    expect(e).toMatchObject({
+      allowed: false,
+      reason: "feature_disabled",
+      planId: "free", // historical sentinel, not a grant
+      featureId: "ai_assistant",
+      limit: 0,
+      used: 0,
+      remaining: 0,
+      resetsAt: null,
+      subscriptionExpiresAt: null,
+    });
+    // A zero limit short-circuits before any meter read — nothing is
+    // counted against a nonexistent quota.
+    expect(rpcCalls(admin.calls, "feature_quota_status")).toHaveLength(0);
+  });
+
+  it("active monthly plan: ai below the limit → allowed, resets at next UTC midnight", async () => {
+    const { admin } = setup({
+      sub: subRow(), // premium_monthly, active at NOW
+      plan: commercialRow("premium_monthly"),
       meters: { ai_assistant: { used: 3, resets_at: null } },
     });
     const e = await checkFeature(USER, "ai_assistant", NOW);
     expect(e).toMatchObject({
       allowed: true,
       reason: "ok",
-      planId: "free",
+      planId: "premium_monthly",
       featureId: "ai_assistant",
-      limit: 100,
+      limit: 200,
       used: 3,
-      remaining: 97,
+      remaining: 197,
       resetsAt: NEXT_MIDNIGHT,
-      subscriptionExpiresAt: null,
     });
     expect(rpcCalls(admin.calls, "feature_quota_status")).toHaveLength(1);
     expect(rpcCalls(admin.calls, "feature_quota_status")[0].args).toEqual({
@@ -462,8 +487,10 @@ describe("checkFeature — free fallback", () => {
     });
   });
 
-  it("honors a server-computed resets_at (string) over the default", async () => {
+  it("honors a server-computed resets_at (string) over the default (active monthly plan)", async () => {
     setup({
+      sub: subRow(),
+      plan: commercialRow("premium_monthly"),
       meters: {
         ai_assistant: { used: 3, resets_at: "2026-10-15T22:00:00.000Z" },
       },
@@ -472,25 +499,33 @@ describe("checkFeature — free fallback", () => {
     expect(e.resetsAt).toBe(Date.parse("2026-10-15T22:00:00.000Z"));
   });
 
-  it("ai_assistant at the limit → quota_exhausted, remaining 0", async () => {
-    setup({ meters: { ai_assistant: { used: 100, resets_at: null } } });
+  it("ai_assistant at the limit → quota_exhausted, remaining 0 (active monthly, 200/day)", async () => {
+    setup({
+      sub: subRow(),
+      plan: commercialRow("premium_monthly"),
+      meters: { ai_assistant: { used: 200, resets_at: null } },
+    });
     const e = await checkFeature(USER, "ai_assistant", NOW);
     expect(e).toMatchObject({
       allowed: false,
       reason: "quota_exhausted",
-      limit: 100,
-      used: 100,
+      limit: 200,
+      used: 200,
       remaining: 0,
     });
   });
 
   it("unreadable meter → lookup_error WITH the known limit (fail closed, not free)", async () => {
-    setup({ meters: { ai_assistant: { error: true } } });
+    setup({
+      sub: subRow(),
+      plan: commercialRow("premium_monthly"),
+      meters: { ai_assistant: { error: true } },
+    });
     const e = await checkFeature(USER, "ai_assistant", NOW);
     expect(e).toMatchObject({
       allowed: false,
       reason: "lookup_error",
-      limit: 100,
+      limit: 200,
       used: 0,
       remaining: 0,
     });
@@ -510,12 +545,14 @@ describe("checkFeature — free fallback", () => {
     expect(rpcCalls(admin.calls, "feature_capacity_status")).toHaveLength(0);
   });
 
-  it("EVERY non-commercial feature is explicitly disabled on free (2026-10-24 fix: Free is never unlimited)", async () => {
+  it("EVERY protected feature is explicitly disabled in the no-entitlement state (D9: there is NO permanent Free plan — nothing is granted, nothing is unlimited)", async () => {
     setup();
     for (const featureId of [
+      "ai_assistant",
       "cover_letter",
       "resume_ai",
       "scanner",
+      "deckblatt",
       "email_drafts",
       "opportunity_search",
       "saved_opportunities",
@@ -529,11 +566,7 @@ describe("checkFeature — free fallback", () => {
         limit: 0,
       });
     }
-    // The explicitly DEFINED free entitlements stay available:
-    const ai = await checkFeature(USER, "ai_assistant", NOW);
-    expect(ai).toMatchObject({ allowed: true, limit: 100 });
-    const deck = await checkFeature(USER, "deckblatt", NOW);
-    expect(deck).toMatchObject({ allowed: true, limit: 2 });
+    // Account functionality that is NOT a plan entitlement stays available:
     const upload = await checkFeature(USER, "upload", NOW);
     expect(upload).toMatchObject({ allowed: true, limit: 10 });
     const salary = await checkFeature(USER, "salary_calculator", NOW);
@@ -781,11 +814,15 @@ describe("checkFeature — trial", () => {
       }),
       plan: commercialRow("trial"),
     });
+    // D9: expiry revokes EVERYTHING — the former "back on the free
+    // fallback (100 AI/day)" grant is gone; the lapsed row resolves to
+    // plan_expired with a zero limit.
     const ai = await checkFeature(USER, "ai_assistant", NOW);
     expect(ai).toMatchObject({
-      allowed: true,
-      planId: "free",
-      limit: 100, // back on the free fallback
+      allowed: false,
+      reason: "plan_expired",
+      planId: "free", // no-entitlement sentinel
+      limit: 0,
     });
 
     const auto = await checkFeature(USER, "automation", NOW);
@@ -797,6 +834,97 @@ describe("checkFeature — trial", () => {
 
     const upload = await checkFeature(USER, "upload", NOW);
     expect(upload).toMatchObject({ limit: 10 });
+  });
+
+  it("boundary: a trial whose last active millisecond is NOW (end = NOW+1ms) still grants its plan limits", async () => {
+    // The end is exclusive: while nowMs < periodEndMs the trial is active.
+    // NOW + 1 is the last instant at which the trial can still be used.
+    setup({
+      sub: subRow({
+        plan: "trial",
+        start: "2026-10-14T09:15:00.000Z",
+        end: new Date(NOW + 1).toISOString(),
+        trialAt: "2026-10-14T09:15:00.000Z",
+      }),
+      plan: commercialRow("trial"),
+      meters: { ai_assistant: { used: 0, resets_at: null } },
+    });
+    const ai = await checkFeature(USER, "ai_assistant", NOW);
+    expect(ai).toMatchObject({
+      allowed: true,
+      reason: "ok",
+      planId: "trial",
+      limit: 5,
+      used: 0,
+      remaining: 5,
+    });
+  });
+
+  it("boundary: a trial whose end is EXACTLY now is already expired (end exclusive) and grants NOTHING (D9)", async () => {
+    const { admin } = setup({
+      sub: subRow({
+        plan: "trial",
+        start: "2026-10-12T09:15:00.000Z",
+        end: new Date(NOW).toISOString(),
+        trialAt: "2026-10-12T09:15:00.000Z",
+      }),
+      plan: commercialRow("trial"),
+      meters: { ai_assistant: { used: 0, resets_at: null } },
+    });
+    const ai = await checkFeature(USER, "ai_assistant", NOW);
+    expect(ai).toMatchObject({
+      allowed: false,
+      reason: "plan_expired",
+      planId: "free", // no-entitlement sentinel, not a grant
+      limit: 0,
+      used: 0,
+      remaining: 0,
+    });
+    const deckblatt = await checkFeature(USER, "deckblatt", NOW);
+    expect(deckblatt).toMatchObject({
+      allowed: false,
+      reason: "plan_expired",
+      limit: 0,
+    });
+    // A zero limit short-circuits BEFORE any meter read: nothing is
+    // counted against a quota that no longer exists.
+    expect(rpcCalls(admin.calls, "feature_quota_status")).toHaveLength(0);
+  });
+
+  it("expiry is evaluated on every read and never WRITES: the trial row keeps its identity (data intact)", async () => {
+    const { admin } = setup({
+      sub: subRow({
+        plan: "trial",
+        start: "2026-10-12T09:15:00.000Z",
+        end: "2026-10-15T11:59:59.000Z",
+        trialAt: "2026-10-12T09:15:00.000Z",
+      }),
+      plan: commercialRow("trial"),
+    });
+    const sub = await resolveSubscription(USER, NOW);
+    expect(sub.status).toBe("expired");
+    // The persisted row is untouched: plan identity and the one-shot trial
+    // stamp survive the computed expiry (no job, no rewrite, no delete).
+    expect(sub.row).toMatchObject({
+      plan: "trial",
+      trial_activated_at: "2026-10-12T09:15:00.000Z",
+    });
+    expect(sub.trialUsed).toBe(true);
+
+    const ai = await checkFeature(USER, "ai_assistant", NOW);
+    expect(ai).toMatchObject({
+      allowed: false,
+      reason: "plan_expired",
+      limit: 0,
+    });
+
+    // Read-only footprint: one subscriptions read per call (two total),
+    // zero plan-row reads (an expired row never loads a plan) and zero
+    // RPCs. The mock harness exposes no write surface at all — any
+    // mutation attempt would throw and fail this test.
+    expect(queryCalls(admin.calls, "subscriptions")).toHaveLength(2);
+    expect(queryCalls(admin.calls, "billing_plans")).toHaveLength(0);
+    expect(admin.calls.filter((c) => c.kind === "rpc")).toHaveLength(0);
   });
 
   it("a trial that has run out of time still reports trialUsed (no restart)", async () => {
@@ -844,10 +972,14 @@ describe("checkFeature — legacy plus", () => {
     });
   });
 
-  it("deckblatt keeps its historic 2/day on legacy plans", async () => {
+  it("deckblatt is disabled on matrix-less legacy plus (D9: the former 2/day free fallback is gone — a paid matrix from migration 20261125 grants it instead)", async () => {
     setup({ ...plusBase, meters: { deckblatt: { used: 1, resets_at: null } } });
     const e = await checkFeature(USER, "deckblatt", NOW);
-    expect(e).toMatchObject({ allowed: true, limit: 2, used: 1, remaining: 1 });
+    expect(e).toMatchObject({
+      allowed: false,
+      reason: "feature_disabled",
+      limit: 0,
+    });
   });
 
   it("other spec features are disabled on legacy plus (explicit non-commercial matrix, 2026-10-24 fix)", async () => {
@@ -1028,24 +1160,41 @@ describe("mockPaymentsEnabled", () => {
 // ---------------------------------------------------------------------------
 
 describe("reserveFeatureOp", () => {
-  it("ai (free fallback): success → 'reserved' with server-side args only", async () => {
+  it("ai (no-plan user, D9): limit 0 is denied as 'feature_disabled' BEFORE any RPC — no client bypass, nothing counted", async () => {
+    // The no-entitlement state resolves AI to 0 (no permanent Free plan).
+    // The reservation short-circuits on the zero limit, exactly like the
+    // generic features: the meter RPC is never even reached, so a no-plan
+    // user cannot consume or create AI usage at all.
     const { admin } = setup({
       sub: null,
+      rpc: { reserve_ai_request: { data: null } },
+    });
+    const result = await reserveFeatureOp(USER, "ai_assistant", RUN, NOW);
+    expect(result).toEqual({ outcome: "feature_disabled" });
+    expect(rpcCalls(admin.calls, "reserve_ai_request")).toHaveLength(0);
+    expect(queryCalls(admin.calls, "subscriptions")).toHaveLength(1);
+  });
+
+  it("ai (entitled active monthly user): reservation goes through the RPC with the plan limit (200) as max_requests", async () => {
+    const { admin } = setup({
+      sub: subRow(),
+      plan: commercialRow("premium_monthly"),
       rpc: { reserve_ai_request: { data: null } },
     });
     const result = await reserveFeatureOp(USER, "ai_assistant", RUN, NOW);
     expect(result).toEqual({ outcome: "reserved" });
     const calls = rpcCalls(admin.calls, "reserve_ai_request");
     expect(calls).toHaveLength(1);
-    expect(calls[0].args).toEqual({ target_user_id: USER, max_requests: 100 });
+    expect(calls[0].args).toEqual({ target_user_id: USER, max_requests: 200 });
   });
 
   it("ai: 'ai_daily_limit_reached' error → 'quota_exhausted'", async () => {
     setup({
-      sub: null,
+      sub: subRow(),
+      plan: commercialRow("premium_monthly"),
       rpc: {
         reserve_ai_request: {
-          error: { message: "ai_daily_limit_reached (100/100)" },
+          error: { message: "ai_daily_limit_reached (200/200)" },
         },
       },
     });
@@ -1055,7 +1204,8 @@ describe("reserveFeatureOp", () => {
 
   it("ai: any other RPC error → 'error' (never a reservation)", async () => {
     setup({
-      sub: null,
+      sub: subRow(),
+      plan: commercialRow("premium_monthly"),
       rpc: { reserve_ai_request: { error: { message: "boom" } } },
     });
     const result = await reserveFeatureOp(USER, "ai_assistant", RUN, NOW);
@@ -1067,7 +1217,8 @@ describe("reserveFeatureOp", () => {
 
   it("ai: a throwing RPC client → 'error' via the outer catch", async () => {
     setup({
-      sub: null,
+      sub: subRow(),
+      plan: commercialRow("premium_monthly"),
       rpc: { reserve_ai_request: { throw: new Error("network") } },
     });
     const result = await reserveFeatureOp(USER, "ai_assistant", RUN, NOW);
@@ -1578,15 +1729,15 @@ describe("getBillingStatus", () => {
     });
   });
 
-  it("lookup failure: fail-closed aggregate, free labels, zero emails", async () => {
+  it("lookup failure: fail-closed aggregate, historical labels, ZERO display quotas (no free fallback — D9)", async () => {
     setup({ throwTable: "subscriptions", emailsSent: null });
     const s = await getBillingStatus(USER, NOW);
     expect(s).toMatchObject({
       planId: "free",
       planLabel: "Free",
       lookupFailed: true,
-      aiPerDay: 100,
-      emailsPerDay: 50,
+      aiPerDay: 0,
+      emailsPerDay: 0,
       emailsUsedToday: 0,
       trialUsed: false,
     });
@@ -1634,7 +1785,7 @@ describe("getBillingStatus", () => {
     });
   });
 
-  it("computed expiry (DB row still status 'active', period end past) → entitlements stay FREE but the UI keeps the Pro identity", async () => {
+  it("computed expiry (DB row still status 'active', period end past) → entitlements are REVOKED (zero, no free fallback — D9) but the UI keeps the Pro identity", async () => {
     setup({
       sub: subRow({
         plan: "pro",
@@ -1654,16 +1805,21 @@ describe("getBillingStatus", () => {
       provider: "manual",
       periodEndMs: Date.parse("2026-10-15T00:00:00.000Z"),
     });
-    // Access control: effective plan is still the free fallback
-    // (the lapsed plan must NOT keep granting pro limits).
+    // Access control: effective plan is the no-entitlement sentinel —
+    // the lapsed plan must NOT keep granting pro limits, and nothing
+    // falls back to a free tier.
     expect(s).toMatchObject({
       planId: "free",
-      aiPerDay: 100,
-      emailsPerDay: 50,
+      aiPerDay: 0,
+      emailsPerDay: 0,
     });
+    // Computed expiry: the ROW exists (plan pro) and the resolved status is
+    // 'expired' → the limit-0 reason is 'plan_expired' (a plain no-plan /
+    // free-row state would instead be 'feature_disabled').
     expect(s.features.ai_assistant).toMatchObject({
-      allowed: true,
-      limit: 100,
+      allowed: false,
+      reason: "plan_expired",
+      limit: 0,
     });
   });
 
@@ -1683,7 +1839,7 @@ describe("getBillingStatus", () => {
     expect(queryCalls(admin.calls, "billing_plans")).toHaveLength(0);
   });
 
-  it("canceled pro row → Pro identity retained, free entitlements", async () => {
+  it("canceled pro row → Pro identity retained, ZERO entitlements (cancellation ends the plan; no free fallback — D9)", async () => {
     setup({
       sub: subRow({
         plan: "pro",
@@ -1698,8 +1854,8 @@ describe("getBillingStatus", () => {
       planLabel: "Pro",
       rowPlanId: "pro",
       status: "canceled",
-      aiPerDay: 100,
-      emailsPerDay: 50,
+      aiPerDay: 0,
+      emailsPerDay: 0,
     });
   });
 });

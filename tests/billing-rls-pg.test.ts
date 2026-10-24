@@ -685,6 +685,117 @@ describeMaybe(
         ).toBe(before);
       });
     });
+
+    // ---------------------------------------------------------------------
+    // D9 — the permanent Free plan's DB-level deckblatt fallback (2/day) is
+    // removed by migration 20261127. No-plan / historical-free users get
+    // daily_limit 0 and a hard 'quota_exhausted' denial; active entitled
+    // plans keep their matrix grants. (The full migration chain — including
+    // 20261127 — was applied to this disposable DB in beforeAll.)
+    // ---------------------------------------------------------------------
+
+    describe("D9 — no-plan users get NO deckblatt grant at the DB level (migration 20261127)", () => {
+      const one = (sql: string) => q(sql).trim();
+
+      // Fixture identities — never reused anywhere else in this file.
+      const NF1 = "91919191-9191-4191-8191-919191919191"; // no subscription row
+      const NF2 = "92929292-9292-4292-8292-929292929292"; // historical 'free' row
+      const NF3 = "93939393-9393-4393-8393-939393939393"; // will activate the trial
+
+      it("fixture: seed auth.users for the no-plan identities (FK targets)", () => {
+        q(
+          `alter table auth.users disable trigger on_auth_user_created;
+           insert into auth.users (id, email) values
+             ('${NF1}', 'pg-nf1@test.invalid'),
+             ('${NF2}', 'pg-nf2@test.invalid'),
+             ('${NF3}', 'pg-nf3@test.invalid');
+           alter table auth.users enable trigger on_auth_user_created;`,
+        );
+        expect(
+          one(
+            `select count(*) from auth.users where id in ('${NF1}','${NF2}','${NF3}')`,
+          ),
+        ).toBe("3");
+      });
+
+      it("NO subscription row → get_deckblatt_usage_status reports daily_limit 0 / remaining 0 (the former 2/day free fallback is gone)", () => {
+        expect(
+          one(
+            `select daily_limit || '|' || used || '|' || remaining from public.get_deckblatt_usage_status('${NF1}')`,
+          ),
+        ).toBe("0|0|0");
+      });
+
+      it("NO subscription row → reserve_deckblatt_generation denies 'quota_exhausted' BEFORE any write (no run row, no usage row)", () => {
+        const run = "94949494-9494-4494-8494-949494940001";
+        expect(
+          one(
+            `select status from public.reserve_deckblatt_generation('${NF1}', '${run}')`,
+          ),
+        ).toBe("quota_exhausted");
+        expect(
+          one(
+            `select count(*) from public.ai_deckblatt_runs where user_id = '${NF1}'`,
+          ),
+        ).toBe("0");
+        expect(
+          one(
+            `select count(*) from public.ai_deckblatt_usage where user_id = '${NF1}'`,
+          ),
+        ).toBe("0");
+        // A release of the phantom run is a no-op (nothing was ever reserved).
+        expect(
+          one(
+            `select status from public.release_deckblatt_generation('${NF1}', '${run}')`,
+          ),
+        ).toBe("no_op");
+      });
+
+      it("historical 'free' row (production legacy state) → the same denial: free is history, never a grant", () => {
+        q(
+          `insert into public.subscriptions (user_id, plan, status, provider, current_period_start, current_period_end)
+           values ('${NF2}', 'free', 'active', 'manual', timezone('utc', now()) - interval '30 days', null);`,
+        );
+        expect(
+          one(
+            `select daily_limit from public.get_deckblatt_usage_status('${NF2}')`,
+          ),
+        ).toBe("0");
+        expect(
+          one(
+            `select status from public.reserve_deckblatt_generation('${NF2}', '94949494-9494-4494-8494-949494940002')`,
+          ),
+        ).toBe("quota_exhausted");
+        expect(
+          one(
+            `select count(*) from public.ai_deckblatt_runs where user_id = '${NF2}'`,
+          ),
+        ).toBe("0");
+      });
+
+      it("an ACTIVE trial user keeps the trial matrix deckblatt grant (1/day) — D9 removed only the FREE fallback, not entitled plans", () => {
+        const out = JSON.parse(
+          q(`select public.activate_trial('${NF3}')`),
+        ) as Record<string, string>;
+        expect(out.status).toBe("activated");
+        expect(
+          one(
+            `select daily_limit from public.get_deckblatt_usage_status('${NF3}')`,
+          ),
+        ).toBe("1");
+        expect(
+          one(
+            `select status from public.reserve_deckblatt_generation('${NF3}', '94949494-9494-4494-8494-949494940003')`,
+          ),
+        ).toBe("reserved");
+        // The trial cap is 1/day: the second generation is denied.
+        expect(
+          one(
+            `select status from public.reserve_deckblatt_generation('${NF3}', '94949494-9494-4494-8494-949494940004')`,
+          ),
+        ).toBe("quota_exhausted");
+      });
+    });
   },
 );
 

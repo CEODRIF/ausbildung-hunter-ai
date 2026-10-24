@@ -345,26 +345,34 @@ describe("S1/S6 · no subscription → no restricted access", () => {
       const e = await checkFeature(USER_A, f, NOW);
       expect(e, f).toMatchObject({ allowed: false, limit: 0 });
     }
-    // The defined free entitlements remain.
+    // D9: there is NO free fallback — AI is denied too (0). The row exists
+    // and is non-active → the limit-0 reason is 'plan_expired' (a no-row /
+    // free-row state would instead be 'feature_disabled').
     const ai = await checkFeature(USER_A, "ai_assistant", NOW);
-    expect(ai).toMatchObject({ allowed: true, limit: 100 });
+    expect(ai).toMatchObject({
+      allowed: false,
+      reason: "plan_expired",
+      limit: 0,
+    });
   });
 });
 
 // ---------------------------------------------------------------------------
-// S2 — Free = exactly the defined free entitlements, nothing more
+// S2 — no-entitlement state (D9: the permanent Free plan was removed)
 // ---------------------------------------------------------------------------
 
-describe("S2 · free state grants only the defined free entitlements", () => {
-  it("defined: ai 100/day, deckblatt 2/day, upload 10 MB, salary unmetered — all else denied", async () => {
+describe("S2 · the no-entitlement state grants nothing protected", () => {
+  it("EVERY protected feature is denied (ai 0, deckblatt 0, restricted 0) — only the 10 MB account upload baseline + quota-free salary calculator remain", async () => {
     holder.admin = makeAdmin();
     expect(await checkFeature(USER_A, "ai_assistant", NOW)).toMatchObject({
-      allowed: true,
-      limit: 100,
+      allowed: false,
+      reason: "feature_disabled",
+      limit: 0,
     });
     expect(await checkFeature(USER_A, "deckblatt", NOW)).toMatchObject({
-      allowed: true,
-      limit: 2,
+      allowed: false,
+      reason: "feature_disabled",
+      limit: 0,
     });
     expect(await checkFeature(USER_A, "upload", NOW)).toMatchObject({
       allowed: true,
@@ -380,10 +388,33 @@ describe("S2 · free state grants only the defined free entitlements", () => {
         limit: 0,
       });
     }
-    // The matrix itself is explicit and fail-closed by construction.
+    // The matrix itself is explicit and fail-closed by construction —
+    // deckblatt is now IN the zero matrix (former 2/day free fallback gone).
     for (const f of RESTRICTED_FEATURES) {
       expect(NON_COMMERCIAL_FEATURE_LIMITS[f]).toBe(0);
     }
+    expect(NON_COMMERCIAL_FEATURE_LIMITS.deckblatt).toBe(0);
+  });
+
+  it("cancellation and expiry never CREATE a free row: the effective plan is the no-entitlement sentinel, the persisted row keeps its own identity", async () => {
+    holder.admin = makeAdmin({
+      subscriptions: (f) =>
+        f.user_id === USER_A
+          ? subRow({
+              plan: "premium_monthly",
+              status: "canceled",
+              canceled_at: "2026-10-10T00:00:00.000Z",
+              current_period_end: FUTURE_END,
+            })
+          : null,
+    });
+    const sub = await resolveSubscription(USER_A, NOW);
+    expect(sub).toMatchObject({ planId: "free", status: "canceled" });
+    // The ROW still says premium_monthly (history is never overwritten) —
+    // 'free' is only the entitlement-plane sentinel, not a written plan.
+    expect(sub.row?.plan).toBe("premium_monthly");
+    expect(sub.row?.status).toBe("canceled");
+    expect(classifySubscriptionState(sub)).toBe("canceled");
   });
 });
 
@@ -478,9 +509,13 @@ describe("S4/S5 · verified subscribers", () => {
       planId: "pro",
       limit: 300,
     });
+    // D9: matrix-less legacy pro has NO deckblatt fallback (former 2/day
+    // free tier removed) — 0 = denied. Post-migration-20261125 rows carry
+    // the matrix (15/30) and are covered elsewhere.
     expect(await checkFeature(USER_A, "deckblatt", NOW)).toMatchObject({
-      allowed: true,
-      limit: 2,
+      allowed: false,
+      reason: "feature_disabled",
+      limit: 0,
     });
     for (const f of RESTRICTED_FEATURES) {
       expect(await checkFeature(USER_A, f, NOW), f).toMatchObject({
@@ -599,9 +634,9 @@ describe("S8 · historical 'Pro' label without a valid subscription", () => {
     const s = await getBillingStatus(USER_A, NOW);
     expect(s.planLabel).toBe("Pro"); // display-only identity
     expect(s.rowPlanId).toBe("pro"); // display-only identity
-    expect(s.planId).toBe("free"); // entitlement plane
+    expect(s.planId).toBe("free"); // entitlement plane (no-entitlement sentinel)
     expect(s.status).toBe("canceled");
-    expect(s.aiPerDay).toBe(100); // free fallback, NOT the pro column
+    expect(s.aiPerDay).toBe(0); // NO free fallback (D9), and NOT the pro column
     expect(s.features["cover_letter"]).toMatchObject({
       allowed: false,
       limit: 0,
@@ -708,41 +743,29 @@ describe("S11 · direct API denial", () => {
     expect(holder.providerImpl ?? null).toBeNull(); // provider mock would throw if called
   });
 
-  // Note: generate-file is metered as ai_assistant — the free state
-  // INCLUDES 100 AI ops/day, so the free-user denial scenario is the
-  // QUOTA-EXHAUSTED path (429), and the success path proves the free
-  // limit (100) is applied server-side in the reservation args.
-  it("POST /api/ai/generate-file as a free user within quota → 200, reservation uses the free limit (100)", async () => {
+  // Note: generate-file is metered as ai_assistant. Since 2026-10-24 (D9)
+  // the no-entitlement states (no plan, expired/canceled trial) carry a
+  // daily AI limit of 0 — the reservation short-circuits to
+  // 'feature_disabled' BEFORE any meter RPC, and the route maps that to 403
+  // WITHOUT ever calling the paid AI provider. A client that bypasses the UI
+  // is still denied server-side; nothing is counted against a quota that
+  // does not exist.
+  it("POST /api/ai/generate-file as a NO-PLAN user → 403 feature_disabled, reserve RPC never reached, AI provider never called", async () => {
     const admin = makeAdmin({
       conversations: { id: "c0000000-0000-4000-8000-000000000000" },
-      rpc: { reserve_ai_request: { data: "reserved", error: null } },
-    });
-    holder.admin = admin;
-    holder.generateFileImpl = async () => Buffer.from("doc");
-    const res = await generateFileRoute.POST(
-      post({
-        conversationId: "c0000000-0000-4000-8000-000000000000",
-        filename: "a.docx",
-        mimeType:
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        prompt: "p",
-      }),
-    );
-    expect(res.status).toBe(200);
-    const reserve = admin.rpcs.find((r) => r.fn === "reserve_ai_request");
-    expect(reserve).toMatchObject({
-      args: { target_user_id: USER_A, max_requests: 100 },
-    });
-  });
-
-  it("POST /api/ai/generate-file as a free user at the limit → 429, AI provider never called", async () => {
-    holder.admin = makeAdmin({
+      // Trap: if the zero-limit state ever reached the meter RPC, this
+      // spec would turn the outcome into 'quota_exhausted' and the test
+      // would fail on the 403/429 + code assertions below.
       rpc: {
         reserve_ai_request: {
-          error: { message: "ai_daily_limit_reached (100/100)" },
+          error: { message: "ai_daily_limit_reached (0/0)" },
         },
       },
     });
+    holder.admin = admin;
+    // generateFileImpl stays NULL: if the route ever reached the paid
+    // provider, the mock throws PROVIDER_MUST_NOT_BE_CALLED and the
+    // status assertion below can never pass.
     const res = await generateFileRoute.POST(
       post({
         conversationId: "c0000000-0000-4000-8000-000000000000",
@@ -752,8 +775,46 @@ describe("S11 · direct API denial", () => {
         prompt: "p",
       }),
     );
-    expect(res.status).toBe(429);
-    expect(await res.json()).toMatchObject({ code: "quota_exhausted" });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "feature_disabled" });
+    expect(
+      admin.rpcs.find((r) => r.fn === "reserve_ai_request"),
+    ).toBeUndefined();
+    expect(holder.generateFileImpl ?? null).toBeNull(); // never called
+  });
+
+  it("POST /api/ai/generate-file as an expired-trial user → 403 feature_disabled, AI provider never called (expired plan = 0 AI/day, no free fallback)", async () => {
+    const admin = makeAdmin({
+      conversations: { id: "c0000000-0000-4000-8000-000000000000" },
+      subscriptions: (f) =>
+        f.user_id === USER_A
+          ? subRow({
+              plan: "trial",
+              status: "active",
+              current_period_end: PAST_END, // already past → computed expired
+            })
+          : null,
+      rpc: {
+        reserve_ai_request: {
+          error: { message: "ai_daily_limit_reached (0/0)" },
+        },
+      },
+    });
+    holder.admin = admin;
+    const res = await generateFileRoute.POST(
+      post({
+        conversationId: "c0000000-0000-4000-8000-000000000000",
+        filename: "a.docx",
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        prompt: "p",
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "feature_disabled" });
+    expect(
+      admin.rpcs.find((r) => r.fn === "reserve_ai_request"),
+    ).toBeUndefined();
   });
 
   it("POST /api/ai/cover-letter as an ACTIVE monthly subscriber → 200 with the provider call", async () => {

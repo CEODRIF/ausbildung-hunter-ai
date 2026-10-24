@@ -89,14 +89,16 @@ vi.mock("@/lib/billing/entitlement-service", async () => {
       sub.row && sub.row.plan !== "free"
         ? PLAN_LABELS[sub.row.plan as keyof typeof PLAN_LABELS]
         : PLAN_LABELS[sub.planId as keyof typeof PLAN_LABELS],
+    // D9: a no-entitlement (free-sentinel) state carries a ZERO AI limit —
+    // the former 100/day free fallback no longer exists anywhere.
     checkFeature: async () => ({
-      allowed: true,
-      reason: "ok",
+      allowed: false,
+      reason: "feature_disabled",
       planId: "free",
       featureId: "ai_assistant",
-      limit: 100,
+      limit: 0,
       used: 0,
-      remaining: 100,
+      remaining: 0,
       resetsAt: null,
       subscriptionExpiresAt: null,
     }),
