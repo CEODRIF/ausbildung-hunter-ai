@@ -155,6 +155,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { labelKey: "nav.profile", href: "/settings/profile", icon: "user" },
       { labelKey: "nav.settings", href: "/settings/usage", icon: "settings" },
+      { labelKey: "nav.billing", href: "/settings/billing", icon: "idCard" },
     ],
   },
   {

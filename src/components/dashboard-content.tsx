@@ -8,6 +8,7 @@ import { SearchOrb } from "@/components/ui/search-orb";
 import type {
   DashboardData,
   DashboardRecommendations,
+  DashboardSubscription,
   MatchingSummary,
   RecommendationItem,
   SavedPreviewItem,
@@ -33,6 +34,7 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
     usage,
     usageSnapshot,
     aiLimit,
+    subscription,
     applicationsCount,
     emailAccount,
     hasCompletedScan,
@@ -258,6 +260,9 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
               />
             </dl>
           </GlassCard>
+          {subscription && (
+            <SubscriptionCard subscription={subscription} t={t} locale={locale} />
+          )}
         </div>
       </section>
 
@@ -930,6 +935,116 @@ function MatchingCard({
         )}
       </GlassCard>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Subscription card — display-only summary of the user's own subscription.
+// Never grants anything: plan identity comes from the server-resolved
+// BillingStatus row (historical plans keep their label), entitlements are
+// decided exclusively by the entitlement service elsewhere.
+// ---------------------------------------------------------------------------
+
+function SubscriptionCard({
+  subscription,
+  t,
+  locale,
+}: {
+  subscription: DashboardSubscription;
+  t: T;
+  locale: string;
+}) {
+  const statusKey =
+    subscription.status === "active"
+      ? "statusActive"
+      : subscription.status === "canceled"
+        ? "statusCanceled"
+        : subscription.status === "expired"
+          ? "statusExpired"
+          : "statusNone";
+  const tone =
+    subscription.status === "active"
+      ? "bg-success-soft text-success"
+      : subscription.status === "none"
+        ? "bg-line/60 text-muted"
+        : "bg-warning-soft text-warning";
+  return (
+    <GlassCard className="mt-5 p-5 sm:p-6" as="section">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-bold text-ink">
+          {t("dash.subscription.title")}
+        </h2>
+        <Link
+          href="/settings/billing"
+          className="text-xs font-semibold text-accent hover:underline"
+        >
+          {t("dash.subscription.manage")}
+        </Link>
+      </div>
+      {subscription.lookupFailed ? (
+        <p className="mt-3 text-xs leading-5 text-muted">
+          {t("billing.currentPlan.lookupFailed")}
+        </p>
+      ) : (
+        <>
+          <div className="mt-4 flex flex-wrap items-center gap-2.5">
+            <span className="text-base font-bold text-ink">
+              {subscription.planLabel}
+            </span>
+            <span
+              className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] ${tone}`}
+            >
+              {t(`billing.currentPlan.${statusKey}`)}
+            </span>
+          </div>
+          {subscription.status === "none" && (
+            <p className="mt-2.5 text-xs text-muted">
+              {t("dash.subscription.none")}
+            </p>
+          )}
+          {(subscription.status === "canceled" ||
+            subscription.status === "expired") && (
+            <p className="mt-2.5 text-xs text-muted">
+              {t("dash.subscription.lapsed")}
+            </p>
+          )}
+          {(subscription.periodStartMs !== null ||
+            subscription.periodEndMs !== null ||
+            subscription.provider !== null) && (
+            <dl className="mt-5 space-y-3.5 text-sm">
+              {subscription.periodStartMs !== null && (
+                <Detail
+                  label={t("billing.currentPlan.periodStart")}
+                  value={formatDate(
+                    new Date(subscription.periodStartMs).toISOString(),
+                    locale,
+                  )}
+                />
+              )}
+              {subscription.periodEndMs !== null && (
+                <Detail
+                  label={t("billing.currentPlan.periodEnd")}
+                  value={formatDate(
+                    new Date(subscription.periodEndMs).toISOString(),
+                    locale,
+                  )}
+                />
+              )}
+              {subscription.provider !== null && (
+                <Detail
+                  label={t("billing.currentPlan.provider")}
+                  value={
+                    subscription.provider === "mock"
+                      ? t("billing.currentPlan.providerMock")
+                      : subscription.provider
+                  }
+                />
+              )}
+            </dl>
+          )}
+        </>
+      )}
+    </GlassCard>
   );
 }
 

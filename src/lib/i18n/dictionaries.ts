@@ -209,6 +209,7 @@ const de = {
     bewerbungAutomation: "Bewerbung-Automatisierung",
     deckblatt: "Deckblatt AI",
     settings: "Einstellungen",
+    billing: "Abonnement",
     soon: "Demnächst",
     collapse: "Seitenleiste einklappen",
     expand: "Seitenleiste ausklappen",
@@ -642,6 +643,13 @@ const de = {
   // ---- Dashboard ----------------------------------------------------------
   dash: {
     
+    subscription: {
+      title: "Abonnement",
+      manage: "Verwalten",
+      none: "Kein Abonnement — Free-Plan-Limits aktiv.",
+      lapsed:
+        "Abonnement nicht mehr aktiv — Free-Plan-Limits gelten.",
+    },
     greeting: {
       morning: "Guten Morgen, {name}.",
       afternoon: "Guten Tag, {name}.",
@@ -2261,6 +2269,7 @@ const en: Dict = {
     bewerbungAutomation: "Application Automation",
     deckblatt: "Deckblatt AI",
     settings: "Settings",
+    billing: "Subscription",
     soon: "Soon",
     collapse: "Collapse sidebar",
     expand: "Expand sidebar",
@@ -2667,6 +2676,12 @@ const en: Dict = {
   },
   dash: {
     
+    subscription: {
+      title: "Subscription",
+      manage: "Manage",
+      none: "No subscription — free plan limits apply.",
+      lapsed: "Subscription no longer active — free plan limits apply.",
+    },
     greeting: {
       morning: "Good morning, {name}.",
       afternoon: "Good afternoon, {name}.",
@@ -4257,6 +4272,7 @@ const fr: Dict = {
     bewerbungAutomation: "Automatisation des candidatures",
     deckblatt: "Deckblatt IA",
     settings: "Réglages",
+    billing: "Abonnement",
     soon: "Bientôt",
     collapse: "Réduire la barre latérale",
     expand: "Déplier la barre latérale",
@@ -4665,6 +4681,12 @@ const fr: Dict = {
   },
   dash: {
     
+    subscription: {
+      title: "Abonnement",
+      manage: "Gérer",
+      none: "Aucun abonnement — limites du plan gratuit.",
+      lapsed: "Abonnement non actif — limites du plan gratuit.",
+    },
     greeting: {
       morning: "Bonjour, {name}.",
       afternoon: "Bon après-midi, {name}.",
@@ -6257,6 +6279,7 @@ const ar: Dict = {
     bewerbungAutomation: "أتمتة الطلبات",
     deckblatt: "صفحة الغلاف AI",
     settings: "الإعدادات",
+    billing: "الاشتراك",
     soon: "قريبًا",
     collapse: "طي الشريط الجانبي",
     expand: "توسيع الشريط الجانبي",
@@ -6653,6 +6676,12 @@ const ar: Dict = {
   },
   dash: {
     
+    subscription: {
+      title: "الاشتراك",
+      manage: "إدارة",
+      none: "لا يوجد اشتراك — تُطبَّق حدود الخطة المجانية.",
+      lapsed: "الاشتراك لم يعد نشطًا — تُطبَّق حدود الخطة المجانية.",
+    },
     greeting: {
       morning: "صباح الخير، {name}.",
       afternoon: "مساء النور، {name}.",
