@@ -97,10 +97,14 @@ import {
   checkFeature,
   completeFeatureOp,
   effectiveUploadLimitBytes,
-  effectiveUploadLimitMbForUser,
+  evaluateFeatureFor,
+  readMeter,
   releaseFeatureOp,
   reserveFeatureOp,
+  resolveSubscription,
+  uploadLimitMbFor,
 } from "@/lib/billing/entitlement-service";
+import { FEATURE_QUOTA_KIND } from "@/lib/billing/commercial-plans";
 
 /* ------------------------------------------------------------------ *
  * Row types (mirror the migration)
@@ -3178,11 +3182,19 @@ async function buildBewCampaignView(
   let usage: BewCampaignView["usage"] = { remaining: null, daily_limit: null };
   let uploadLimitMb: number | null = null;
   try {
-    const [snap, automation, uploadMb] = await Promise.all([
+    // Quota-consistency reads (P0 audit): the view must show what the send
+    // path ENFORCES — email snapshot MIN automation entitlement — plus the
+    // TRUE enforceable upload cap. ONE shared subscription resolution and
+    // the meter RPC run in the same wave as apps/docs (billing_plans is
+    // the only follow-up read); `evaluateFeatureFor` is the same pure
+    // evaluation the metered engine uses, so display = enforcement.
+    const autoKind = FEATURE_QUOTA_KIND["automation"] as "per_day";
+    const [snap, sub, meter] = await Promise.all([
       getUsageSnapshot(userId),
-      checkFeature(userId, "automation"),
-      effectiveUploadLimitMbForUser(userId),
+      resolveSubscription(userId),
+      readMeter("automation", userId, autoKind),
     ]);
+    const automation = evaluateFeatureFor(sub, "automation", meter);
     usage = {
       remaining: Math.min(snap.remaining, automation.remaining ?? snap.remaining),
       daily_limit: Math.min(
@@ -3190,7 +3202,7 @@ async function buildBewCampaignView(
         automation.limit ?? snap.daily_limit,
       ),
     };
-    uploadLimitMb = uploadMb;
+    uploadLimitMb = uploadLimitMbFor(sub);
   } catch {
     // Quota read is non-fatal for the view — the nulls above carry the
     // honest "unknown" state to the UI (never a fabricated 0).

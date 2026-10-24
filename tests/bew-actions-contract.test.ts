@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { utcToLocalParts } from "@/lib/schedule-time";
+import { utcToLocalParts, wallClockToUtc } from "@/lib/schedule-time";
 
 /**
  * Service-contract + ISOLATION tests for the Bewerbung Automation server
@@ -219,6 +219,24 @@ describe("action → engine argument mapping (service contract)", () => {
     fd.set("scheduleHour", String(wall.hour));
     fd.set("scheduleMinute", String(wall.minute));
     fd.set("scheduleTimezone", "Europe/Berlin");
+    // DST-fold guard: when the chosen instant's Berlin wall-clock time
+    // occurs TWICE (fall-back, e.g. 02:00–02:59 on the last Sunday of
+    // October), the server requires the explicit resolution the form
+    // posts as `dstResolution` — without it the round-trip is
+    // INVALID_SCHEDULE whenever CI runs inside the fold window.
+    const probe = wallClockToUtc(
+      {
+        year: wall.year,
+        month: wall.month,
+        day: wall.day,
+        hour: wall.hour,
+        minute: wall.minute,
+      },
+      "Europe/Berlin",
+      null,
+    );
+    if (probe.ok === false && probe.reason === "ambiguous")
+      fd.set("dstResolution", "start");
     await actions.bewStartSend(fd);
     const call = engineCalls.find((c) => c.fn === "startBewSend")!;
     const opts = call.args[2] as { selectedSeqs: number[]; scheduling?: { utcIso: string; timeZone: string } };
@@ -242,6 +260,20 @@ describe("action → engine argument mapping (service contract)", () => {
     fd.set("scheduleHour", String(wall.hour));
     fd.set("scheduleMinute", String(wall.minute));
     fd.set("scheduleTimezone", "Europe/Berlin");
+    // DST-fold guard — same as the start-send test above.
+    const probe = wallClockToUtc(
+      {
+        year: wall.year,
+        month: wall.month,
+        day: wall.day,
+        hour: wall.hour,
+        minute: wall.minute,
+      },
+      "Europe/Berlin",
+      null,
+    );
+    if (probe.ok === false && probe.reason === "ambiguous")
+      fd.set("dstResolution", "start");
     await actions.bewRescheduleSend(fd);
     const call = engineCalls.find((c) => c.fn === "rescheduleBewSend")!;
     expect(call.args[0]).toBe("user-1");

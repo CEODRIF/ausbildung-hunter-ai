@@ -101,9 +101,13 @@ describe("buildPendingView", () => {
     expect(v.senderEmail).toBeNull();
   });
 
-  it("first series (no previous view): zero usage, empty owner", () => {
+  it("first series (no previous view): unknown usage (honest nulls), empty owner", () => {
     const v = buildPendingView(null, 2, "ausbildung");
-    expect(v.usage).toEqual({ remaining: 0, daily_limit: 0 });
+    // No previous view ⇒ no server-derived usage: the pending state must
+    // carry the HONEST unknown (nulls), never a fabricated 0-of-0
+    // (P0 quota audit — fabricated-zero fix; the QuotaIndicator renders
+    // nulls as "unknown", not as a hard zero limit).
+    expect(v.usage).toEqual({ remaining: null, daily_limit: null });
     expect(v.campaign.user_id).toBe("");
     expect(v.applications).toHaveLength(2);
     expect(v.documents).toEqual([]);

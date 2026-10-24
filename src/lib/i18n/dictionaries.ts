@@ -442,10 +442,10 @@ const de = {
     page: {
       memberSince: "Mitglied seit",
       status: { active: "Aktiv", pending: "Ausstehend", suspended: "Gesperrt" },
+      emailLimitUnknown: "Derzeit unbekannt — bitte erneut versuchen",
       personal: {
         title: "Persönliche Informationen",
         hint: "Ihre grundlegenden Angaben.",
-        emailLimitUnknown: "Derzeit unbekannt — bitte erneut versuchen",
       },
       accounts: {
         title: "Verknüpfte Konten",
@@ -2572,10 +2572,10 @@ const en: Dict = {
     page: {
       memberSince: "Member since",
       status: { active: "Active", pending: "Pending", suspended: "Suspended" },
+      emailLimitUnknown: "Currently unknown — please try again",
       personal: {
         title: "Personal information",
         hint: "Your basic details.",
-        emailLimitUnknown: "Currently unknown — please try again",
       },
       accounts: {
         title: "Connected accounts",
@@ -4661,10 +4661,10 @@ const fr: Dict = {
     page: {
       memberSince: "Membre depuis",
       status: { active: "Actif", pending: "En attente", suspended: "Suspendu" },
+      emailLimitUnknown: "Actuellement inconnu — veuillez réessayer",
       personal: {
         title: "Informations personnelles",
         hint: "Vos informations de base.",
-        emailLimitUnknown: "Actuellement inconnu — veuillez réessayer",
       },
       accounts: {
         title: "Comptes liés",
@@ -6743,10 +6743,10 @@ const ar: Dict = {
     page: {
       memberSince: "عضو منذ",
       status: { active: "نشط", pending: "قيد الانتظار", suspended: "موقوف" },
+      emailLimitUnknown: "غير معروف حاليًا — يرجى المحاولة مرة أخرى",
       personal: {
         title: "المعلومات الشخصية",
         hint: "بياناتك الأساسية.",
-        emailLimitUnknown: "غير معروف حاليًا — يرجى المحاولة مرة أخرى",
       },
       accounts: {
         title: "الحسابات المرتبطة",

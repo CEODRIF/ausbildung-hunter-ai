@@ -455,12 +455,18 @@ describe("F2 getBewCampaignView (engine)", () => {
     seedCampaign(10);
   });
 
-  it("4 RTT / 3 waves (apps+docs parallel; sender skipped — seeded campaign has no email_account_id)", async () => {
+  it("7 RTT / 4 waves (quota reads parallel; sender skipped — seeded campaign has no email_account_id)", async () => {
     const m = await measure("F2 getBewCampaignView", () =>
       engine.getBewCampaignView(USER, "camp-1"),
     );
-    expect(m.rtt).toBe(4); // campaign, apps, docs, usage rpc
-    expect(m.waves).toBe(3); // campaign → (apps ∥ docs) → usage
+    // +3 RTT / +1 wave vs the pre-audit 4/3: the view now shows what the
+    // send path ENFORCES (P0 quota audit) — the usage rpc wave gains
+    // subscriptions ∥ automation meter alongside it, and billing_plans
+    // (the one sequential follow-up of the shared subscription
+    // resolution) starts while the meter is still in flight, so it joins
+    // that same wave.
+    expect(m.rtt).toBe(7); // campaign, apps, docs, usage rpc, subscriptions, automation meter, billing_plans
+    expect(m.waves).toBe(4); // campaign → (apps ∥ docs) → (usage ∥ subscriptions ∥ meter + billing_plans)
   });
 });
 
@@ -474,7 +480,7 @@ describe("F3 '+ New series' — client-visible flow", () => {
     engine.resetBewPositionColumnsProbe();
   });
 
-  it("BEFORE: create action + view action back-to-back = 13 RTT / 11 waves", async () => {
+  it("BEFORE: create action + view action back-to-back = 16 RTT / 12 waves", async () => {
     // The old client: `await bewCreateCampaign(fd)` then
     // `await bewGetView(result.campaignId)` — two server actions, each
     // re-authenticating (2 RTT).
@@ -497,12 +503,14 @@ describe("F3 '+ New series' — client-visible flow", () => {
       await engine.getBewCampaignView(USER, campaign.id);
     });
     // 2 auth + 4 cold create (probe ∥ sender, insert, seed) + 2 auth +
-    // 5 view (the CREATED campaign carries its default sender → sender read)
-    expect(m.rtt).toBe(13);
-    expect(m.waves).toBe(11);
+    // 8 view (the CREATED campaign carries its default sender → sender
+    // read; +3 P0 quota-consistency reads: subscriptions ∥ automation
+    // meter join the usage wave, billing_plans rides that wave)
+    expect(m.rtt).toBe(16);
+    expect(m.waves).toBe(12);
   });
 
-  it("AFTER: one createBewCampaignView action = 9 RTT / 7 waves (and the UI already opened)", async () => {
+  it("AFTER: one createBewCampaignView action = 12 RTT / 8 waves (and the UI already opened)", async () => {
     const m = await measure("F3b new-series AFTER", async () => {
       const { getCurrentUserAndProfile } = await import("@/lib/auth");
       await getCurrentUserAndProfile(); // the single action's auth
@@ -512,12 +520,15 @@ describe("F3 '+ New series' — client-visible flow", () => {
         purpose: "ausbildung",
       });
     });
-    // 2 auth + (probe ∥ sender) + insert + seed + (apps ∥ docs) + usage.
-    // The sender's e-mail is REUSED from the create — no account re-read.
-    expect(m.rtt).toBe(9);
-    expect(m.waves).toBe(7);
-    expect(m.rtt).toBeLessThan(13);
-    expect(m.waves).toBeLessThan(11);
+    // 2 auth + (probe ∥ sender) + insert + seed + (apps ∥ docs) +
+    // (usage ∥ subscriptions ∥ automation meter + billing_plans, P0
+    // quota-consistency reads — the view shows what the send path
+    // enforces; +3 RTT / +1 wave). The sender's e-mail is REUSED from
+    // the create — no account re-read.
+    expect(m.rtt).toBe(12);
+    expect(m.waves).toBe(8);
+    expect(m.rtt).toBeLessThan(16);
+    expect(m.waves).toBeLessThan(12);
   });
 });
 
@@ -568,7 +579,7 @@ describe("F4/F5 per-row Save — client-visible flow", () => {
     expect(m.waves).toBe(9);
   });
 
-  it("BEFORE: update action + refresh (getBewCampaignView) = 17 RTT / 16 waves", async () => {
+  it("BEFORE: update action + refresh (getBewCampaignView) = 20 RTT / 17 waves", async () => {
     // Warm the probe first (steady state) so the composite is comparable
     // with the AFTER number. (app-4 is an empty→content fill: it also pays
     // the F1 capacity pre-check hop — unmeasured, like before.)
@@ -592,10 +603,12 @@ describe("F4/F5 per-row Save — client-visible flow", () => {
     });
     // (auth 2 + warm update 9 — incl. the F1 empty→content capacity
     // pre-check hop AND the 2026-10-24 entitlement subscription resolution:
-    // subscriptions + billing_plans selects) + (auth 2 + view 4 — seeded
-    // campaign has no sender)
-    expect(m.rtt).toBe(17);
-    expect(m.waves).toBe(16);
+    // subscriptions + billing_plans selects) + (auth 2 + view 7 — seeded
+    // campaign has no sender; +3 P0 quota-consistency reads on the view:
+    // subscriptions ∥ automation meter join the usage wave,
+    // billing_plans rides that wave → +1 wave)
+    expect(m.rtt).toBe(20);
+    expect(m.waves).toBe(17);
   });
 
   it("AFTER: update action only (no view refetch; probe ∥ app select) = 12 RTT / 11 waves (cold probe)", async () => {
