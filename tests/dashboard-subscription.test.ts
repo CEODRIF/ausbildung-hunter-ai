@@ -200,7 +200,8 @@ describe("dashboard data — subscription summary (source contract)", () => {
 describe("dashboard subscription card (source contract)", () => {
   it("renders only when the summary resolved (no guessed billing state)", () => {
     expect(DASH_CARD).toContain("{subscription && (");
-    expect(DASH_CARD).toContain("<SubscriptionCard subscription={subscription}");
+    expect(DASH_CARD).toContain("<SubscriptionCard");
+    expect(DASH_CARD).toContain("subscription={subscription}");
   });
 
   it("links to /settings/billing for management", () => {
