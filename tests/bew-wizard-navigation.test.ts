@@ -29,6 +29,7 @@
  * is SSR-rendered (renderToString) exactly as the page's first paint.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { COMMERCIAL_SUB_ROW, COMMERCIAL_PLAN_ROW } from "./helpers";
 
 // The in-memory fake below mimics a DYNAMIC Supabase proxy builder; its
 // surface is intentionally untyped (shape-proof against the real chains).
@@ -44,7 +45,9 @@ type TableKey =
   | "bew_applications"
   | "bew_documents"
   | "bew_campaign_documents"
-  | "email_accounts";
+  | "email_accounts"
+  | "subscriptions"
+  | "billing_plans";
 
 interface DB {
   bew_campaigns: Row[];
@@ -52,6 +55,10 @@ interface DB {
   bew_documents: Row[];
   bew_campaign_documents: Row[];
   email_accounts: Row[];
+  /** Entitlement lookups: USER is a verified active commercial subscriber
+   *  (2026-10-24 fix — fail-closed non-commercial matrix). */
+  subscriptions: Row[];
+  billing_plans: Row[];
   /** Tables whose UPDATE should fail (simulates the 42703 trigger bug). */
   updateFailTables: Set<string>;
 }
@@ -108,6 +115,8 @@ function freshDb(): DB {
         created_at: new Date().toISOString(),
       },
     ],
+    subscriptions: [{ ...COMMERCIAL_SUB_ROW, user_id: USER }],
+    billing_plans: [{ ...COMMERCIAL_PLAN_ROW }],
     updateFailTables: new Set(),
   };
 }
@@ -130,7 +139,8 @@ function makeFrom(db: DB, table: TableKey) {
   function rows(): Row[] {
     let out = (db[table] ?? []).slice();
     for (const f of state.filters) out = out.filter((r) => r[f.col] === f.val);
-    for (const f of state.inFilters) out = out.filter((r) => f.values.includes(r[f.col]));
+    for (const f of state.inFilters)
+      out = out.filter((r) => f.values.includes(r[f.col]));
     if (state.orderBy.length) {
       out.sort((a, b) => {
         for (const o of state.orderBy) {
@@ -147,14 +157,17 @@ function makeFrom(db: DB, table: TableKey) {
 
   async function run(): Promise<any> {
     if (state.op === "insert") {
-      const items = Array.isArray(state.payload) ? state.payload : [state.payload];
+      const items = Array.isArray(state.payload)
+        ? state.payload
+        : [state.payload];
       const inserted = items.map((r) => ({
         ...DEFAULTS[table],
         ...r,
         id: r.id ?? `id-${Math.random()}`,
       }));
       (db[table] ??= []).push(...inserted);
-      if (state.terminal === "single") return { data: inserted[0], error: null };
+      if (state.terminal === "single")
+        return { data: inserted[0], error: null };
       return { data: inserted, error: null };
     }
     if (state.op === "update") {
@@ -170,22 +183,33 @@ function makeFrom(db: DB, table: TableKey) {
       }
       const matched = rows();
       for (const m of matched) Object.assign(m, state.payload);
-      if (state.terminal === "single") return { data: matched[0] ?? null, error: null };
-      if (state.terminal === "maybeSingle") return { data: matched[0] ?? null, error: null };
-      if (state.selectOpts) return { data: null, error: null, count: matched.length };
+      if (state.terminal === "single")
+        return { data: matched[0] ?? null, error: null };
+      if (state.terminal === "maybeSingle")
+        return { data: matched[0] ?? null, error: null };
+      if (state.selectOpts)
+        return { data: null, error: null, count: matched.length };
       return { data: matched, error: null };
     }
     if (state.op === "delete") {
       const matched = rows();
-      (db[table] as Row[]) = (db[table] ?? []).filter((r) => !matched.includes(r));
+      (db[table] as Row[]) = (db[table] ?? []).filter(
+        (r) => !matched.includes(r),
+      );
       return { data: null, error: null };
     }
     // select
     const matched = rows();
     if (state.selectOpts?.count)
-      return { data: state.selectOpts.head ? null : matched, error: null, count: matched.length };
-    if (state.terminal === "single") return { data: matched[0] ?? null, error: null };
-    if (state.terminal === "maybeSingle") return { data: matched[0] ?? null, error: null };
+      return {
+        data: state.selectOpts.head ? null : matched,
+        error: null,
+        count: matched.length,
+      };
+    if (state.terminal === "single")
+      return { data: matched[0] ?? null, error: null };
+    if (state.terminal === "maybeSingle")
+      return { data: matched[0] ?? null, error: null };
     return { data: matched, error: null };
   }
 
@@ -249,7 +273,17 @@ vi.mock("@/lib/supabase/admin", () => ({
     // "unmetered" keeps the gate out of this suite.
     rpc: async (fn: string) =>
       fn === "check_saved_application_capacity"
-        ? { data: [{ status: "unmetered", plan_limit: null, used: 0, remaining: null }], error: null }
+        ? {
+            data: [
+              {
+                status: "unmetered",
+                plan_limit: null,
+                used: 0,
+                remaining: null,
+              },
+            ],
+            error: null,
+          }
         : { data: null, error: null },
     storage: { from: () => ({ upload: async () => ({ error: null }) }) },
   }),
@@ -265,11 +299,17 @@ vi.mock("@/lib/email-campaigns", () => ({
   reserveSenderSlot: async () => true,
 }));
 vi.mock("@/lib/email-providers", () => ({
-  createEmailProvider: async () => ({ sendEmail: async () => ({ providerMessageId: "m" }) }),
+  createEmailProvider: async () => ({
+    sendEmail: async () => ({ providerMessageId: "m" }),
+  }),
 }));
 vi.mock("@/lib/application-drafts", () => ({
   sanitizeEmailHtml: (h: string) => h,
-  htmlToText: (h: string) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+  htmlToText: (h: string) =>
+    h
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
 }));
 vi.mock("@/lib/ai-provider", () => ({
   createAIProvider: () => ({ generateText: async () => "Text." }),
@@ -279,7 +319,9 @@ vi.mock("@/lib/ai-service", () => ({
   storagePath: (userId: string, filename: string) => `${userId}/${filename}`,
 }));
 vi.mock("@/lib/pdf-extract", () => ({ extractPdfText: async () => "" }));
-vi.mock("mammoth", () => ({ default: { extractRawText: async () => ({ value: "docx" }) } }));
+vi.mock("mammoth", () => ({
+  default: { extractRawText: async () => ({ value: "docx" }) },
+}));
 
 const {
   createBewCampaign,
@@ -327,7 +369,11 @@ describe("engine: importing valid companies commits the step-1 gate state", () =
   });
 
   it("saveBewCompanies persists rows AND the valid_count the wizard gates on", async () => {
-    const campaignRow = await createBewCampaign({ userId: USER, count: 10, purpose: "ausbildung" });
+    const campaignRow = await createBewCampaign({
+      userId: USER,
+      count: 10,
+      purpose: "ausbildung",
+    });
     await saveBewCompanies(USER, campaignRow.id, validRecords(10));
 
     // The rows landed (this is what the user saw as "10 entries, all Open").
@@ -349,16 +395,24 @@ describe("engine: importing valid companies commits the step-1 gate state", () =
   });
 
   it("a failed campaign counter update FAILS THE SAVE (no silent success)", async () => {
-    const campaignRow = await createBewCampaign({ userId: USER, count: 10, purpose: "ausbildung" });
+    const campaignRow = await createBewCampaign({
+      userId: USER,
+      count: 10,
+      purpose: "ausbildung",
+    });
     // Simulate the 42703 trigger failure on the real database.
     db.updateFailTables.add("bew_campaigns");
-    await expect(saveBewCompanies(USER, campaignRow.id, validRecords(10))).rejects.toThrow(
-      "SAVE_FAILED",
-    );
+    await expect(
+      saveBewCompanies(USER, campaignRow.id, validRecords(10)),
+    ).rejects.toThrow("SAVE_FAILED");
   });
 
   it("editing a row while all rows are pending does NOT zero valid_count (drift regression)", async () => {
-    const campaignRow = await createBewCampaign({ userId: USER, count: 10, purpose: "ausbildung" });
+    const campaignRow = await createBewCampaign({
+      userId: USER,
+      count: 10,
+      purpose: "ausbildung",
+    });
     await saveBewCompanies(USER, campaignRow.id, validRecords(10));
     const third = apps()[2];
 
@@ -377,7 +431,11 @@ describe("engine: importing valid companies commits the step-1 gate state", () =
   });
 
   it("a genuinely broken row lowers valid_count — and excluded rows never count", async () => {
-    const campaignRow = await createBewCampaign({ userId: USER, count: 10, purpose: "ausbildung" });
+    const campaignRow = await createBewCampaign({
+      userId: USER,
+      count: 10,
+      purpose: "ausbildung",
+    });
     await saveBewCompanies(USER, campaignRow.id, validRecords(10));
     const [first, third] = apps();
 
@@ -424,16 +482,16 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("next/link", async () => {
   const React = await import("react");
-  return { default: (props: any) => React.createElement("a", props, props.children) };
+  return {
+    default: (props: any) => React.createElement("a", props, props.children),
+  };
 });
 
 const React = await import("react");
 const { renderToString } = await import("react-dom/server");
 const { I18nProvider } = await import("@/lib/i18n");
-const {
-  BewerbungAutomation,
-  isCompanyRowComplete,
-} = await import("@/components/bewerbung-automation/client");
+const { BewerbungAutomation, isCompanyRowComplete } =
+  await import("@/components/bewerbung-automation/client");
 
 function appRow(
   seq: number,
@@ -512,20 +570,40 @@ function buttonWith(html: string, label: string): string | null {
 describe("client: the Companies step exposes a visible, explained way forward", () => {
   it("isCompanyRowComplete follows the row rule (name + valid e-mail, active rows only)", () => {
     expect(
-      isCompanyRowComplete({ status: "pending", company_name: "ACME", company_email: "hr@acme.de" }),
+      isCompanyRowComplete({
+        status: "pending",
+        company_name: "ACME",
+        company_email: "hr@acme.de",
+      }),
     ).toBe(true);
     expect(
-      isCompanyRowComplete({ status: "pending", company_name: "", company_email: "hr@acme.de" }),
+      isCompanyRowComplete({
+        status: "pending",
+        company_name: "",
+        company_email: "hr@acme.de",
+      }),
     ).toBe(false);
     expect(
-      isCompanyRowComplete({ status: "pending", company_name: "ACME", company_email: "bad" }),
+      isCompanyRowComplete({
+        status: "pending",
+        company_name: "ACME",
+        company_email: "bad",
+      }),
     ).toBe(false);
     // Excluded / cancelled rows never count, even when complete.
     expect(
-      isCompanyRowComplete({ status: "excluded", company_name: "ACME", company_email: "hr@acme.de" }),
+      isCompanyRowComplete({
+        status: "excluded",
+        company_name: "ACME",
+        company_email: "hr@acme.de",
+      }),
     ).toBe(false);
     expect(
-      isCompanyRowComplete({ status: "cancelled", company_name: "ACME", company_email: "hr@acme.de" }),
+      isCompanyRowComplete({
+        status: "cancelled",
+        company_name: "ACME",
+        company_email: "hr@acme.de",
+      }),
     ).toBe(false);
   });
 
@@ -540,7 +618,10 @@ describe("client: the Companies step exposes a visible, explained way forward", 
 
     const button = buttonWith(html, "Zu den Dokumenten"); // default (de) first paint
     expect(button, "the continue button must be rendered").not.toBeNull();
-    expect(button!.includes("disabled="), "must not be disabled after a valid import").toBe(false);
+    expect(
+      button!.includes("disabled="),
+      "must not be disabled after a valid import",
+    ).toBe(false);
     // No blocked-reason line while the step is ready.
     expect(html.includes('id="bew-continue-blocked"')).toBe(false);
   });
@@ -566,13 +647,19 @@ describe("client: the Companies step exposes a visible, explained way forward", 
 
   it("while a send is in progress the button is disabled with the lock reason", () => {
     const appsList = validRecords(5).map((r, i) =>
-      appRow(i + 1, { name: r.companyName, email: r.companyEmail, status: "sent" }),
+      appRow(i + 1, {
+        name: r.companyName,
+        email: r.companyEmail,
+        status: "sent",
+      }),
     );
     const html = renderWizard(appsList, { validCount: 5, status: "sending" });
 
     const button = buttonWith(html, "Zu den Dokumenten");
     expect(button).not.toBeNull();
     expect(button!.includes("disabled=")).toBe(true);
-    expect(html.includes("Der Versand läuft — die Einträge sind gesperrt.")).toBe(true);
+    expect(
+      html.includes("Der Versand läuft — die Einträge sind gesperrt."),
+    ).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createAdminMock, baseParams, jsonResponse } =
+const { createAdminMock, baseParams, jsonResponse, commercialMaybeSingleData } =
   await import("../helpers");
 
 vi.mock("@/lib/supabase/admin", () => ({
@@ -30,7 +30,11 @@ function authed(userId: string) {
 }
 
 beforeEach(() => {
-  adminMock = createAdminMock();
+  // Real entitlement service → verified active commercial subscriber, so
+  // opportunity_search (plan-metered) is allowed and the tests can focus on
+  // search-UX validation. Denial behavior is covered by
+  // tests/subscription-entitlement-boundary.test.ts.
+  adminMock = createAdminMock({ maybeSingleData: commercialMaybeSingleData });
   vi.mocked(createAdminClient).mockReturnValue(adminMock.admin as never);
 });
 
@@ -258,7 +262,10 @@ describe("shareable URL state", () => {
     expect(state.contact_email).toBe("available");
     const again = parseSearchUrlState(serializeSearchState(state), "arbeit");
     expect(again).toEqual(state);
-    const nowState = parseSearchUrlState("goal=arbeit&beginn=now", "ausbildung");
+    const nowState = parseSearchUrlState(
+      "goal=arbeit&beginn=now",
+      "ausbildung",
+    );
     expect(nowState.beginn).toBe("now");
   });
 

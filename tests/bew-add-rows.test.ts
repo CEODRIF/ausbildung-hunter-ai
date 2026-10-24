@@ -19,6 +19,7 @@
  *      while the engine/action contract above (A/B) is unchanged.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { COMMERCIAL_SUB_ROW, COMMERCIAL_PLAN_ROW } from "./helpers";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -28,7 +29,9 @@ type TableKey =
   | "bew_applications"
   | "bew_documents"
   | "bew_campaign_documents"
-  | "email_accounts";
+  | "email_accounts"
+  | "subscriptions"
+  | "billing_plans";
 
 interface DB {
   bew_campaigns: Row[];
@@ -36,6 +39,10 @@ interface DB {
   bew_documents: Row[];
   bew_campaign_documents: Row[];
   email_accounts: Row[];
+  /** Entitlement lookups: USER is a verified active commercial subscriber
+   *  (2026-10-24 fix — fail-closed non-commercial matrix). */
+  subscriptions: Row[];
+  billing_plans: Row[];
   /** Tables whose INSERT should fail (simulates a broken DB write). */
   insertFailTables: Set<string>;
   /** Tables whose UPDATE should fail. */
@@ -126,6 +133,8 @@ function freshDb(rowCount = 10): DB {
         requires_reconnect: false,
       },
     ],
+    subscriptions: [{ ...COMMERCIAL_SUB_ROW, user_id: USER }],
+    billing_plans: [{ ...COMMERCIAL_PLAN_ROW }],
     insertFailTables: new Set<string>(),
     updateFailTables: new Set<string>(),
   };
@@ -181,8 +190,10 @@ function makeFrom(table: TableKey) {
       return { data: null, error: null };
     }
     const matched = rows();
-    if (state.terminal === "single") return { data: matched[0] ?? null, error: null };
-    if (state.terminal === "maybeSingle") return { data: matched[0] ?? null, error: null };
+    if (state.terminal === "single")
+      return { data: matched[0] ?? null, error: null };
+    if (state.terminal === "maybeSingle")
+      return { data: matched[0] ?? null, error: null };
     return { data: matched, error: null };
   }
 
@@ -235,7 +246,17 @@ vi.mock("@/lib/supabase/admin", () => ({
     // empty→content fills — "unmetered" keeps the gate out of this suite.
     rpc: async (fn: string) =>
       fn === "check_saved_application_capacity"
-        ? { data: [{ status: "unmetered", plan_limit: null, used: 0, remaining: null }], error: null }
+        ? {
+            data: [
+              {
+                status: "unmetered",
+                plan_limit: null,
+                used: 0,
+                remaining: null,
+              },
+            ],
+            error: null,
+          }
         : { data: null, error: null },
     storage: { from: () => ({ upload: async () => ({ error: null }) }) },
   }),
@@ -251,11 +272,17 @@ vi.mock("@/lib/email-campaigns", () => ({
   reserveSenderSlot: async () => true,
 }));
 vi.mock("@/lib/email-providers", () => ({
-  createEmailProvider: async () => ({ sendEmail: async () => ({ providerMessageId: "m" }) }),
+  createEmailProvider: async () => ({
+    sendEmail: async () => ({ providerMessageId: "m" }),
+  }),
 }));
 vi.mock("@/lib/application-drafts", () => ({
   sanitizeEmailHtml: (h: string) => h,
-  htmlToText: (h: string) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+  htmlToText: (h: string) =>
+    h
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
 }));
 vi.mock("@/lib/ai-provider", () => ({
   createAIProvider: () => ({ generateText: async () => "Text." }),
@@ -265,13 +292,12 @@ vi.mock("@/lib/ai-service", () => ({
   storagePath: (userId: string, filename: string) => `${userId}/${filename}`,
 }));
 vi.mock("@/lib/pdf-extract", () => ({ extractPdfText: async () => "" }));
-vi.mock("mammoth", () => ({ default: { extractRawText: async () => ({ value: "docx" }) } }));
+vi.mock("mammoth", () => ({
+  default: { extractRawText: async () => ({ value: "docx" }) },
+}));
 
-const {
-  addBewCompanyRows,
-  getBewCampaignView,
-  updateBewApplicationFields,
-} = await import("@/lib/bewerbung-engine");
+const { addBewCompanyRows, getBewCampaignView, updateBewApplicationFields } =
+  await import("@/lib/bewerbung-engine");
 
 function campaignRow(): Row {
   const row = db.bew_campaigns.find((c) => c.id === "camp-1");
@@ -325,7 +351,9 @@ describe("A. engine addBewCompanyRows", () => {
 
   it("rejects a full (100-row) campaign with CAMPAIGN_FULL and adds nothing", async () => {
     db = freshDb(100);
-    await expect(addBewCompanyRows(USER, "camp-1", 10)).rejects.toThrow("CAMPAIGN_FULL");
+    await expect(addBewCompanyRows(USER, "camp-1", 10)).rejects.toThrow(
+      "CAMPAIGN_FULL",
+    );
     expect(db.bew_applications).toHaveLength(100);
   });
 
@@ -336,7 +364,9 @@ describe("A. engine addBewCompanyRows", () => {
     [1.5, "a fraction"],
     [NaN, "NaN"],
   ])("rejects an invalid batch %s with INVALID_COUNT", async (n) => {
-    await expect(addBewCompanyRows(USER, "camp-1", n as number)).rejects.toThrow("INVALID_COUNT");
+    await expect(
+      addBewCompanyRows(USER, "camp-1", n as number),
+    ).rejects.toThrow("INVALID_COUNT");
     expect(db.bew_applications).toHaveLength(10);
   });
 
@@ -344,26 +374,36 @@ describe("A. engine addBewCompanyRows", () => {
     "rejects a terminal campaign (%s) with CAMPAIGN_CLOSED",
     async (status) => {
       campaignRow().status = status;
-      await expect(addBewCompanyRows(USER, "camp-1", 5)).rejects.toThrow("CAMPAIGN_CLOSED");
+      await expect(addBewCompanyRows(USER, "camp-1", 5)).rejects.toThrow(
+        "CAMPAIGN_CLOSED",
+      );
       expect(db.bew_applications).toHaveLength(10);
     },
   );
 
   it("rejects a campaign with a send in flight with APPLICATION_LOCKED", async () => {
     campaignRow().status = "sending";
-    await expect(addBewCompanyRows(USER, "camp-1", 5)).rejects.toThrow("APPLICATION_LOCKED");
+    await expect(addBewCompanyRows(USER, "camp-1", 5)).rejects.toThrow(
+      "APPLICATION_LOCKED",
+    );
     expect(db.bew_applications).toHaveLength(10);
   });
 
   it("enforces ownership (foreign and unknown campaign ids)", async () => {
-    await expect(addBewCompanyRows(USER, "camp-other", 5)).rejects.toThrow("NOT_FOUND");
-    await expect(addBewCompanyRows(USER, "nope", 5)).rejects.toThrow("NOT_FOUND");
+    await expect(addBewCompanyRows(USER, "camp-other", 5)).rejects.toThrow(
+      "NOT_FOUND",
+    );
+    await expect(addBewCompanyRows(USER, "nope", 5)).rejects.toThrow(
+      "NOT_FOUND",
+    );
     expect(db.bew_applications).toHaveLength(10);
   });
 
   it("surfaces a failed insert as SAVE_FAILED (atomic — nothing written)", async () => {
     db.insertFailTables.add("bew_applications");
-    await expect(addBewCompanyRows(USER, "camp-1", 5)).rejects.toThrow("SAVE_FAILED");
+    await expect(addBewCompanyRows(USER, "camp-1", 5)).rejects.toThrow(
+      "SAVE_FAILED",
+    );
     expect(db.bew_applications).toHaveLength(10);
     expect(campaignRow().total_count).toBe(10); // counters untouched
   });
@@ -403,7 +443,10 @@ describe("A. engine addBewCompanyRows", () => {
  * B. Server action — auth + FormData → engine 1:1
  * ------------------------------------------------------------------ */
 
-const authState = { user: null as null | { id: string }, profile: null as null | Record<string, any> };
+const authState = {
+  user: null as null | { id: string },
+  profile: null as null | Record<string, any>,
+};
 vi.mock("next/navigation", () => ({
   redirect: () => {
     throw new Error("NEXT_REDIRECT");
@@ -436,10 +479,15 @@ vi.doMock("@/lib/bewerbung-engine", () => {
   return {
     BEW_MAX_BATCH: 5,
     attachBewDocument: stub("attachBewDocument"),
-    addBewCompanyRows: vi.fn(async (userId: string, campaignId: string, count: number) => {
-      engineMockCalls.push({ fn: "addBewCompanyRows", args: [userId, campaignId, count] });
-      return { added: count, total: 10 + count };
-    }),
+    addBewCompanyRows: vi.fn(
+      async (userId: string, campaignId: string, count: number) => {
+        engineMockCalls.push({
+          fn: "addBewCompanyRows",
+          args: [userId, campaignId, count],
+        });
+        return { added: count, total: 10 + count };
+      },
+    ),
     cancelBewSend: stub("cancelBewSend"),
     createBewCampaign: stub("createBewCampaign"),
     createBewCampaignView: stub("createBewCampaignView"),
@@ -461,7 +509,8 @@ vi.doMock("@/lib/bewerbung-engine", () => {
   };
 });
 
-const { bewAddCompanyRows } = await import("@/app/bewerbung-automation/actions");
+const { bewAddCompanyRows } =
+  await import("@/app/bewerbung-automation/actions");
 
 describe("B. action bewAddCompanyRows", () => {
   beforeEach(() => {
@@ -485,7 +534,9 @@ describe("B. action bewAddCompanyRows", () => {
     fd.set("campaignId", "camp-1");
     fd.set("count", "40");
     const res = await bewAddCompanyRows(fd);
-    expect(engineMockCalls).toEqual([{ fn: "addBewCompanyRows", args: [USER, "camp-1", 40] }]);
+    expect(engineMockCalls).toEqual([
+      { fn: "addBewCompanyRows", args: [USER, "camp-1", 40] },
+    ]);
     expect(res).toEqual({ campaignId: "camp-1", added: 40, total: 50 });
   });
 
@@ -511,23 +562,34 @@ vi.doMock("@/app/bewerbung-automation/actions", () => ({
   bewCreateCampaignView: vi.fn(async () => null),
   bewGetView: vi.fn(async () => null),
   bewRefreshSend: vi.fn(async () => null),
-  bewSetCompanyCount: vi.fn(async () => ({ campaignId: "c1", requestedCount: 50 })),
-  bewAddCompanyRows: vi.fn(async () => ({ campaignId: "c1", added: 10, total: 100 })),
+  bewSetCompanyCount: vi.fn(async () => ({
+    campaignId: "c1",
+    requestedCount: 50,
+  })),
+  bewAddCompanyRows: vi.fn(async () => ({
+    campaignId: "c1",
+    added: 10,
+    total: 100,
+  })),
 }));
 vi.doMock("next/link", async () => {
   const React = await import("react");
-  return { default: (props: any) => React.createElement("a", props, props.children) };
+  return {
+    default: (props: any) => React.createElement("a", props, props.children),
+  };
 });
 vi.resetModules();
 
 const React = await import("react");
 const { renderToString } = await import("react-dom/server");
 const { I18nProvider } = await import("@/lib/i18n");
-const { BewerbungAutomation } = await import(
-  "@/components/bewerbung-automation/client"
-);
+const { BewerbungAutomation } =
+  await import("@/components/bewerbung-automation/client");
 
-function renderWizard(rows: number, campaign: { status?: string; requested?: number } = {}): string {
+function renderWizard(
+  rows: number,
+  campaign: { status?: string; requested?: number } = {},
+): string {
   const view: any = {
     campaign: {
       id: "c1",

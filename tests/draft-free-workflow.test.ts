@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Opportunity } from "@/lib/opportunities/types";
+import { COMMERCIAL_SUB_ROW, COMMERCIAL_PLAN_ROW } from "./helpers";
 
 /**
  * Draft-free application workflow (Drafts feature removal).
@@ -49,7 +50,11 @@ const H = vi.hoisted(() => ({
   providerAttachments: [] as Row[][],
   uploadCalls: [] as Array<{ path: string; file: File }>,
   removedPaths: [] as string[],
-  sendError: null as null | { code: string; message: string; temporary: boolean },
+  sendError: null as null | {
+    code: string;
+    message: string;
+    temporary: boolean;
+  },
   insertFailTable: null as string | null,
 }));
 
@@ -87,106 +92,111 @@ vi.mock("@/lib/supabase/admin", () => {
         if (matched.includes(list[i])) list.splice(i, 1);
       return { data: matched, error: null };
     };
-    const chain: Record<string | symbol, unknown> = new Proxy({}, {
-      get(_target, prop) {
-        if (typeof prop !== "string") return undefined;
-        switch (prop) {
-          case "select":
-            return (
-              columns: string,
-              opts?: { count?: string; head?: boolean },
-            ) => {
-              selectColumns = String(columns ?? "");
-              countMode = Boolean(opts?.count);
-              return chain;
-            };
-          case "eq":
-            return (column: string, value: unknown) => {
-              filters.push((row) => row[column] === value);
-              return chain;
-            };
-          case "in":
-            return (column: string, values: unknown[]) => {
-              filters.push((row) => values.includes(row[column]));
-              return chain;
-            };
-          case "lt":
-            return (column: string, value: unknown) => {
-              filters.push((row) => String(row[column] ?? "") < String(value));
-              return chain;
-            };
-          case "order":
-          case "limit":
-            return () => chain;
-          case "single":
-            return async () => {
-              const err = schemaError();
-              if (err) return { data: null, error: err };
-              const matched = all();
-              return matched[0]
-                ? { data: matched[0], error: null }
-                : { data: null, error: { message: "PGRST116: no rows" } };
-            };
-          case "maybeSingle":
-            return async () => {
-              const err = schemaError();
-              if (err) return { data: null, error: err };
-              return { data: all()[0] ?? null, error: null };
-            };
-          case "insert":
-            return (payload: Row | Row[]) => {
-              const fail = H.insertFailTable === table;
-              const rows = (
-                Array.isArray(payload) ? payload : [payload]
-              )
-                .filter(() => !fail)
-                .map((row) =>
-                  row.id ? row : { ...row, id: `gen-${table}-${++insertSeq}` },
+    const chain: Record<string | symbol, unknown> = new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          if (typeof prop !== "string") return undefined;
+          switch (prop) {
+            case "select":
+              return (
+                columns: string,
+                opts?: { count?: string; head?: boolean },
+              ) => {
+                selectColumns = String(columns ?? "");
+                countMode = Boolean(opts?.count);
+                return chain;
+              };
+            case "eq":
+              return (column: string, value: unknown) => {
+                filters.push((row) => row[column] === value);
+                return chain;
+              };
+            case "in":
+              return (column: string, values: unknown[]) => {
+                filters.push((row) => values.includes(row[column]));
+                return chain;
+              };
+            case "lt":
+              return (column: string, value: unknown) => {
+                filters.push(
+                  (row) => String(row[column] ?? "") < String(value),
                 );
-              if (!fail) (H.store[table] ??= []).push(...rows);
-              const result: Record<string | symbol, unknown> = {
-                select: () => ({
-                  single: async () =>
+                return chain;
+              };
+            case "order":
+            case "limit":
+              return () => chain;
+            case "single":
+              return async () => {
+                const err = schemaError();
+                if (err) return { data: null, error: err };
+                const matched = all();
+                return matched[0]
+                  ? { data: matched[0], error: null }
+                  : { data: null, error: { message: "PGRST116: no rows" } };
+              };
+            case "maybeSingle":
+              return async () => {
+                const err = schemaError();
+                if (err) return { data: null, error: err };
+                return { data: all()[0] ?? null, error: null };
+              };
+            case "insert":
+              return (payload: Row | Row[]) => {
+                const fail = H.insertFailTable === table;
+                const rows = (Array.isArray(payload) ? payload : [payload])
+                  .filter(() => !fail)
+                  .map((row) =>
+                    row.id
+                      ? row
+                      : { ...row, id: `gen-${table}-${++insertSeq}` },
+                  );
+                if (!fail) (H.store[table] ??= []).push(...rows);
+                const result: Record<string | symbol, unknown> = {
+                  select: () => ({
+                    single: async () =>
+                      fail
+                        ? { data: null, error: { message: "insert failed" } }
+                        : { data: rows[0] ?? null, error: null },
+                  }),
+                };
+                result.then = (onFulfilled?: unknown, onRejected?: unknown) =>
+                  Promise.resolve(
                     fail
                       ? { data: null, error: { message: "insert failed" } }
-                      : { data: rows[0] ?? null, error: null },
-                }),
+                      : { data: rows, error: null },
+                  ).then(onFulfilled as never, onRejected as never);
+                return result;
               };
-              result.then = (onFulfilled?: unknown, onRejected?: unknown) =>
-                Promise.resolve(
-                  fail
-                    ? { data: null, error: { message: "insert failed" } }
-                    : { data: rows, error: null },
-                ).then(onFulfilled as never, onRejected as never);
-              return result;
-            };
-          case "delete":
-            return () => {
-              deleteMode = true;
-              return chain;
-            };
-          case "then":
-            return (onFulfilled?: unknown, onRejected?: unknown) => {
-              const result = deleteMode
-                ? runDelete()
-                : countMode
-                  ? { data: null, count: all().length, error: null }
-                  : (() => {
-                      const err = schemaError();
-                      return err
-                        ? { data: null, error: err }
-                        : { data: all(), error: null };
-                    })();
-              return Promise.resolve(result).then(
-                onFulfilled as never,
-                onRejected as never,
-              );
-            };
-          default:
-            return undefined;
-        }
+            case "delete":
+              return () => {
+                deleteMode = true;
+                return chain;
+              };
+            case "then":
+              return (onFulfilled?: unknown, onRejected?: unknown) => {
+                const result = deleteMode
+                  ? runDelete()
+                  : countMode
+                    ? { data: null, count: all().length, error: null }
+                    : (() => {
+                        const err = schemaError();
+                        return err
+                          ? { data: null, error: err }
+                          : { data: all(), error: null };
+                      })();
+                return Promise.resolve(result).then(
+                  onFulfilled as never,
+                  onRejected as never,
+                );
+              };
+            default:
+              return undefined;
+          }
+        },
       },
-    });
+    );
     return chain;
   }
   const rpcImpl = async (
@@ -202,7 +212,8 @@ vi.mock("@/lib/supabase/admin", () => {
       case "claim_next_email_message": {
         const campaign = (H.store["email_campaigns"] ?? []).find(
           (c) =>
-            c.id === args.target_campaign_id && c.user_id === args.target_user_id,
+            c.id === args.target_campaign_id &&
+            c.user_id === args.target_user_id,
         );
         if (
           !campaign ||
@@ -228,8 +239,7 @@ vi.mock("@/lib/supabase/admin", () => {
         const m = (H.store["email_messages"] ?? []).find(
           (x) => x.id === args.target_message_id,
         );
-        if (!m || m.status !== "sending")
-          return { data: false, error: null };
+        if (!m || m.status !== "sending") return { data: false, error: null };
         if (args.succeeded) {
           m.status = "sent";
           m.provider_message_id = args.provider_id;
@@ -269,8 +279,7 @@ vi.mock("@/lib/supabase/admin", () => {
         const m = (H.store["email_messages"] ?? []).find(
           (x) => x.id === args.target_message_id,
         );
-        if (!m || m.status !== "sending")
-          return { data: false, error: null };
+        if (!m || m.status !== "sending") return { data: false, error: null };
         m.status = "queued";
         // The real RPC backs off 60 s — a re-queued message is NOT
         // claimable again in the same batch.
@@ -283,6 +292,29 @@ vi.mock("@/lib/supabase/admin", () => {
       case "reserve_email_capacity_on":
       case "get_daily_usage_snapshot":
         return { data: USAGE, error: null };
+      // Entitlement-service RPCs (2026-10-24 fix: the campaign path runs the
+      // REAL service — the seeded subscription is a verified commercial
+      // subscriber, see resetWorld).
+      case "check_saved_application_capacity":
+        return {
+          data: [{ status: "ok", plan_limit: 500, used: 0, remaining: 500 }],
+          error: null,
+        };
+      case "feature_quota_status":
+      case "feature_capacity_status":
+        return { data: { used: 0, resets_at: null }, error: null };
+      case "reserve_feature_op":
+        return {
+          data: [{ status: "reserved", used: 1, remaining: 119 }],
+          error: null,
+        };
+      case "complete_feature_op":
+        return { data: [{ status: "no_op" }], error: null };
+      case "release_feature_op":
+        return { data: [{ status: "released" }], error: null };
+      case "reserve_ai_request":
+      case "release_ai_request":
+        return { data: null, error: null };
       default:
         return { data: null, error: null };
     }
@@ -348,9 +380,8 @@ vi.mock("@/lib/auth", () => ({
 // path helpers (the feature relies on them); only the ownership guards are
 // stubbed.
 vi.mock("@/lib/application-drafts", async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import("@/lib/application-drafts")
-  >();
+  const actual =
+    await importOriginal<typeof import("@/lib/application-drafts")>();
   return {
     ...actual,
     assertDraftOwnership: async (_userId: string, draftId: string) => ({
@@ -377,12 +408,17 @@ const {
 } = await import("@/lib/contact-name-support");
 const { resolveOpportunityPrefill } = await import("@/lib/opportunity-prefill");
 const { resolveOpportunityCached } = await import("@/lib/opportunities/search");
-const { stageAttachment, discardStagedAttachment } = await import(
-  "@/app/applications/new/actions"
-);
+const { stageAttachment, discardStagedAttachment } =
+  await import("@/app/applications/new/actions");
 
 function resetWorld() {
-  H.store = {};
+  // Verified active commercial subscriber for the USER (the campaign path
+  // runs the REAL entitlement service; without these rows every write would
+  // be (correctly) denied by the fail-closed non-commercial matrix).
+  H.store = {
+    subscriptions: [{ ...COMMERCIAL_SUB_ROW, user_id: USER.id }],
+    billing_plans: [{ ...COMMERCIAL_PLAN_ROW }],
+  };
   H.migrated = true;
   H.rpcLog = [];
   H.fromCalls = [];
@@ -437,7 +473,11 @@ describe("createCampaign (owned path, post-migration)", () => {
       "<p>{{greeting}}</p><p>Ich möchte gerne bei {{company_name}} arbeiten.</p>",
     recipients: [
       { email: "bewerbung@carrier.de", companyName: null },
-      { email: "info@bosch.de", companyName: null, contactName: "Herr Mustermann" },
+      {
+        email: "info@bosch.de",
+        companyName: null,
+        contactName: "Herr Mustermann",
+      },
       { email: "not-an-email" },
     ],
     attachments: [
@@ -479,16 +519,19 @@ describe("createCampaign (owned path, post-migration)", () => {
 
     const messages = H.store["email_messages"];
     expect(messages).toHaveLength(2);
-    expect(
-      messages.map((m) => m.recipient_email).sort(),
-    ).toEqual(["bewerbung@carrier.de", "info@bosch.de"]);
+    expect(messages.map((m) => m.recipient_email).sort()).toEqual([
+      "bewerbung@carrier.de",
+      "info@bosch.de",
+    ]);
     const bosch = messages.find((m) => m.recipient_email === "info@bosch.de");
     const carrier = messages.find(
       (m) => m.recipient_email === "bewerbung@carrier.de",
     );
     // Each message carries the subject template + its OWN personalization
     // data (the worker's only data source).
-    expect(messages.every((m) => m.subject === "Bewerbung bei {{company_name}}")).toBe(true);
+    expect(
+      messages.every((m) => m.subject === "Bewerbung bei {{company_name}}"),
+    ).toBe(true);
     expect(bosch?.contact_name).toBe("Herr Mustermann");
     expect(carrier?.contact_name).toBeNull();
 
@@ -636,12 +679,16 @@ describe("processCampaignBatch (owned content)", () => {
     expect(String(carrier.html)).toContain("Sehr geehrte Damen und Herren,");
     expect(String(bosch.html)).toContain("Sehr geehrter Herr Mustermann,");
     // No cross-recipient leakage, no unresolved token reaches the provider.
-    expect(`${carrier.subject} ${carrier.html} ${carrier.text}`).not.toContain("Bosch");
-    expect(`${bosch.subject} ${bosch.html} ${bosch.text}`).not.toContain("Carrier");
+    expect(`${carrier.subject} ${carrier.html} ${carrier.text}`).not.toContain(
+      "Bosch",
+    );
+    expect(`${bosch.subject} ${bosch.html} ${bosch.text}`).not.toContain(
+      "Carrier",
+    );
     for (const sent of H.sendEmails)
-      expect(
-        `${sent.subject} ${sent.html} ${sent.text}`,
-      ).not.toMatch(/\{\{\s*(company_name|contact_name|greeting)\s*\}\}/);
+      expect(`${sent.subject} ${sent.html} ${sent.text}`).not.toMatch(
+        /\{\{\s*(company_name|contact_name|greeting)\s*\}\}/,
+      );
 
     // The campaign's OWNED attachment reaches the provider factory.
     expect(H.providerAttachments[0]).toEqual([
@@ -833,10 +880,7 @@ describe("listUserCampaigns (owned world)", () => {
 
     const items = await listUserCampaigns(USER.id);
 
-    expect(items.map((item) => item.id)).toEqual([
-      "campaign-B",
-      "campaign-A",
-    ]);
+    expect(items.map((item) => item.id)).toEqual(["campaign-B", "campaign-A"]);
     expect(items.every((item) => item.kind === "campaign")).toBe(true);
 
     const a = items.find((item) => item.id === "campaign-A");
@@ -879,12 +923,14 @@ describe("staged attachments (draft-free composer)", () => {
     expect(meta.mime_type).toBe("application/pdf");
     expect(meta.size_bytes).toBe(3);
     // The composer still creates NO record of any kind. The only database
-    // access is the READ-ONLY plan-cap lookup (subscriptions) that the
-    // billing meter added to the upload path — it writes nothing (see the
-    // H.store assertion below) and degrades to the 10 MB ceiling when the
-    // lookup fails.
-    expect(H.fromCalls).toEqual(["subscriptions"]);
-    expect(Object.keys(H.store)).toEqual([]);
+    // access is the READ-ONLY plan-cap lookup (subscriptions + the
+    // billing_plans matrix after the 2026-10-24 entitlement fix) that the
+    // billing meter added to the upload path — it writes nothing (the two
+    // seeded lookup rows are the ONLY store entries; no other table is
+    // ever created) and degrades to the 10 MB ceiling when the lookup
+    // fails.
+    expect(H.fromCalls).toEqual(["subscriptions", "billing_plans"]);
+    expect(Object.keys(H.store)).toEqual(["subscriptions", "billing_plans"]);
   });
 
   it("stageAttachment rejects unsupported types and oversized files", async () => {
@@ -1043,9 +1089,7 @@ describe("draft-free UI contracts", () => {
     // Exactly one Drafts card, and it sits in the legacy branch (after the
     // ternary) — the owned branch shows Total/Sending/Sent/Failed only.
     expect((cards.match(/"Drafts"/g) ?? []).length).toBe(1);
-    expect(cards.indexOf('"Drafts"')).toBeGreaterThan(
-      cards.lastIndexOf(": ["),
-    );
+    expect(cards.indexOf('"Drafts"')).toBeGreaterThan(cards.lastIndexOf(": ["));
     for (const label of ["Total", "Sending", "Sent", "Failed"])
       expect((cards.match(new RegExp(`"${label}"`, "g")) ?? []).length).toBe(2);
   });
@@ -1058,9 +1102,10 @@ describe("draft-free UI contracts", () => {
       "loadOwnedDraft",
       "draftId",
     ])
-      expect(COMPOSER, `composer must not reference ${forbidden}`).not.toContain(
-        forbidden,
-      );
+      expect(
+        COMPOSER,
+        `composer must not reference ${forbidden}`,
+      ).not.toContain(forbidden);
     expect(COMPOSER).toContain("stageAttachment(");
     expect(COMPOSER).toContain("discardStagedAttachment(");
     expect(COMPOSER).toContain("sendApplications");
@@ -1084,7 +1129,9 @@ describe("draft-free UI contracts", () => {
     expect(sql).toContain("add column if not exists body_html");
     expect(sql).toContain("add column if not exists goal");
     expect(sql).toContain("drop not null");
-    expect(sql).toContain("create table if not exists public.email_campaign_attachments");
+    expect(sql).toContain(
+      "create table if not exists public.email_campaign_attachments",
+    );
     // No destructive DDL, no draft deletion.
     expect(sql).not.toMatch(/drop table|truncate|delete from/i);
   });
