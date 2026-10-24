@@ -8,16 +8,19 @@ vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 
 const { createAdminClient } = await import("@/lib/supabase/admin");
 const { createBlankDraft } = await import("@/lib/application-drafts");
+const { COMMERCIAL_SUB_ROW, COMMERCIAL_PLAN_ROW } = await import("./helpers");
 
 const adminClient = createAdminClient as unknown as ReturnType<typeof vi.fn>;
 
 /** Minimal admin-client fake: `.from().insert().select().single()` resolves to
- *  the supplied PostgREST-style `{ data, error }`. The `subscriptions` table
- *  (consulted by the email_drafts quota meter inside createBlankDraft)
- *  resolves to NO row → free fallback → `unmetered`, i.e. zero ledger RPCs —
- *  exactly the legacy behavior these error-collapse tests cover. Quota
- *  behavior itself is tested in tests/email-draft-quota.test.ts with a
- *  mocked entitlement-service. */
+ *  the supplied PostgREST-style `{ data, error }`. The entitlement lookups
+ *  (subscriptions → billing_plans) resolve to a VERIFIED ACTIVE COMMERCIAL
+ *  subscription, so the email_drafts reservation inside createBlankDraft
+ *  takes its metered path and these error-collapse tests focus on the
+ *  INSERT. Ledger RPCs answer "reserved / no_op / released". Plan-gating
+ *  behavior itself is tested in tests/email-draft-quota.test.ts (mocked
+ *  service) and tests/subscription-entitlement-boundary.test.ts (real
+ *  service, denial paths). */
 function mockInsert(result: { data: unknown; error: unknown }) {
   adminClient.mockReturnValue({
     from: (table: string) =>
@@ -25,17 +28,43 @@ function mockInsert(result: { data: unknown; error: unknown }) {
         ? {
             select: () => ({
               eq: () => ({
-                maybeSingle: async () => ({ data: null, error: null }),
+                maybeSingle: async () => ({
+                  data: COMMERCIAL_SUB_ROW,
+                  error: null,
+                }),
               }),
             }),
           }
-        : {
-            insert: () => ({
+        : table === "billing_plans"
+          ? {
               select: () => ({
-                single: async () => result,
+                eq: () => ({
+                  maybeSingle: async () => ({
+                    data: COMMERCIAL_PLAN_ROW,
+                    error: null,
+                  }),
+                }),
               }),
-            }),
-          },
+            }
+          : {
+              insert: () => ({
+                select: () => ({
+                  single: async () => result,
+                }),
+              }),
+            },
+    rpc: async (fn: string) => {
+      if (fn === "reserve_feature_op")
+        return {
+          data: [{ status: "reserved", used: 1, remaining: 119 }],
+          error: null,
+        };
+      if (fn === "complete_feature_op")
+        return { data: [{ status: "no_op" }], error: null };
+      if (fn === "release_feature_op")
+        return { data: [{ status: "released" }], error: null };
+      return { data: null, error: null };
+    },
   } as never);
 }
 

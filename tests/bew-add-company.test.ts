@@ -12,6 +12,7 @@
  *   - the position-brief schema probe degrades gracefully (no position keys).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { COMMERCIAL_SUB_ROW, COMMERCIAL_PLAN_ROW } from "./helpers";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -20,6 +21,12 @@ type Row = Record<string, any>;
 interface DB {
   bew_campaigns: Row[];
   bew_applications: Row[];
+  /** Entitlement lookups: USER is a verified active commercial subscriber
+   *  (2026-10-24 fix — the fail-closed non-commercial matrix would deny
+   *  every saved_application write otherwise; plan gating is covered in
+   *  tests/subscription-entitlement-boundary.test.ts). */
+  subscriptions: Row[];
+  billing_plans: Row[];
   positionColumnsBroken: boolean;
   /** Records every delete issued on bew_applications (must stay empty). */
   appDeletes: number;
@@ -34,6 +41,8 @@ function freshDb(): DB {
   return {
     bew_campaigns: [],
     bew_applications: [],
+    subscriptions: [{ ...COMMERCIAL_SUB_ROW, user_id: USER }],
+    billing_plans: [{ ...COMMERCIAL_PLAN_ROW }],
     positionColumnsBroken: false,
     appDeletes: 0,
   };
@@ -50,16 +59,23 @@ function makeFrom(table: string) {
     filters: [] as Array<{ col: string; val: any }>,
     terminal: undefined as "single" | "maybeSingle" | undefined,
   };
-  const bucket = (): Row[] => (db as unknown as Record<string, Row[]>)[table] ?? [];
+  const bucket = (): Row[] =>
+    (db as unknown as Record<string, Row[]>)[table] ?? [];
   function rows(): Row[] {
     let out = bucket().slice();
-    for (const f of state.filters) out = out.filter((r: Row) => r[f.col] === f.val);
+    for (const f of state.filters)
+      out = out.filter((r: Row) => r[f.col] === f.val);
     return out;
   }
   async function run(): Promise<any> {
     if (state.op === "insert") {
-      const items = Array.isArray(state.payload) ? state.payload : [state.payload];
-      const ins = items.map((r) => ({ ...r, id: r.id ?? `id-${Math.random()}` }));
+      const items = Array.isArray(state.payload)
+        ? state.payload
+        : [state.payload];
+      const ins = items.map((r) => ({
+        ...r,
+        id: r.id ?? `id-${Math.random()}`,
+      }));
       ((db as unknown as Record<string, Row[]>)[table] ??= []).push(...ins);
       return state.terminal === "single"
         ? { data: ins[0], error: null }
@@ -117,7 +133,14 @@ vi.doMock("@/lib/supabase/admin", () => ({
     rpc: (fn: string) =>
       fn === "check_saved_application_capacity"
         ? Promise.resolve({
-            data: [{ status: "unmetered", plan_limit: null, used: 0, remaining: null }],
+            data: [
+              {
+                status: "unmetered",
+                plan_limit: null,
+                used: 0,
+                remaining: null,
+              },
+            ],
             error: null,
           })
         : Promise.resolve({ data: null, error: null }),
@@ -150,7 +173,9 @@ vi.doMock("@/lib/email-campaigns", () => ({
   reserveSenderSlot: async () => true,
 }));
 vi.doMock("@/lib/email-providers", () => ({
-  createEmailProvider: async () => ({ sendEmail: async () => ({ ok: true, id: "m" }) }),
+  createEmailProvider: async () => ({
+    sendEmail: async () => ({ ok: true, id: "m" }),
+  }),
 }));
 vi.doMock("@/lib/bew-letter-pdf", () => ({
   BEW_ATTACHMENT_BUCKET: "b",
@@ -158,14 +183,15 @@ vi.doMock("@/lib/bew-letter-pdf", () => ({
   deleteLetterPdf: async () => {},
   letterPdfStoragePath: () => "p",
 }));
-vi.doMock("mammoth", () => ({ default: { extractRawText: async () => ({ value: "docx" }) } }));
+vi.doMock("mammoth", () => ({
+  default: { extractRawText: async () => ({ value: "docx" }) },
+}));
 vi.doMock("@/lib/contact-name-support", () => ({
   hasApplicantProfileColumns: () => Promise.resolve(true),
 }));
 
-const { addBewCompany, resetBewPositionColumnsProbe } = await import(
-  "@/lib/bewerbung-engine"
-);
+const { addBewCompany, resetBewPositionColumnsProbe } =
+  await import("@/lib/bewerbung-engine");
 
 /* ------------------- Seeds ------------------- */
 
@@ -252,7 +278,11 @@ describe("addBewCompany — happy path", () => {
       subject: "Bewerbung um einen Ausbildungsplatz bei Alpha GmbH",
     });
     seedApp(2); // empty pending row
-    seedApp(5, { company_name: "Old GmbH", company_email: "old@old.de", status: "excluded" });
+    seedApp(5, {
+      company_name: "Old GmbH",
+      company_email: "old@old.de",
+      status: "excluded",
+    });
 
     const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
 
@@ -261,7 +291,9 @@ describe("addBewCompany — happy path", () => {
     expect(row.company_name).toBe("Amberger Kühltechnik GmbH");
     expect(row.company_email).toBe("bernklaustefanie@amberger-kuehltechnik.de");
     expect(row.contact_name).toBe("Frau Stefanie Bernklau");
-    expect(row.company_address).toBe("Dr.-Aigner-Str. 15, 92224 Amberg, Oberpfalz");
+    expect(row.company_address).toBe(
+      "Dr.-Aigner-Str. 15, 92224 Amberg, Oberpfalz",
+    );
     expect(row.subject).toBe(
       "Bewerbung um einen Ausbildungsplatz bei Amberger Kühltechnik GmbH",
     );
@@ -296,7 +328,9 @@ describe("addBewCompany — happy path", () => {
     // One extra row (the new one); the original row is byte-identical.
     expect(db.bew_applications).toHaveLength(2);
     const original = db.bew_applications.find((r) => r.id === "app-A");
-    expect(JSON.stringify(original)).toBe(JSON.stringify(JSON.parse(before)[0]));
+    expect(JSON.stringify(original)).toBe(
+      JSON.stringify(JSON.parse(before)[0]),
+    );
     expect(original?.body_html).toBe("<p>Letter A</p>");
     expect(original?.status).toBe("generated");
   });
@@ -309,7 +343,11 @@ describe("addBewCompany — happy path", () => {
       status: "generated",
     });
     seedApp(2);
-    seedApp(3, { company_name: "Old GmbH", company_email: "old@old.de", status: "excluded" });
+    seedApp(3, {
+      company_name: "Old GmbH",
+      company_email: "old@old.de",
+      status: "excluded",
+    });
 
     await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
 
@@ -335,9 +373,9 @@ describe("addBewCompany — happy path", () => {
     expect(second.company_name).toBe("Beta Kältebau GmbH");
     expect(second.company_email).toBe("info@beta-kaeltebau.de");
     // Row 1 is untouched by the second add.
-    expect(db.bew_applications.find((r) => r.id === first.id)?.company_name).toBe(
-      "Amberger Kühltechnik GmbH",
-    );
+    expect(
+      db.bew_applications.find((r) => r.id === first.id)?.company_name,
+    ).toBe("Amberger Kühltechnik GmbH");
   });
 });
 
@@ -398,7 +436,11 @@ describe("addBewCompany — duplicates, caps, gates", () => {
 
   it("ACCEPTS a campaign while a send is in flight (row stays pending, send untouched)", async () => {
     seedCampaign("sending");
-    seedApp(1, { company_name: "Alpha GmbH", company_email: "jobs@alpha.de", status: "queued" });
+    seedApp(1, {
+      company_name: "Alpha GmbH",
+      company_email: "jobs@alpha.de",
+      status: "queued",
+    });
     const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
     expect(row.seq).toBe(2);
     expect(row.status).toBe("pending"); // not claimed by the in-flight batch
@@ -407,7 +449,10 @@ describe("addBewCompany — duplicates, caps, gates", () => {
 
   it("rejects a foreign / unknown campaign (NOT_FOUND)", async () => {
     seedCampaign();
-    await expectCode(() => addBewCompany(OTHER, CAMPAIGN, KAELTE_AD), "NOT_FOUND");
+    await expectCode(
+      () => addBewCompany(OTHER, CAMPAIGN, KAELTE_AD),
+      "NOT_FOUND",
+    );
     await expectCode(
       () => addBewCompany(USER, "camp-missing", KAELTE_AD),
       "NOT_FOUND",
@@ -416,7 +461,10 @@ describe("addBewCompany — duplicates, caps, gates", () => {
 
   it("rejects empty and oversized payloads (INVALID_PAYLOAD)", async () => {
     seedCampaign();
-    await expectCode(() => addBewCompany(USER, CAMPAIGN, "   "), "INVALID_PAYLOAD");
+    await expectCode(
+      () => addBewCompany(USER, CAMPAIGN, "   "),
+      "INVALID_PAYLOAD",
+    );
     await expectCode(
       () => addBewCompany(USER, CAMPAIGN, "A".repeat(20_001)),
       "INVALID_PAYLOAD",
@@ -520,7 +568,9 @@ describe("addBewCompany — Seco Kältetechnik real ad (regression, MOCKED DB)",
     // The persisted values (the server re-parse is the source of truth):
     expect(row.company_name).toBe("Seco Kältetechnik GmbH"); // NO "Unternehmensdarstellung:" prefix
     expect(row.company_email).toBe("christina.brandenburg@secokaelte.de");
-    expect(row.contact_name).toBe("Frau Christina Brandenburg – Personalreferentin");
+    expect(row.contact_name).toBe(
+      "Frau Christina Brandenburg – Personalreferentin",
+    );
     expect(row.company_address).toBe("Herzogstr. 28, 44807 Bochum");
     expect(row.status).toBe("pending");
     expect(row.employer_facts).toBeNull(); // never auto-filled
@@ -530,7 +580,9 @@ describe("addBewCompany — Seco Kältetechnik real ad (regression, MOCKED DB)",
     // …portal navigation and the contact block are NOT description text.
     expect(row.position_brief).not.toContain("Alle Stellen anzeigen");
     expect(row.position_brief).not.toContain("Kontaktadresse");
-    expect(row.position_brief).not.toContain("christina.brandenburg@secokaelte.de");
+    expect(row.position_brief).not.toContain(
+      "christina.brandenburg@secokaelte.de",
+    );
   });
 
   it("a valid e-mail that is only SUGGESTED (unverified) is persisted — not auto-rejected", async () => {
@@ -561,7 +613,12 @@ describe("addBewCompany — series state is NOT a prerequisite (regression, MOCK
       sent_at: NOW(),
       body_html: "<p>Letter A</p>",
     });
-    seedApp(2, { company_name: "Beta GmbH", company_email: "jobs@beta.de", status: "sent", sent_at: NOW() });
+    seedApp(2, {
+      company_name: "Beta GmbH",
+      company_email: "jobs@beta.de",
+      status: "sent",
+      sent_at: NOW(),
+    });
     const historyBefore = JSON.stringify(db.bew_applications.slice());
 
     const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
@@ -586,8 +643,17 @@ describe("addBewCompany — series state is NOT a prerequisite (regression, MOCK
 
   it("SENDING series: a new company is appended, the in-flight send keeps its state", async () => {
     seedCampaign("sending");
-    seedApp(1, { company_name: "Alpha GmbH", company_email: "jobs@alpha.de", status: "queued" });
-    seedApp(2, { company_name: "Beta GmbH", company_email: "jobs@beta.de", status: "sent", sent_at: NOW() });
+    seedApp(1, {
+      company_name: "Alpha GmbH",
+      company_email: "jobs@alpha.de",
+      status: "queued",
+    });
+    seedApp(2, {
+      company_name: "Beta GmbH",
+      company_email: "jobs@beta.de",
+      status: "sent",
+      sent_at: NOW(),
+    });
 
     const row = await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
 
@@ -604,8 +670,17 @@ describe("addBewCompany — series state is NOT a prerequisite (regression, MOCK
   it("PARTIALLY_FAILED series: reopened by new work (same contract as completed)", async () => {
     seedCampaign("partially_failed");
     db.bew_campaigns[0].completed_at = NOW();
-    seedApp(1, { company_name: "Alpha GmbH", company_email: "jobs@alpha.de", status: "sent", sent_at: NOW() });
-    seedApp(2, { company_name: "Beta GmbH", company_email: "jobs@beta.de", status: "failed" });
+    seedApp(1, {
+      company_name: "Alpha GmbH",
+      company_email: "jobs@alpha.de",
+      status: "sent",
+      sent_at: NOW(),
+    });
+    seedApp(2, {
+      company_name: "Beta GmbH",
+      company_email: "jobs@beta.de",
+      status: "failed",
+    });
 
     await addBewCompany(USER, CAMPAIGN, KAELTE_AD);
 
@@ -617,7 +692,10 @@ describe("addBewCompany — series state is NOT a prerequisite (regression, MOCK
 
   it("authentication and ownership stay enforced (a foreign COMPLETED series is still NOT_FOUND)", async () => {
     seedCampaign("completed");
-    await expectCode(() => addBewCompany(OTHER, CAMPAIGN, KAELTE_AD), "NOT_FOUND");
+    await expectCode(
+      () => addBewCompany(OTHER, CAMPAIGN, KAELTE_AD),
+      "NOT_FOUND",
+    );
     expect(db.bew_applications).toHaveLength(0); // nothing was written
     // A nonexistent campaign id is still NOT_FOUND as well.
     await expectCode(() => addBewCompany(USER, "nope", KAELTE_AD), "NOT_FOUND");
@@ -625,13 +703,34 @@ describe("addBewCompany — series state is NOT a prerequisite (regression, MOCK
 
   it("duplicate protection and the 100-row cap still hold on a COMPLETED series", async () => {
     seedCampaign("completed");
-    seedApp(1, { company_name: "Amberger Kühltechnik GmbH", company_email: "bernklaustefanie@amberger-kuehltechnik.de", status: "sent", sent_at: NOW() });
-    await expectCode(() => addBewCompany(USER, CAMPAIGN, KAELTE_AD), "DUPLICATE_COMPANY");
+    seedApp(1, {
+      company_name: "Amberger Kühltechnik GmbH",
+      company_email: "bernklaustefanie@amberger-kuehltechnik.de",
+      status: "sent",
+      sent_at: NOW(),
+    });
+    await expectCode(
+      () => addBewCompany(USER, CAMPAIGN, KAELTE_AD),
+      "DUPLICATE_COMPANY",
+    );
 
     for (let i = 2; i <= 100; i++) {
-      seedApp(i, { company_name: `GmbH ${i}`, company_email: `jobs${i}@x.de`, status: "sent", sent_at: NOW() });
+      seedApp(i, {
+        company_name: `GmbH ${i}`,
+        company_email: `jobs${i}@x.de`,
+        status: "sent",
+        sent_at: NOW(),
+      });
     }
-    await expectCode(() => addBewCompany(USER, CAMPAIGN, "Gamma GmbH\ninfo@gamma.de\nBeschreibung: Test."), "COUNT_EXCEEDED");
+    await expectCode(
+      () =>
+        addBewCompany(
+          USER,
+          CAMPAIGN,
+          "Gamma GmbH\ninfo@gamma.de\nBeschreibung: Test.",
+        ),
+      "COUNT_EXCEEDED",
+    );
     expect(db.bew_applications).toHaveLength(100); // nothing appended past the cap
   });
 });

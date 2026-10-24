@@ -27,10 +27,14 @@
  *     null key means "unmetered" (no plan quota); 0 means "disabled".
  *   - Legacy plus/pro (and the free fallback): ai_assistant uses the
  *     `billing_plans.ai_requests_per_day` column (free fallback 100),
- *     deckblatt keeps its historic 2/day, the upload cap keeps 10 MB, and
- *     all other spec features are unmetered (preserving today's behavior).
- *     Application Automation is 0 (disabled) for every non-commercial
- *     state — it is a commercial-plan feature only.
+ *     deckblatt keeps its historic 2/day, and the upload cap keeps 10 MB.
+ *     EVERY other feature is DISABLED (0) for non-commercial states —
+ *     explicit, fail-closed policy (see NON_COMMERCIAL_FEATURE_LIMITS):
+ *     no canonical non-commercial value exists for the other spec
+ *     features, and Free must never be treated as unlimited access.
+ *     (This replaces the Phase-12 "unmetered legacy" default, which made
+ *     every signed-in account effectively unlimited — the 2026-10-24
+ *     entitlement bug.)
  *
  * Quota families (write path):
  *   - ai_assistant -> existing `reserve_ai_request` (daily_usage) plus the
@@ -369,8 +373,108 @@ export async function resolveSubscription(
 }
 
 // ---------------------------------------------------------------------------
+// Subscription state machine (server-authoritative classification)
+// ---------------------------------------------------------------------------
+
+export type SubscriptionStateKind =
+  "none" | "active" | "canceled" | "expired" | "invalid";
+
+/** Minimal row shape needed to classify a subscription (no DB access). */
+export interface RawSubscriptionLike {
+  plan: string | null;
+  status: string | null;
+  current_period_end: number | string | null;
+}
+
+/**
+ * Pure classification of a subscription (row-level — no DB access). Used by
+ * `classifySubscriptionState` (resolved form) and the read-only
+ * reconciliation report (raw rows).
+ *
+ *   none     — no row, or a row whose plan grants no plan entitlements
+ *              (plan 'free' / unknown). Entitlements = the explicit
+ *              non-commercial matrix (NON_COMMERCIAL_FEATURE_LIMITS).
+ *              A PENDING checkout classifies as 'none': until verified
+ *              completion (mock-checkout RPC / future provider webhook)
+ *              no subscription row exists — a pending payment never
+ *              grants anything.
+ *   active   — status 'active', period not ended (or open), known
+ *              non-free plan. Entitlements = that plan's matrix.
+ *   canceled — status 'canceled'. Documented rule (Phase 12): entitlements
+ *              END AT CANCELLATION; `current_period_end` is display
+ *              information only and grants nothing after cancellation.
+ *   expired  — status 'expired', or 'active' with the period end already
+ *              in the past (computed on every evaluation — no job).
+ *   invalid  — lookup failed / DB unavailable. STRICTER than 'none':
+ *              every metered feature is denied (lookup_error). Never
+ *              conflated with a legitimate free state.
+ *
+ * The historical plan label (display) is NEVER consulted here.
+ */
+export function classifyRawSubscription(
+  row: RawSubscriptionLike | null,
+  opts: { lookupFailed?: boolean; nowMs?: number },
+): SubscriptionStateKind {
+  if (opts.lookupFailed) return "invalid";
+  if (!row) return "none";
+  const now = opts.nowMs ?? Date.now();
+  const end = toMs(row.current_period_end);
+  const computedExpired = row.status === "active" && end !== null && end <= now;
+  if (row.status === "expired" || computedExpired) return "expired";
+  if (row.status === "canceled") return "canceled";
+  if (isPlanId(row.plan) && row.plan !== "free") return "active";
+  return "none";
+}
+
+/**
+ * Classify a resolved subscription (convenience wrapper over the pure row
+ * form; keeps the entitlement-service's own resolution authoritative).
+ */
+export function classifySubscriptionState(
+  sub: ResolvedSubscription,
+): SubscriptionStateKind {
+  if (sub.lookupFailed) return "invalid";
+  if (sub.status === "expired") return "expired";
+  if (sub.status === "canceled") return "canceled";
+  if (sub.planId !== "free" && sub.planRow !== null) return "active";
+  return "none";
+}
+
+// ---------------------------------------------------------------------------
 // Feature limit policy
 // ---------------------------------------------------------------------------
+
+/**
+ * The explicit non-commercial entitlement matrix (free fallback AND legacy
+ * plus/pro). This is the SINGLE place the Free/legacy policy is defined —
+ * if the product later grants Free tiers for any feature, set the value
+ * here (and nothing else).
+ *
+ *   0    = disabled: the feature is not part of this state (fail closed).
+ *          No canonical non-commercial limit exists for any of these, so
+ *          they are commercial-plan-only (automation already was).
+ *   null = unmetered: explicitly defined that way (salary_calculator is
+ *          quota kind "none" and is allowed upstream before limits are read).
+ *
+ * Not listed here (handled by canonical dynamic values):
+ *   ai_assistant -> billing_plans.ai_requests_per_day (free fallback 100)
+ *   deckblatt    -> DECKBLATT_LEGACY_DAILY_LIMIT (2/day)
+ *   upload       -> LEGACY_UPLOAD_MB (10 MB)
+ */
+export const NON_COMMERCIAL_FEATURE_LIMITS: Record<
+  Exclude<FeatureId, "ai_assistant" | "deckblatt" | "upload">,
+  number | null
+> = {
+  cover_letter: 0,
+  resume_ai: 0,
+  scanner: 0,
+  email_drafts: 0,
+  opportunity_search: 0,
+  saved_opportunities: 0,
+  saved_applications: 0,
+  salary_calculator: null,
+  automation: 0,
+};
 
 /**
  * The effective limit for one feature on the resolved subscription.
@@ -390,20 +494,17 @@ export function effectiveFeatureLimit(
     }
     return null;
   }
-  // Legacy plus / pro / free fallback.
+  // Non-commercial states (free fallback, legacy plus / pro): the explicit
+  // matrix — nothing is unmetered by accident.
   switch (featureId) {
     case "ai_assistant":
       return sub.planRow?.ai_requests_per_day ?? FREE_PLAN_LIMITS.aiPerDay;
     case "deckblatt":
       return DECKBLATT_LEGACY_DAILY_LIMIT;
-    case "automation":
-      // Commercial-plan feature only; every legacy state is fail-closed.
-      return 0;
     case "upload":
       return LEGACY_UPLOAD_MB;
     default:
-      // Unmetered on legacy states (preserves pre-Phase-12 behavior).
-      return null;
+      return NON_COMMERCIAL_FEATURE_LIMITS[featureId] ?? 0; // unlisted → fail closed
   }
 }
 
@@ -422,7 +523,8 @@ async function readMeter(
   userId: string,
   kind: "per_day" | "per_cycle" | "items",
 ): Promise<MeterReading | null> {
-  const rpcName = kind === "items" ? "feature_capacity_status" : "feature_quota_status";
+  const rpcName =
+    kind === "items" ? "feature_capacity_status" : "feature_quota_status";
   let admin;
   try {
     admin = createAdminClient();
@@ -434,7 +536,10 @@ async function readMeter(
     p_feature_id: featureId,
   });
   if (error) return null;
-  const obj = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
+  const obj = (Array.isArray(data) ? data[0] : data) as Record<
+    string,
+    unknown
+  > | null;
   if (!obj || typeof obj !== "object") return null;
   const used = obj["used"];
   if (typeof used !== "number" || !Number.isFinite(used)) return null;
@@ -483,7 +588,15 @@ export async function checkFeatureFor(
   };
 
   if (!isFeatureId(featureId)) {
-    return { ...base, allowed: false, reason: "unknown_feature", limit: null, used: 0, remaining: null, resetsAt: null };
+    return {
+      ...base,
+      allowed: false,
+      reason: "unknown_feature",
+      limit: null,
+      used: 0,
+      remaining: null,
+      resetsAt: null,
+    };
   }
 
   const kind = FEATURE_QUOTA_KIND[featureId];
@@ -491,7 +604,15 @@ export async function checkFeatureFor(
   if (kind === "none") {
     // Gross-to-Net calculator: never plan-metered (allowed even on
     // lookup failure — it involves no plan state at all).
-    return { ...base, allowed: true, reason: "ok", limit: null, used: 0, remaining: null, resetsAt: null };
+    return {
+      ...base,
+      allowed: true,
+      reason: "ok",
+      limit: null,
+      used: 0,
+      remaining: null,
+      resetsAt: null,
+    };
   }
 
   if (kind === "static_mb") {
@@ -500,27 +621,69 @@ export async function checkFeatureFor(
     const limit = sub.lookupFailed
       ? LEGACY_UPLOAD_MB
       : (effectiveFeatureLimit(sub, featureId) ?? LEGACY_UPLOAD_MB);
-    return { ...base, allowed: true, reason: "ok", limit, used: 0, remaining: null, resetsAt: null };
+    return {
+      ...base,
+      allowed: true,
+      reason: "ok",
+      limit,
+      used: 0,
+      remaining: null,
+      resetsAt: null,
+    };
   }
 
   if (sub.lookupFailed) {
-    return { ...base, allowed: false, reason: "lookup_error", limit: 0, used: 0, remaining: 0, resetsAt: null };
+    return {
+      ...base,
+      allowed: false,
+      reason: "lookup_error",
+      limit: 0,
+      used: 0,
+      remaining: 0,
+      resetsAt: null,
+    };
   }
 
   const limit = effectiveFeatureLimit(sub, featureId);
   if (limit === null) {
-    return { ...base, allowed: true, reason: "ok_legacy_unmetered", limit: null, used: 0, remaining: null, resetsAt: null };
+    return {
+      ...base,
+      allowed: true,
+      reason: "ok_legacy_unmetered",
+      limit: null,
+      used: 0,
+      remaining: null,
+      resetsAt: null,
+    };
   }
 
   if (limit === 0) {
     const reason: FeatureReason =
-      sub.row !== null && sub.status !== "active" ? "plan_expired" : "feature_disabled";
-    return { ...base, allowed: false, reason, limit: 0, used: 0, remaining: 0, resetsAt: null };
+      sub.row !== null && sub.status !== "active"
+        ? "plan_expired"
+        : "feature_disabled";
+    return {
+      ...base,
+      allowed: false,
+      reason,
+      limit: 0,
+      used: 0,
+      remaining: 0,
+      resetsAt: null,
+    };
   }
 
   const meter = await readMeter(featureId, userId, kind);
   if (!meter) {
-    return { ...base, allowed: false, reason: "lookup_error", limit, used: 0, remaining: 0, resetsAt: null };
+    return {
+      ...base,
+      allowed: false,
+      reason: "lookup_error",
+      limit,
+      used: 0,
+      remaining: 0,
+      resetsAt: null,
+    };
   }
 
   const remaining = Math.max(limit - meter.used, 0);
@@ -548,7 +711,10 @@ export async function checkFeatureFor(
 /** Extract a `status` string from a table-returning RPC payload
  *  (PostgREST returns arrays of row objects) or a single-row object. */
 function rpcStatus(data: unknown): string | null {
-  const obj = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
+  const obj = (Array.isArray(data) ? data[0] : data) as Record<
+    string,
+    unknown
+  > | null;
   if (obj && typeof obj === "object" && "status" in obj) {
     const s = obj["status"];
     if (typeof s === "string") return s;
@@ -582,7 +748,10 @@ export async function reserveFeatureOp(
 
   const sub = await resolveSubscription(userId, nowMs);
   if (sub.lookupFailed) {
-    return { outcome: "error", message: "Subscription state could not be verified." };
+    return {
+      outcome: "error",
+      message: "Subscription state could not be verified.",
+    };
   }
   const limit = effectiveFeatureLimit(sub, featureId);
   if (limit === null) return { outcome: "unmetered" };
@@ -614,7 +783,8 @@ export async function reserveFeatureOp(
         target_user_id: userId,
         p_run_id: runId,
       });
-      if (error) return { outcome: "error", message: "Feature quota is unavailable." };
+      if (error)
+        return { outcome: "error", message: "Feature quota is unavailable." };
       const status = rpcStatus(data);
       if (
         status === "reserved" ||
@@ -632,7 +802,8 @@ export async function reserveFeatureOp(
       p_feature_id: featureId,
       p_run_id: runId,
     });
-    if (error) return { outcome: "error", message: "Feature quota is unavailable." };
+    if (error)
+      return { outcome: "error", message: "Feature quota is unavailable." };
     const status = rpcStatus(data);
     if (
       status === "reserved" ||
@@ -659,7 +830,8 @@ export async function completeFeatureOp(
   runId: string,
 ): Promise<{ outcome: "completed" | "no_op" | "error" }> {
   const kind = FEATURE_QUOTA_KIND[featureId];
-  if (kind === "none" || featureId === "ai_assistant") return { outcome: "no_op" };
+  if (kind === "none" || featureId === "ai_assistant")
+    return { outcome: "no_op" };
   try {
     if (featureId === "deckblatt") {
       const client = await createClient();
@@ -720,7 +892,9 @@ export async function releaseFeatureOp(
       });
       if (error) return { outcome: "error" };
       const status = rpcStatus(data);
-      return status === "no_op" ? { outcome: "no_op" } : { outcome: "released" };
+      return status === "no_op"
+        ? { outcome: "no_op" }
+        : { outcome: "released" };
     }
 
     if (!runId) return { outcome: "no_op" };
@@ -788,7 +962,12 @@ export async function getBillingStatus(
   await Promise.all(
     ALL_FEATURE_IDS.map(async (featureId) => {
       try {
-        features[featureId] = await checkFeatureFor(userId, sub, featureId, nowMs);
+        features[featureId] = await checkFeatureFor(
+          userId,
+          sub,
+          featureId,
+          nowMs,
+        );
       } catch {
         features[featureId] = undefined;
       }
@@ -845,11 +1024,7 @@ export async function getBillingStatus(
 // ---------------------------------------------------------------------------
 
 export type SavedCapacityStatus =
-  | "ok"
-  | "unmetered"
-  | "disabled"
-  | "exceeded"
-  | "error";
+  "ok" | "unmetered" | "disabled" | "exceeded" | "error";
 
 export interface SavedCapacityCheck {
   status: SavedCapacityStatus;
@@ -901,9 +1076,10 @@ export async function checkSavedApplicationCapacity(
     return SAVED_CAPACITY_FALLBACK;
   }
   if (rpcError) return SAVED_CAPACITY_FALLBACK;
-  const row = (Array.isArray(data) ? data[0] : data) as
-    | Record<string, unknown>
-    | null;
+  const row = (Array.isArray(data) ? data[0] : data) as Record<
+    string,
+    unknown
+  > | null;
   if (!row || typeof row !== "object") return SAVED_CAPACITY_FALLBACK;
   const status = row["status"];
   if (
@@ -951,6 +1127,18 @@ export async function assertSavedApplicationCapacity(
   replaceCampaignId: string | null = null,
 ): Promise<void> {
   if (newContentCount <= 0) return;
+  // Plan-policy gate FIRST: the DB RPC (plan_feature_limit) returns NULL =
+  // 'unmetered' for non-commercial states, so without this gate a free user
+  // would pass the capacity check and the insert would commit. The explicit
+  // non-commercial matrix is authoritative in the application layer.
+  const sub = await resolveSubscription(userId);
+  if (sub.lookupFailed) {
+    throw new Error("SAVE_FAILED"); // fail closed, as before
+  }
+  const limit = effectiveFeatureLimit(sub, "saved_applications");
+  if (limit === 0) {
+    throw new Error("CAPACITY_EXCEEDED");
+  }
   const check = await checkSavedApplicationCapacity(
     userId,
     newContentCount,
