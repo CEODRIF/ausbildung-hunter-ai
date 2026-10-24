@@ -62,11 +62,14 @@ function extractAndNormalize(raw: string, goal: ScanGoal): unknown {
 /** Long structured CV extraction gets a bigger per-request budget than the
  *  60s chat default (the function timeout in Vercel stays the backstop). */
 const SCANNER_AI_TIMEOUT_MS = 180_000;
-/** User-safe scanner quota messages (stored/surfaced verbatim). */
-const SCANNER_QUOTA_EXHAUSTED = "Scanner limit reached for your current plan.";
-const SCANNER_FEATURE_DISABLED =
+/** User-safe scanner quota messages (stored/surfaced verbatim). Exported so
+ *  the route can map them to the canonical deny statuses (429/403/503)
+ *  instead of a generic 400. */
+export const SCANNER_QUOTA_EXHAUSTED =
+  "Scanner limit reached for your current plan.";
+export const SCANNER_FEATURE_DISABLED =
   "Scanner is not available on your current plan.";
-const SCANNER_QUOTA_UNAVAILABLE =
+export const SCANNER_QUOTA_UNAVAILABLE =
   "Scanner quota could not be verified. Please try again later.";
 
 /** Messages that are already user-safe (stored verbatim, no code mapping). */
@@ -208,7 +211,11 @@ export async function runScan(scanId: string) {
           [
             {
               role: "user",
-              content: buildSparseRetryPrompt(scan.goal, context, emptySections),
+              content: buildSparseRetryPrompt(
+                scan.goal,
+                context,
+                emptySections,
+              ),
             },
           ],
           SCANNER_AI_TIMEOUT_MS,
@@ -217,7 +224,10 @@ export async function runScan(scanId: string) {
           extractAndNormalize(retryResponse, scan.goal),
         );
         if (retryParsed.success) {
-          finalProfile = pickMoreComplete(finalProfile, retryParsed.data) as CandidateProfile;
+          finalProfile = pickMoreComplete(
+            finalProfile,
+            retryParsed.data,
+          ) as CandidateProfile;
           finalProfile = { ...finalProfile, goal: scan.goal };
         } else {
           console.error(
@@ -274,9 +284,7 @@ export async function runScan(scanId: string) {
     // UI) and the client response. Unexpected technical failures (library
     // internals like "DOMMatrix is not defined", provider stack messages)
     // are logged server-side and replaced with SCAN_UNEXPECTED_FAILED.
-    const message = SAFE_SCAN_MESSAGES.has(raw)
-      ? raw
-      : SCAN_UNEXPECTED_FAILED;
+    const message = SAFE_SCAN_MESSAGES.has(raw) ? raw : SCAN_UNEXPECTED_FAILED;
     if (message !== raw)
       console.error("[bewerbung-scanner] scan failed:", error);
     // A failed op must not consume quota: release the live scanner

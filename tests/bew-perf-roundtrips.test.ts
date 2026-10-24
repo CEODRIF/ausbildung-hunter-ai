@@ -38,6 +38,7 @@
  * wall times are the measured product with the 25 ms simulation.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { COMMERCIAL_SUB_ROW, COMMERCIAL_PLAN_ROW } from "./helpers";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -68,7 +69,9 @@ type TableKey =
   | "bew_applications"
   | "bew_documents"
   | "bew_campaign_documents"
-  | "email_accounts";
+  | "email_accounts"
+  | "subscriptions"
+  | "billing_plans";
 
 interface DB {
   bew_campaigns: Row[];
@@ -76,6 +79,11 @@ interface DB {
   bew_documents: Row[];
   bew_campaign_documents: Row[];
   email_accounts: Row[];
+  /** Entitlement lookups: USER is a verified active commercial subscriber
+   *  (2026-10-24 fix — the row-save capacity gate now resolves the
+   *  subscription; two extra measured SELECTs per empty→content save). */
+  subscriptions: Row[];
+  billing_plans: Row[];
 }
 
 const DEFAULTS: Partial<Record<TableKey, Row>> = {
@@ -135,6 +143,8 @@ function freshDb(): DB {
         created_at: new Date().toISOString(),
       },
     ],
+    subscriptions: [{ ...COMMERCIAL_SUB_ROW, user_id: USER }],
+    billing_plans: [{ ...COMMERCIAL_PLAN_ROW }],
   };
 }
 
@@ -156,7 +166,8 @@ function makeFrom(table: TableKey) {
   function rows(): Row[] {
     let out = (db[table] ?? []).slice();
     for (const f of state.filters) out = out.filter((r) => r[f.col] === f.val);
-    for (const f of state.inFilters) out = out.filter((r) => f.values.includes(r[f.col]));
+    for (const f of state.inFilters)
+      out = out.filter((r) => f.values.includes(r[f.col]));
     if (state.orderBy.length) {
       out.sort((a, b) => {
         for (const o of state.orderBy) {
@@ -174,33 +185,46 @@ function makeFrom(table: TableKey) {
   async function run(): Promise<any> {
     await hop(); // ONE network round trip per query.
     if (state.op === "insert") {
-      const items = Array.isArray(state.payload) ? state.payload : [state.payload];
+      const items = Array.isArray(state.payload)
+        ? state.payload
+        : [state.payload];
       const inserted = items.map((r) => ({
         ...DEFAULTS[table],
         ...r,
         id: r.id ?? `id-${Math.random()}`,
       }));
       (db[table] ??= []).push(...inserted);
-      if (state.terminal === "single") return { data: inserted[0], error: null };
+      if (state.terminal === "single")
+        return { data: inserted[0], error: null };
       return { data: inserted, error: null };
     }
     if (state.op === "update") {
       const matched = rows();
       for (const m of matched) Object.assign(m, state.payload);
-      if (state.terminal === "single") return { data: matched[0] ?? null, error: null };
-      if (state.terminal === "maybeSingle") return { data: matched[0] ?? null, error: null };
+      if (state.terminal === "single")
+        return { data: matched[0] ?? null, error: null };
+      if (state.terminal === "maybeSingle")
+        return { data: matched[0] ?? null, error: null };
       return { data: matched, error: null };
     }
     if (state.op === "delete") {
       const matched = rows();
-      (db[table] as Row[]) = (db[table] ?? []).filter((r) => !matched.includes(r));
+      (db[table] as Row[]) = (db[table] ?? []).filter(
+        (r) => !matched.includes(r),
+      );
       return { data: null, error: null };
     }
     const matched = rows();
     if (state.selectOpts?.count)
-      return { data: state.selectOpts.head ? null : matched, error: null, count: matched.length };
-    if (state.terminal === "single") return { data: matched[0] ?? null, error: null };
-    if (state.terminal === "maybeSingle") return { data: matched[0] ?? null, error: null };
+      return {
+        data: state.selectOpts.head ? null : matched,
+        error: null,
+        count: matched.length,
+      };
+    if (state.terminal === "single")
+      return { data: matched[0] ?? null, error: null };
+    if (state.terminal === "maybeSingle")
+      return { data: matched[0] ?? null, error: null };
     return { data: matched, error: null };
   }
 
@@ -269,7 +293,9 @@ vi.mock("@/lib/supabase/admin", () => ({
       // contract (covered by tests/saved-applications-capacity.test.ts).
       if (fn === "check_saved_application_capacity") {
         return {
-          data: [{ status: "unmetered", plan_limit: null, used: 0, remaining: null }],
+          data: [
+            { status: "unmetered", plan_limit: null, used: 0, remaining: null },
+          ],
           error: null,
         };
       }
@@ -307,11 +333,17 @@ vi.mock("@/lib/email-campaigns", () => ({
 }));
 
 vi.mock("@/lib/email-providers", () => ({
-  createEmailProvider: async () => ({ sendEmail: async () => ({ providerMessageId: "m" }) }),
+  createEmailProvider: async () => ({
+    sendEmail: async () => ({ providerMessageId: "m" }),
+  }),
 }));
 vi.mock("@/lib/application-drafts", () => ({
   sanitizeEmailHtml: (h: string) => h,
-  htmlToText: (h: string) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+  htmlToText: (h: string) =>
+    h
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
 }));
 vi.mock("@/lib/ai-provider", () => ({
   createAIProvider: () => ({ generateText: async () => "Text." }),
@@ -321,7 +353,9 @@ vi.mock("@/lib/ai-service", () => ({
   storagePath: (userId: string, filename: string) => `${userId}/${filename}`,
 }));
 vi.mock("@/lib/pdf-extract", () => ({ extractPdfText: async () => "" }));
-vi.mock("mammoth", () => ({ default: { extractRawText: async () => ({ value: "docx" }) } }));
+vi.mock("mammoth", () => ({
+  default: { extractRawText: async () => ({ value: "docx" }) },
+}));
 
 const engine = await import("@/lib/bewerbung-engine");
 
@@ -335,12 +369,19 @@ interface Measured {
   wallMs: number;
 }
 
-async function measure(label: string, fn: () => Promise<unknown>): Promise<Measured> {
+async function measure(
+  label: string,
+  fn: () => Promise<unknown>,
+): Promise<Measured> {
   resetPerf();
   const t0 = performance.now();
   await fn();
   const wallMs = performance.now() - t0;
-  const m: Measured = { rtt: perf.rtt, waves: perf.waves, wallMs: Math.round(wallMs) };
+  const m: Measured = {
+    rtt: perf.rtt,
+    waves: perf.waves,
+    wallMs: Math.round(wallMs),
+  };
   console.log(
     `[perf] ${label.padEnd(34)} rtt=${String(m.rtt).padStart(2)}  waves=${String(m.waves).padStart(2)}  wall=${String(m.wallMs).padStart(4)} ms  (@ ${RTT_MS} ms/RTT simulated)`,
   );
@@ -348,7 +389,12 @@ async function measure(label: string, fn: () => Promise<unknown>): Promise<Measu
 }
 
 function seedCampaign(count = 10) {
-  db.bew_campaigns.push({ ...DEFAULTS.bew_campaigns, id: "camp-1", user_id: USER, requested_count: count });
+  db.bew_campaigns.push({
+    ...DEFAULTS.bew_campaigns,
+    id: "camp-1",
+    user_id: USER,
+    requested_count: count,
+  });
   for (let i = 1; i <= count; i++) {
     db.bew_applications.push({
       ...DEFAULTS.bew_applications,
@@ -374,7 +420,11 @@ describe("F1 createBewCampaign (engine, cold + warm probe)", () => {
   it("cold (position probe uncached): 4 RTT / 3 waves (probe ∥ default sender)", async () => {
     engine.resetBewPositionColumnsProbe();
     const m = await measure("F1 createBewCampaign (cold)", () =>
-      engine.createBewCampaign({ userId: USER, count: 10, purpose: "ausbildung" }),
+      engine.createBewCampaign({
+        userId: USER,
+        count: 10,
+        purpose: "ausbildung",
+      }),
     );
     expect(m.rtt).toBe(4); // probe, default sender, campaign insert, seed insert
     expect(m.waves).toBe(3); // (probe ∥ sender) → insert → seed
@@ -382,9 +432,17 @@ describe("F1 createBewCampaign (engine, cold + warm probe)", () => {
 
   it("warm (probe cached after first use in the process): 3 RTT / 3 waves", async () => {
     engine.resetBewPositionColumnsProbe();
-    await engine.createBewCampaign({ userId: USER, count: 1, purpose: "ausbildung" }); // warms
+    await engine.createBewCampaign({
+      userId: USER,
+      count: 1,
+      purpose: "ausbildung",
+    }); // warms
     const m = await measure("F1 createBewCampaign (warm)", () =>
-      engine.createBewCampaign({ userId: USER, count: 10, purpose: "ausbildung" }),
+      engine.createBewCampaign({
+        userId: USER,
+        count: 10,
+        purpose: "ausbildung",
+      }),
     );
     expect(m.rtt).toBe(3);
     expect(m.waves).toBe(3);
@@ -426,7 +484,11 @@ describe("F3 '+ New series' — client-visible flow", () => {
       await (async () => {
         const { getCurrentUserAndProfile } = await import("@/lib/auth");
         await getCurrentUserAndProfile();
-        return engine.createBewCampaign({ userId, count: 10, purpose: "ausbildung" });
+        return engine.createBewCampaign({
+          userId,
+          count: 10,
+          purpose: "ausbildung",
+        });
       })();
       // action 2: auth + view
       const { getCurrentUserAndProfile } = await import("@/lib/auth");
@@ -444,7 +506,11 @@ describe("F3 '+ New series' — client-visible flow", () => {
     const m = await measure("F3b new-series AFTER", async () => {
       const { getCurrentUserAndProfile } = await import("@/lib/auth");
       await getCurrentUserAndProfile(); // the single action's auth
-      return engine.createBewCampaignView({ userId: USER, count: 10, purpose: "ausbildung" });
+      return engine.createBewCampaignView({
+        userId: USER,
+        count: 10,
+        purpose: "ausbildung",
+      });
     });
     // 2 auth + (probe ∥ sender) + insert + seed + (apps ∥ docs) + usage.
     // The sender's e-mail is REUSED from the create — no account re-read.
@@ -477,7 +543,7 @@ describe("F4/F5 per-row Save — client-visible flow", () => {
     expect(m.waves).toBe(6);
   });
 
-  it("F4b updateBewApplicationFields (warm): 7 RTT / 7 waves", async () => {
+  it("F4b updateBewApplicationFields (warm): 9 RTT / 9 waves", async () => {
     await engine.updateBewApplicationFields(USER, "app-2", {
       companyName: "Warm GmbH",
       companyEmail: "warm@warm.de",
@@ -494,11 +560,15 @@ describe("F4/F5 per-row Save — client-visible flow", () => {
     );
     // F1: app-3 is an EMPTY→CONTENT fill, so the save carries one extra hop
     // — the advisory saved_applications capacity pre-check (rpc).
-    expect(m.rtt).toBe(7);
-    expect(m.waves).toBe(7);
+    // 2026-10-24 entitlement fix: that pre-check first RESOLVES the
+    // subscription (subscriptions select + billing_plans select = 2 more
+    // sequential hops) so the plan limit is server-authoritative, not
+    // inferred. 7 + 2 = 9.
+    expect(m.rtt).toBe(9);
+    expect(m.waves).toBe(9);
   });
 
-  it("BEFORE: update action + refresh (getBewCampaignView) = 15 RTT / 14 waves", async () => {
+  it("BEFORE: update action + refresh (getBewCampaignView) = 17 RTT / 16 waves", async () => {
     // Warm the probe first (steady state) so the composite is comparable
     // with the AFTER number. (app-4 is an empty→content fill: it also pays
     // the F1 capacity pre-check hop — unmeasured, like before.)
@@ -520,13 +590,15 @@ describe("F4/F5 per-row Save — client-visible flow", () => {
       await getCurrentUserAndProfile(); // action 2 auth (the `await refresh()`)
       await engine.getBewCampaignView(USER, "camp-1");
     });
-    // (auth 2 + warm update 7 — incl. the F1 empty→content capacity
-    // pre-check hop) + (auth 2 + view 4 — seeded campaign has no sender)
-    expect(m.rtt).toBe(15);
-    expect(m.waves).toBe(14);
+    // (auth 2 + warm update 9 — incl. the F1 empty→content capacity
+    // pre-check hop AND the 2026-10-24 entitlement subscription resolution:
+    // subscriptions + billing_plans selects) + (auth 2 + view 4 — seeded
+    // campaign has no sender)
+    expect(m.rtt).toBe(17);
+    expect(m.waves).toBe(16);
   });
 
-  it("AFTER: update action only (no view refetch; probe ∥ app select) = 10 RTT / 9 waves (cold probe)", async () => {
+  it("AFTER: update action only (no view refetch; probe ∥ app select) = 12 RTT / 11 waves (cold probe)", async () => {
     const m = await measure("F5b row-save AFTER", async () => {
       const { getCurrentUserAndProfile } = await import("@/lib/auth");
       await getCurrentUserAndProfile(); // the single action's auth
@@ -540,11 +612,12 @@ describe("F4/F5 per-row Save — client-visible flow", () => {
       // client patches that ONE row into the view.
     });
     // 2 auth + (probe ∥ app) + capacity pre-check (F1, app-6 is
-    // empty→content) + campaign + update + counter×3
-    expect(m.rtt).toBe(10);
-    expect(m.waves).toBe(9);
+    // empty→content) + the 2026-10-24 entitlement subscription resolution
+    // (subscriptions + billing_plans selects) + campaign + update + counter×3
+    expect(m.rtt).toBe(12);
+    expect(m.waves).toBe(11);
     // And strictly fewer round trips than the BEFORE composite.
-    expect(m.rtt).toBeLessThan(15);
-    expect(m.waves).toBeLessThan(14);
+    expect(m.rtt).toBeLessThan(17);
+    expect(m.waves).toBeLessThan(16);
   });
 });

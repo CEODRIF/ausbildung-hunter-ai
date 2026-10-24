@@ -6,8 +6,12 @@ const detailsArbeit =
     unknown
   >;
 
-const { createAdminMock, candidateProfileFixture, jsonResponse } =
-  await import("../helpers");
+const {
+  createAdminMock,
+  candidateProfileFixture,
+  jsonResponse,
+  commercialMaybeSingleData,
+} = await import("../helpers");
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: vi.fn(),
@@ -65,7 +69,9 @@ beforeEach(() => {
   adminMock = createAdminMock({
     singleData: () => detailsSingleRow(),
     maybeSingleData: (table) =>
-      table === "candidate_profiles" ? { profile_json: null } : null,
+      table === "candidate_profiles"
+        ? { profile_json: null }
+        : commercialMaybeSingleData(table), // verified commercial subscriber
   });
   vi.mocked(createAdminClient).mockReturnValue(adminMock.admin as never);
   vi.stubGlobal(
@@ -150,7 +156,7 @@ describe("saveOpportunityFromKey (server-derived data only)", () => {
               profile_json: candidateProfileFixture(),
               updated_at: "2026-09-20T09:00:00.000Z",
             }
-          : null,
+          : commercialMaybeSingleData(table), // verified commercial subscriber
     });
     vi.mocked(createAdminClient).mockReturnValue(adminMock.admin as never);
     await saveOpportunityFromKey("user-1", `arbeitsagentur:${DETAILS_REF}`);
@@ -184,7 +190,7 @@ describe("saveOpportunityFromKey (server-derived data only)", () => {
                 },
               },
             }
-          : null,
+          : commercialMaybeSingleData(table), // verified commercial subscriber
     });
     vi.mocked(createAdminClient).mockReturnValue(adminMock.admin as never);
     await saveOpportunityFromKey("user-1", `arbeitsagentur:${DETAILS_REF}`);
@@ -470,13 +476,12 @@ describe("saved flow ↔ migrated database schema", () => {
   it("an incomplete but valid opportunity can be saved (optionals stay null)", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          jsonResponse({
-            referenznummer: DETAILS_REF,
-            stellenangebotsTitel: "Minimale Stelle",
-            stellenangebotsart: "ARBEIT",
-          }),
+      vi.fn(async () =>
+        jsonResponse({
+          referenznummer: DETAILS_REF,
+          stellenangebotsTitel: "Minimale Stelle",
+          stellenangebotsart: "ARBEIT",
+        }),
       ),
     );
     const row = await saveOpportunityFromKey(
