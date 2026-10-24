@@ -92,9 +92,13 @@ export function AdminUserActions({
                   ? t("admin.selfRevoke")
                   : data.error === "no_subscription"
                     ? t("admin.noSubscription")
-                    : t("admin.actionFailed", {
-                        error: data.error ?? String(response.status),
-                      }),
+                    : data.error === "rpc_unavailable"
+                      ? t("admin.rpcUnavailable")
+                      : data.error === "audit_failed"
+                        ? t("admin.auditFailed")
+                        : t("admin.actionFailed", {
+                            error: data.error ?? String(response.status),
+                          }),
             },
       );
       if (response.ok) {

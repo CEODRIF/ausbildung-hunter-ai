@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
@@ -8,6 +8,8 @@ const { createAdminClient } = await import("@/lib/supabase/admin");
 const { POST } = await import("@/app/api/admin/users/[id]/route");
 const { GET } = await import("@/app/api/admin/users/route");
 const webhookRoute = await import("@/app/api/billing/webhook/route");
+const { isMissingFunctionError, sanitizeDbDiagnostic } =
+  await import("@/lib/billing/admin");
 
 const ADMIN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const OTHER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -16,6 +18,11 @@ const RANDOM_USER_ID = "eeeeeeee-eeee-4eee-8eeee-eeeeeeeeeeee";
 
 interface Filters {
   [key: string]: unknown;
+}
+
+interface DbErr {
+  code?: string;
+  message?: string;
 }
 
 /** Chain mock supporting select/eq/in/upsert/update/insert/delete +
@@ -30,6 +37,12 @@ function makeMock(handlers: {
     name: string,
     args: Record<string, unknown>,
   ) => Record<string, unknown> | null;
+  /** PostgREST-style RPC error (e.g. PGRST202 function does not exist). */
+  rpcError?: (name: string, args: Record<string, unknown>) => DbErr | null;
+  /** Client-level throw for one RPC. */
+  rpcThrow?: (name: string, args: Record<string, unknown>) => Error | null;
+  /** Row-operation error for a terminal then (e.g. audit insert failure). */
+  rowError?: (table: string, filters: Filters) => DbErr | null;
 }) {
   const calls: Array<{
     table: string;
@@ -81,7 +94,7 @@ function makeMock(handlers: {
               record(prop === "then" ? "await" : prop);
               return Promise.resolve({
                 data: handlers.list?.(table, filters) ?? null,
-                error: null,
+                error: handlers.rowError?.(table, filters) ?? null,
               }).then(onF as never);
             };
           if (prop === "upsert" || prop === "insert" || prop === "update")
@@ -111,9 +124,11 @@ function makeMock(handlers: {
       // and resolves to { data, error } (the codebase awaits it that way).
       rpc: (name: string, args: Record<string, unknown>) => {
         rpcCalls.push({ name, args: { ...args } });
+        const thrown = handlers.rpcThrow?.(name, args);
+        if (thrown) return Promise.reject(thrown);
         return Promise.resolve({
           data: handlers.rpc?.(name, args) ?? null,
-          error: null,
+          error: handlers.rpcError?.(name, args) ?? null,
         });
       },
     },
@@ -161,6 +176,9 @@ function adminLookupHandlers(
       name: string,
       args: Record<string, unknown>,
     ) => Record<string, unknown> | null;
+    rpcError?: (name: string, args: Record<string, unknown>) => DbErr | null;
+    rpcThrow?: (name: string, args: Record<string, unknown>) => Error | null;
+    rowError?: (table: string, filters: Filters) => DbErr | null;
   } = {},
 ) {
   return {
@@ -176,6 +194,9 @@ function adminLookupHandlers(
       return extra.single?.(table, filters) ?? null;
     },
     rpc: extra.rpc,
+    rpcError: extra.rpcError,
+    rpcThrow: extra.rpcThrow,
+    rowError: extra.rowError,
   };
 }
 
@@ -340,6 +361,191 @@ describe("admin authorization", () => {
       (c) => c.table === "admin_audit_log" && c.op === "insert",
     );
     expect(audit).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Error transparency — production incident 2026-10-25
+//
+// The deployed admin UI showed an opaque "db_error" for every subscription
+// action. Root cause (reproduced on a disposable PostgreSQL mirror of the
+// production schema state): the `manage_subscription` RPC (migration
+// 20261126) had never been applied to the production database, so PostgREST
+// answered PGRST202 "function ... does not exist" and the app mapped every
+// such failure to the undifferentiated reason "db_error".
+//
+// These tests pin the repaired behavior: the missing-function case gets a
+// DISTINCT reason (rpc_unavailable → 503) with a useful per-language UI
+// message, the real PostgREST error is recorded server-side (sanitized),
+// and no personal data ever reaches the log or the browser.
+// ---------------------------------------------------------------------------
+
+describe("admin action error transparency (incident 2026-10-25)", () => {
+  let consoleSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  const logged = () =>
+    consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
+
+  it("ORIGINAL FAILURE REPRODUCED: manage_subscription missing (PGRST202) → 503 rpc_unavailable, NOT an opaque 400 db_error; the real error is logged server-side", async () => {
+    mockSession(ADMIN_ID);
+    mockAdminData(
+      adminLookupHandlers({
+        rpcError: (name) =>
+          name === "manage_subscription"
+            ? {
+                code: "PGRST202",
+                message:
+                  "function public.manage_subscription(uuid, uuid, text, text, integer, text) does not exist",
+              }
+            : null,
+      }),
+    );
+    const response = await post({
+      action: "set_plan",
+      plan: "plus",
+      periodDays: 30,
+    });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "rpc_unavailable" });
+    // The browser sees only the coarse reason — never the raw SQL error:
+    // (asserted by the json above) — while the server log carries the
+    // diagnostic signal (code + function name + cause):
+    expect(logged()).toContain("PGRST202");
+    expect(logged()).toContain("manage_subscription");
+    expect(logged()).toContain("does not exist");
+    expect(logged()).toContain('action "set_plan"');
+    // ...and no personal data (ids are never part of the diagnostic):
+    expect(logged()).not.toContain(ADMIN_ID);
+    expect(logged()).not.toContain(TARGET_ID);
+  });
+
+  it("other database errors stay db_error (400) but are logged with PII REDACTED", async () => {
+    const piiUuid = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    const piiEmail = "victim@example.com";
+    mockSession(ADMIN_ID);
+    mockAdminData(
+      adminLookupHandlers({
+        rpcError: () => ({
+          code: "23503",
+          message: `insert or update on table "subscriptions" violates FK for user ${piiUuid} admin ${piiEmail}`,
+        }),
+      }),
+    );
+    const response = await post({
+      action: "set_plan",
+      plan: "pro",
+      periodDays: 30,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "db_error" });
+    const out = logged();
+    expect(out).toContain("23503");
+    expect(out).not.toContain(piiUuid);
+    expect(out).not.toContain(piiEmail);
+    expect(out).toContain("[uuid]");
+    expect(out).toContain("[email]");
+  });
+
+  it("a throwing RPC client → db_error (400), still logged (client_exception)", async () => {
+    mockSession(ADMIN_ID);
+    mockAdminData(
+      adminLookupHandlers({
+        rpcThrow: (name) =>
+          name === "manage_subscription"
+            ? new Error("fetch failed (network down)")
+            : null,
+      }),
+    );
+    const response = await post({
+      action: "cancel_subscription",
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "db_error" });
+    expect(logged()).toContain("client_exception");
+    expect(logged()).toContain("fetch failed");
+  });
+
+  it("grant_admin whose AUDIT insert fails → 500 audit_failed (never a false success)", async () => {
+    mockSession(ADMIN_ID);
+    const mock = mockAdminData(
+      adminLookupHandlers({
+        rowError: (table) =>
+          table === "admin_audit_log"
+            ? { code: "55000", message: "audit insert failed" }
+            : null,
+      }),
+    );
+    const response = await post({ action: "grant_admin" });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "audit_failed" });
+    // The grant itself WAS committed (the upsert ran) — and the failure is
+    // logged with the committed-state caveat:
+    expect(
+      mock.calls.find((c) => c.table === "admins" && c.op === "upsert"),
+    ).toBeDefined();
+    expect(logged()).toContain("AUDIT WRITE FAILED");
+    expect(logged()).toContain("grant_admin");
+  });
+
+  it("revoke_admin whose AUDIT insert fails → 500 audit_failed (never a false success)", async () => {
+    mockSession(ADMIN_ID);
+    const mock = mockAdminData(
+      adminLookupHandlers({
+        rowError: (table) =>
+          table === "admin_audit_log"
+            ? { code: "55000", message: "audit insert failed" }
+            : null,
+      }),
+    );
+    const response = await post({ action: "revoke_admin" });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "audit_failed" });
+    expect(
+      mock.calls.find((c) => c.table === "admins" && c.op === "delete"),
+    ).toBeDefined();
+    expect(logged()).toContain("revoke_admin");
+  });
+
+  it("sanitizeDbDiagnostic: redacts UUIDs + e-mails, collapses whitespace, truncates", () => {
+    const s = sanitizeDbDiagnostic(
+      `  error for ${ADMIN_ID} and ${TARGET_ID} admin@example.com\nsecond line`,
+    );
+    expect(s).toBe("error for [uuid] and [uuid] [email] second line");
+    expect(s).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
+    expect(s).not.toContain("@");
+    const long = sanitizeDbDiagnostic("x".repeat(1000));
+    expect(long.length).toBeLessThanOrEqual(300);
+  });
+
+  it("isMissingFunctionError: PGRST202 / 42883 / the 42883 message shape → true; everything else → false", () => {
+    expect(isMissingFunctionError({ code: "PGRST202" })).toBe(true);
+    expect(isMissingFunctionError({ code: "42883" })).toBe(true);
+    expect(
+      isMissingFunctionError({
+        message:
+          "function public.manage_subscription(uuid, uuid, text, text, integer, text) does not exist",
+      }),
+    ).toBe(true);
+    expect(
+      isMissingFunctionError({
+        message: "function  public.activate_trial ( uuid ) does not exist",
+      }),
+    ).toBe(true);
+    expect(
+      isMissingFunctionError({ code: "23503", message: "FK violation" }),
+    ).toBe(false);
+    expect(
+      isMissingFunctionError({ message: 'relation "x" does not exist' }),
+    ).toBe(false);
+    expect(isMissingFunctionError({})).toBe(false);
   });
 });
 

@@ -1236,6 +1236,10 @@ const de = {
     done: "Erledigt.",
     selfRevoke: "Sie können Ihre eigenen Adminrechte nicht entziehen.",
     noSubscription: "Für diesen Benutzer existiert kein Abonnement.",
+    rpcUnavailable:
+      "Datenbank-Funktion fehlt — das Schema ist hinter dem Code (Migration 20261126 nicht angewendet). Server-Logs prüfen und den dokumentierten Rollout anwenden.",
+    auditFailed:
+      "Aktion wurde angewendet, aber der Audit-Eintrag konnte nicht geschrieben werden. Bitte manuell prüfen.",
     actionFailed: "Aktion fehlgeschlagen ({error}).",
     networkError: "Netzwerkfehler — bitte erneut versuchen.",
     confirmBody: "Bestätigen: {action} für {email}?",
@@ -3292,6 +3296,10 @@ const en: Dict = {
     done: "Done.",
     selfRevoke: "You cannot revoke your own admin rights.",
     noSubscription: "No subscription exists for this user.",
+    rpcUnavailable:
+      "Database function missing — the schema is behind the code (migration 20261126 not applied). Check the server logs and apply the documented rollout.",
+    auditFailed:
+      "The action was applied, but its audit record could not be written. Verify manually.",
     actionFailed: "Action failed ({error}).",
     networkError: "Network error — please retry.",
     confirmBody: "Confirm: {action} for {email}?",
@@ -5339,6 +5347,10 @@ const fr: Dict = {
     done: "Terminé.",
     selfRevoke: "Vous ne pouvez pas révoquer vos propres droits admin.",
     noSubscription: "Aucun abonnement n'existe pour cet utilisateur.",
+    rpcUnavailable:
+      "Fonction de base de données manquante — le schéma est en retard sur le code (migration 20261126 non appliquée). Vérifier les journaux serveur et appliquer le déroulé documenté.",
+    auditFailed:
+      "L'action a été appliquée, mais sa trace d'audit n'a pas pu être écrite. Vérifier manuellement.",
     actionFailed: "Action échouée ({error}).",
     networkError: "Erreur réseau — veuillez réessayer.",
     confirmBody: "Confirmer : {action} pour {email} ?",
@@ -7358,6 +7370,10 @@ const ar: Dict = {
     done: "تم.",
     selfRevoke: "لا يمكنك سحب صلاحيات المدير الخاصة بك.",
     noSubscription: "لا يوجد اشتراك لهذا المستخدم.",
+    rpcUnavailable:
+      "دالة قاعدة البيانات غير موجودة — مخطط القاعدة متأخر عن الكود (لم تُطبَّق الترحيلة 20261126). راجع سجلات الخادم وطبّق خطة الترحيل الموثقة.",
+    auditFailed:
+      "تم تنفيذ الإجراء، لكن تعذر كتابة سجل التدقيق الخاص به. تحقق يدويًا.",
     actionFailed: "فشل الإجراء ({error}).",
     networkError: "خطأ في الشبكة — يرجى إعادة المحاولة.",
     confirmBody: "تأكيد: {action} لـ {email}؟",

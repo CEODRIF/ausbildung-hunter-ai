@@ -127,19 +127,81 @@ export type AdminAction =
 export type AdminActionResult =
   { ok: true; message: string } | { ok: false; reason: string };
 
+/**
+ * Sanitized server-side diagnostics for admin-action failures.
+ *
+ * The UI only ever receives the coarse `reason` (see AdminActionResult) —
+ * these logs carry the actual PostgREST error CODE + a redacted MESSAGE so
+ * the real failure (e.g. "function does not exist" = a missing migration)
+ * is diagnosable from the server logs without leaking data to the browser.
+ * Redaction: every UUID and e-mail literal in the message is replaced; the
+ * message is truncated. Function names, argument TYPES and SQLSTATE/PGRST
+ * codes are intentionally kept — they are the diagnostic signal and carry
+ * no personal data.
+ */
+export function sanitizeDbDiagnostic(message: string): string {
+  return message
+    .replace(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+      "[uuid]",
+    )
+    .replace(/\S+@\S+\.\S+/g, "[email]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+}
+
+function logAdminDbError(
+  action: AdminAction,
+  code: string | undefined,
+  message: string | undefined,
+): void {
+  console.error(
+    `[admin] database error for action "${action}" — code=${code ?? "unknown"} message=${sanitizeDbDiagnostic(message ?? "(no message)")}`,
+  );
+}
+
+/**
+ * True when the error says the RPC (or another function) does not exist —
+ * i.e. the database schema is behind the deployed application code
+ * (missing migration), not when the operation itself was rejected.
+ * PostgREST reports this as PGRST202; raw SQLSTATE is 42883.
+ */
+export function isMissingFunctionError(error: {
+  code?: string | null;
+  message?: string | null;
+}): boolean {
+  if (error.code === "PGRST202" || error.code === "42883") return true;
+  return /function\s+[\w.]+\s*\([^)]*\)\s+does not exist/i.test(
+    error.message ?? "",
+  );
+}
+
+/**
+ * Appends an audit row. Returns false (and logs a sanitized diagnostic)
+ * when the insert fails — callers MUST treat that as a failure, never as
+ * success: an admin action without its audit record is not complete.
+ */
 async function appendAudit(
   actorId: string,
   targetUserId: string,
   action: AdminAction,
   details: Record<string, unknown>,
-): Promise<void> {
+): Promise<boolean> {
   const admin = createAdminClient();
-  await admin.from("admin_audit_log").insert({
+  const { error } = await admin.from("admin_audit_log").insert({
     actor_id: actorId,
     target_user_id: targetUserId,
     action,
     details,
   });
+  if (error) {
+    console.error(
+      `[admin] AUDIT WRITE FAILED for action "${action}" (the underlying change, if any, IS committed) — code=${error.code ?? "unknown"} message=${sanitizeDbDiagnostic(error.message ?? "(no message)")}`,
+    );
+    return false;
+  }
+  return true;
 }
 
 async function targetExists(targetUserId: string): Promise<boolean> {
@@ -200,7 +262,7 @@ export async function executeAdminAction(
       }
     }
     let data: unknown;
-    let error: { message?: string } | null = null;
+    let error: { code?: string; message?: string } | null = null;
     try {
       const res = await admin.rpc("manage_subscription", {
         p_actor_id: actorId,
@@ -213,10 +275,28 @@ export async function executeAdminAction(
       });
       data = res.data;
       error = res.error;
-    } catch {
+    } catch (e) {
+      // A thrown client failure still gets a sanitized server-side
+      // diagnostic (the UI keeps only the coarse reason).
+      logAdminDbError(
+        action,
+        e instanceof Error && /PGRST\d{4}/.test(e.message)
+          ? e.message.match(/PGRST\d{4}/)?.[0]
+          : "client_exception",
+        e instanceof Error ? e.message : String(e),
+      );
       return { ok: false, reason: "db_error" };
     }
-    if (error) return { ok: false, reason: "db_error" };
+    if (error) {
+      logAdminDbError(action, error.code, error.message);
+      // Missing function = the database is behind the code (a required
+      // migration was never applied) — surface that specifically instead
+      // of an opaque "db_error" so the operator knows exactly what to do.
+      if (isMissingFunctionError(error)) {
+        return { ok: false, reason: "rpc_unavailable" };
+      }
+      return { ok: false, reason: "db_error" };
+    }
     const result = (Array.isArray(data) ? data[0] : data) as Record<
       string,
       unknown
@@ -233,7 +313,7 @@ export async function executeAdminAction(
       return {
         ok: true,
         message:
-          "Subscription canceled (entitlements revert to the Free state).",
+          "Subscription canceled — the account has no active plan; protected features are locked (account and data preserved).",
       };
     }
     return {
@@ -252,7 +332,11 @@ export async function executeAdminAction(
         { onConflict: "user_id" },
       );
     if (error) return { ok: false, reason: "db_error" };
-    await appendAudit(actorId, targetUserId, "grant_admin", {});
+    // The grant IS committed at this point; a failed audit write must NOT
+    // be reported as a plain success — the operator has to verify it.
+    if (!(await appendAudit(actorId, targetUserId, "grant_admin", {}))) {
+      return { ok: false, reason: "audit_failed" };
+    }
     return { ok: true, message: "Admin rights granted." };
   }
 
@@ -266,7 +350,10 @@ export async function executeAdminAction(
       .delete()
       .eq("user_id", targetUserId);
     if (error) return { ok: false, reason: "db_error" };
-    await appendAudit(actorId, targetUserId, "revoke_admin", {});
+    // Same audit-integrity rule as grant_admin.
+    if (!(await appendAudit(actorId, targetUserId, "revoke_admin", {}))) {
+      return { ok: false, reason: "audit_failed" };
+    }
     return { ok: true, message: "Admin rights revoked." };
   }
 

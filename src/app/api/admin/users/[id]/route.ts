@@ -59,12 +59,21 @@ export async function POST(
     { plan: parsed.data.plan, periodDays: parsed.data.periodDays },
   );
   if (!result.ok) {
+    // Status codes: 4xx = caller-side rejection (the request itself was
+    // invalid or the state doesn't allow it); 5xx = infrastructure
+    // problems the operator must act on (missing migration = the database
+    // is behind the code; audit write failed = the action committed but
+    // its audit record did not — verify manually).
     const status =
       result.reason === "user_not_found"
         ? 404
         : result.reason === "no_subscription"
           ? 409
-          : 400;
+          : result.reason === "rpc_unavailable"
+            ? 503
+            : result.reason === "audit_failed"
+              ? 500
+              : 400;
     return NextResponse.json({ error: result.reason }, { status });
   }
   return NextResponse.json({ ok: true, message: result.message });
