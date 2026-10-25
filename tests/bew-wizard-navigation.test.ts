@@ -268,9 +268,11 @@ let db: DB;
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (table: string) => makeFrom(db, table as TableKey),
-    // F1 (saved_applications): real entitlement service; the save paths do
-    // an advisory capacity pre-check on empty→content transitions —
-    // "unmetered" keeps the gate out of this suite.
+    // Real entitlement service: the save paths do an advisory capacity
+    // pre-check on empty→content transitions ("unmetered" keeps that gate
+    // out of this suite), and the series-creation path reads the automation
+    // meter (feature_quota_status) after resolving the seeded commercial
+    // subscription — a denied lookup would fail every create here.
     rpc: async (fn: string) =>
       fn === "check_saved_application_capacity"
         ? {
@@ -284,7 +286,9 @@ vi.mock("@/lib/supabase/admin", () => ({
             ],
             error: null,
           }
-        : { data: null, error: null },
+        : fn === "feature_quota_status"
+          ? { data: { used: 0, resets_at: null }, error: null }
+          : { data: null, error: null },
     storage: { from: () => ({ upload: async () => ({ error: null }) }) },
   }),
 }));
