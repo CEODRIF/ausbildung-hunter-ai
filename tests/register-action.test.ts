@@ -1,18 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
- * Supabase Auth email-confirmation registration contract:
- *  - the invitation code is validated (service role) before any user is
- *    created;
+ * Supabase Auth email-confirmation registration contract (OPEN registration
+ * since 2026-10-25 — migration 20261201000000):
+ *  - the invitation code is OPTIONAL: the normal path carries no code and
+ *    never touches the invitation table (validateInvitationCode is not even
+ *    consulted);
+ *  - an EXPLICITLY provided code is pre-validated (service role) before any
+ *    user is created — an invalid/unknown/exhausted code is rejected with a
+ *    clear message (the user can simply not provide a code), a valid one
+ *    travels in the user metadata and is consumed atomically by the
+ *    on_auth_user_created trigger (UX pre-check only — the DB is the gate);
  *  - the user is created with the standard anon-key `auth.signUp()` —
  *    Supabase itself sends the confirmation email (no Resend, no service
  *    role user creation, no 6-digit code);
- *  - full_name + invitation_code travel in the user metadata (the profile
- *    trigger and the confirmation trigger consume them);
  *  - emailRedirectTo points at /auth/callback?next=/onboarding;
  *  - success shows "check your email" — never claims the account is active;
- *  - raw provider errors are never leaked (they are logged scrubbed); the
- *    "already registered" message is preserved.
+ *  - email verification, terms acceptance, per-IP rate limiting and scrubbed
+ *    error logging are all unchanged;
+ *  - raw provider errors are never leaked; the "already registered" message
+ *    is preserved.
  */
 vi.mock("@/lib/auth", () => ({
   validateInvitationCode: vi.fn(),
@@ -44,6 +51,8 @@ const { createClient } = await import("@/lib/supabase/server");
 const { checkRateLimit, clientIpKey } = await import("@/lib/rate-limit");
 
 const signUp = vi.fn();
+const INVITATION_REJECTED =
+  "That invitation code is invalid or no longer active. You can leave the invitation code out and continue without one.";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -63,7 +72,8 @@ function makeFormData(overrides: Record<string, string> = {}): FormData {
   body.set("fullName", "Jane Doe");
   body.set("email", "jane@example.com");
   body.set("password", "password123");
-  body.set("invitationCode", "DRIF26");
+  // Open registration: the base form post carries NO invitation code (the
+  // field is no longer in the UI — a code only arrives via direct posts).
   body.set("terms", "on");
   for (const [key, value] of Object.entries(overrides)) {
     if (value === "") body.delete(key);
@@ -72,28 +82,10 @@ function makeFormData(overrides: Record<string, string> = {}): FormData {
   return body;
 }
 
-describe("register (Supabase Auth email confirmation)", () => {
-  it("rejects invalid input before touching Supabase", async () => {
-    mockSignUp({});
-    const res = await register({ error: "" }, makeFormData({ fullName: "J" }));
-    expect(res).toEqual({ error: "Enter your full name." });
-    expect(signUp).not.toHaveBeenCalled();
-  });
-
-  it("rejects an invalid/expired invitation code", async () => {
-    mockSignUp({});
-    vi.mocked(validateInvitationCode).mockResolvedValue(false);
-    const res = await register({ error: "" }, makeFormData());
-    expect(res).toEqual({
-      error: "That invitation code is invalid or no longer active.",
-    });
-    expect(signUp).not.toHaveBeenCalled();
-  });
-
-  it("signs the user up with metadata + emailRedirectTo and shows the check-your-email state", async () => {
+describe("register (open registration, Supabase Auth email confirmation)", () => {
+  it("signs up WITHOUT an invitation code and never touches the invitation table", async () => {
     vi.stubEnv("APP_URL", "https://app.example.com/");
     mockSignUp({ data: { user: { id: "u1" }, session: null }, error: null });
-    vi.mocked(validateInvitationCode).mockResolvedValue(true);
 
     const res = await register({ error: "" }, makeFormData());
 
@@ -101,6 +93,92 @@ describe("register (Supabase Auth email confirmation)", () => {
       success:
         "Check your email and click the verification link to activate your account.",
     });
+    // No code -> no pre-check at all.
+    expect(validateInvitationCode).not.toHaveBeenCalled();
+    expect(signUp).toHaveBeenCalledTimes(1);
+    expect(signUp).toHaveBeenCalledWith({
+      email: "jane@example.com",
+      password: "password123",
+      options: {
+        data: {
+          full_name: "Jane Doe",
+          // No invitation_code key — the trigger sees '' and consumes nothing.
+        },
+        emailRedirectTo:
+          "https://app.example.com/auth/callback?next=/onboarding",
+      },
+    });
+  });
+
+  it("rejects a submission WITHOUT terms even in the no-code path", async () => {
+    mockSignUp({});
+    const res = await register({ error: "" }, makeFormData({ terms: "" }));
+    expect(res).toEqual({
+      error:
+        "Please accept the Terms of Service and Privacy Policy to continue.",
+    });
+    expect(signUp).not.toHaveBeenCalled();
+    expect(validateInvitationCode).not.toHaveBeenCalled();
+  });
+
+  it("still rejects invalid input before touching Supabase", async () => {
+    mockSignUp({});
+    const res = await register({ error: "" }, makeFormData({ fullName: "J" }));
+    expect(res).toEqual({ error: "Enter your full name." });
+    expect(signUp).not.toHaveBeenCalled();
+    expect(validateInvitationCode).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed explicit code without touching Supabase", async () => {
+    mockSignUp({});
+    const res = await register(
+      {
+        error: "",
+      },
+      makeFormData({ invitationCode: "bad code!" }),
+    );
+    expect(res).toEqual({ error: "Enter a valid invitation code." });
+    expect(signUp).not.toHaveBeenCalled();
+    expect(validateInvitationCode).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid/expired EXPLICITLY provided code (with the optional-code hint)", async () => {
+    mockSignUp({});
+    vi.mocked(validateInvitationCode).mockResolvedValue(false);
+    const res = await register(
+      {
+        error: "",
+      },
+      makeFormData({ invitationCode: "DRIF26" }),
+    );
+    expect(res).toEqual({ error: INVITATION_REJECTED });
+    expect(validateInvitationCode).toHaveBeenCalledWith(
+      "DRIF26",
+      "registration",
+    );
+    expect(signUp).not.toHaveBeenCalled();
+  });
+
+  it("signs up WITH a valid explicit code (legacy/referral path preserved)", async () => {
+    vi.stubEnv("APP_URL", "https://app.example.com/");
+    mockSignUp({ data: { user: { id: "u1" }, session: null }, error: null });
+    vi.mocked(validateInvitationCode).mockResolvedValue(true);
+
+    const res = await register(
+      {
+        error: "",
+      },
+      makeFormData({ invitationCode: "DRIF26" }),
+    );
+
+    expect(res).toEqual({
+      success:
+        "Check your email and click the verification link to activate your account.",
+    });
+    expect(validateInvitationCode).toHaveBeenCalledWith(
+      "DRIF26",
+      "registration",
+    );
     expect(signUp).toHaveBeenCalledTimes(1);
     expect(signUp).toHaveBeenCalledWith({
       email: "jane@example.com",
@@ -119,7 +197,6 @@ describe("register (Supabase Auth email confirmation)", () => {
   it("leaves emailRedirectTo undefined when APP_URL is unset (dashboard Site URL fallback)", async () => {
     vi.stubEnv("APP_URL", "");
     mockSignUp({ data: { user: { id: "u1" }, session: null }, error: null });
-    vi.mocked(validateInvitationCode).mockResolvedValue(true);
 
     const res = await register({ error: "" }, makeFormData());
 
@@ -132,9 +209,8 @@ describe("register (Supabase Auth email confirmation)", () => {
     expect(signUp.mock.calls[0][0].options.emailRedirectTo).toBeUndefined();
   });
 
-  it("keeps the existing 'already registered' message", async () => {
+  it("keeps the existing 'already registered' message (no code)", async () => {
     mockSignUp({ data: null, error: { message: "User already registered" } });
-    vi.mocked(validateInvitationCode).mockResolvedValue(true);
 
     const res = await register({ error: "" }, makeFormData());
 
@@ -151,7 +227,6 @@ describe("register (Supabase Auth email confirmation)", () => {
           "For your security, we limit login attempts after many failed attempts.",
       },
     });
-    vi.mocked(validateInvitationCode).mockResolvedValue(true);
 
     const res = await register({ error: "" }, makeFormData());
 
@@ -168,7 +243,6 @@ describe("register (Supabase Auth email confirmation)", () => {
         "fetch failed Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.aaaa1111bbbb",
       ),
     );
-    vi.mocked(validateInvitationCode).mockResolvedValue(true);
 
     const res = await register({ error: "" }, makeFormData());
 
@@ -183,17 +257,7 @@ describe("register (Supabase Auth email confirmation)", () => {
     );
   });
 
-  it("rejects a submission without the Terms acceptance (server-side, not just the checkbox)", async () => {
-    mockSignUp({});
-    const res = await register({ error: "" }, makeFormData({ terms: "" }));
-    expect(res).toEqual({
-      error: "Please accept the Terms of Service and Privacy Policy to continue.",
-    });
-    expect(signUp).not.toHaveBeenCalled();
-    expect(validateInvitationCode).not.toHaveBeenCalled();
-  });
-
-  it("caps signup spam / invitation-code guessing per client IP before touching Supabase", async () => {
+  it("caps signup spam per client IP before touching Supabase (no code needed)", async () => {
     mockSignUp({});
     vi.mocked(checkRateLimit).mockResolvedValueOnce({
       allowed: false,
@@ -218,7 +282,6 @@ describe("register (Supabase Auth email confirmation)", () => {
 
   it("still registers when the limiter itself throws (fail open)", async () => {
     mockSignUp({ data: { user: { id: "u1" }, session: null }, error: null });
-    vi.mocked(validateInvitationCode).mockResolvedValue(true);
     vi.mocked(checkRateLimit).mockRejectedValueOnce(new Error("limiter down"));
 
     const res = await register({ error: "" }, makeFormData());
@@ -230,21 +293,20 @@ describe("register (Supabase Auth email confirmation)", () => {
     expect(signUp).toHaveBeenCalledTimes(1);
   });
 
-  it("maps a database-level invitation rejection (race for the last use) to the invitation error", async () => {
+  it("maps a database-level rejection (transitional old-DB deployment) to the safe invitation message", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     // Supabase Auth returns this opaque message when the on_auth_user_created
-    // trigger raises — the real reason is only in the Postgres log.
+    // trigger raises. With the 20261201 trigger applied the trigger no longer
+    // raises for codes — this pin covers the NEW-APP/OLD-DB window (old
+    // trigger rejecting a code-less sign-up) and keeps the message safe.
     mockSignUp({
       data: null,
       error: { message: "Database error saving new user" },
     });
-    vi.mocked(validateInvitationCode).mockResolvedValue(true);
 
     const res = await register({ error: "" }, makeFormData());
 
-    expect(res).toEqual({
-      error: "That invitation code is invalid or no longer active.",
-    });
+    expect(res).toEqual({ error: INVITATION_REJECTED });
     // Diagnosable server-side, opaque to the client.
     expect(spy.mock.calls.map((c) => c.join(" ")).join("\n")).toContain(
       "[register]",
