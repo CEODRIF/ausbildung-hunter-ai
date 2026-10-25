@@ -299,6 +299,11 @@ vi.mock("@/lib/supabase/admin", () => ({
           error: null,
         };
       }
+      if (fn === "feature_quota_status") {
+        // The automation meter read — the series-creation entitlement gate
+        // and the view's usage snapshot both read it (used: 0 = fresh day).
+        return { data: { used: 0, resets_at: null }, error: null };
+      }
       return { data: null, error: null };
     },
     storage: { from: () => ({ upload: async () => ({ error: null }) }) },
@@ -417,7 +422,7 @@ describe("F1 createBewCampaign (engine, cold + warm probe)", () => {
     db = freshDb();
   });
 
-  it("cold (position probe uncached): 4 RTT / 3 waves (probe ∥ default sender)", async () => {
+  it("cold (position probe uncached): 7 RTT / 6 waves (entitlement gate + probe ∥ default sender)", async () => {
     engine.resetBewPositionColumnsProbe();
     const m = await measure("F1 createBewCampaign (cold)", () =>
       engine.createBewCampaign({
@@ -426,11 +431,15 @@ describe("F1 createBewCampaign (engine, cold + warm probe)", () => {
         purpose: "ausbildung",
       }),
     );
-    expect(m.rtt).toBe(4); // probe, default sender, campaign insert, seed insert
-    expect(m.waves).toBe(3); // (probe ∥ sender) → insert → seed
+    // +3 RTT / +3 waves vs pre-gate 4/3: the automation entitlement gate
+    // (2026-10-25 subscription-enforcement fix) runs FIRST and resolves
+    // subscriptions → billing_plans → automation meter (three sequential
+    // hops), then (probe ∥ sender) → insert → seed.
+    expect(m.rtt).toBe(7); // gate (subscriptions, billing_plans, meter) + probe, sender, insert, seed
+    expect(m.waves).toBe(6); // subs → plans → meter → (probe ∥ sender) → insert → seed
   });
 
-  it("warm (probe cached after first use in the process): 3 RTT / 3 waves", async () => {
+  it("warm (probe cached after first use in the process): 6 RTT / 6 waves", async () => {
     engine.resetBewPositionColumnsProbe();
     await engine.createBewCampaign({
       userId: USER,
@@ -444,8 +453,10 @@ describe("F1 createBewCampaign (engine, cold + warm probe)", () => {
         purpose: "ausbildung",
       }),
     );
-    expect(m.rtt).toBe(3);
-    expect(m.waves).toBe(3);
+    // The gate always costs its 3 hops (no caching of entitlement state —
+    // it MUST be fresh on every call); only the position probe is cached.
+    expect(m.rtt).toBe(6);
+    expect(m.waves).toBe(6);
   });
 });
 
@@ -480,7 +491,7 @@ describe("F3 '+ New series' — client-visible flow", () => {
     engine.resetBewPositionColumnsProbe();
   });
 
-  it("BEFORE: create action + view action back-to-back = 16 RTT / 12 waves", async () => {
+  it("BEFORE: create action + view action back-to-back = 19 RTT / 15 waves", async () => {
     // The old client: `await bewCreateCampaign(fd)` then
     // `await bewGetView(result.campaignId)` — two server actions, each
     // re-authenticating (2 RTT).
@@ -502,15 +513,16 @@ describe("F3 '+ New series' — client-visible flow", () => {
       const campaign = db.bew_campaigns[db.bew_campaigns.length - 1];
       await engine.getBewCampaignView(USER, campaign.id);
     });
-    // 2 auth + 4 cold create (probe ∥ sender, insert, seed) + 2 auth +
-    // 8 view (the CREATED campaign carries its default sender → sender
-    // read; +3 P0 quota-consistency reads: subscriptions ∥ automation
-    // meter join the usage wave, billing_plans rides that wave)
-    expect(m.rtt).toBe(16);
-    expect(m.waves).toBe(12);
+    // 2 auth + 7 cold create (the +3 entitlement-gate hops — subscriptions
+    // → billing_plans → meter — before probe ∥ sender, insert, seed) +
+    // 2 auth + 8 view (the CREATED campaign carries its default sender →
+    // sender read; +3 P0 quota-consistency reads: subscriptions ∥
+    // automation meter join the usage wave, billing_plans rides that wave)
+    expect(m.rtt).toBe(19);
+    expect(m.waves).toBe(15);
   });
 
-  it("AFTER: one createBewCampaignView action = 12 RTT / 8 waves (and the UI already opened)", async () => {
+  it("AFTER: one createBewCampaignView action = 15 RTT / 11 waves (and the UI already opened)", async () => {
     const m = await measure("F3b new-series AFTER", async () => {
       const { getCurrentUserAndProfile } = await import("@/lib/auth");
       await getCurrentUserAndProfile(); // the single action's auth
@@ -520,15 +532,16 @@ describe("F3 '+ New series' — client-visible flow", () => {
         purpose: "ausbildung",
       });
     });
-    // 2 auth + (probe ∥ sender) + insert + seed + (apps ∥ docs) +
+    // 2 auth + (the +3 entitlement-gate hops: subscriptions → billing_
+    // plans → meter) + (probe ∥ sender) + insert + seed + (apps ∥ docs) +
     // (usage ∥ subscriptions ∥ automation meter + billing_plans, P0
     // quota-consistency reads — the view shows what the send path
     // enforces; +3 RTT / +1 wave). The sender's e-mail is REUSED from
     // the create — no account re-read.
-    expect(m.rtt).toBe(12);
-    expect(m.waves).toBe(8);
-    expect(m.rtt).toBeLessThan(16);
-    expect(m.waves).toBeLessThan(12);
+    expect(m.rtt).toBe(15);
+    expect(m.waves).toBe(11);
+    expect(m.rtt).toBeLessThan(19);
+    expect(m.waves).toBeLessThan(15);
   });
 });
 

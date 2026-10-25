@@ -8,6 +8,7 @@
  * becomes a clear, terminal quality failure (never silently accepted).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { COMMERCIAL_PLAN_ROW, COMMERCIAL_SUB_ROW } from "./helpers";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -20,6 +21,11 @@ interface DB {
   bew_applications: Row[];
   bew_documents: Row[];
   bew_campaign_documents: Row[];
+  // The REAL entitlement service resolves the automation gate on every
+  // generateBewLetters call — a seeded commercial subscription + plan row
+  // make the gate pass (the tests exercise generation, not plan denial).
+  subscriptions: Row[];
+  billing_plans: Row[];
   aiRemaining: number;
   aiScripts: Array<string | (() => Error)>;
   pdfText: string;
@@ -46,6 +52,8 @@ function freshDb(): DB {
       },
     ],
     candidate_profiles: [], // no scanned CV → engine falls back to the raw CV text
+    subscriptions: [{ ...COMMERCIAL_SUB_ROW, user_id: USER }],
+    billing_plans: [{ ...COMMERCIAL_PLAN_ROW }],
     bew_campaigns: [],
     bew_applications: [],
     bew_documents: [],
@@ -133,7 +141,15 @@ function makeFrom(table: string) {
 vi.doMock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (table: string) => makeFrom(table),
-    rpc: () => Promise.resolve({ data: null, error: null }),
+    // The automation entitlement gate reads the meter (feature_quota_status)
+    // after resolving the seeded commercial subscription — an unanswered
+    // meter read would fail the gate closed and break every generation test.
+    rpc: (fn: string) =>
+      Promise.resolve(
+        fn === "feature_quota_status"
+          ? { data: { used: 0, resets_at: null }, error: null }
+          : { data: null, error: null },
+      ),
     storage: {
       from: () => ({
         download: async () => ({ data: { arrayBuffer: async () => new Uint8Array([1]).buffer }, error: null }),

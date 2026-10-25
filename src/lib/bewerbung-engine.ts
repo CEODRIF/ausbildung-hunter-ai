@@ -98,6 +98,7 @@ import {
   completeFeatureOp,
   effectiveUploadLimitBytes,
   evaluateFeatureFor,
+  type FeatureEntitlement,
   readMeter,
   releaseFeatureOp,
   reserveFeatureOp,
@@ -520,6 +521,16 @@ async function resolveDefaultSenderAccount(
 async function createBewCampaignCore(
   input: CreateBewCampaignInput,
 ): Promise<{ row: BewCampaignRow; defaultSenderEmail: string | null | undefined }> {
+  // AUTOMATION ENTITLEMENT GATE (server-side, fail-closed): creating a
+  // series is the entry point of a PAID automation feature. The canonical
+  // resolver reads FRESH subscription state on every call (no cache, no
+  // client input) — a canceled / expired / downgraded account is denied
+  // immediately, and nothing is inserted (not even a sender lookup runs)
+  // for a denied caller. The billing contract (Phase 12) ends entitlements
+  // AT cancellation: a future current_period_end never grants access.
+  const automation = await checkFeature(input.userId, "automation");
+  if (!automation.allowed)
+    throw new Error(automationDenialCode(automation.reason));
   const check = validateCompanyCount(input.count);
   if (!check.ok) throw new Error("INVALID_COUNT");
   if (!isBewPurpose(input.purpose)) throw new Error("INVALID_PURPOSE");
@@ -1636,6 +1647,16 @@ export async function generateBewLetters(
   const { admin, campaign } = await requireOwnedCampaign(userId, campaignId);
   if (BEW_TERMINAL_CAMPAIGN.has(campaign.status))
     throw new Error("CAMPAIGN_CLOSED");
+  // AUTOMATION ENTITLEMENT GATE (server-side, fail-closed): letter
+  // generation is a PAID automation operation, re-verified on EVERY run —
+  // the entitlement may have been canceled / expired / downgraded between
+  // the page load (or the previous generation) and this call. The
+  // per-letter `reserveAIUsage` below meters a DIFFERENT feature
+  // (ai_assistant) and is never the automation gate itself. No row is
+  // claimed and nothing is generated for a denied caller.
+  const automation = await checkFeature(userId, "automation");
+  if (!automation.allowed)
+    throw new Error(automationDenialCode(automation.reason));
   // The full applicant header (seven mandatory profile fields) is required
   // before any NEW Anschreiben is generated. Stable code — the wizard maps
   // it to a localized "complete your profile" explanation. No rows are
@@ -2187,6 +2208,22 @@ export interface StartSendResult {
 }
 
 /**
+ * The stable denial code for a rejected automation entitlement — the SAME
+ * mapping at every paid entry point (series creation, letter generation,
+ * send start): one place so no operation can drift to a weaker or missing
+ * code. All three codes are in the action-level known-code set, so they
+ * cross the RSC boundary unchanged and surface as the localized
+ * upgrade/renewal messages (`bewauto.err.*`).
+ */
+function automationDenialCode(reason: FeatureEntitlement["reason"]): string {
+  return reason === "quota_exhausted"
+    ? "AUTOMATION_QUOTA_EXHAUSTED"
+    : reason === "lookup_error"
+      ? "AUTOMATION_UNAVAILABLE"
+      : "AUTOMATION_DISABLED";
+}
+
+/**
  * Explicitly start sending (the ONLY entry point that can enqueue e-mails).
  *
  * Order (all server-side, ownership-verified):
@@ -2243,12 +2280,7 @@ export async function startBewSend(
   if (!automation.allowed) {
     return {
       ok: false,
-      error:
-        automation.reason === "quota_exhausted"
-          ? "AUTOMATION_QUOTA_EXHAUSTED"
-          : automation.reason === "lookup_error"
-            ? "AUTOMATION_UNAVAILABLE"
-            : "AUTOMATION_DISABLED",
+      error: automationDenialCode(automation.reason),
       senderEmail: sender.email,
     };
   }
