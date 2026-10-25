@@ -17,11 +17,17 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   bewCancelSend,
+  bewCreateCampaignView,
   bewGetView,
   bewRefreshSend,
 } from "@/app/bewerbung-automation/actions";
 import { useI18n } from "@/lib/i18n";
-import { isValidEmail } from "@/lib/bewerbung-automation";
+import {
+  BEW_MAX_COUNT,
+  BEW_MIN_COUNT,
+  isValidEmail,
+  type BewPurpose,
+} from "@/lib/bewerbung-automation";
 import { Card } from "@/components/ui";
 import { GradientMesh } from "@/components/ui/surfaces";
 import { QuotaIndicator, makeQuotaLabels } from "@/components/quota-indicator";
@@ -47,6 +53,13 @@ const STEPS: Step[] = [1, 2, 3, 4, 5];
 interface Props {
   schemaOk: boolean;
   initialView: BewViewDTO | null;
+  /**
+   * True when the SERVER-SIDE initial load failed (DB/network error): the
+   * page must then show an actionable retry state — NEVER the "no series"
+   * empty state (an error is not an empty result). The empty state is
+   * rendered only when the query SUCCEEDED and returned no campaign.
+   */
+  initialLoadError: boolean;
   userName: string;
   userEmail: string;
 }
@@ -109,19 +122,61 @@ function lettersReady(view: BewViewDTO | null): boolean {
   );
 }
 
-export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail }: Props) {
+export function BewerbungAutomation({
+  schemaOk,
+  initialView,
+  initialLoadError,
+  userName,
+  userEmail,
+}: Props) {
   const { t } = useI18n();
   const router = useRouter();
   const [view, setView] = useState<BewViewDTO | null>(initialView);
   const [step, setStep] = useState<Step>(1);
   const [error, setError] = useState<string | null>(null);
 
-  /* Series creation is deliberately NOT part of this page: the page always
-     works on the CURRENT series (the initial view resolved by the server
-     component) and never creates, switches or redirects series on load.
-     The CompaniesStep `creatingSeries` / `seriesConfirmation` props are
-     kept (defensive, always inert here) so the step's row-save/delete
-     guards stay intact. */
+  /* First-series creation (the ONLY creation entry point on this page —
+     the three-dot series menu was removed on 2026-10-20). The form renders
+     ONLY in the verified no-series state (the initial query succeeded and
+     found no campaign); a page load never auto-creates — creation happens
+     exclusively on an explicit submit, through the server action
+     `bewCreateCampaignView` (validated + persisted server-side). The
+     CompaniesStep `creatingSeries` / `seriesConfirmation` props stay
+     defensive and inert. */
+  const [count, setCount] = useState("10");
+  const [purpose, setPurpose] = useState<BewPurpose>("ausbildung");
+  const [positionTitle, setPositionTitle] = useState("");
+  const [creatingSeries, setCreatingSeries] = useState(false);
+  const countNum = Number(count);
+  const countOk =
+    Number.isInteger(countNum) && countNum >= BEW_MIN_COUNT && countNum <= BEW_MAX_COUNT;
+  const submitCreateSeries = useCallback(
+    (event: React.FormEvent) => {
+      event.preventDefault();
+      if (!countOk || creatingSeries) return; // the server re-checks 1..100
+      const fd = new FormData();
+      fd.set("count", String(countNum));
+      fd.set("purpose", purpose);
+      if (positionTitle.trim()) fd.set("positionTitle", positionTitle.trim());
+      void (async () => {
+        setCreatingSeries(true);
+        setError(null);
+        try {
+          // Create + return the fresh, PERSISTED view in one action (the
+          // returned view is the server truth of the brand-new series).
+          const fresh = await bewCreateCampaignView(fd);
+          if (fresh) setView(fresh);
+        } catch (e) {
+          // Actionable failure message (localized error code, or the
+          // session-expiry navigation) — never a silent empty state.
+          setError(resolveBewError(e, t, (p) => router.replace(p)));
+        } finally {
+          setCreatingSeries(false);
+        }
+      })();
+    },
+    [countOk, countNum, purpose, positionTitle, creatingSeries, t, router],
+  );
 
   /* Latest view for the STABLE callbacks (refresh/pump/patch) — a callback
      that depends on `view` would be recreated on every poll and re-render
@@ -282,10 +337,39 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
     );
   }
 
-  /* -------- no series yet --------
-     This page is a pure entry point for the CURRENT series: it never creates
-     a series, never seeds rows and never redirects anywhere. When no series
-     exists, it simply says so (no controls, no forms, no hidden menus). */
+  /* -------- initial load FAILED --------
+     A failed query is NOT an empty result: show an actionable retry state
+     (the data may exist — the read simply did not succeed). */
+  if (initialLoadError && !view) {
+    return (
+      <div className="relative mx-auto max-w-3xl px-4 py-6">
+        <GradientMesh />
+        <Card className="relative p-5 sm:p-6">
+          <h1 className="text-2xl font-extrabold tracking-tight text-ink">
+            {t("bewauto.title")}
+          </h1>
+          <p className="mt-3 text-sm font-semibold text-danger">
+            {t("bewauto.loadErrorTitle")}
+          </p>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            {t("bewauto.loadErrorBody")}
+          </p>
+          <button
+            type="button"
+            onClick={() => router.refresh()}
+            className="mt-4 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+          >
+            {t("bewauto.retry")}
+          </button>
+        </Card>
+      </div>
+    );
+  }
+
+  /* -------- no series yet (query SUCCEEDED, genuinely none) --------
+     The creation form: the only series-creation entry point on this page.
+     A page load never auto-creates — the series is created only on an
+     explicit submit (server-validated, server-persisted). */
   if (!view) {
     return (
       <div className="relative mx-auto max-w-3xl px-4 py-6">
@@ -295,11 +379,85 @@ export function BewerbungAutomation({ schemaOk, initialView, userName, userEmail
             {t("bewauto.title")}
           </h1>
           <p className="mt-3 text-sm leading-6 text-muted">
-            {t("bewauto.noSeriesTitle")}
+            {t("bewauto.setupBody")} {userName}
           </p>
-          <p className="mt-2 text-sm leading-6 text-muted">
-            {t("bewauto.noSeriesBody")}
-          </p>
+          <form onSubmit={submitCreateSeries} className="mt-5 grid gap-4">
+            <div>
+              <label
+                htmlFor="bew-count"
+                className="block text-xs font-bold uppercase tracking-[0.12em] text-faint"
+              >
+                {t("bewauto.countQuestion")}
+              </label>
+              <input
+                id="bew-count"
+                type="number"
+                min={BEW_MIN_COUNT}
+                max={BEW_MAX_COUNT}
+                step={1}
+                value={count}
+                onChange={(e) => setCount(e.target.value)}
+                required
+                className={`mt-1.5 w-full rounded-xl border bg-surface-2 px-3 py-2 text-sm text-ink outline-none transition focus:border-accent ${countOk ? "border-line-strong" : "border-danger"}`}
+              />
+              <p className="mt-1 text-xs text-muted">{t("bewauto.countHint")}</p>
+              {!countOk && (
+                <p className="mt-1 text-xs font-semibold text-danger">
+                  {t("bewauto.countError")}
+                </p>
+              )}
+            </div>
+            <div>
+              <label
+                htmlFor="bew-purpose"
+                className="block text-xs font-bold uppercase tracking-[0.12em] text-faint"
+              >
+                {t("bewauto.purposeLabel")}
+              </label>
+              <select
+                id="bew-purpose"
+                value={purpose}
+                onChange={(e) => setPurpose(e.target.value as BewPurpose)}
+                className="mt-1.5 w-full rounded-xl border border-line-strong bg-surface-2 px-3 py-2 text-sm text-ink outline-none transition focus:border-accent"
+              >
+                <option value="ausbildung">
+                  {t("bewauto.purposeAusbildung")}
+                </option>
+                <option value="arbeit">{t("bewauto.purposeArbeit")}</option>
+                <option value="praktikum">
+                  {t("bewauto.purposePraktikum")}
+                </option>
+              </select>
+            </div>
+            <div>
+              <label
+                htmlFor="bew-position-title"
+                className="block text-xs font-bold uppercase tracking-[0.12em] text-faint"
+              >
+                {t("bewauto.positionTitle")} · {t("bewauto.positionOptional")}
+              </label>
+              <input
+                id="bew-position-title"
+                type="text"
+                value={positionTitle}
+                onChange={(e) => setPositionTitle(e.target.value)}
+                className="mt-1.5 w-full rounded-xl border border-line-strong bg-surface-2 px-3 py-2 text-sm text-ink outline-none transition focus:border-accent"
+              />
+              <p className="mt-1 text-xs text-muted">
+                {t("bewauto.positionTitleHint")}
+              </p>
+            </div>
+            {error && (
+              <p className="text-sm font-semibold text-danger">{error}</p>
+            )}
+            <button
+              type="submit"
+              disabled={!countOk || creatingSeries}
+              className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {creatingSeries ? t("bewauto.newSeriesCreating") : t("bewauto.setupStart")}
+            </button>
+          </form>
         </Card>
       </div>
     );

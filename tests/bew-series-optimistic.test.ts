@@ -217,20 +217,25 @@ describe("client wiring (static contract): series creation is gone from the page
       join(process.cwd(), "src/components/bewerbung-automation/client.tsx"),
       "utf8",
     );
-    // No creation entry point in any form — the previous instant-open
-    // orchestration (pending view + create+view action) is not referenced.
-    expect(src).not.toContain("startNewSeries");
-    expect(src).not.toContain("bewCreateCampaignView");
+    // First-series creation (restored 2026-10-25 — the page had become a
+    // dead end for subscribers with no series): the ONLY creation path is
+    // the explicit submit of the no-series form through the create+view
+    // action. The old instant-open orchestration (pending view) and the
+    // three-dot series menu stay removed.
+    expect(src).toContain("bewCreateCampaignView");
     // Word-boundary match, so `bewCreateCampaignView` does not count.
     expect(src).not.toMatch(/\bbewCreateCampaign\b/);
+    expect(src).not.toContain("startNewSeries");
     expect(src).not.toContain("buildPendingView");
     expect(src).not.toContain("bew-series-menu");
     expect(src).not.toContain("seriesMenuAria");
-    expect(src).not.toContain("newSeriesCreating");
-    expect(src).not.toContain("setupStart");
-    // The no-series state is a neutral notice (no controls).
-    expect(src).toContain("noSeriesTitle");
-    expect(src).toContain("noSeriesBody");
+    // The no-series state is the creation form (setupStart / count), and a
+    // FAILED initial load renders the actionable retry state instead of
+    // the empty state.
+    expect(src).toContain("setupStart");
+    expect(src).toContain('id="bew-count"');
+    expect(src).toContain("loadErrorTitle");
+    expect(src).toContain("initialLoadError");
     // The step receives the inert guard constants + the row-patch callback.
     expect(src).toContain("creatingSeries={false}");
     expect(src).toContain("seriesConfirmation={null}");
