@@ -282,6 +282,147 @@ describeMaybe(
     });
 
     // ======================================================================
+    // Open registration (migration 20261201000000) — verified on REAL
+    // PostgreSQL with the FULL migration chain applied, so this runs the
+    // EFFECTIVE (last-defined) handle_new_user:
+    //   * code-less sign-up succeeds and consumes NOTHING;
+    //   * a valid provided code is consumed atomically (+ consumed marker);
+    //   * an unknown code and an exhausted code never block the sign-up
+    //     and never consume.
+    // ======================================================================
+    describe("open registration — handle_new_user trigger (real PG)", () => {
+      // Fixture identities — never reused elsewhere in this file.
+      const OPEN_0 = "eeee0000-1111-4222-8333-444455556666"; // no metadata at all
+      const OPEN_1 = "eeee1111-2222-4333-8444-555566667777"; // no code
+      const OPEN_2 = "eeee2222-3333-4444-8555-666677778888"; // valid code
+      const OPEN_3 = "eeee3333-4444-4555-8666-777788889999"; // unknown code
+      const OPEN_4 = "eeee4444-5555-4666-8777-88889999aaaa"; // exhausted code
+      const profileCount = (uid: string) =>
+        q(`select count(*) from public.profiles where id = '${uid}'`).trim();
+      const openUsedCount = () =>
+        q(
+          `select used_count from public.invitation_codes where code = 'OPENTEST'`,
+        ).trim();
+      const marker = (uid: string) =>
+        q(
+          `select coalesce(raw_user_meta_data->>'invitation_code_consumed', '') from auth.users where id = '${uid}'`,
+        ).trim();
+
+      it("fixture: the effective trigger is the OPEN one (no invitation_code_required)", () => {
+        const prosrc = q(
+          `select prosrc from pg_proc where proname = 'handle_new_user' and pronamespace = 'public'::regnamespace`,
+        );
+        expect(prosrc).toContain("consume_invitation_code");
+        expect(prosrc).not.toContain("invitation_code_required");
+        expect(prosrc).not.toContain("invitation_code_invalid_or_exhausted");
+        // Single-use registration code for the fixture (max_uses 1, no
+        // daily_email_limit — registration codes grant no quota anyway).
+        q(
+          `insert into public.invitation_codes (code, type, is_active, max_uses, daily_email_limit)
+           values ('OPENTEST', 'registration', true, 1, 0)
+           on conflict (code) do nothing;`,
+        );
+        expect(openUsedCount()).toBe("0");
+      });
+
+      it("code-less sign-up (no metadata at all) succeeds, consumes nothing, derives the name from the email", () => {
+        q(
+          `alter table auth.users enable trigger on_auth_user_created;
+           insert into auth.users (id, email) values ('${OPEN_0}', 'openzero@test.invalid');
+           alter table auth.users disable trigger on_auth_user_created;`,
+        );
+        expect(profileCount(OPEN_0)).toBe("1");
+        expect(openUsedCount()).toBe("0");
+        expect(marker(OPEN_0)).toBe("");
+        expect(
+          q(
+            `select full_name from public.profiles where id = '${OPEN_0}'`,
+          ).trim(),
+        ).toBe("openzero");
+      });
+
+      it("code-less sign-up (metadata without a code) succeeds, consumes nothing", () => {
+        q(
+          `alter table auth.users enable trigger on_auth_user_created;
+           insert into auth.users (id, email, raw_user_meta_data) values ('${OPEN_1}', 'openone@test.invalid', '{"full_name":"Open One"}'::jsonb);
+           alter table auth.users disable trigger on_auth_user_created;`,
+        );
+        expect(profileCount(OPEN_1)).toBe("1");
+        expect(openUsedCount()).toBe("0");
+        expect(marker(OPEN_1)).toBe("");
+      });
+
+      it("a valid provided code is consumed atomically (+ consumed marker)", () => {
+        q(
+          `alter table auth.users enable trigger on_auth_user_created;
+           insert into auth.users (id, email, raw_user_meta_data) values ('${OPEN_2}', 'opentwo@test.invalid', '{"full_name":"Open Two","invitation_code":"OPENTEST"}'::jsonb);
+           alter table auth.users disable trigger on_auth_user_created;`,
+        );
+        expect(profileCount(OPEN_2)).toBe("1");
+        expect(openUsedCount()).toBe("1");
+        expect(marker(OPEN_2)).toBe("true");
+      });
+
+      it("an UNKNOWN code never blocks the sign-up and consumes nothing", () => {
+        q(
+          `alter table auth.users enable trigger on_auth_user_created;
+           insert into auth.users (id, email, raw_user_meta_data) values ('${OPEN_3}', 'openthree@test.invalid', '{"full_name":"Open Three","invitation_code":"NOPE123"}'::jsonb);
+           alter table auth.users disable trigger on_auth_user_created;`,
+        );
+        expect(profileCount(OPEN_3)).toBe("1");
+        expect(openUsedCount()).toBe("1");
+        expect(marker(OPEN_3)).toBe("");
+      });
+
+      it("an EXHAUSTED code never blocks the sign-up and is never double-consumed", () => {
+        q(
+          `alter table auth.users enable trigger on_auth_user_created;
+           insert into auth.users (id, email, raw_user_meta_data) values ('${OPEN_4}', 'openfour@test.invalid', '{"full_name":"Open Four","invitation_code":"OPENTEST"}'::jsonb);
+           alter table auth.users disable trigger on_auth_user_created;`,
+        );
+        expect(profileCount(OPEN_4)).toBe("1");
+        // One use per max_uses — the loser of the race still gets an
+        // account, but the code's single use was already granted above.
+        expect(openUsedCount()).toBe("1");
+        expect(marker(OPEN_4)).toBe("");
+      });
+
+      it("the pending profile activates via the confirmation trigger (email verification unchanged)", () => {
+        expect(
+          q(
+            `select account_status from public.profiles where id = '${OPEN_0}'`,
+          ).trim(),
+        ).toBe("pending");
+        // PRODUCTION FIDELITY: in Supabase the confirmation click runs
+        // GoTrue's UPDATE as the `service_role` claim, and
+        // protect_profile_system_fields() only reverts system fields for
+        // the `authenticated` role. The suite's stub hardcodes
+        // auth.role() = 'authenticated', so rebind it to the same
+        // per-session claim mechanism (GUC) the suite already uses for
+        // auth.uid(), run the confirmation under 'service_role', then
+        // restore the stub verbatim.
+        q(
+          `create or replace function auth.role() returns text language sql stable as $$
+             select coalesce(nullif(current_setting('app.pgrls.test_role', true), ''), 'authenticated')
+           $$;`,
+        );
+        q(
+          `select set_config('app.pgrls.test_role', 'service_role', false);
+           update auth.users set email_confirmed_at = timezone('utc', now()) where id = '${OPEN_0}';`,
+        );
+        q(`select set_config('app.pgrls.test_role', '', false);`);
+        q(
+          `create or replace function auth.role() returns text language sql stable as $$ select 'authenticated'::text $$;`,
+        );
+        expect(
+          q(
+            `select account_status from public.profiles where id = '${OPEN_0}'`,
+          ).trim(),
+        ).toBe("active");
+      });
+    });
+
+    // ======================================================================
     // manage_subscription — the atomic, audited admin plan RPC, verified on
     // REAL PostgreSQL (disposable DB, full migration chain already applied).
     // These are the database-level proofs for spec §4 (admin) and §2 (trial):

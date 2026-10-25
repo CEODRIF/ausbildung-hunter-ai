@@ -12,8 +12,10 @@ import { createClient } from "@/lib/supabase/server";
  * The `sb_flow_id` from the URL selects the exact pending PKCE flow.
  *
  * The database trigger on_auth_user_email_confirmed activates the profile
- * and consumes the invitation code when the email is confirmed — nothing in
- * this route reads email_confirmed_at directly.
+ * when the email is confirmed (and, only for legacy pre-20261021 accounts
+ * that still carried an unconsumed invitation code, consumes it — since
+ * 20261201000000 codes are consumed at sign-up and are optional). Nothing
+ * in this route reads email_confirmed_at directly.
  */
 
 function first(value: string | string[] | undefined): string | undefined {

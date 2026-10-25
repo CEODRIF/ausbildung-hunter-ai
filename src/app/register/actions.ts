@@ -17,10 +17,16 @@ const schema = z.object({
     .max(120, "Your name is too long."),
   email: z.string().trim().email("Enter a valid email address."),
   password: z.string().min(8, "Use at least 8 characters."),
+  // Registration is OPEN (2026-10-25): the invitation code is optional.
+  // When present it must still be well-formed — a code that exists in the
+  // table matches this shape (A-Z0-9, 6..32). An empty/absent value is the
+  // normal path and carries no code in the sign-up metadata.
   invitationCode: z
     .string()
     .trim()
-    .regex(/^[A-Za-z0-9]{6,32}$/, "Enter a valid invitation code."),
+    .regex(/^[A-Za-z0-9]{6,32}$/, "Enter a valid invitation code.")
+    .optional()
+    .or(z.literal("")),
   // The Terms/Privacy checkbox is `required` in the form, but that is only a
   // browser hint: the acceptance is re-validated here so a direct POST cannot
   // create an account without it.
@@ -32,17 +38,21 @@ const schema = z.object({
     ),
 });
 
-/** Message for both the pre-check and the database-level rejection of a code
- *  that is unknown, inactive or already used up. */
+/** Message for the pre-check rejection of a code the user EXPLICITLY
+ *  entered and that is unknown, inactive or already used up. The code is
+ *  optional, so the message points at the ordinary path: leave it out. */
 const INVITATION_REJECTED =
-  "That invitation code is invalid or no longer active.";
+  "That invitation code is invalid or no longer active. You can leave the invitation code out and continue without one.";
 
 /**
  * Supabase Auth surfaces ANY exception raised inside the
- * on_auth_user_created trigger as this opaque message (the real reason —
- * `invitation_code_required` / `invitation_code_invalid_or_exhausted` — is
- * only visible in the Postgres log). Since this action always sends a code,
- * that error means the code lost the race for its last remaining use.
+ * on_auth_user_created trigger as the opaque "Database error saving new
+ * user" (the real reason is only visible in the Postgres log). With open
+ * registration (20261201000000) the trigger no longer raises for
+ * invitation codes, so in the target state this mapping is defensive: it
+ * still catches a transitional deployment (new app on a database where the
+ * migration is not yet applied — code-less sign-ups rejected by the old
+ * trigger) and keeps the user-facing message safe and diagnosable.
  */
 function isInvitationRejection(message: string): boolean {
   return (
@@ -83,7 +93,9 @@ export async function register(
     fullName: formData.get("fullName"),
     email: formData.get("email"),
     password: formData.get("password"),
-    invitationCode: formData.get("invitationCode"),
+    // The field is no longer in the form; a code only arrives via a direct
+    // API/form post. Absent (null) is the normal path — normalize to "".
+    invitationCode: formData.get("invitationCode") ?? "",
     terms: formData.get("terms") ?? "",
   });
   if (!parsed.success)
@@ -94,9 +106,10 @@ export async function register(
 
   let step = "rate_limit";
   try {
-    // Abuse protection for the unauthenticated flow: caps invitation-code
-    // guessing and signup spam per client IP. Fail-open when no IP header is
-    // available (see clientIpKey) — Supabase Auth's own limits still apply.
+    // Abuse protection for the unauthenticated flow: caps signup spam per
+    // client IP (it also caps invitation-code probing for clients that do
+    // post codes directly). Fail-open when no IP header is available (see
+    // clientIpKey) — Supabase Auth's own limits still apply.
     // The limiter is protection, never a gate: a limiter outage must not stop
     // a legitimate sign-up, so its own errors are swallowed here.
     try {
@@ -109,13 +122,13 @@ export async function register(
       // Fail open (documented limiter policy).
     }
 
+    const code = parsed.data.invitationCode;
+    // The code is OPTIONAL (open registration, 2026-10-25). When the user
+    // explicitly provided one, the pre-check gives fast, clear feedback for
+    // a code that is unknown/inactive/exhausted — signup without a code
+    // never touches the invitation table at all.
     step = "validate_invitation_code";
-    if (
-      !(await validateInvitationCode(
-        parsed.data.invitationCode,
-        "registration",
-      ))
-    )
+    if (code && !(await validateInvitationCode(code, "registration")))
       return { error: INVITATION_REJECTED };
 
     step = "sign_up";
@@ -124,22 +137,28 @@ export async function register(
     // itself sends the confirmation email — no external email service, no
     // service-role user creation, no manual verification codes.
     //
-    // The invitation code is consumed ATOMICALLY by the on_auth_user_created
-    // trigger, in the same transaction as the user insert (migration
-    // 20261021000000): the pre-check above is UX only. A race for the last
-    // remaining use of a one-use code therefore fails here instead of creating
-    // a second account.
+    // A provided invitation code is consumed ATOMICALLY by the
+    // on_auth_user_created trigger, in the same transaction as the user
+    // insert (migrations 20261021000000 / 20261201000000): the pre-check
+    // above is UX only. A race for the last remaining use of a one-use code
+    // means the code is simply not consumed for the loser — the account is
+    // still created (a code must never block a sign-up), and no one ever
+    // receives the same code's benefit twice.
     const { data, error } = await supabase.auth.signUp({
       email: parsed.data.email,
       password: parsed.data.password,
       options: {
-        // handle_new_user() creates the profile from `full_name` and consumes
-        // `invitation_code` atomically; the confirmation trigger only activates
-        // the profile.
-        data: {
-          full_name: parsed.data.fullName,
-          invitation_code: parsed.data.invitationCode,
-        },
+        // handle_new_user() creates the profile from `full_name` and, only
+        // when present, consumes `invitation_code` atomically; the
+        // confirmation trigger only activates the profile.
+        data: code
+          ? {
+              full_name: parsed.data.fullName,
+              invitation_code: code,
+            }
+          : {
+              full_name: parsed.data.fullName,
+            },
         emailRedirectTo: getAuthCallbackUrl(),
       },
     });

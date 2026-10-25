@@ -89,15 +89,6 @@ export function RegisterForm() {
             </button>
           </div>
         </div>
-        <Input
-          id="invitationCode"
-          name="invitationCode"
-          label={t("auth.form.invitationCode")}
-          placeholder={t("auth.form.invitationPlaceholder")}
-          autoComplete="off"
-          className="uppercase tracking-[0.12em]"
-          required
-        />
         <label className="flex items-start gap-2.5 pt-1 text-xs leading-5 text-muted">
           <input
             name="terms"
