@@ -15,6 +15,7 @@ import {
 } from "@/app/applications/campaign/[id]/actions";
 import { ScheduleForm } from "@/components/schedule-form";
 import { CampaignMonitor } from "@/app/applications/campaign/[id]/campaign-monitor";
+import { QuotaIndicator, makeQuotaLabels } from "@/components/quota-indicator";
 
 export const dynamic = "force-dynamic";
 
@@ -221,10 +222,25 @@ export default async function CampaignPage({
                 .length,
             )}
           />
-          <Metric
-            label={t("account.remainingQuota")}
-            value={String(data.usage.remaining)}
-          />
+          {/* Shared green quota indicator (P0 quota audit): the remaining
+              quota is the server snapshot (never a client-side number) —
+              used/limit, remaining and the UTC reset label in one place. */}
+          <div className="rounded-xl bg-surface-2 p-4">
+            <p className="text-xs text-muted">{t("account.remainingQuota")}</p>
+            <div className="mt-2">
+              <QuotaIndicator
+                data={{
+                  used: data.usage.emails_sent,
+                  limit: data.usage.daily_limit,
+                  remaining: data.usage.remaining,
+                }}
+                unit={t("quota.unitEmails")}
+                resetLabel={t("quota.resetsDaily")}
+                labels={makeQuotaLabels(t)}
+                upgradeHint={t("quota.upgrade")}
+              />
+            </div>
+          </div>
         </section>
         {/* Reschedule — only while the campaign is queued AND the instant
             is still in the future. The RPC itself is the authority: once

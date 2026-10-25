@@ -195,7 +195,13 @@ export const DocumentsStep = memo(function DocumentsStep({ view, refresh }: Prop
       {/* Upload new */}
       <div className="mt-6 rounded-2xl border border-line bg-surface-2/40 p-4">
         <p className="text-sm font-semibold text-ink-soft">{t("bewauto.uploadTitle")}</p>
-        <p className="mt-0.5 text-xs leading-5 text-muted">{t("bewauto.uploadHint")}</p>
+        {/* TRUE plan cap (server-derived): the 10 MB platform ceiling is
+            enforced before the plan cap, and a failed read degrades to
+            exactly that ceiling on the server — so `?? 10` is the actual
+            enforced value, never a promise (P0 quota audit). */}
+        <p className="mt-0.5 text-xs leading-5 text-muted">
+          {t("bewauto.uploadHint", { value: view.uploadLimitMb ?? 10 })}
+        </p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <KindSelect value={kind} onChange={setKind} t={t} />
           <input

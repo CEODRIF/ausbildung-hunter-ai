@@ -25,14 +25,13 @@ import type { CandidateProfile } from "@/lib/bewerbung-schema";
 /** Minimum applications the user may request per campaign. */
 export const BEW_MIN_COUNT = 1;
 /**
- * Maximum applications the user may request per campaign AND the
- * platform-wide daily cap for this feature. This is a REQUEST cap, not a
- * permission to exceed the effective daily sending quota — the actual send
- * batch is always `min(requested, remaining quota, platform cap)`.
+ * Maximum applications the user may request PER CAMPAIGN. This is a request
+ * / anti-abuse cap, NOT a daily quota — the daily sending constraint is the
+ * user's canonical plan quota (e-mail quota + automation entitlement, passed
+ * in as `remaining` to computeSendPlan), so a plan with a higher daily
+ * allowance is not artificially capped (P0 quota audit, 2026-10-25).
  */
 export const BEW_MAX_COUNT = 100;
-/** Platform-wide daily cap for this feature (see BEW_MAX_COUNT). */
-export const BEW_PLATFORM_DAILY_CAP = 100;
 
 /* ------------------------------------------------------------------ *
  * Types
@@ -559,48 +558,44 @@ export function parsePdfCompanyCandidates(
 export interface SendPlanInput {
   /** Number of valid, selected applications the user wants to send now. */
   requested: number;
-  /** Remaining effective daily quota (from get_daily_usage_snapshot). */
+  /**
+   * Remaining effective daily quota — the caller passes the BINDING
+   * remainder (min of the e-mail quota and the automation entitlement,
+   * both plan-aware and server-derived). This is the ONLY daily
+   * constraint (the Gmail provider limit is enforced reactively at send
+   * time — Google reports 429s, which the engine treats as retryable).
+   */
   remaining: number;
-  /** Platform feature cap (defaults to BEW_PLATFORM_DAILY_CAP). */
-  platformCap?: number;
 }
 
 export interface SendPlan {
-  /** How many may be sent now = min(requested, remaining, platformCap). */
+  /** How many may be sent now = min(requested, remaining). */
   batch: number;
   /** requested - batch (must be rescheduled or dropped by the user). */
   deferred: number;
   /** True when the user asked for more than is currently allowed. */
   overLimit: boolean;
-  platformCap: number;
   remaining: number;
   /** The binding limit that produced `batch` (for the explanation copy). */
-  binding: "requested" | "quota" | "platform";
+  binding: "requested" | "quota";
 }
 
 /**
  * Compute how many of the requested applications can actually be sent now.
- * The effective limit is the LOWEST of the platform cap and the user's
- * remaining daily quota (the Gmail provider limit is enforced reactively at
- * send time — Google reports 429s, which the engine treats as retryable).
+ * The effective limit is the user's remaining canonical plan quota — no
+ * platform-wide fixed cap (removed 2026-10-25, P0 quota audit: the fixed
+ * 100/day cap silently truncated plans with a 250/500 allowance).
  */
 export function computeSendPlan(input: SendPlanInput): SendPlan {
-  const platformCap = input.platformCap ?? BEW_PLATFORM_DAILY_CAP;
   const remaining = Math.max(0, Math.floor(input.remaining));
   const requested = Math.max(0, Math.floor(input.requested));
-  const effective = Math.min(platformCap, remaining);
-  const batch = Math.min(requested, effective);
-  let binding: SendPlan["binding"] = "requested";
-  if (requested > effective) {
-    binding = platformCap < remaining ? "platform" : "quota";
-  }
+  const batch = Math.min(requested, remaining);
   return {
     batch,
     deferred: requested - batch,
-    overLimit: requested > effective,
-    platformCap,
+    overLimit: requested > remaining,
     remaining,
-    binding,
+    binding: requested > remaining ? "quota" : "requested",
   };
 }
 

@@ -86,7 +86,6 @@ import {
   type LetterPromptInput,
   type LetterQualityResult,
   type LetterEvalVerdict,
-  BEW_PLATFORM_DAILY_CAP,
 } from "@/lib/bewerbung-automation";
 import {
   BEW_AD_INPUT_MAX,
@@ -98,9 +97,14 @@ import {
   checkFeature,
   completeFeatureOp,
   effectiveUploadLimitBytes,
+  evaluateFeatureFor,
+  readMeter,
   releaseFeatureOp,
   reserveFeatureOp,
+  resolveSubscription,
+  uploadLimitMbFor,
 } from "@/lib/billing/entitlement-service";
+import { FEATURE_QUOTA_KIND } from "@/lib/billing/commercial-plans";
 
 /* ------------------------------------------------------------------ *
  * Row types (mirror the migration)
@@ -2317,26 +2321,32 @@ export async function startBewSend(
 
   const scheduling = opts.scheduling ?? null;
 
-  // IMMEDIATE: plan against TODAY's remaining shared daily quota (unchanged).
-  // SCHEDULED: the batch is due LATER, so it reserves against the SCHEDULED
-  // date's quota (the daily limit that day) — today's remaining is irrelevant.
-  // The real per-date quota is enforced by reserveCapacityOnDate below
-  // (daily_quota_exceeded => explained, nothing reserved).
+  // The daily constraint is the user's CANONICAL plan quota — the binding
+  // minimum of the e-mail send quota and the automation entitlement (both
+  // plan-aware, server-derived). No fixed platform cap (removed 2026-10-25,
+  // P0 quota audit — it truncated 250/500-allowance plans at 100).
+  // IMMEDIATE: plan against TODAY's remaining quota.
+  // SCHEDULED: the batch is due LATER, so it plans against the SCHEDULED
+  // date's FULL daily allowance (a fresh day) — today's remaining is
+  // irrelevant. The real per-date quota is enforced by reserveCapacityOnDate
+  // below (daily_quota_exceeded => explained, nothing reserved).
+  const automationLimit = automation.limit; // null = unmetered (no constraint)
+  const automationRemaining = automation.remaining;
   let usageDate: string;
   let plan: SendPlan;
   if (scheduling) {
     usageDate = scheduling.utcIso.slice(0, 10);
+    const snapshot = await getUsageSnapshot(userId);
     plan = computeSendPlan({
       requested: candidates.length,
-      remaining: BEW_PLATFORM_DAILY_CAP,
-      platformCap: BEW_PLATFORM_DAILY_CAP,
+      remaining: Math.min(snapshot.daily_limit, automationLimit ?? Infinity),
     });
   } else {
     usageDate = campaign.usage_date;
     const snapshot = await getUsageSnapshot(userId);
     plan = computeSendPlan({
       requested: candidates.length,
-      remaining: snapshot.remaining,
+      remaining: Math.min(snapshot.remaining, automationRemaining ?? Infinity),
     });
   }
   if (plan.batch === 0)
@@ -2358,17 +2368,17 @@ export async function startBewSend(
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message.includes("daily_quota_exceeded")) {
-      const snap = scheduling ? null : await getUsageSnapshot(userId);
-      const remaining = snap
-        ? snap.remaining
-        : BEW_PLATFORM_DAILY_CAP;
+      // Fail closed on a missing snapshot — never fabricate a quota.
+      const snap = await getUsageSnapshot(userId);
+      const remaining = scheduling
+        ? Math.min(snap.daily_limit, automationLimit ?? Infinity)
+        : Math.min(snap.remaining, automationRemaining ?? Infinity);
       return {
         ok: false,
         error: "QUOTA_EXHAUSTED",
         plan: computeSendPlan({
           requested: candidates.length,
           remaining,
-          platformCap: BEW_PLATFORM_DAILY_CAP,
         }),
         senderEmail: sender.email,
         hasCv,
@@ -3122,7 +3132,17 @@ export interface BewCampaignView {
   campaign: BewCampaignRow;
   applications: BewApplicationRow[];
   documents: BewCampaignDocumentRow[];
-  usage: { remaining: number; daily_limit: number };
+  /** BINDING send capacity: the min of the e-mail quota and the automation
+   *  entitlement, both plan-aware and server-derived. `null` = unknown
+   *  (quota read failed) — the UI must show an honest unknown state, never
+   *  a fabricated 0 (P0 quota audit, 2026-10-25). */
+  usage: { remaining: number | null; daily_limit: number | null };
+  /** TRUE per-file document cap in MB for this plan (min of plan cap and
+   *  the 10 MB platform safety ceiling that every upload path enforces
+   *  first). `null` = unknown (read failed) — the UI shows a number-free
+   *  hint. P0 quota audit: the hint must not promise 10 MB to a trial
+   *  user whose plan cap is 2 MB. */
+  uploadLimitMb: number | null;
   /**
    * The e-mail that will actually send (null when the attached account is
    * missing or needs a reconnect) — shown in the final confirmation so the
@@ -3159,12 +3179,33 @@ async function buildBewCampaignView(
       .order("kind", { ascending: true })
       .order("filename", { ascending: true }),
   ]);
-  let usage = { remaining: 0, daily_limit: 0 };
+  let usage: BewCampaignView["usage"] = { remaining: null, daily_limit: null };
+  let uploadLimitMb: number | null = null;
   try {
-    const snap = await getUsageSnapshot(userId);
-    usage = { remaining: snap.remaining, daily_limit: snap.daily_limit };
+    // Quota-consistency reads (P0 audit): the view must show what the send
+    // path ENFORCES — email snapshot MIN automation entitlement — plus the
+    // TRUE enforceable upload cap. ONE shared subscription resolution and
+    // the meter RPC run in the same wave as apps/docs (billing_plans is
+    // the only follow-up read); `evaluateFeatureFor` is the same pure
+    // evaluation the metered engine uses, so display = enforcement.
+    const autoKind = FEATURE_QUOTA_KIND["automation"] as "per_day";
+    const [snap, sub, meter] = await Promise.all([
+      getUsageSnapshot(userId),
+      resolveSubscription(userId),
+      readMeter("automation", userId, autoKind),
+    ]);
+    const automation = evaluateFeatureFor(sub, "automation", meter);
+    usage = {
+      remaining: Math.min(snap.remaining, automation.remaining ?? snap.remaining),
+      daily_limit: Math.min(
+        snap.daily_limit,
+        automation.limit ?? snap.daily_limit,
+      ),
+    };
+    uploadLimitMb = uploadLimitMbFor(sub);
   } catch {
-    // Quota read is non-fatal for the view.
+    // Quota read is non-fatal for the view — the nulls above carry the
+    // honest "unknown" state to the UI (never a fabricated 0).
   }
 
   // Resolve the sender display e-mail (ownership-verified, read-only).
@@ -3193,6 +3234,7 @@ async function buildBewCampaignView(
     applications: (apps ?? []) as unknown as BewApplicationRow[],
     documents: (docs ?? []) as unknown as BewCampaignDocumentRow[],
     usage,
+    uploadLimitMb,
     senderEmail,
   };
 }

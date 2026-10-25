@@ -57,6 +57,7 @@ import {
   type DeckblattPhotoMime,
 } from "@/lib/deckblatt/validate";
 import { DeckblattSheet } from "@/components/deckblatt-sheet";
+import { QuotaIndicator, makeQuotaLabels } from "@/components/quota-indicator";
 
 // ---------------------------------------------------------------------------
 // Types & constants
@@ -109,10 +110,19 @@ interface GenerateResponse {
 interface UsageState {
   used: number;
   remaining: number;
+  /**
+   * Plan-aware daily design limit from the authoritative status RPC
+   * (get_deckblatt_usage_status → `daily_limit`). NULL when the payload
+   * did not carry it (the generate response only returns used/remaining)
+   * — the shared indicator then keeps the last known limit or shows the
+   * honest unknown state. The old hard-coded `DAILY_LIMIT = 2` was
+   * removed: it showed "X of 2" for plans with 15/30 daily designs
+   * (P0 quota audit, Deckblatt design limits).
+   */
+  limit: number | null;
 }
 
 const STYLE_IDS = Object.keys(DECKBLATT_STYLES) as DeckblattStyleId[];
-const DAILY_LIMIT = 2;
 
 /** One client-side UUID v4 per click = the idempotency key for the quota
  *  reservation. crypto.randomUUID with a getRandomValues fallback. */
@@ -135,7 +145,11 @@ function newRunId(): string {
   ].join("-");
 }
 
-function readUsage(payload: { used?: number; remaining?: number } | undefined): UsageState | null {
+function readUsage(
+  payload:
+    | { used?: number; remaining?: number; limit?: number }
+    | undefined,
+): UsageState | null {
   if (
     payload &&
     typeof payload.used === "number" &&
@@ -143,7 +157,11 @@ function readUsage(payload: { used?: number; remaining?: number } | undefined): 
     typeof payload.remaining === "number" &&
     Number.isInteger(payload.remaining)
   ) {
-    return { used: payload.used, remaining: payload.remaining };
+    const limit =
+      typeof payload.limit === "number" && Number.isInteger(payload.limit)
+        ? payload.limit
+        : null;
+    return { used: payload.used, remaining: payload.remaining, limit };
   }
   return null;
 }
@@ -323,8 +341,13 @@ export function DeckblattGenerator() {
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         if (cancelled || !data || typeof data !== "object") return;
-        const next = readUsage(data as { used?: number; remaining?: number });
-        if (next) setUsage(next);
+        const next = readUsage(
+          data as { used?: number; remaining?: number; limit?: number },
+        );
+        if (next)
+          // The status payload is authoritative for the limit; a stale
+          // client limit is never kept over a fresh server value.
+          setUsage(next);
       })
       .catch(() => undefined);
     return () => {
@@ -510,8 +533,16 @@ export function DeckblattGenerator() {
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as GenerateResponse;
-      const freshUsage = readUsage(payload.usage);
-      if (freshUsage) setUsage(freshUsage);
+      const freshUsage = readUsage(
+        payload.usage as { used?: number; remaining?: number; limit?: number },
+      );
+      if (freshUsage)
+        // The generate response carries used/remaining but NO limit — keep
+        // the last server-confirmed limit instead of dropping it to "unknown".
+        setUsage((prev) => ({
+          ...freshUsage,
+          limit: freshUsage.limit ?? prev?.limit ?? null,
+        }));
 
       if (response.ok) {
         // 4. Real step: decode the design BEFORE showing it — the "done"
@@ -753,31 +784,22 @@ export function DeckblattGenerator() {
         <p className="max-w-2xl text-sm leading-6 text-muted sm:text-base">
           {t("deckblatt.subtitle")}
         </p>
-        {usage ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="inline-flex items-center gap-2 rounded-full border border-line bg-surface-2/70 px-3.5 py-1.5 text-xs font-bold text-ink-soft">
-              <Icon name="spark" size={13} className="text-accent" />
-              {t("deckblatt.usageAvailable", { n: usage.remaining })}
-              <span className="flex gap-1" aria-hidden="true">
-                {Array.from({ length: DAILY_LIMIT }, (_, i) => (
-                  <span
-                    key={i}
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      i < usage.remaining ? "bg-accent" : "bg-line-strong"
-                    }`}
-                  />
-                ))}
-              </span>
-            </span>
-            {quotaExhausted && (
-              <span className="text-xs text-faint">{t("deckblatt.usageReset")}</span>
-            )}
-          </div>
-        ) : (
-          <span className="inline-flex items-center gap-2 rounded-full border border-line bg-surface-2/70 px-3.5 py-1.5 text-xs font-bold text-faint">
-            {t("deckblatt.usageLoading")}
-          </span>
-        )}
+        {/* Shared green quota indicator (P0 quota audit): the limit comes
+            from the authoritative status RPC (`daily_limit`) — the old
+            hard-coded "X of 2" pill + two dots were wrong for plans with
+            15/30 daily designs and are removed. */}
+        <QuotaIndicator
+          data={{
+            used: usage?.used ?? null,
+            limit: usage?.limit ?? null,
+            remaining: usage?.remaining ?? null,
+          }}
+          unit={t("quota.unitDesigns")}
+          resetLabel={t("quota.resetsDaily")}
+          labels={makeQuotaLabels(t)}
+          upgradeHint={t("quota.upgrade")}
+          loading={usage === null}
+        />
       </header>
 
       {/* ====================== Desktop 2-col / mobile 1-col ================== */}

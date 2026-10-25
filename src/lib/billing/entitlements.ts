@@ -88,7 +88,18 @@ export async function getEntitlements(
       .eq("user_id", userId)
       .maybeSingle();
     row = (data as SubscriptionRow | null) ?? null;
-    if (row && row.status === "active" && isPlanId(row.plan)) {
+    // `free` is a HISTORICAL ROW STATE ONLY — it grants nothing (same
+    // rule as resolveSubscription/checkFeature, which never load a
+    // plan row for `free`). Without this exclusion a legacy free row
+    // would grant billing_plans.free (100 AI / 50 e-mails per day)
+    // here while the metered engine denies the same user — the two
+    // resolvers must agree (P0 quota audit, 2026-10-25).
+    if (
+      row &&
+      row.status === "active" &&
+      isPlanId(row.plan) &&
+      row.plan !== "free"
+    ) {
       const { data: plan } = await admin
         .from("billing_plans")
         .select("plan_id, emails_per_day, ai_requests_per_day")

@@ -3,6 +3,7 @@ import { getCurrentUserAndProfile } from "@/lib/auth";
 import { OpportunitySearch } from "@/components/opportunity-search";
 import { sanitizeSearchUrlState } from "@/lib/opportunities/types";
 import { getServerT } from "@/lib/i18n/server";
+import { checkFeature } from "@/lib/billing/entitlement-service";
 
 export const dynamic = "force-dynamic";
 export default async function OpportunitiesPage({
@@ -10,9 +11,13 @@ export default async function OpportunitiesPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { profile } = await getCurrentUserAndProfile();
-  if (!profile) return null;
+  const { user, profile } = await getCurrentUserAndProfile();
+  if (!user || !profile) return null;
   const t = await getServerT();
+  // Canonical search entitlement for the shared quota indicator (P0 quota
+  // audit): server-derived; a failed read surfaces as the indicator's
+  // honest unknown state.
+  const searchEntitlement = await checkFeature(user.id, "opportunity_search");
   const raw = await searchParams;
   const entries = Object.entries(raw)
     .filter(([, value]) => value !== undefined)
@@ -45,6 +50,7 @@ export default async function OpportunitiesPage({
           <OpportunitySearch
             defaultGoal={defaultGoal}
             initialUrlState={initialUrlState}
+            searchEntitlement={searchEntitlement}
           />
         </div>
       </div>

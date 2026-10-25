@@ -92,7 +92,10 @@ export function buildPendingView(
     },
     applications,
     documents: [],
-    usage: previous?.usage ?? { remaining: 0, daily_limit: 0 },
+    // No previous view = quota genuinely unknown — honest nulls, never a
+    // fabricated 0 (P0 quota audit 2026-10-25).
+    usage: previous?.usage ?? { remaining: null, daily_limit: null },
+    uploadLimitMb: previous?.uploadLimitMb ?? null,
     senderEmail: null,
   };
 }

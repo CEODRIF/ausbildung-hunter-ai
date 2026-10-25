@@ -19,6 +19,12 @@ import type {
   ProfileCompleteness,
 } from "@/lib/dashboard-intelligence";
 import { EmailAccountCard } from "@/components/email-account-card";
+import {
+  QuotaIndicator,
+  makeQuotaLabels,
+  quotaDataFromEntitlement,
+} from "@/components/quota-indicator";
+import type { UsageSnapshot } from "@/lib/email-campaigns";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
 import { getServerT, getRequestLang } from "@/lib/i18n/server";
 import {
@@ -37,7 +43,7 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
     profile,
     usage,
     usageSnapshot,
-    aiLimit,
+    aiEntitlement,
     subscription,
     applicationsCount,
     emailAccount,
@@ -53,8 +59,11 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
   const goalLabel = t(isAusbildung ? "dash.goalAusbildung" : "dash.goalArbeit");
   const completion = getProfileCompletion(profile);
   const firstName = profile.full_name.trim().split(" ")[0] || "";
-  const remaining = Math.max(usageSnapshot.remaining, 0);
-  const aiRemaining = Math.max(aiLimit - usage.ai_requests, 0);
+
+  // Shared green quota indicator (P0 quota audit): labels via the ONE
+  // helper so wording parity holds across all quota surfaces.
+  const quotaLabels = makeQuotaLabels(t);
+  const aiData = quotaDataFromEntitlement(aiEntitlement);
   const hour = new Date().getHours();
   const greetingKey =
     hour >= 5 && hour < 11
@@ -184,12 +193,7 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
       {/* User progress — real backend values only.                          */}
       {/* ----------------------------------------------------------------- */}
       <section className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <UsageCard
-          sent={usageSnapshot.emails_sent}
-          limit={usageSnapshot.daily_limit}
-          remaining={remaining}
-          t={t}
-        />
+        <UsageCard snapshot={usageSnapshot} t={t} />
         <MetricCard
           label={t("dash.metrics.applications")}
           value={applicationsCount}
@@ -217,15 +221,34 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
         <MetricCard
           label={t("dash.metrics.aiUsage")}
           value={usage.ai_requests}
-          detail={t("dash.metrics.aiUsageDetail", {
-            remaining: aiRemaining,
-            limit: aiLimit,
-          })}
+          detail={
+            aiData.used !== null &&
+            aiData.limit !== null &&
+            aiData.remaining !== null
+              ? t("dash.metrics.aiUsageDetail", {
+                  remaining: aiData.remaining,
+                  limit: aiData.limit,
+                })
+              : aiData.limit === null
+                ? t("quota.unlimited")
+                : aiData.limit === 0
+                  ? t("quota.unavailable")
+                  : t("quota.unknown")
+          }
           icon="spark"
           tone="ai"
           href="/ai"
           hrefLabel={t("dash.metrics.aiCta")}
           badge={t("badges.you")}
+          footer={
+            <QuotaIndicator
+              data={aiData}
+              unit={t("quota.unitAi")}
+              resetLabel={t("quota.resetsDaily")}
+              labels={quotaLabels}
+              upgradeHint={t("quota.upgrade")}
+            />
+          }
         />
         <ProfileMetricCard
           completeness={completeness}
@@ -281,9 +304,13 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
               />
               <Detail
                 label={t("dash.detail.emailLimit")}
-                value={t("dash.detail.emails", {
-                  count: usageSnapshot.daily_limit,
-                })}
+                value={
+                  usageSnapshot
+                    ? t("dash.detail.emails", {
+                        count: usageSnapshot.daily_limit,
+                      })
+                    : t("quota.unknown")
+                }
               />
             </dl>
           </GlassCard>
@@ -803,16 +830,21 @@ const toneStyles: Record<string, string> = {
 };
 
 function UsageCard({
-  sent,
-  limit,
-  remaining,
+  snapshot,
   t,
 }: {
-  sent: number;
-  limit: number;
-  remaining: number;
+  /** null = today's usage read failed → honest unknown state, never 0-of-0 */
+  snapshot: UsageSnapshot | null;
   t: T;
 }) {
+  const quotaLabels = makeQuotaLabels(t);
+  const emailData = snapshot
+    ? {
+        used: snapshot.emails_sent,
+        limit: snapshot.daily_limit,
+        remaining: snapshot.remaining,
+      }
+    : { used: null, limit: null, remaining: null };
   return (
     <div className="surface-elevated rounded-3xl p-5 transition-shadow duration-300 hover:shadow-[var(--shadow-float)]">
       <div className="flex items-start justify-between">
@@ -824,17 +856,31 @@ function UsageCard({
         </span>
       </div>
       <p className="num mt-5 text-4xl font-extrabold text-ink">
-        {sent}
-        <span className="text-base font-semibold text-muted"> / {limit}</span>
+        {snapshot ? snapshot.emails_sent : "—"}
+        <span className="text-base font-semibold text-muted">
+          {snapshot ? ` / ${snapshot.daily_limit}` : ""}
+        </span>
       </p>
       <p className="mt-1 text-sm font-semibold text-ink-soft">
         {t("dash.metrics.emailsSent")}
       </p>
+      {/* Shared indicator: used/limit, remaining and the UTC reset label —
+          same component and state rules as every other quota surface
+          (P0 quota audit). */}
+      <div className="mt-3">
+        <QuotaIndicator
+          data={emailData}
+          unit={t("account.emailsUnit")}
+          resetLabel={t("quota.resetsDaily")}
+          labels={quotaLabels}
+          upgradeHint={t("quota.upgrade")}
+        />
+      </div>
       <Link
         href="/settings/usage"
         className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-success transition-colors hover:text-success/80"
       >
-        {t("dash.metrics.emailsDetail", { remaining, limit })}
+        {t("quota.details")}
         <Icon name="arrowRight" size={12} className="rtl:-scale-x-100" />
       </Link>
     </div>
@@ -850,6 +896,7 @@ function MetricCard({
   href,
   hrefLabel,
   badge,
+  footer,
 }: {
   label: string;
   value: number;
@@ -859,6 +906,9 @@ function MetricCard({
   href: string;
   hrefLabel: string;
   badge: string;
+  /** Optional node rendered under the detail line (e.g. the shared
+   *  QuotaIndicator for metered features). */
+  footer?: React.ReactNode;
 }) {
   return (
     <div className="surface-elevated rounded-3xl p-5 transition-shadow duration-300 hover:shadow-[var(--shadow-float)]">
@@ -875,6 +925,7 @@ function MetricCard({
       <p className="num mt-5 text-4xl font-extrabold text-ink">{value}</p>
       <p className="mt-1 text-sm font-semibold text-ink-soft">{label}</p>
       <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted">{detail}</p>
+      {footer ? <div className="mt-2">{footer}</div> : null}
       <Link
         href={href}
         className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-accent transition-colors hover:text-accent-deep"

@@ -236,6 +236,46 @@ export function isCoverLetterRequest(content: string): boolean {
   return false;
 }
 
+// Resume / CV generation-OR-analysis requests (de/en/fr/ar, matched on
+// normalized text). Same metering policy as cover letters: only an explicit
+// write/generate/improve/analyze verb combined with a resume/CV noun counts
+// as a resume_ai OPERATION (metered against the dedicated resume quota).
+// Informational questions ("Was gehört in einen guten Lebenslauf?",
+// "how do I format a resume") stay on the general AI quota.
+const RESUME_PATTERNS: RegExp[] = [
+  // German
+  /lebenslauf (schreiben|erstellen|erstell|formulieren|verbessern|analysieren|optimieren)/,
+  /(schreib|erstelle|erstell|formuliere|verbessere|analysiere|optimiere)(r|st)? (?:\S+ ){0,2}lebenslauf/,
+  /cv (schreiben|erstellen|erstell|formulieren|verbessern|analysieren|optimieren)/,
+  /(schreib|erstelle|erstell|formuliere|verbessere|analysiere|optimiere)(r|st)? (?:\S+ ){0,2}\bcv\b/,
+  // English
+  /write (a|an|my|the) (resume|cv|curriculum vitae)/,
+  /(generate|create|draft|improve|optimize|optimise|analyze|analyse|review) (a|an|my|the)? ?(resume|cv|curriculum vitae)/,
+  // French ("résumé" in French means "summary" — deliberately NOT matched;
+  // only cv / curriculum vitae count). Accent-tolerant like the cover-letter
+  // patterns (the normalizer keeps é/è, so both spellings are offered).
+  /(ecri|ecrit|écri|écrit|redige|rédige|genere|génere|cree|crée|ameliorer|améliorer|analyse|revis|révis)[\s\S]{0,20}(cv|curriculum vitae)/,
+  /(cv|curriculum vitae) (ecri|ecrit|écri|écrit|redige|rédige|genere|génere|cree|crée|ameliorer|améliorer|analyse|revis|révis)/,
+  // Arabic
+  /(اكتب|كتب|اصنع|صياغة|حسّن|تحسين|حلل|حلّل|راجع|انشاء)[\s\S]{0,20}سيرة ذاتية/,
+  /سيرة ذاتية[\s\S]{0,20}(اكتب|اصنع|صياغة|حسّن|تحسين|حلل|راجع|انشاء)/,
+];
+
+/** Pure detector: does this message REQUEST a resume (CV) to be generated,
+ *  improved or analyzed? Used by the chat route to meter the operation
+ *  against the dedicated resume quota (never the general AI quota).
+ *  P0 quota audit 2026-10-25: resume_ai was sold in every plan matrix but
+ *  enforced nowhere — this closes that gap with the same pattern as
+ *  isCoverLetterRequest. */
+export function isResumeRequest(content: string): boolean {
+  const text = normalize(content ?? "");
+  if (!text) return false;
+  for (const pattern of RESUME_PATTERNS) {
+    if (pattern.test(text)) return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Detection primitives
 // ---------------------------------------------------------------------------

@@ -28,6 +28,34 @@ const de = {
     
     
   },
+  // ---- Shared quota indicator (P0 quota audit 2026-10-25) ----------------
+  // One set of strings used by the single QuotaIndicator on every
+  // quota-consuming surface (de/en/fr/ar parity enforced at compile time).
+  quota: {
+    unknown: "Limit derzeit unbekannt",
+    unlimited: "Unbegrenzt",
+    unavailable: "Nicht verfügbar",
+    remaining: "übrig",
+    limitReached: "Limit erreicht",
+    resetsDaily: "Reset täglich (00:00 UTC)",
+    resetsOnExpiry: "Reset bei Tarifablauf",
+    noReset: "Kein Reset",
+    unitAi: "Anfragen",
+    unitEmails: "E-Mails",
+    unitDocuments: "Dokumente",
+    unitDesigns: "Designs",
+    unitSearches: "Suchen",
+    unitSavedOpportunities: "Opportunities",
+    unitSavedApplications: "Bewerbungen",
+    unitResumes: "Lebensläufe",
+    unitCoverLetters: "Anschreiben",
+    unitEmailDrafts: "Entwürfe",
+    unitScans: "Scans",
+    unitUploadMb: "MB",
+    upgrade: "Upgrade",
+    details: "Details",
+  },
+
   // ---- Billing / subscription (plans, demo checkout, usage) --------------
   billing: {
     trialExpired:
@@ -292,9 +320,7 @@ const de = {
     title: "AI Deckblatt Generator",
     subtitle:
       "Erstelle dein professionelles Deckblatt für deine Ausbildungsbewerbung – mit deinem Foto und deinen echten Kontaktdaten.",
-    usageAvailable: "{n} von 2 Designs heute verfügbar",
-    usageReset: "Morgen stehen automatisch wieder 2 Designs zur Verfügung.",
-    usageLoading: "Verfügbarkeit wird geladen…",
+
     formTitle: "Persönliche Daten",
     firstName: "Vorname",
     firstNamePlaceholder: "Max",
@@ -346,8 +372,11 @@ const de = {
       "Das kann je nach Auslastung 30–90 Sekunden dauern. Bitte schließe diesen Tab nicht.",
     errorValidationTitle: "Formular unvollständig",
     errorValidation: "Bitte prüfe die markierten Felder.",
-    errorQuota: "Du hast deine 2 kostenlosen Designs für heute verwendet.",
-    errorQuotaNote: "Morgen (UTC) stehen wieder 2 Designs zur Verfügung.",
+    // Number-free: the daily design limit is plan-dependent (1/15/30) and
+    // arrives from the status RPC — a fixed "2" would be wrong on every
+    // paid plan (P0 quota audit, Deckblatt design limits).
+    errorQuota: "Du hast deine Designs für heute verwendet.",
+    errorQuotaNote: "Morgen (UTC) stehen deine Designs wieder zur Verfügung.",
     errorAlreadyRunning:
       "Dein Deckblatt wird gerade erstellt. Bitte warte kurz und versuche es erneut.",
     errorRateLimited: "Zu viele Anfragen. Bitte warte kurz und versuche es erneut.",
@@ -413,6 +442,7 @@ const de = {
     page: {
       memberSince: "Mitglied seit",
       status: { active: "Aktiv", pending: "Ausstehend", suspended: "Gesperrt" },
+      emailLimitUnknown: "Derzeit unbekannt — bitte erneut versuchen",
       personal: {
         title: "Persönliche Informationen",
         hint: "Ihre grundlegenden Angaben.",
@@ -1172,12 +1202,12 @@ const de = {
     scannerGoalNote:
       "Ihre Auswahl gilt nur für diesen Scan und ändert nicht Ihr globales Profilziel.",
     scannerDropTitle: "Dokumente hier ablegen",
-    scannerDropHint: "PDF, DOC, DOCX, PNG, JPG · bis zu 10 Dateien · je 10 MB",
+    scannerDropHint: "PDF, DOC, DOCX, PNG, JPG · bis zu 10 Dateien · je {value} MB",
     scannerChooseFiles: "Dateien auswählen",
     scannerRemove: "Entfernen",
     scannerMaxFiles: "Sie können pro Scan bis zu 10 Dokumente hochladen.",
     scannerFileTypes:
-      "Nur PDF-, DOC-, DOCX-, PNG- und JPG-Dateien bis 10 MB werden unterstützt.",
+      "Nur PDF-, DOC-, DOCX-, PNG- und JPG-Dateien bis {value} MB werden unterstützt.",
     scannerUploadFailed: "Upload fehlgeschlagen.",
     scannerUploadHint: "Laden Sie zuerst mindestens ein Dokument hoch.",
     scannerScanFailed: "Scan fehlgeschlagen.",
@@ -1280,7 +1310,7 @@ const de = {
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
   chat: {
     fileHint:
-      "PDF, DOC, DOCX, TXT, JPG, PNG · max. 10 MB pro Datei · KI-Antworten bitte vor Verwendung prüfen",
+      "PDF, DOC, DOCX, TXT, JPG, PNG · max. {value} MB pro Datei · KI-Antworten bitte vor Verwendung prüfen",
   },
 
   // ---- CV Builder / Templates ------------------------------------------------
@@ -1743,6 +1773,7 @@ const de = {
     step5: "Versenden",
     campaignSummary: "Gesendet: {sent} · Fehlgeschlagen: {failed} · Alle: {total}",
     usageLeft: "{n} Sends heute übrig",
+    usageUnknown: "Limit derzeit unbekannt",
     newCampaign: "Neue Serie",
     seriesMenuAria: "Serien-Optionen",
     newSeriesCreating: "Serie wird erstellt …",
@@ -1883,7 +1914,7 @@ const de = {
     noDocYet: "Noch keine Datei angehängt.",
     detach: "Lösen",
     uploadTitle: "Neu hochladen",
-    uploadHint: "Erlaubt: PDF, DOC, DOCX, PNG, JPEG · max. 10 MB pro Datei.",
+    uploadHint: "Erlaubt: PDF, DOC, DOCX, PNG, JPEG · max. {value} MB pro Datei.",
     uploadBtn: "Hochladen",
     docUploaded: "„{name}“ hochgeladen und angehängt.",
     docAttached: "Dokument an die Serie angehängt.",
@@ -1955,6 +1986,8 @@ const de = {
     confirmSender: "Versand über: {email}",
     confirmAttachments: "Anlagen pro Mail: Lebenslauf + {n} weitere Datei(en)",
     confirmQuota: "Tageskontingent: {remaining} von {limit} verfügbar",
+    confirmQuotaUnknown:
+      "Tageskontingent: derzeit unbekannt — bitte erneut versuchen",
     overLimitNote:
       "Nur {batch} von {total} passen in das heutige Kontingent – {deferred} bleiben gespeichert und können an einem späteren Tag gesendet werden.",
     confirmGo: "Jetzt senden",
@@ -2049,7 +2082,10 @@ const de = {
       NO_FILE: "Keine Datei ausgewählt.",
       PDF_REQUIRED: "Für diesen Import wird eine PDF-Datei benötigt.",
       DOCUMENT_UNSUPPORTED: "Dateityp wird nicht unterstützt (PDF, DOC, DOCX, PNG, JPEG).",
-      "DOCUMENT_TOO-LARGE": "Die Datei ist größer als 10 MB.",
+      // Number-free on purpose: this code fires BOTH at the 10 MB platform
+      // ceiling and at a smaller PLAN cap (trial = 2 MB) — the size shown
+      // must never exceed what is actually enforced (P0 quota audit).
+      "DOCUMENT_TOO-LARGE": "Die Datei ist zu groß für deinen aktuellen Plan.",
       DOCUMENT_EMPTY: "Die Datei ist leer.",
       APPLICATION_LOCKED: "Dieser Eintrag ist gerade in Bearbeitung – bitte kurz warten.",
       CAMPAIGN_CLOSED: "Diese Serie ist abgeschlossen und kann nicht mehr geändert werden.",
@@ -2141,6 +2177,32 @@ const en: Dict = {
     
     
   },
+  // ---- Shared quota indicator (P0 quota audit 2026-10-25) ----------------
+  quota: {
+    unknown: "Quota status unavailable",
+    unlimited: "Unlimited",
+    unavailable: "Not available",
+    remaining: "left",
+    limitReached: "Limit reached",
+    resetsDaily: "Resets daily (00:00 UTC)",
+    resetsOnExpiry: "Resets on plan period expiry",
+    noReset: "No reset",
+    unitAi: "requests",
+    unitEmails: "emails",
+    unitDocuments: "documents",
+    unitDesigns: "designs",
+    unitSearches: "searches",
+    unitSavedOpportunities: "opportunities",
+    unitSavedApplications: "applications",
+    unitResumes: "resumes",
+    unitCoverLetters: "cover letters",
+    unitEmailDrafts: "drafts",
+    unitScans: "scans",
+    unitUploadMb: "MB",
+    upgrade: "Upgrade",
+    details: "Details",
+  },
+
   billing: {
     trialExpired:
       "Your free trial has expired. Choose a plan to continue using protected features.",
@@ -2397,9 +2459,7 @@ const en: Dict = {
     title: "AI Deckblatt Generator",
     subtitle:
       "Create a professional cover page for your vocational training application – with your photo and your real contact details.",
-    usageAvailable: "{n} of 2 designs available today",
-    usageReset: "2 designs become available again tomorrow, automatically.",
-    usageLoading: "Loading availability…",
+
     formTitle: "Personal details",
     firstName: "First name",
     firstNamePlaceholder: "Max",
@@ -2451,8 +2511,11 @@ const en: Dict = {
       "Depending on demand this can take 30–90 seconds. Please do not close this tab.",
     errorValidationTitle: "Form incomplete",
     errorValidation: "Please check the highlighted fields.",
-    errorQuota: "You have used your 2 free designs for today.",
-    errorQuotaNote: "2 designs become available again tomorrow (UTC).",
+    // Number-free: the daily design limit is plan-dependent (1/15/30) and
+    // arrives from the status RPC — a fixed "2" would be wrong on every
+    // paid plan (P0 quota audit, Deckblatt design limits).
+    errorQuota: "You have used all of today's designs.",
+    errorQuotaNote: "Your designs become available again tomorrow (UTC).",
     errorAlreadyRunning:
       "Your Deckblatt is already being created. Please wait a moment and try again.",
     errorRateLimited: "Too many requests. Please wait a moment and try again.",
@@ -2509,6 +2572,7 @@ const en: Dict = {
     page: {
       memberSince: "Member since",
       status: { active: "Active", pending: "Pending", suspended: "Suspended" },
+      emailLimitUnknown: "Currently unknown — please try again",
       personal: {
         title: "Personal information",
         hint: "Your basic details.",
@@ -3238,12 +3302,12 @@ const en: Dict = {
     scannerGoalNote:
       "Your selection applies only to this scan and will not change your global profile goal.",
     scannerDropTitle: "Drop your documents here",
-    scannerDropHint: "PDF, DOC, DOCX, PNG, JPG · up to 10 files · 10 MB each",
+    scannerDropHint: "PDF, DOC, DOCX, PNG, JPG · up to 10 files · {value} MB each",
     scannerChooseFiles: "Choose files",
     scannerRemove: "Remove",
     scannerMaxFiles: "You can upload up to 10 documents per scan.",
     scannerFileTypes:
-      "Only PDF, DOC, DOCX, PNG, and JPG files up to 10 MB are supported.",
+      "Only PDF, DOC, DOCX, PNG, and JPG files up to {value} MB are supported.",
     scannerUploadFailed: "Upload failed.",
     scannerUploadHint: "Upload at least one document first.",
     scannerScanFailed: "Scan failed.",
@@ -3345,7 +3409,7 @@ const en: Dict = {
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
   chat: {
     fileHint:
-      "PDF, DOC, DOCX, TXT, JPG, PNG · max 10 MB per file · Verify AI answers before use",
+      "PDF, DOC, DOCX, TXT, JPG, PNG · max {value} MB per file · Verify AI answers before use",
   },
 
   // ---- CV Builder / Templates ------------------------------------------------
@@ -3799,6 +3863,7 @@ const en: Dict = {
     step5: "Send",
     campaignSummary: "Sent: {sent} · Failed: {failed} · Total: {total}",
     usageLeft: "{n} sends left today",
+    usageUnknown: "Quota status unavailable",
     newCampaign: "New series",
     seriesMenuAria: "Series options",
     newSeriesCreating: "Creating series…",
@@ -3939,7 +4004,7 @@ const en: Dict = {
     noDocYet: "No file attached yet.",
     detach: "Detach",
     uploadTitle: "Upload new",
-    uploadHint: "Allowed: PDF, DOC, DOCX, PNG, JPEG · max. 10 MB per file.",
+    uploadHint: "Allowed: PDF, DOC, DOCX, PNG, JPEG · max. {value} MB per file.",
     uploadBtn: "Upload",
     docUploaded: "“{name}” uploaded and attached.",
     docAttached: "Document attached to the series.",
@@ -4012,6 +4077,8 @@ const en: Dict = {
     confirmSender: "Sending via: {email}",
     confirmAttachments: "Attachments per e-mail: CV + {n} additional file(s)",
     confirmQuota: "Daily quota: {remaining} of {limit} available",
+    confirmQuotaUnknown:
+      "Daily quota: currently unavailable — please try again",
     overLimitNote:
       "Only {batch} of {total} fit today's quota — {deferred} stay saved and can be sent on a later day.",
     confirmGo: "Send now",
@@ -4105,7 +4172,10 @@ const en: Dict = {
       NO_FILE: "No file selected.",
       PDF_REQUIRED: "A PDF file is required for this import.",
       DOCUMENT_UNSUPPORTED: "File type not supported (PDF, DOC, DOCX, PNG, JPEG).",
-      "DOCUMENT_TOO-LARGE": "The file is larger than 10 MB.",
+      // Number-free on purpose: this code fires BOTH at the 10 MB platform
+      // ceiling and at a smaller PLAN cap (trial = 2 MB) — the size shown
+      // must never exceed what is actually enforced (P0 quota audit).
+      "DOCUMENT_TOO-LARGE": "The file is too large for your current plan.",
       DOCUMENT_EMPTY: "The file is empty.",
       APPLICATION_LOCKED: "This entry is currently being processed — please wait a moment.",
       CAMPAIGN_CLOSED: "This series is finished and can no longer be changed.",
@@ -4190,6 +4260,32 @@ const fr: Dict = {
 
 
   },
+  // ---- Shared quota indicator (P0 quota audit 2026-10-25) ----------------
+  quota: {
+    unknown: "Statut du quota indisponible",
+    unlimited: "Illimité",
+    unavailable: "Non disponible",
+    remaining: "restants",
+    limitReached: "Limite atteinte",
+    resetsDaily: "Réinitialisation quotidienne (00h00 UTC)",
+    resetsOnExpiry: "Réinitialisation à l'échéance du plan",
+    noReset: "Sans réinitialisation",
+    unitAi: "requêtes",
+    unitEmails: "e-mails",
+    unitDocuments: "documents",
+    unitDesigns: "designs",
+    unitSearches: "recherches",
+    unitSavedOpportunities: "opportunités",
+    unitSavedApplications: "candidatures",
+    unitResumes: "CV",
+    unitCoverLetters: "lettres de motivation",
+    unitEmailDrafts: "brouillons",
+    unitScans: "analyses",
+    unitUploadMb: "Mo",
+    upgrade: "Mettre à niveau",
+    details: "Détails",
+  },
+
   billing: {
     trialExpired:
       "Votre essai gratuit de 3 jours a expiré. Choisissez une formule pour continuer à utiliser les fonctions protégées.",
@@ -4450,9 +4546,7 @@ const fr: Dict = {
     title: "Générateur de Deckblatt IA",
     subtitle:
       "Créez un Deckblatt professionnel pour votre candidature en formation – avec votre photo et vos vraies coordonnées.",
-    usageAvailable: "{n} des 2 designs disponibles aujourd'hui",
-    usageReset: "2 designs seront de nouveau disponibles demain, automatiquement.",
-    usageLoading: "Chargement de la disponibilité…",
+
     formTitle: "Données personnelles",
     firstName: "Prénom",
     firstNamePlaceholder: "Max",
@@ -4504,8 +4598,11 @@ const fr: Dict = {
       "Selon la charge, cela peut prendre 30 à 90 secondes. Merci de ne pas fermer cet onglet.",
     errorValidationTitle: "Formulaire incomplet",
     errorValidation: "Veuillez vérifier les champs signalés.",
-    errorQuota: "Vous avez utilisé vos 2 designs gratuits du jour.",
-    errorQuotaNote: "2 designs seront de nouveau disponibles demain (UTC).",
+    // Number-free: the daily design limit is plan-dependent (1/15/30) and
+    // arrives from the status RPC — a fixed "2" would be wrong on every
+    // paid plan (P0 quota audit, Deckblatt design limits).
+    errorQuota: "Vous avez utilisé tous vos designs du jour.",
+    errorQuotaNote: "Vos designs seront de nouveau disponibles demain (UTC).",
     errorAlreadyRunning:
       "Votre Deckblatt est déjà en cours de création. Veuillez patienter et réessayer.",
     errorRateLimited: "Trop de requêtes. Veuillez patienter un instant et réessayer.",
@@ -4564,6 +4661,7 @@ const fr: Dict = {
     page: {
       memberSince: "Membre depuis",
       status: { active: "Actif", pending: "En attente", suspended: "Suspendu" },
+      emailLimitUnknown: "Actuellement inconnu — veuillez réessayer",
       personal: {
         title: "Informations personnelles",
         hint: "Vos informations de base.",
@@ -5293,12 +5391,12 @@ const fr: Dict = {
     scannerGoalNote:
       "Votre choix ne s'applique qu'à ce scan et ne modifie pas votre objectif de profil global.",
     scannerDropTitle: "Déposez vos documents ici",
-    scannerDropHint: "PDF, DOC, DOCX, PNG, JPG · 10 fichiers max · 10 Mo chacun",
+    scannerDropHint: "PDF, DOC, DOCX, PNG, JPG · 10 fichiers max · {value} Mo chacun",
     scannerChooseFiles: "Choisir les fichiers",
     scannerRemove: "Retirer",
     scannerMaxFiles: "Vous pouvez téléverser jusqu'à 10 documents par scan.",
     scannerFileTypes:
-      "Seuls les fichiers PDF, DOC, DOCX, PNG et JPG de 10 Mo maximum sont pris en charge.",
+      "Seuls les fichiers PDF, DOC, DOCX, PNG et JPG de {value} Mo maximum sont pris en charge.",
     scannerUploadFailed: "Échec du téléversement.",
     scannerUploadHint: "Téléversez d'abord au moins un document.",
     scannerScanFailed: "Échec du scan.",
@@ -5401,7 +5499,7 @@ const fr: Dict = {
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
   chat: {
     fileHint:
-      "PDF, DOC, DOCX, TXT, JPG, PNG · 10 Mo max. par fichier · Vérifiez les réponses de l'IA avant usage",
+      "PDF, DOC, DOCX, TXT, JPG, PNG · {value} Mo max. par fichier · Vérifiez les réponses de l'IA avant usage",
   },
 
   // ---- CV Builder / Templates ------------------------------------------------
@@ -5859,6 +5957,7 @@ const fr: Dict = {
     step5: "Envoyer",
     campaignSummary: "Envoyées : {sent} · Échouées : {failed} · Total : {total}",
     usageLeft: "{n} envois restants aujourd'hui",
+    usageUnknown: "Statut du quota indisponible",
     newCampaign: "Nouvelle série",
     seriesMenuAria: "Options de série",
     newSeriesCreating: "Création de la série…",
@@ -5999,7 +6098,7 @@ const fr: Dict = {
     noDocYet: "Aucun fichier joint pour l'instant.",
     detach: "Détacher",
     uploadTitle: "Téléverser un nouveau",
-    uploadHint: "Autorisé : PDF, DOC, DOCX, PNG, JPEG · max. 10 Mo par fichier.",
+    uploadHint: "Autorisé : PDF, DOC, DOCX, PNG, JPEG · max. {value} Mo par fichier.",
     uploadBtn: "Téléverser",
     docUploaded: "« {name} » téléversé et joint.",
     docAttached: "Document joint à la série.",
@@ -6072,6 +6171,8 @@ const fr: Dict = {
     confirmSender: "Envoi via : {email}",
     confirmAttachments: "Pièces jointes par e-mail : CV + {n} fichier(s) supplémentaire(s)",
     confirmQuota: "Quota journalier : {remaining} sur {limit} disponibles",
+    confirmQuotaUnknown:
+      "Quota journalier : indisponible pour le moment — veuillez réessayer",
     overLimitNote:
       "Seules {batch} candidatures sur {total} entrent dans le quota d'aujourd'hui — {deferred} restent enregistrées et peuvent être envoyées un jour plus tard.",
     confirmGo: "Envoyer maintenant",
@@ -6165,7 +6266,10 @@ const fr: Dict = {
       NO_FILE: "Aucun fichier sélectionné.",
       PDF_REQUIRED: "Un fichier PDF est requis pour cet import.",
       DOCUMENT_UNSUPPORTED: "Type de fichier non pris en charge (PDF, DOC, DOCX, PNG, JPEG).",
-      "DOCUMENT_TOO-LARGE": "Le fichier dépasse 10 Mo.",
+      // Number-free on purpose: this code fires BOTH at the 10 MB platform
+      // ceiling and at a smaller PLAN cap (trial = 2 MB) — the size shown
+      // must never exceed what is actually enforced (P0 quota audit).
+      "DOCUMENT_TOO-LARGE": "Le fichier est trop volumineux pour votre plan actuel.",
       DOCUMENT_EMPTY: "Le fichier est vide.",
       APPLICATION_LOCKED: "Cette entrée est en cours de traitement — veuillez patienter un instant.",
       CAMPAIGN_CLOSED: "Cette série est terminée et ne peut plus être modifiée.",
@@ -6251,6 +6355,32 @@ const ar: Dict = {
 
 
   },
+  // ---- Shared quota indicator (P0 quota audit 2026-10-25) ----------------
+  quota: {
+    unknown: "حالة الحصة غير متاحة",
+    unlimited: "غير محدود",
+    unavailable: "غير متوفر",
+    remaining: "متبقٍ",
+    limitReached: "تم بلوغ الحد",
+    resetsDaily: "تتصفير يوميًا (00:00 UTC)",
+    resetsOnExpiry: "يتصفّر عند انتهاء فترة الخطة",
+    noReset: "بدون تصفير",
+    unitAi: "طلبات",
+    unitEmails: "رسائل إلكترونية",
+    unitDocuments: "مستندات",
+    unitDesigns: "تصاميم",
+    unitSearches: "عمليات بحث",
+    unitSavedOpportunities: "فرص",
+    unitSavedApplications: "تقديمات",
+    unitResumes: "سيرة ذاتية",
+    unitCoverLetters: "رسائل تغطية",
+    unitEmailDrafts: "مسودات",
+    unitScans: "فحوصات",
+    unitUploadMb: "ميغابايت",
+    upgrade: "ترقية",
+    details: "التفاصيل",
+  },
+
   billing: {
     trialExpired:
       "انتهت فترة تجربتك المجانية البالغة 3 أيام. اختر خطة للمتابعة باستخدام الميزات المحمية.",
@@ -6506,9 +6636,7 @@ const ar: Dict = {
     title: "مولّد صفحة الغلاف بالذكاء الاصطناعي",
     subtitle:
       "أنشئ صفحة غلاف احترافية لطلب التوظيف في التدريب المهني (Ausbildung) – مع صورتك وبياناتك الحقيقية.",
-    usageAvailable: "{n} من 2 تصاميم متاحة اليوم",
-    usageReset: "ستكون 2 تصاميم متاحة مرة أخرى غدًا تلقائيًا.",
-    usageLoading: "جارٍ تحميل حالة الاستخدام…",
+
     formTitle: "البيانات الشخصية",
     firstName: "الاسم الأول",
     firstNamePlaceholder: "ماكس",
@@ -6560,8 +6688,11 @@ const ar: Dict = {
       "قد يستغرق الأمر 30–90 ثانية حسب الحمل. يرجى عدم إغلاق هذا التبويب.",
     errorValidationTitle: "النموذج غير مكتمل",
     errorValidation: "يرجى التحقق من الحقول المحددة.",
-    errorQuota: "لقد استخدمت تصاميمك المجانية (2) لهذا اليوم.",
-    errorQuotaNote: "ستتوفر 2 تصاميم مرة أخرى غدًا (UTC).",
+    // Number-free: the daily design limit is plan-dependent (1/15/30) and
+    // arrives from the status RPC — a fixed "2" would be wrong on every
+    // paid plan (P0 quota audit, Deckblatt design limits).
+    errorQuota: "لقد استهلكت جميع تصاميمك لهذا اليوم.",
+    errorQuotaNote: "ستتوفر تصاميمك مرة أخرى غدًا (UTC).",
     errorAlreadyRunning: "جارٍ إنشاء صفحة الغلاف بالفعل. يرجى الانتظار قليلًا ثم إعادة المحاولة.",
     errorRateLimited: "طلبات كثيرة جدًا. يرجى الانتظار قليلًا ثم إعادة المحاولة.",
     errorProvider: "خدمة التصميم غير متاحة حاليًا.",
@@ -6612,6 +6743,7 @@ const ar: Dict = {
     page: {
       memberSince: "عضو منذ",
       status: { active: "نشط", pending: "قيد الانتظار", suspended: "موقوف" },
+      emailLimitUnknown: "غير معروف حاليًا — يرجى المحاولة مرة أخرى",
       personal: {
         title: "المعلومات الشخصية",
         hint: "بياناتك الأساسية.",
@@ -7324,11 +7456,11 @@ const ar: Dict = {
     scannerGoalNote:
       "اختيارك يسري على هذا المسح فقط ولا يغير هدف ملفك العام.",
     scannerDropTitle: "أفلت مستنداتك هنا",
-    scannerDropHint: "PDF, DOC, DOCX, PNG, JPG · حتى 10 ملفات · 10 م.ب لكل ملف",
+    scannerDropHint: "PDF, DOC, DOCX, PNG, JPG · حتى 10 ملفات · {value} م.ب لكل ملف",
     scannerChooseFiles: "اختيار الملفات",
     scannerRemove: "إزالة",
     scannerMaxFiles: "يمكنك رفع حتى 10 مستندات لكل مسح.",
-    scannerFileTypes: "يُقبل فقط ملفات PDF وDOC وDOCX وPNG وJPG حتى 10 م.ب.",
+    scannerFileTypes: "يُقبل فقط ملفات PDF وDOC وDOCX وPNG وJPG حتى {value} م.ب.",
     scannerUploadFailed: "فشل الرفع.",
     scannerUploadHint: "ارفع مستندًا واحدًا على الأقل أولًا.",
     scannerScanFailed: "فشل المسح.",
@@ -7429,7 +7561,7 @@ const ar: Dict = {
   // ---- AI Search + AI Chat (feature chrome) ---------------------------------
   chat: {
     fileHint:
-      "PDF, DOC, DOCX, TXT, JPG, PNG · 10 م.ب كحد أقصى لكل ملف · تحقق من إجابات الذكاء الاصطناعي قبل الاستخدام",
+      "PDF, DOC, DOCX, TXT, JPG, PNG · {value} م.ب كحد أقصى لكل ملف · تحقق من إجابات الذكاء الاصطناعي قبل الاستخدام",
   },
 
   // ---- CV Builder / Templates ------------------------------------------------
@@ -7866,6 +7998,7 @@ const ar: Dict = {
     step5: "الإرسال",
     campaignSummary: "المُرسل: {sent} · الفاشل: {failed} · الإجمالي: {total}",
     usageLeft: "{n} إرسال متبقٍ اليوم",
+    usageUnknown: "حالة الحصة غير متاحة",
     newCampaign: "سلسلة جديدة",
     seriesMenuAria: "خيارات السلسلة",
     newSeriesCreating: "جارٍ إنشاء السلسلة…",
@@ -8004,7 +8137,7 @@ const ar: Dict = {
     noDocYet: "لم تُرفق أي ملفات بعد.",
     detach: "فصل",
     uploadTitle: "رفع جديد",
-    uploadHint: "مسموح: PDF، DOC، DOCX، PNG، JPEG · بحد أقصى 10 ميغابايت لكل ملف.",
+    uploadHint: "مسموح: PDF، DOC، DOCX، PNG، JPEG · بحد أقصى {value} ميغابايت لكل ملف.",
     uploadBtn: "رفع",
     docUploaded: "تم رفع «{name}» وإرفاقه.",
     docAttached: "تم إرفاق المستند بالسلسلة.",
@@ -8074,6 +8207,8 @@ const ar: Dict = {
     confirmSender: "الإرسال عبر: {email}",
     confirmAttachments: "المرفقات لكل بريد: السيرة الذاتية + {n} ملف إضافي",
     confirmQuota: "الحد اليومي: {remaining} من {limit} متوفر",
+    confirmQuotaUnknown:
+      "الحد اليومي: غير متاح حاليًا — يرجى المحاولة مرة أخرى",
     overLimitNote:
       "يسع حد اليوم {batch} فقط من أصل {total} — تبقى {deferred} محفوظة ويمكن إرسالها في يوم لاحق.",
     confirmGo: "إرسال الآن",
@@ -8164,7 +8299,10 @@ const ar: Dict = {
       NO_FILE: "لم يُحدد أي ملف.",
       PDF_REQUIRED: "يتطلب هذا الاستيراد ملف PDF.",
       DOCUMENT_UNSUPPORTED: "نوع الملف غير مدعوم (PDF، DOC، DOCX، PNG، JPEG).",
-      "DOCUMENT_TOO-LARGE": "حجم الملف أكبر من 10 ميغابايت.",
+      // Number-free on purpose: this code fires BOTH at the 10 MB platform
+      // ceiling and at a smaller PLAN cap (trial = 2 MB) — the size shown
+      // must never exceed what is actually enforced (P0 quota audit).
+      "DOCUMENT_TOO-LARGE": "حجم الملف أكبر من المسموح به في خطتك الحالية.",
       DOCUMENT_EMPTY: "الملف فارغ.",
       APPLICATION_LOCKED: "هذا السطر قيد المعالجة — يرجى الانتظار لحظة.",
       CAMPAIGN_CLOSED: "هذه السلسلة منتهية ولا يمكن تعديلها بعد الآن.",

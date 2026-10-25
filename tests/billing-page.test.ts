@@ -113,12 +113,25 @@ describe("billing page — offer cards", () => {
   it("shows usage rows for every feature id with quota-kind semantics", () => {
     expect(PAGE).toContain("ALL_FEATURE_IDS");
     expect(PAGE).toContain("FEATURE_QUOTA_KIND");
-    // No-limit, disabled, and per-day/per-expiry reset labels all wired.
+    // Features without a limit keep the no-limit copy...
     expect(PAGE).toContain('t("billing.usage.noLimit")');
-    expect(PAGE).toContain('t("billing.usage.disabled")');
-    expect(PAGE).toContain("billing.usage.${resetKey}");
-    expect(PAGE).toContain('t("billing.usage.usedOf"');
-    expect(PAGE).toContain('t("billing.usage.remaining")');
+    // ...upload size shows the TRUE enforceable cap — the platform ceiling
+    // (10 MB) is applied BEFORE the plan cap on every upload path, so the
+    // nominal matrix value is never promised on its own (P0 quota audit,
+    // upload-size copy).
+    expect(PAGE).toContain("Math.min(entitlement.limit, UPLOAD_PLATFORM_CAP_MB)");
+    // Everything else renders through the ONE shared indicator (P0 quota
+    // audit): same component, state rules and tokens as every other quota
+    // surface. The reset label follows the quota kind (per_day → daily
+    // reset, per_cycle → plan expiry). The disabled / unknown / limit-
+    // reached states are pinned by the component contract in
+    // tests/quota-indicator.test.tsx.
+    expect(PAGE).toContain("<QuotaIndicator");
+    expect(PAGE).toContain("quotaDataFromEntitlement(");
+    expect(PAGE).toContain("makeQuotaLabels(t)");
+    expect(PAGE).toContain("t(`quota.${resetKey}`)");
+    expect(PAGE).toContain('kind === "per_day"');
+    expect(PAGE).toContain('kind === "per_cycle"');
   });
 
   it("routes trial + upgrades through the server flow", () => {

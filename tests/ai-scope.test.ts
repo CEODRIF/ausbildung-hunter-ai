@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { isResumeRequest } from "@/lib/ai-scope";
 
 /**
  * AI Assistant scope enforcement — deterministic tests.
@@ -478,5 +479,42 @@ describe("route enforcement", () => {
     );
     expect(response.status).toBe(200);
     expect(providerCalls).toHaveLength(1); // model called with file context
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 3: isResumeRequest detector (P0 quota audit 2026-10-25, R2) —
+// the chat route meters resume generation against the dedicated resume_ai
+// quota. The detector must catch explicit write/generate/improve/analyze
+// requests in all four UI languages, and must NOT meter informational
+// questions (those stay on the general AI quota).
+// ---------------------------------------------------------------------------
+describe("isResumeRequest — resume metering detector (R2)", () => {
+  it.each([
+    // German
+    ["Schreib mir einen Lebenslauf", true],
+    ["Lebenslauf schreiben für Ausbildung", true],
+    ["Verbessere meinen CV", true],
+    ["CV erstellen", true],
+    ["Optimiere meinen Lebenslauf", true],
+    ["Was ist ein Lebenslauf?", false],
+    ["Wie lange dauert eine Ausbildung?", false],
+    // English
+    ["Write a resume for me", true],
+    ["Improve my CV", true],
+    ["Generate a resume for a Fachinformatiker", true],
+    ["Analyse my resume and tell me what to fix", true],
+    ["Review my curriculum vitae", true],
+    ["What is a resume?", false],
+    ["How do I apply for a job in Germany?", false],
+    // French — "résumé" means SUMMARY in French and must NOT match
+    ["Écris-moi un CV", true],
+    ["rédige un curriculum vitae", true],
+    ["Fais un résumé de la réunion", false],
+    // Arabic
+    ["اكتب لي سيرة ذاتية", true],
+    ["ما هي السيرة الذاتية؟", false],
+  ])("%j → %s", (content, expected) => {
+    expect(isResumeRequest(content)).toBe(expected);
   });
 });

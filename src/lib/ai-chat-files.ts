@@ -49,18 +49,25 @@ export type ClientFileCheck =
   | { ok: true }
   | { ok: false; reason: string };
 
-/** Pre-upload check with user-friendly German messages. */
-export function checkClientFile(file: {
-  name: string;
-  size: number;
-}): ClientFileCheck {
+/**
+ * Pre-upload check with user-friendly German messages.
+ * `limitBytes` — the user's TRUE per-file cap (server-computed plan cap,
+ * defaulting to the universal 10 MB platform ceiling). The message shows
+ * the cap that will actually be enforced, so a trial user (2 MB) is told
+ * "2 MB", not "10 MB" (P0 quota audit, upload-size copy).
+ */
+export function checkClientFile(
+  file: { name: string; size: number },
+  limitBytes: number = AI_CHAT_MAX_FILE_SIZE,
+): ClientFileCheck {
   if (!file.name) return { ok: false, reason: "Unbekannte Datei." };
   if (file.size <= 0)
     return { ok: false, reason: `„${file.name}“ ist eine leere Datei.` };
-  if (file.size > AI_CHAT_MAX_FILE_SIZE)
+  const limitMb = Math.max(1, Math.round(limitBytes / (1024 * 1024)));
+  if (file.size > limitBytes)
     return {
       ok: false,
-      reason: `„${file.name}“ ist größer als 10 MB (max. 10 MB pro Datei).`,
+      reason: `„${file.name}“ ist größer als ${limitMb} MB (max. ${limitMb} MB pro Datei).`,
     };
   if (!(AI_CHAT_ACCEPTED_EXTENSIONS as readonly string[]).includes(fileExtension(file.name)))
     return {

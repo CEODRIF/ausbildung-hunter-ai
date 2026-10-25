@@ -4,6 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { memo, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import {
+  QuotaIndicator,
+  makeQuotaLabels,
+  quotaDataFromEntitlement,
+} from "@/components/quota-indicator";
+import type { FeatureEntitlement } from "@/lib/billing/entitlement-service";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
@@ -379,13 +385,32 @@ export function AIChat({
   conversations: initialConversations,
   selectedConversation,
   initialMessages,
+  fileLimitMb,
+  aiEntitlement,
 }: {
   conversations: Conversation[];
   selectedConversation: Conversation;
   initialMessages: ChatMessageWithFiles[];
+  /**
+   * TRUE per-file upload cap in MB for this plan (server-computed,
+   * min(plan cap, 10 MB platform ceiling)). The composer hint and the
+   * local pre-check must not promise 10 MB to a trial user whose plan
+   * cap is 2 MB (P0 quota audit, upload-size copy). Safe default: 10 (the
+   * universal ceiling — also the enforced value when the read degrades).
+   */
+  fileLimitMb?: number;
+  /**
+   * Canonical AI entitlement for the header indicator (P0 quota audit):
+   * server-derived; a failed read arrives as a `lookup_error` entitlement
+   * → the indicator's honest unknown state. This is the shared indicator
+   * for the chat, resume-AI and cover-letter surfaces (their dedicated
+   * quotas are enforced server-side with explicit 403/429 responses).
+   */
+  aiEntitlement?: FeatureEntitlement | null;
 }) {
   const router = useRouter();
   const { t } = useI18n();
+  const limitMb = fileLimitMb ?? 10;
   const [conversations, setConversations] = useState(initialConversations);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
@@ -571,7 +596,8 @@ export function AIChat({
     const fresh: ComposerFile[] = [];
     const freshFiles: File[] = [];
     for (const file of incoming) {
-      const check = checkClientFile(file);
+      // TRUE plan cap (server-derived); the server re-checks authoritatively.
+      const check = checkClientFile(file, limitMb * 1024 * 1024);
       if (!check.ok) {
         rejected.push(check.reason);
         continue;
@@ -888,6 +914,19 @@ export function AIChat({
                 </p>
             </div>
           </div>
+          {/* Shared green quota indicator (P0 quota audit): server-derived
+              AI entitlement — previously this surface only had a link to
+              /settings/usage and no live quota state at all. */}
+          {aiEntitlement ? (
+            <span className="hidden shrink-0 sm:inline-flex">
+              <QuotaIndicator
+                data={quotaDataFromEntitlement(aiEntitlement)}
+                unit={t("quota.unitAi")}
+                resetLabel={t("quota.resetsDaily")}
+                labels={makeQuotaLabels(t)}
+              />
+            </span>
+          ) : null}
           <Link
             href="/settings/usage"
             className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-accent hover:bg-accent-soft"
@@ -1145,7 +1184,7 @@ export function AIChat({
               )}
             </div>
             <p className="mt-2 text-center text-[10px] leading-4 text-muted dark:text-faint">
-              {t("chat.fileHint")}
+              {t("chat.fileHint", { value: limitMb })}
             </p>
           </div>
         </div>

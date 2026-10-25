@@ -597,13 +597,20 @@ describe("i18n dictionaries (de/en/fr/ar)", () => {
 
   it("de: the brief's exact user-facing strings", () => {
     expect(translate("de", "deckblatt.previewPlaceholderTitle")).toBe("Dein Deckblatt erscheint hier");
+    // P0 quota audit: the quota copy is NUMBER-FREE — the daily design
+    // limit is plan-dependent (1/15/30) and comes from the authoritative
+    // status RPC. The old "2 von 2 Designs" pill copy (hard-coded
+    // DAILY_LIMIT=2) was removed; the header now uses the shared
+    // quota.* indicator strings.
     expect(translate("de", "deckblatt.errorQuota")).toBe(
-      "Du hast deine 2 kostenlosen Designs für heute verwendet.",
+      "Du hast deine Designs für heute verwendet.",
+    );
+    expect(translate("de", "deckblatt.errorQuotaNote")).toBe(
+      "Morgen (UTC) stehen deine Designs wieder zur Verfügung.",
     );
     expect(translate("de", "deckblatt.generate")).toBe("Deckblatt erstellen");
-    expect(translate("de", "deckblatt.usageAvailable", { n: 2 })).toBe("2 von 2 Designs heute verfügbar");
-    expect(translate("de", "deckblatt.usageAvailable", { n: 1 })).toBe("1 von 2 Designs heute verfügbar");
-    expect(translate("de", "deckblatt.usageAvailable", { n: 0 })).toBe("0 von 2 Designs heute verfügbar");
+    expect(translate("de", "quota.unitDesigns")).toBe("Designs");
+    expect(translate("de", "quota.resetsDaily")).toBe("Reset täglich (00:00 UTC)");
   });
 
   it("de: the four real generation states (no fake progress copy)", () => {

@@ -12,6 +12,7 @@ import { Icon, type IconName } from "@/components/icon";
 import { ApplicantProfileForm } from "@/components/applicant-profile-form";
 import { ProfileIdentityForm } from "@/components/profile-identity-form";
 import { UserAvatar } from "@/components/user-avatar";
+import { getUsageSnapshot } from "@/lib/email-campaigns";
 import {
   hasApplicantProfileColumns,
   hasProfileAvatarColumn,
@@ -109,6 +110,18 @@ export default async function ProfileSettingsPage() {
       : profile.selected_goal === "arbeit"
         ? t("dash.goalArbeit")
         : null;
+
+  // Effective daily e-mail limit — the SAME plan-aware source of truth as
+  // dashboard / usage / automation (effective_daily_email_limit). The raw
+  // profiles column is a legacy base that ignores the plan and quota
+  // upgrades, so it must not be displayed (P0 quota audit, 2026-10-25).
+  // A failed read shows an honest unknown state, never a stale number.
+  let emailLimit: number | null = null;
+  try {
+    emailLimit = (await getUsageSnapshot(user.id)).daily_limit;
+  } catch {
+    emailLimit = null;
+  }
 
   const accounts: Array<{
     icon: IconName;
@@ -277,9 +290,11 @@ export default async function ProfileSettingsPage() {
               )}
               <ProfileDetail
                 label={t("dash.detail.emailLimit")}
-                value={t("dash.detail.emails", {
-                  count: profile.daily_email_limit,
-                })}
+                value={
+                  emailLimit === null
+                    ? t("profile.page.emailLimitUnknown")
+                    : t("dash.detail.emails", { count: emailLimit })
+                }
                 last
               />
             </dl>

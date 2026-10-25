@@ -93,9 +93,12 @@ export interface BewCampaignDocumentDTO {
   created_at: string;
 }
 
+/** Binding send capacity (min of e-mail quota + automation entitlement).
+ *  `null` = the quota read failed — render an honest unknown state, never
+ *  a fabricated 0 (P0 quota audit, 2026-10-25). */
 export interface BewUsageDTO {
-  remaining: number;
-  daily_limit: number;
+  remaining: number | null;
+  daily_limit: number | null;
 }
 
 export interface BewViewDTO {
@@ -103,6 +106,9 @@ export interface BewViewDTO {
   applications: BewApplicationDTO[];
   documents: BewCampaignDocumentDTO[];
   usage: BewUsageDTO;
+  /** TRUE per-file document cap in MB for this plan (server-computed;
+   *  `null` = unknown → number-free hint). P0 quota audit. */
+  uploadLimitMb: number | null;
   senderEmail: string | null;
 }
 

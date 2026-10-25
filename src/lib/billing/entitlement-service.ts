@@ -544,13 +544,20 @@ export function effectiveFeatureLimit(
 // Meter reads
 // ---------------------------------------------------------------------------
 
-interface MeterReading {
+export interface MeterReading {
   used: number;
   resetsAtMs: number | null;
 }
 
-/** Read a feature's current usage. `null` = unreadable (fail closed). */
-async function readMeter(
+/**
+ * Read a feature's current usage. `null` = unreadable (fail closed).
+ *
+ * Exported so parallel-safe read paths (the bew campaign view) can fetch
+ * the meter in the SAME wave as the subscription resolution and evaluate
+ * via `evaluateFeatureFor` — same single-RPC read, no extra serial round
+ * trips (P0 quota audit: display = enforcement parity).
+ */
+export async function readMeter(
   featureId: FeatureId,
   userId: string,
   kind: "per_day" | "per_cycle" | "items",
@@ -613,6 +620,42 @@ export async function checkFeatureFor(
   featureId: FeatureId,
   nowMs: number = Date.now(),
 ): Promise<FeatureEntitlement> {
+  const kind = isFeatureId(featureId) ? FEATURE_QUOTA_KIND[featureId] : null;
+  const metered =
+    kind === "per_day" || kind === "per_cycle" || kind === "items";
+  if (metered && !sub.lookupFailed) {
+    // The meter RPC is read EXACTLY when the original flow read it
+    // (metered feature, positive limit, resolved subscription) — the
+    // round-trip budget of every existing caller is unchanged.
+    const limit = effectiveFeatureLimit(sub, featureId);
+    if (limit !== null && limit > 0) {
+      const meter = await readMeter(
+        featureId,
+        userId,
+        kind as "per_day" | "per_cycle" | "items",
+      );
+      return evaluateFeatureFor(sub, featureId, meter, nowMs);
+    }
+  }
+  return evaluateFeatureFor(sub, featureId, null, nowMs);
+}
+
+/**
+ * Pure (NO I/O) entitlement evaluation from already-resolved parts:
+ * the subscription resolution + an optional meter reading.
+ *
+ * `checkFeatureFor` awaits the meter and delegates here; parallel-safe
+ * view paths that hold both parts from their own wave (the bew campaign
+ * view: subscriptions ∥ billing_plans ∥ meter in one wave) evaluate with
+ * this — ONE code path, identical results, no duplicate resolution
+ * (P0 quota audit).
+ */
+export function evaluateFeatureFor(
+  sub: ResolvedSubscription,
+  featureId: FeatureId,
+  meter: MeterReading | null,
+  nowMs: number = Date.now(),
+): FeatureEntitlement {
   const base = {
     planId: sub.planId,
     featureId,
@@ -692,8 +735,8 @@ export async function checkFeatureFor(
   if (limit === 0) {
     const reason: FeatureReason =
       sub.row !== null && sub.status !== "active"
-        ? "plan_expired"
-        : "feature_disabled";
+      ? "plan_expired"
+      : "feature_disabled";
     return {
       ...base,
       allowed: false,
@@ -705,7 +748,6 @@ export async function checkFeatureFor(
     };
   }
 
-  const meter = await readMeter(featureId, userId, kind);
   if (!meter) {
     return {
       ...base,
@@ -956,6 +998,11 @@ export async function releaseFeatureOp(
 /**
  * Effective per-file upload cap in BYTES. Commercial: 2/15/15 MB; legacy
  * plus/pro/free: 10 MB; lookup failure: 10 MB (never an upgrade).
+ *
+ * NOTE: every upload path enforces the platform safety ceiling
+ * (UPLOAD_PLATFORM_CAP_MB, 10 MB) BEFORE this plan cap, so on premium plans
+ * the value actually enforced is min(this, 10 MB) — see
+ * `effectiveUploadLimitMbForUser` for the display-honest value.
  */
 export async function effectiveUploadLimitBytes(
   userId: string,
@@ -965,6 +1012,54 @@ export async function effectiveUploadLimitBytes(
   if (sub.lookupFailed) return LEGACY_UPLOAD_MB * ONE_MB;
   const mb = effectiveFeatureLimit(sub, "upload") ?? LEGACY_UPLOAD_MB;
   return mb * ONE_MB;
+}
+
+/**
+ * The platform per-file safety ceiling (MB). Hard-coded 10 MB in every
+ * upload path (ai-service `MAX_FILE_SIZE`, application-drafts
+ * `MAX_ATTACHMENT_SIZE`, ai-chat-files `AI_CHAT_MAX_FILE_SIZE`,
+ * bewerbering `validateDocumentInput`) and enforced BEFORE the plan cap —
+ * so it is the maximum file size that can ever be accepted on ANY plan.
+ * Lifting it for premium plans (matrix nominal 15 MB) is a business
+ * decision, not a display change.
+ */
+export const UPLOAD_PLATFORM_CAP_MB = 10;
+
+/**
+ * The TRUE enforceable per-file upload cap in MB for this user — the only
+ * value display copy may show (P0 quota audit: displays must never
+ * promise more than the server accepts). = min(plan cap, platform
+ * ceiling): trial 2 MB; free / legacy plus/pro / lookup failure 10 MB;
+ * premium plans 10 MB today (their nominal 15 MB is clamped by the
+ * ceiling). Degrades to 10 MB on failure, exactly like
+ * `effectiveUploadLimitBytes` — never an upgrade.
+ */
+/**
+ * Pure: the TRUE enforceable per-file upload cap (MB) for an ALREADY
+ * resolved subscription — plan matrix cap clamped by the platform
+ * ceiling; lookup failure degrades to the legacy 10 MB (never an
+ * upgrade). Read paths that hold `sub` from another query (the bew
+ * campaign view) use this to avoid a second subscription resolution
+ * (P0 quota audit).
+ */
+export function uploadLimitMbFor(sub: ResolvedSubscription): number {
+  const mb = sub.lookupFailed
+    ? LEGACY_UPLOAD_MB
+    : (effectiveFeatureLimit(sub, "upload") ?? LEGACY_UPLOAD_MB);
+  return Math.min(mb, UPLOAD_PLATFORM_CAP_MB);
+}
+
+export async function effectiveUploadLimitMbForUser(
+  userId: string,
+  nowMs: number = Date.now(),
+): Promise<number> {
+  let sub: ResolvedSubscription;
+  try {
+    sub = await resolveSubscription(userId, nowMs);
+  } catch {
+    return UPLOAD_PLATFORM_CAP_MB;
+  }
+  return uploadLimitMbFor(sub);
 }
 
 /**
