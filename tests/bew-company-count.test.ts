@@ -585,6 +585,7 @@ function renderWizard(
     React.createElement(BewerbungAutomation, {
       schemaOk: true,
       initialView: view,
+      initialLoadError: false,
       userName: "Max",
       userEmail: "max@example.com",
     }),

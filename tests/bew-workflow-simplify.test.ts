@@ -1,9 +1,10 @@
 /**
- * Application Automation — required UX (CRITICAL FIX, 2026-10-20).
+ * Application Automation — required UX (2026-10-20 simplification,
+ * first-series creation RESTORED 2026-10-25).
  *
- * The "New series" action must be GONE from this page entirely: no three-dot
- * menu, no header button, no setup form, no hidden entry point — and opening
- * or refreshing the page must never create a series or navigate anywhere.
+ * The three-dot "series menu" must stay GONE from the wizard: no menu, no
+ * header button, no hidden entry point — and opening or refreshing the page
+ * must never create a series or navigate anywhere.
  *
  * The page is a pure guided workflow on the CURRENT series:
  *   paste company information / job ad → "Check information" (analysis +
@@ -12,21 +13,32 @@
  *   → Review → Send. No manual row-count controls (Company target / Add rows
  *   stay removed).
  *
+ * FIRST-SERIES CREATION (2026-10-25 bug fix): commit 0868839 removed the
+ * setup form entirely, leaving subscribers WITHOUT any series a dead end
+ * ("no series" notice with no controls and no way to create one). The
+ * creation form (count / purpose / position + Start) renders ONLY in the
+ * verified no-series state — a successful query that returned no campaign —
+ * and is submitted explicitly through bewCreateCampaignView (server-
+ * validated + persisted). A FAILED initial load shows an actionable retry
+ * state, never the empty state.
+ *
  * Pinned here (SSR first paint against the mocked actions module):
- *   A. no New series button, three-dot menu, setup form or any other
- *      series-creation entry point anywhere on the page (12-row, zero-row
- *      AND no-campaign renders),
+ *   A. the WIZARD (an existing campaign) shows no series-creation entry
+ *      point (menu, button, form — creation is only for the no-series
+ *      state),
  *   B. the Company target + Add rows controls are gone from step 1,
  *   C. the Smart Input with the "Check information" button is the primary
  *      entry point (the old "Auto-organize" one-shot is gone; the "Confirm
  *      and add" button does not exist before a check passes),
  *   D. opening / refreshing the page never creates a series and never
  *      navigates (zero create-action calls, zero router calls) for
- *      zero / one / twelve row campaigns,
- *   E. with NO campaign at all the page shows a neutral "no series" state —
- *      no creation controls, nothing created, no navigation,
+ *      zero / one / twelve row campaigns AND the no-campaign render,
+ *   E. with NO campaign at all the page shows the creation form (count /
+ *      purpose / position + Start) — no wizard, no smart input, nothing
+ *      created or navigated on load,
  *   F. existing rows stay editable and deletable,
- *   G. static contract on client.tsx: no series-creation logic at all.
+ *   G. static contract on client.tsx: creation only via the explicit
+ *      no-series form submit; the three-dot menu stays gone.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -132,6 +144,7 @@ function renderWizard(rows: number | null): string {
       React.createElement(BewerbungAutomation, {
         schemaOk: true,
         initialView: view,
+        initialLoadError: false,
         userName: "Max",
         userEmail: "max@example.com",
       }),
@@ -155,16 +168,12 @@ function expectNoSeriesCreation(html: string): void {
   expect(html).not.toContain('id="bew-count"');
 }
 
-describe("A. New series is GONE — no button, no three-dot menu, no setup form", () => {
+describe("A. the WIZARD (existing campaign) carries no series-creation entry point", () => {
   it.each([
     [12, "12-row campaign"],
     [0, "zero-row campaign"],
   ])("renders no series-creation entry point on a %s (menu, button, form)", (rows) => {
     expectNoSeriesCreation(renderWizard(rows));
-  });
-
-  it("renders no series-creation entry point when there is no campaign at all", () => {
-    expectNoSeriesCreation(renderWizard(null));
   });
 });
 
@@ -227,19 +236,24 @@ describe("D. opening / refreshing the page never creates or navigates", () => {
   });
 });
 
-describe("E. no campaign at all → a neutral no-series state (nothing created)", () => {
-  it("shows the no-series notice without any creation controls, calls or navigation", () => {
+describe("E. no campaign at all → the first-series creation form (nothing auto-created)", () => {
+  it("shows the creation form (count / purpose / position + Start), no wizard, no menu", () => {
     const html = renderWizard(null);
-    expect(html).toContain("Keine Bewerbungsserie vorhanden");
-    expect(html).toContain("Aktuell ist keine Bewerbungsserie vorhanden");
+    // The creation form IS present (the only series-creation entry point —
+    // subscribers without a series must be able to create their first one;
+    // the dead-end neutral notice is gone).
+    expect(html).toContain('id="bew-count"');
+    expect(html).toContain("Wie viele Bewerbungen möchtest du");
+    expect(html).toContain("Art der Bewerbung");
+    expect(html).toContain("Serie starten");
     // No wizard, no smart input (there is no current series to add to),
-    // no setup form, no hidden menu.
+    // no three-dot menu.
     expect(html).not.toContain('id="bew-smart-input"');
     expect(html).not.toContain('id="bew-series-menu"');
     expect(html).not.toContain("Neue Serie");
-    expect(html).not.toContain("Serie starten");
-    expect(html).not.toContain("Wie viele Bewerbungen möchtest du");
-    // Nothing was created or navigated by rendering the page.
+    // Nothing was created or navigated by RENDERING the page — the form is
+    // inert until an explicit submit (covered behaviorally by
+    // bew-create-series.test.tsx).
     expect(createCalls).toHaveLength(0);
     expect(navCalls).toEqual([]);
   });
@@ -260,27 +274,31 @@ describe("F. existing rows stay editable and deletable", () => {
   });
 });
 
-describe("G. static contract on client.tsx: no series creation at all", () => {
-  it("the client imports no creation action and contains no creation logic or menu", async () => {
+describe("G. static contract on client.tsx: explicit-form creation only, menu gone", () => {
+  it("creation only via the no-series form submit; the three-dot menu stays gone", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const src = readFileSync(
       join(process.cwd(), "src/components/bewerbung-automation/client.tsx"),
       "utf8",
     );
-    // No creation entry point in any form: not a button, not a menu, not a
-    // setup form, not a hidden overflow item.
+    // The ONLY creation path: the explicit no-series form submit through
+    // the create+view server action (server-validated + persisted)…
+    expect(src).toContain("bewCreateCampaignView");
+    expect(src).toContain("setupStart");
+    // …while the old instant-open orchestration and the three-dot menu stay
+    // gone (word-boundary match: `bewCreateCampaignView` must not count as
+    // the plain create action).
     expect(src).not.toContain("startNewSeries");
-    expect(src).not.toContain("bewCreateCampaignView");
-    expect(src).not.toContain("bewCreateCampaign");
+    expect(src).not.toMatch(/\bbewCreateCampaign\b/);
     expect(src).not.toContain("buildPendingView");
     expect(src).not.toContain("bew-series-menu");
     expect(src).not.toContain("seriesMenuAria");
+    // A FAILED initial load is an actionable retry state — never the
+    // "no series" empty state (an error is not an empty result).
+    expect(src).toContain("initialLoadError");
+    expect(src).toContain("loadErrorTitle");
     expect(src).not.toContain("newCampaign");
-    expect(src).not.toContain("setupStart");
-    // The no-series state is a notice, not a form.
-    expect(src).toContain("noSeriesTitle");
-    expect(src).toContain("noSeriesBody");
     // The step keeps its defensive guards — inert (always false/null) on
     // this page.
     expect(src).toContain("creatingSeries={false}");

@@ -1777,9 +1777,12 @@ const de = {
     newSeriesCreating: "Serie wird erstellt …",
     seriesCreatingHint:
       "Die neue Serie wird gespeichert — du kannst bereits Einträge erfassen, Speichern und Löschen sind bis zur Bestätigung kurz gesperrt.",
-    noSeriesTitle: "Keine Bewerbungsserie vorhanden",
-    noSeriesBody:
-      "Aktuell ist keine Bewerbungsserie vorhanden. Sobald eine Serie existiert, fügst du hier über die Smart-Eingabe Firmen hinzu und gehst die fünf Schritte durch.",
+    // The initial load FAILED (DB/network) — an actionable retry state,
+    // never rendered for a successful query that returned no series.
+    loadErrorTitle: "Deine Bewerbungsserie konnte nicht geladen werden",
+    loadErrorBody:
+      "Bitte prüfe deine Verbindung und versuche es erneut. Deine Daten sind nicht verloren.",
+    retry: "Erneut versuchen",
     savedFlash: "Gespeichert",
     emailSettingsLink: "E-Mail-Konto verwalten",
     /* Schritt 1 — Firmendaten */
@@ -3865,9 +3868,12 @@ const en: Dict = {
     newSeriesCreating: "Creating series…",
     seriesCreatingHint:
       "The new series is being saved — you can already enter entries; saving and deleting rows are briefly locked until it is confirmed.",
-    noSeriesTitle: "No application series available",
-    noSeriesBody:
-      "There is currently no series. As soon as a series exists, add companies here via the smart input and work through the five steps.",
+    // The initial load FAILED (DB/network) — an actionable retry state,
+    // never rendered for a successful query that returned no series.
+    loadErrorTitle: "Your application series could not be loaded",
+    loadErrorBody:
+      "Please check your connection and try again. Your data has not been lost.",
+    retry: "Try again",
     savedFlash: "Saved",
     emailSettingsLink: "Manage e-mail account",
     /* Step 1 — company data */
@@ -5957,9 +5963,12 @@ const fr: Dict = {
     newSeriesCreating: "Création de la série…",
     seriesCreatingHint:
       "La nouvelle série est en cours d'enregistrement — vous pouvez déjà saisir des entrées ; l'enregistrement et la suppression des lignes sont brièvement verrouillés jusqu'à confirmation.",
-    noSeriesTitle: "Aucune série de candidatures disponible",
-    noSeriesBody:
-      "Il n'existe actuellement aucune série. Dès qu'une série est disponible, ajoutez des entreprises ici via la saisie intelligente et suivez les cinq étapes.",
+    // The initial load FAILED (DB/network) — an actionable retry state,
+    // never rendered for a successful query that returned no series.
+    loadErrorTitle: "Impossible de charger votre série de candidatures",
+    loadErrorBody:
+      "Veuillez vérifier votre connexion et réessayer. Vos données ne sont pas perdues.",
+    retry: "Réessayer",
     savedFlash: "Enregistré",
     emailSettingsLink: "Gérer le compte e-mail",
     /* Étape 1 — données entreprises */
@@ -7996,9 +8005,11 @@ const ar: Dict = {
     newSeriesCreating: "جارٍ إنشاء السلسلة…",
     seriesCreatingHint:
       "جاري حفظ السلسلة الجديدة — يمكنك إدخال البيانات بالفعل؛ الحفظ والحذف مقفَّلان مؤقتًا حتى التأكيد.",
-    noSeriesTitle: "لا توجد سلسلة طلبات متاحة",
-    noSeriesBody:
-      "لا توجد حاليًا أي سلسلة. ما إن توجد سلسلة حتى يمكنك إضافة الشركات من هنا عبر الإدخال الذكي والعب خلال الخطوات الخمس.",
+    // The initial load FAILED (DB/network) — an actionable retry state,
+    // never rendered for a successful query that returned no series.
+    loadErrorTitle: "تعذّر تحميل سلسلة الطلبات الخاصة بك",
+    loadErrorBody: "يرجى التحقق من اتصالك ومحاولة مرة أخرى. بياناتك لم تضيع.",
+    retry: "إعادة المحاولة",
     savedFlash: "تم الحفظ",
     emailSettingsLink: "إدارة حساب البريد",
     /* الخطوة 1 — بيانات الشركات */

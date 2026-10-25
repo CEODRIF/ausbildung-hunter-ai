@@ -36,15 +36,25 @@ export default async function BewerbungAutomationPage() {
   const schemaOk = await hasBewAutomationSchema();
 
   let view: BewCampaignView | null = null;
+  let initialLoadError = false;
   if (schemaOk && user && profile && profile.account_status === "active") {
-    const latestId = await getLatestBewCampaignId(profile.id);
-    if (latestId) view = await getBewCampaignView(profile.id, latestId);
+    // A FAILED initial read is NOT an empty result: the client must show an
+    // actionable retry state, never the "no series" empty state (the data
+    // may exist — the query just did not succeed).
+    try {
+      const latestId = await getLatestBewCampaignId(profile.id);
+      if (latestId) view = await getBewCampaignView(profile.id, latestId);
+    } catch (error) {
+      console.error("[bewerbung-automation] initial view load failed", error);
+      initialLoadError = true;
+    }
   }
 
   return (
     <BewerbungAutomation
       schemaOk={schemaOk}
       initialView={view}
+      initialLoadError={initialLoadError}
       userName={profile?.full_name ?? ""}
       userEmail={profile?.email ?? ""}
     />
