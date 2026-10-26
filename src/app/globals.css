@@ -569,39 +569,6 @@ textarea:focus-visible,
   .cv-print-root .cv-sheet section > div > div {
     break-inside: avoid;
   }
-  /* Supplementary private-note page (cv.hiddenInformation): one labeled A4
-     page appended AFTER the sheet, rendered only when the note is non-empty.
-     Plain visible text — deliberately NO hidden-text techniques (no
-     white-on-white, no off-page overlays, no zero-size glyphs). Margins
-     reuse the same --cv-pad-* vars the sheet sets (identical fallbacks). */
-  .cv-print-root .cv-note-page {
-    width: 210mm !important;
-    margin: 0 !important;
-    padding: var(--cv-pad-block, 14mm) var(--cv-pad-inline, 15mm) !important;
-    background-color: #ffffff;
-    color: #1a1a1a;
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-      Roboto, "Helvetica Neue", Arial, sans-serif;
-    page-break-before: always;
-    break-before: page;
-  }
-  .cv-print-root .cv-note-page h2 {
-    font-size: 13pt;
-    font-weight: 600;
-    margin: 0 0 4mm 0;
-  }
-  .cv-print-root .cv-note-page .cv-note-page-text {
-    font-size: 10.5pt;
-    line-height: 1.5;
-    margin: 0;
-    white-space: pre-wrap;
-    overflow-wrap: break-word;
-  }
-  .cv-print-root .cv-note-page .cv-note-page-caption {
-    margin-top: 6mm;
-    font-size: 8.5pt;
-    color: #595959;
-  }
 }
 
 /* ------------------------------------------------------------------ */

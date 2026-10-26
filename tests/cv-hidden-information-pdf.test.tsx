@@ -1,30 +1,33 @@
 /**
- * REAL-ARTIFACT tests for the hiddenInformation PDF export.
+ * REAL-ARTIFACT tests for the simplified hiddenInformation contract:
+ * the note lives in the draft only and the exported PDF carries NO trace
+ * of it — visible or extractable.
  *
- * The DOM-level suite (cv-hidden-information.test.tsx) proves the gate and
- * the print-root wiring; this suite proves what the browser actually
- * exports: it prints the shipped print markup (the real CvDocument template
- * output + the real CvNotePage) with the shipped print CSS (extracted from
- * src/app/globals.css) through headless Chrome --print-to-pdf — the same
- * engine and CSS as the user's "PDF export" button — and extracts text
- * from the resulting PDF file (the repo's own pdf.js/pdf-parse stack, as
- * used by src/lib/pdf-extract.ts).
+ * Feasibility finding (verified empirically in this environment and
+ * re-verified by the "probe" artifact below in CI): the browser print
+ * pipeline (headless Chrome --print-to-pdf) OMITS invisible text from the
+ * PDF text layer — `opacity: 0`, `visibility: hidden` and `font-size: 0`
+ * content all disappear. There is therefore no compliant way to embed an
+ * invisible-but-extractable note; only forbidden techniques (white-on-
+ * white, off-page text) could survive, and those are deliberately NOT
+ * used (guarded by the shipped-CSS assertions below). If an invisible
+ * layer is ever required, it needs a separate server-side PDF
+ * post-processing pipeline — not this print flow.
  *
- * Verified on the exported artifact itself (not React state):
- *  1. empty note  → PDF without a note page, no note text anywhere;
- *  2. filled note → exactly ONE extractable occurrence, on its OWN final
- *                   page, page count = empty export + 1;
- *  3. visible CV content (name/title) still present on the CV pages;
- *  4. repeated exports of the same state → still exactly one occurrence
- *     (nothing accumulates);
- *  5. a second template (modern) behaves identically (the note page is
- *     template-agnostic — it is appended after the sheet, outside every
- *     template);
- *  6. Arabic note (dir=rtl) → extracted exactly once.
+ * Verified on the exported PDF files themselves (not React state):
+ *  1. empty-note export → visible CV intact, no note text anywhere;
+ *  2. populated-note export → EXACTLY the same PDF (page count and full
+ *     extracted text) as the empty export, no note marker;
+ *  3. same for a second template (modern) — the note is template-agnostic
+ *     because no template renders it;
+ *  4. probe artifact: visible text is extracted, opacity:0 and
+ *     visibility:hidden text is omitted by Chrome (documents WHY the
+ *     export cannot contain a hidden layer);
+ *  5. the shipped CV print CSS contains no hidden-text tricks.
  *
- * Environment: needs a Chrome binary (google-chrome or a Chrome-for-Testing
- * cache under ~/.cache/cht). Without one the whole suite skips — same
- * honest-failure mode as tests/deckblatt-composition.test.ts.
+ * Environment: needs a Chrome binary (google-chrome or a Chrome-for-
+ * Testing cache under ~/.cache/cht). Without one the Chrome-dependent
+ * suite skips — same honest-failure mode as tests/deckblatt-composition.
  */
 import { execFileSync } from "node:child_process";
 import {
@@ -40,9 +43,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it } from "vitest";
 import { CvDocument, type CvLabels } from "@/components/cv-document";
-import { CvNotePage } from "@/components/cv-note-page";
-import { dictionaries } from "@/lib/i18n/dictionaries";
-import { defaultCvCustomization } from "@/lib/templates/cv-customization";
 import { cvEmpty, type CvDocument as CvDocModel } from "@/lib/templates/cv";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -109,9 +109,6 @@ async function extractPdf(file: string): Promise<Extracted> {
   }
 }
 
-const count = (haystack: string, needle: string): number =>
-  haystack.split(needle).length - 1;
-
 // ---------------------------------------------------------------------------
 // Harness: the EXACT print-root markup the builder portals, with the
 // EXACT shipped print CSS from globals.css.
@@ -130,7 +127,10 @@ const LABELS: CvLabels = {
   documentTitle: "Your CV",
 };
 
-function sampleCv(templateId: CvDocModel["templateId"]): CvDocModel {
+function sampleCv(
+  templateId: CvDocModel["templateId"],
+  hiddenInformation: string,
+): CvDocModel {
   const cv = cvEmpty();
   cv.templateId = templateId;
   cv.personal.fullName = "Daniel Mercer";
@@ -165,40 +165,20 @@ function sampleCv(templateId: CvDocModel["templateId"]): CvDocModel {
   cv.skills = ["Sales Strategy", "Negotiation"];
   cv.languages = [{ id: "l1", language: "English", level: "Native" }];
   cv.interests = ["Chess"];
+  cv.hiddenInformation = hiddenInformation;
   return cv;
 }
 
-// Unique marker so an accidental duplication is impossible to miss.
+// Unique markers so any leakage into the artifact is impossible to miss.
 const NOTE_DE = "Bismillahir Rahmanir Rahim — private test note (PDF probe)";
-const NOTE_AR = "ملاحظة اختبار خاصة — استخراج PDF (probe-ar-7f3a)";
 
-/** The builder's print-root content, exactly as portal-rendered. */
-function printRootMarkup(
-  templateId: CvDocModel["templateId"],
-  note: {
-    text: string;
-    title: string;
-    caption: string;
-    dir: "ltr" | "rtl";
-  } | null,
-): string {
-  const customization = defaultCvCustomization();
+/** The builder's print-root content, exactly as portal-rendered today:
+ *  ONLY the CV sheet — the note is intentionally not part of it. */
+function printRootMarkup(templateId: CvDocModel["templateId"], note: string): string {
   const sheet = renderToStaticMarkup(
-    <CvDocument cv={sampleCv(templateId)} labels={LABELS} />,
+    <CvDocument cv={sampleCv(templateId, note)} labels={LABELS} />,
   );
-  const notePage = note
-    ? renderToStaticMarkup(
-        <CvNotePage
-          text={note.text}
-          title={note.title}
-          caption={note.caption}
-          dir={note.dir}
-          topMm={customization.spacing.topBottomMarginMm}
-          leftMm={customization.spacing.leftRightMarginMm}
-        />,
-      )
-    : "";
-  return `<div class="cv-print-root" aria-hidden="true">${sheet}${notePage}</div>`;
+  return `<div class="cv-print-root" aria-hidden="true">${sheet}</div>`;
 }
 
 /** Shipped print CSS: the CV print section of globals.css, verbatim. */
@@ -251,55 +231,26 @@ function printPdf(chrome: string, htmlFile: string, pdfFile: string): void {
 // The suite (skips when no Chrome is available in the environment)
 // ---------------------------------------------------------------------------
 
-describeChrome("CV PDF export — hiddenInformation on the exported artifact", () => {
-  const workDir = mkdtempSync(join(tmpdir(), "cv-note-pdf-"));
-  const de = dictionaries.de.templates;
-  const ar = dictionaries.ar.templates;
+describeChrome("CV PDF export — hiddenInformation is absent from the artifact", () => {
+  const workDir = mkdtempSync(join(tmpdir(), "cv-note-absent-"));
 
-  interface Artifact {
-    extracted: Extracted;
-  }
-
-  const artifacts: Record<string, Artifact> = {};
+  const artifacts: Record<string, Extracted> = {};
 
   beforeAll(async () => {
     const specs: Array<[string, string]> = [
-      ["empty", printRootMarkup("classic", null)],
+      ["empty-classic", printRootMarkup("classic", "")],
+      ["filled-classic", printRootMarkup("classic", NOTE_DE)],
+      ["empty-modern", printRootMarkup("modern", "")],
+      ["filled-modern", printRootMarkup("modern", NOTE_DE)],
+      // Feasibility probe: documents which invisible-text techniques the
+      // Chrome print pipeline actually drops (none of them can be used).
       [
-        "filled",
-        printRootMarkup("classic", {
-          text: NOTE_DE,
-          title: de.hiddenInfoPageTitle,
-          caption: de.hiddenInfoPageCaption,
-          dir: "ltr",
-        }),
-      ],
-      [
-        "filled-again",
-        printRootMarkup("classic", {
-          text: NOTE_DE,
-          title: de.hiddenInfoPageTitle,
-          caption: de.hiddenInfoPageCaption,
-          dir: "ltr",
-        }),
-      ],
-      [
-        "filled-modern",
-        printRootMarkup("modern", {
-          text: NOTE_DE,
-          title: de.hiddenInfoPageTitle,
-          caption: de.hiddenInfoPageCaption,
-          dir: "ltr",
-        }),
-      ],
-      [
-        "rtl",
-        printRootMarkup("classic", {
-          text: NOTE_AR,
-          title: ar.hiddenInfoPageTitle,
-          caption: ar.hiddenInfoPageCaption,
-          dir: "rtl",
-        }),
+        "probe",
+        `<div style="width:210mm;min-height:297mm;padding:14mm 15mm;font-family:sans-serif">
+          <h1>PROBE-VISIBLE-7f3a</h1>
+          <div style="opacity: 0;">PROBE-OPACITY-7f3a</div>
+          <div style="visibility: hidden;">PROBE-VISIBILITY-7f3a</div>
+        </div>`,
       ],
     ];
     for (const [name, markup] of specs) {
@@ -307,83 +258,73 @@ describeChrome("CV PDF export — hiddenInformation on the exported artifact", (
       const pdfFile = join(workDir, `${name}.pdf`);
       writeFileSync(htmlFile, harnessHtml(markup), "utf8");
       printPdf(CHROME as string, htmlFile, pdfFile);
-      artifacts[name] = { extracted: await extractPdf(pdfFile) };
+      artifacts[name] = await extractPdf(pdfFile);
     }
   }, 300_000);
 
-  it("empty note: no note page, no note text, visible CV intact", () => {
-    const { extracted } = artifacts["empty"];
+  it("empty-note export: visible CV intact, no note text anywhere", () => {
+    const extracted = artifacts["empty-classic"];
     expect(extracted.total).toBeGreaterThanOrEqual(1);
-    expect(count(extracted.text, NOTE_DE)).toBe(0);
-    expect(count(extracted.text, de.hiddenInfoPageTitle)).toBe(0);
-    // The visible CV is still exported:
+    expect(extracted.text).not.toContain(NOTE_DE);
     expect(extracted.text).toContain("Daniel Mercer");
     expect(extracted.text).toContain("Sales Manager");
   });
 
-  it("filled note: exactly ONE extractable occurrence, on its own final page", () => {
-    const empty = artifacts["empty"].extracted;
-    const filled = artifacts["filled"].extracted;
-    // One supplementary A4 page — and nothing else changed in the count.
-    expect(filled.total).toBe(empty.total + 1);
-    // Exactly one extractable occurrence in the whole document…
-    expect(count(filled.text, NOTE_DE)).toBe(1);
-    expect(count(filled.text, de.hiddenInfoPageTitle)).toBe(1);
-    // …on the FINAL page, never on the first (CV) page.
-    const last = filled.pages[filled.pages.length - 1];
-    const first = filled.pages[0];
-    expect(last).toContain(NOTE_DE);
-    expect(last).toContain(de.hiddenInfoPageTitle);
-    expect(first).not.toContain(NOTE_DE);
-    // Honest caption present (extractable too):
-    expect(last).toContain(de.hiddenInfoPageCaption);
+  it("populated note: exported PDF is EXACTLY the empty export (classic)", () => {
+    const empty = artifacts["empty-classic"];
+    const filled = artifacts["filled-classic"];
+    // No trace of the note — visible or extractable:
+    expect(filled.text).not.toContain(NOTE_DE);
+    // The artifact is unchanged in every observable way:
+    expect(filled.total).toBe(empty.total);
+    expect(filled.text).toBe(empty.text);
   });
 
-  it("visible CV content survives on the CV pages (layout untouched)", () => {
-    const filled = artifacts["filled"].extracted;
-    const first = filled.pages[0];
-    expect(first).toContain("Daniel Mercer");
-    expect(first).toContain("Vice President of Sales");
+  it("populated note: exported PDF is EXACTLY the empty export (modern)", () => {
+    const empty = artifacts["empty-modern"];
+    const filled = artifacts["filled-modern"];
+    expect(filled.text).not.toContain(NOTE_DE);
+    expect(filled.total).toBe(empty.total);
+    expect(filled.text).toBe(empty.text);
   });
 
-  it("repeated exports of the same state never duplicate the note", () => {
-    const a = artifacts["filled"].extracted;
-    const b = artifacts["filled-again"].extracted;
-    expect(b.total).toBe(a.total);
-    expect(count(b.text, NOTE_DE)).toBe(1);
-  });
-
-  it("the second template (modern) exports the note identically", () => {
-    const filled = artifacts["filled"].extracted;
-    const modern = artifacts["filled-modern"].extracted;
-    expect(modern.total).toBe(filled.total);
-    expect(count(modern.text, NOTE_DE)).toBe(1);
-    expect(modern.text).toContain("Daniel Mercer");
-  });
-
-  it("Arabic note (dir=rtl) is extractable exactly once", () => {
-    const empty = artifacts["empty"].extracted;
-    const rtl = artifacts["rtl"].extracted;
-    expect(rtl.total).toBe(empty.total + 1);
-    // pdf.js normalizes Arabic to presentation forms on extraction (the
-    // characters are extractable, but not byte-identical to the source
-    // string), so assert via the note's stable ASCII marker plus the
-    // presence of Arabic Unicode on the final page.
-    expect(count(rtl.text, "probe-ar-7f3a")).toBe(1);
-    const last = rtl.pages[rtl.pages.length - 1];
-    expect(/[؀-ۿ]/.test(last)).toBe(true);
-    // The marker appears nowhere on the CV pages.
-    expect(count(rtl.pages.slice(0, -1).join("\n"), "probe-ar-7f3a")).toBe(0);
+  it("probe: Chrome omits invisible text from the PDF (why no hidden layer is possible)", () => {
+    const probe = artifacts["probe"];
+    // Visible text is extractable…
+    expect(probe.text).toContain("PROBE-VISIBLE-7f3a");
+    // …but opacity:0 and visibility:hidden text is OMITTED from the PDF
+    // text layer — a non-visible extractable note is not achievable in
+    // this pipeline without forbidden techniques.
+    expect(probe.text).not.toContain("PROBE-OPACITY-7f3a");
+    expect(probe.text).not.toContain("PROBE-VISIBILITY-7f3a");
   });
 });
 
-// The gate is trim-based, so whitespace-only notes export nothing.
-describe("note-page gate (whitespace-only notes export nothing)", () => {
-  it("the builder gates the note page on cv.hiddenInformation.trim()", () => {
+// Source-level guards (run without Chrome).
+describe("shipped export code contains no hidden-text techniques", () => {
+  it("the CV print CSS has no white-on-white / invisible / off-page tricks", () => {
+    const printCss = shippedPrintCss();
+    expect(printCss).not.toMatch(/(?<!background-)color:\s*#fff/i);
+    expect(printCss).not.toContain("opacity: 0");
+    expect(printCss).not.toContain("visibility: hidden");
+    expect(printCss).not.toContain("font-size: 0");
+    // The sheet stays the printable page: no negative offsets, no overflow
+    // positioning that would push content off the page.
+    expect(printCss).not.toMatch(/margin(-[a-z]+)?:\s*-/);
+  });
+
+  it("the print portal renders only the CV sheet (no note element)", () => {
     const builderSrc = read("src/components/cv-builder.tsx");
-    expect(builderSrc).toContain(
-      'const hasHiddenNote = cv.hiddenInformation.trim() !== "";',
-    );
-    expect(builderSrc).toMatch(/hasHiddenNote && \(\s*<CvNotePage/);
+    expect(builderSrc).toContain('className="cv-print-root"');
+    expect(builderSrc).not.toContain("CvNotePage");
+    expect(builderSrc).not.toContain("cv-note-page");
+    // The note field exists and is trimmed/gated nowhere in the print path:
+    // it is only written, persisted and (for cover letters) blanked.
+    expect(builderSrc).toContain("cv.hiddenInformation");
+    const portal = builderSrc.match(
+      /<div className="cv-print-root"[\s\S]*?<\/div>/,
+    )?.[0] ?? "";
+    expect(portal).toContain("<CvDocumentSheet cv={cv} labels={cvLabels} />");
+    expect(portal).not.toContain("hiddenInformation");
   });
 });

@@ -125,13 +125,14 @@ export interface CvDocument {
    *  - Stored in the SAME per-user draft (localStorage) as the CV content —
    *    ONE canonical field, so repeated saves/exports overwrite and never
    *    append (idempotent by construction).
-   *  - NEVER rendered by the CV templates and NEVER part of the visible CV
-   *    layout. When non-empty, the browser-print export appends ONE labeled
-   *    supplementary page (CvNotePage inside the print root) carrying the
-   *    note as plain, extractable PDF text — the visible sheet is untouched,
-   *    and an empty note produces byte-identical output. The note is plain
-   *    text readable by ordinary PDF readers; nothing promises AI systems
-   *    read or act on it.
+   *  - NEVER rendered by the CV templates and NEVER part of the print/PDF
+   *    export; the export pipeline has no hook for it on purpose. The
+   *    browser-print pipeline has no compliant way to embed
+   *    invisible-but-extractable text (verified: opacity:0 /
+   *    visibility:hidden / font-size:0 content is omitted from the PDF —
+   *    see tests/cv-hidden-information-pdf.test.tsx); a hidden layer would
+   *    require forbidden tricks (white-on-white, off-page) or a separate
+   *    server-side PDF post-processing pipeline.
    *  - Never transmitted to external AI providers: the cover-letter route
    *    blanks it before prompt assembly, and formatCvForPrompt only ever
    *    serialises visible CV fields.
