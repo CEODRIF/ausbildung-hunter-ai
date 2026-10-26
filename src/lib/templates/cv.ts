@@ -120,6 +120,22 @@ export interface CvDocument {
   projects: CvProject[];
   interests: string[];
   /**
+   * Optional PRIVATE supplementary note (e.g. a personal prayer or a
+   * private note).
+   *  - Stored in the SAME per-user draft (localStorage) as the CV content —
+   *    ONE canonical field, so repeated saves/exports overwrite and never
+   *    append (idempotent by construction).
+   *  - NEVER rendered by the CV templates and NEVER part of the print/PDF
+   *    export; the export pipeline has no hook for it on purpose.
+   *  - Never transmitted to external AI providers: the cover-letter route
+   *    blanks it before prompt assembly, and formatCvForPrompt only ever
+   *    serialises visible CV fields.
+   *  - Does NOT count as CV content (cvHasContent): a note alone must not
+   *    switch the builder into the "continue" flow or enable the PDF
+   *    button.
+   */
+  hiddenInformation: string;
+  /**
    * Optional appearance/style settings (font, sizes, spacing, colors, photo,
    * header, sections, footer). Persisted in the SAME per-user key as the
    * content; `sanitizeCvDocument` always fills it with valid defaults. When
@@ -128,6 +144,9 @@ export interface CvDocument {
    */
   customization?: CvCustomizationSettings;
 }
+
+/** Hard cap for the private note (UI maxLength + defensive sanitizer). */
+export const HIDDEN_INFORMATION_MAX_LENGTH = 2000;
 
 export type CvListSection =
   | "education"
@@ -221,6 +240,7 @@ export function cvEmpty(): CvDocument {
     certificates: [],
     projects: [],
     interests: [],
+    hiddenInformation: "",
     customization: defaultCvCustomization(),
   };
 }
@@ -416,6 +436,12 @@ export function sanitizeCvDocument(raw: unknown): CvDocument | null {
     certificates,
     projects,
     interests: strList(data.interests),
+    // Private note: kept in the same draft, capped defensively (legacy
+    // documents without the key resolve to "" — behaviour unchanged).
+    hiddenInformation: str(data.hiddenInformation).slice(
+      0,
+      HIDDEN_INFORMATION_MAX_LENGTH,
+    ),
     customization: sanitizeCvCustomization(data.customization),
   };
 }

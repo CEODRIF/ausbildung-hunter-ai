@@ -53,6 +53,7 @@ import {
 import { candidateProfileSchema } from "@/lib/bewerbung-schema";
 import { useScaledSheet } from "@/lib/use-scaled-sheet";
 import {
+  HIDDEN_INFORMATION_MAX_LENGTH,
   cvEmpty,
   cvHasContent,
   emptyCertificate,
@@ -674,6 +675,13 @@ export function CvBuilder({
 
   const setSummary = useCallback((value: string) => {
     setCv((c) => ({ ...c, summary: value }));
+  }, []);
+
+  // Private supplementary note — one canonical field (cv.hiddenInformation),
+  // persisted by the same autosave as the content. Never rendered, never
+  // exported, never transmitted (see CvDocument.hiddenInformation).
+  const setHiddenInformation = useCallback((value: string) => {
+    setCv((c) => ({ ...c, hiddenInformation: value }));
   }, []);
 
   const updateList = useCallback(
@@ -1933,14 +1941,48 @@ export function CvBuilder({
                   onChange={(next) =>
                     setCv((c) => ({ ...c, interests: next }))
                   }
-                  placeholder={t("templates.addInterest")}
-                  label={t("templates.interest")}
-                  removeLabel={t("templates.remove")}
-                  inputRef={interestInputRef}
-                />
-              </SectionCard>
-            </div>
-            </Fragment>
+                   placeholder={t("templates.addInterest")}
+                   label={t("templates.interest")}
+                   removeLabel={t("templates.remove")}
+                   inputRef={interestInputRef}
+                 />
+               </SectionCard>
+
+               {/* Hidden information — private supplementary note. It lives
+                   ONLY in the per-user draft: no template renders it, so the
+                   print portal (PDF export) can never contain it. Clearing
+                   the field stores "" (the note is removed from the draft). */}
+               <SectionCard
+                 icon="lock"
+                 title={t("templates.sectionHiddenInfo")}
+               >
+                 <div>
+                   <Textarea
+                     label={t("templates.hiddenInfoLabel")}
+                     value={cv.hiddenInformation}
+                     onChange={(e) => setHiddenInformation(e.target.value)}
+                     placeholder={t("templates.hiddenInfoPlaceholder")}
+                     hint={t("templates.hiddenInfoHint")}
+                     maxLength={HIDDEN_INFORMATION_MAX_LENGTH}
+                   />
+                   <div className="mt-2 flex items-center justify-between gap-3">
+                     <span className="text-xs tabular-nums text-faint">
+                       {cv.hiddenInformation.length} / {HIDDEN_INFORMATION_MAX_LENGTH}
+                     </span>
+                     <Button
+                       variant="ghost"
+                       size="sm"
+                       className="text-danger hover:bg-danger-soft hover:text-danger"
+                       disabled={cv.hiddenInformation.length === 0}
+                       onClick={() => setHiddenInformation("")}
+                     >
+                       {t("templates.clearHiddenInfo")}
+                     </Button>
+                   </div>
+                 </div>
+               </SectionCard>
+             </div>
+             </Fragment>
             ) : view === "design" ? (
             <CvCustomizationPanel
               settings={cv.customization ?? defaultCvCustomization()}
