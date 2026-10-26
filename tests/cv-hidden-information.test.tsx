@@ -7,12 +7,16 @@
  *    visible CV sections), empty by default;
  *  - editor section at the BOTTOM of the CV editor: textarea, explanation,
  *    character counter, clear option, keyboard/screen-reader accessible;
- *  - persistence through the EXISTING per-user localStorage draft
- *    (`aha:cv:<userId>`) — no new storage surface;
- *  - the note NEVER appears in the visible CV layout / PDF export
- *    (browser print of the same CvDocument the preview renders — no PDF
- *    library is involved, so no malformed-PDF risk is introduced);
- *  - idempotency: repeated saves/exports never duplicate the text;
+  *  - persistence through the EXISTING per-user localStorage draft
+  *    (`aha:cv:<userId>`) — no new storage surface;
+  *  - the note NEVER appears in the visible CV layout or the on-screen
+  *    preview; in the PDF export (browser print) it appears ONLY when
+  *    non-empty, as ONE labeled supplementary page (CvNotePage) appended
+  *    after the sheet inside the print root — plain extractable text, no
+  *    hidden-text tricks, byte-identical sheet markup with or without it.
+  *    The real-artifact extraction test lives in
+  *    tests/cv-hidden-information-pdf.test.tsx;
+  *  - idempotency: repeated saves/exports never duplicate the text;
  *  - the note is never transmitted to external AI providers (the only
  *    server path, /api/ai/cover-letter, blanks it before prompt assembly).
  */
@@ -266,7 +270,7 @@ describe("CV editor: Hidden Information section", () => {
     expect(screen.getByLabelText(/^Ihre private Notiz/)).toBe(field);
     expect(
       screen.getByText(
-        "Wird getrennt von der sichtbaren CV-Ansicht in Ihrem privaten Entwurf gespeichert. Diese Notiz erscheint nie im Lebenslauf und nicht im PDF-Export.",
+        "Wird getrennt von den sichtbaren CV-Abschnitten in Ihrem privaten Entwurf gespeichert. Die Notiz erscheint nie in der CV-Vorschau. Bei gefülltem Feld wird sie als beschriftete Zusatzseite mit normalem, extrahierbarem Text in den PDF-Export aufgenommen.",
       ),
     ).toBeInTheDocument();
     // Character counter (0 / 2000) and a disabled clear option.
@@ -274,9 +278,37 @@ describe("CV editor: Hidden Information section", () => {
       screen.getByText(`0 / ${HIDDEN_INFORMATION_MAX_LENGTH}`),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Feld leeren" })).toBeDisabled();
-    // The note must not be the target of the visible A4 preview (print root).
+    // Empty note → NO supplementary page anywhere (print root or preview).
+    expect(document.querySelector(".cv-note-page")).toBeNull();
     const printRoot = document.querySelector(".cv-print-root");
     expect(printRoot?.textContent ?? "").not.toContain("Ihre private Notiz");
+  });
+
+  it("a non-empty note appears exactly once in the print root, on its own labeled page (never in the preview)", async () => {
+    await openEditor();
+    fireEvent.change(screen.getByPlaceholderText(DE_NOTE_PLACEHOLDER), {
+      target: { value: NOTE },
+    });
+    // The sheet (preview AND printed CV) is untouched by the note.
+    const sheet = document.querySelector(".cv-print-root .cv-sheet");
+    expect(sheet?.textContent ?? "").not.toContain(NOTE);
+    // Exactly ONE supplementary page, inside the print root, labeled, with
+    // the note text exactly once.
+    const notePages = document.querySelectorAll(".cv-note-page");
+    expect(notePages).toHaveLength(1);
+    const notePage = notePages[0];
+    expect(notePage.closest(".cv-print-root")).not.toBeNull();
+    expect(notePage.textContent).toContain(NOTE);
+    expect(notePage.textContent?.split(NOTE).length - 1).toBe(1);
+    // Labeled: the localized page heading is present.
+    expect(notePage.textContent).toContain("Private Notiz (Zusatzseite)");
+    // The on-screen preview sheets (outside the print root) must not show
+    // the note in any rendered element.
+    for (const s of Array.from(document.querySelectorAll(".cv-sheet")).filter(
+      (x) => !x.closest(".cv-print-root"),
+    )) {
+      expect(s.textContent ?? "").not.toContain(NOTE);
+    }
   });
 
   it("supports entering, editing and clearing the note (keyboard-accessible)", async () => {
@@ -309,7 +341,8 @@ describe("CV editor: Hidden Information section", () => {
 });
 
 // ---------------------------------------------------------------------------
-// PDF export: visible layout untouched, note never rendered, idempotent
+// PDF export: visible layout untouched, note only as labeled supplementary
+// page (print root, non-empty gate), idempotent
 // ---------------------------------------------------------------------------
 
 const LABELS: CvLabels = {
@@ -414,26 +447,41 @@ describe("PDF export behavior (print of the same CvDocument)", () => {
     }
   });
 
-  it("the export pipeline is unchanged: browser print of the same sheet, no PDF library", () => {
+  it("the export pipeline is browser print; the note enters only via the labeled note page (no tricks, no PDF lib)", () => {
     // The print portal still renders exactly the same CvDocument as the
-    // preview — the note is absent from the templates, so the printed PDF
-    // (generated by the browser, no PDF library in the repo for CVs) can
-    // only contain the visible layout.
+    // preview; the note is appended AFTER the sheet, gated on non-empty
+    // content, so an empty field yields a byte-identical visible CV.
     expect(builderSrc).toContain('className="cv-print-root"');
     expect(builderSrc).toMatch(
       /cv-print-root[\s\S]{0,200}?<CvDocumentSheet cv=\{cv\}/,
     );
+    expect(builderSrc).toContain(
+      'const hasHiddenNote = cv.hiddenInformation.trim() !== "";',
+    );
+    expect(builderSrc).toMatch(/hasHiddenNote && \(\s*<CvNotePage/);
     const handlePrint =
       builderSrc.match(
         /const handlePrint = useCallback\(\(\) => \{[\s\S]*?\}, \[\]\);/,
       )?.[0] ?? "";
     expect(handlePrint).toContain("window.print()");
+    // No new PDF generation library in the builder — the export stays
+    // browser print (the repo's pdf-lib is Anschreiben-only).
     expect(builderSrc).not.toContain("pdf-lib");
     expect(builderSrc).not.toContain("html2canvas");
-    // No white-on-white / hidden-text tricks anywhere in the print CSS.
+    // The note-page print CSS is explicit visible text on its own page —
+    // no white-on-white, no zero-size glyphs, no opacity tricks.
     const printCss = read("../src/app/globals.css");
-    expect(printCss).not.toContain("color:#fff");
-    expect(printCss).not.toContain("white-space:pre");
+    const noteCss = printCss.slice(
+      printCss.indexOf(".cv-print-root .cv-note-page"),
+      printCss.indexOf(".cl-print-root"),
+    );
+    expect(noteCss).not.toBe(""); // block found
+    expect(noteCss).toContain("page-break-before: always");
+    expect(noteCss).toContain("white-space: pre-wrap");
+    expect(noteCss).toContain("width: 210mm");
+    expect(noteCss).not.toMatch(/(?<!background-)color:\s*#fff/i);
+    expect(noteCss).not.toContain("font-size: 0");
+    expect(noteCss).not.toContain("opacity: 0");
   });
 });
 
@@ -514,6 +562,8 @@ describe("i18n (all four supported languages)", () => {
         "sectionHiddenInfo",
         "hiddenInfoLabel",
         "hiddenInfoHint",
+        "hiddenInfoPageTitle",
+        "hiddenInfoPageCaption",
         "hiddenInfoPlaceholder",
         "clearHiddenInfo",
       ]) {

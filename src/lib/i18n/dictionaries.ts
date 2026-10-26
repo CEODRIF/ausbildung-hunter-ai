@@ -1458,7 +1458,10 @@ const de = {
     sectionHiddenInfo: "Zusätzliche private Notiz",
     hiddenInfoLabel: "Ihre private Notiz",
     hiddenInfoHint:
-      "Wird getrennt von der sichtbaren CV-Ansicht in Ihrem privaten Entwurf gespeichert. Diese Notiz erscheint nie im Lebenslauf und nicht im PDF-Export.",
+      "Wird getrennt von den sichtbaren CV-Abschnitten in Ihrem privaten Entwurf gespeichert. Die Notiz erscheint nie in der CV-Vorschau. Bei gefülltem Feld wird sie als beschriftete Zusatzseite mit normalem, extrahierbarem Text in den PDF-Export aufgenommen.",
+    hiddenInfoPageTitle: "Private Notiz (Zusatzseite)",
+    hiddenInfoPageCaption:
+      "Diese Notiz ist normaler, extrahierbarer PDF-Text und für gewöhnliche PDF-Leser und -Extraktionswerkzeuge einsehbar.",
     hiddenInfoPlaceholder: "z. B. ein persönliches Gebet oder eine private Notiz …",
     clearHiddenInfo: "Feld leeren",
     // ---- CV customization (Gestalten-Tab) ---------------------------------
@@ -3556,7 +3559,10 @@ const en: Dict = {
     sectionHiddenInfo: "Hidden Information",
     hiddenInfoLabel: "Your private note",
     hiddenInfoHint:
-      "Stored privately in your draft, separately from the visible CV layout. This note never appears in your CV and is not included in the PDF export.",
+      "Stored privately in your draft, separately from the visible CV sections. The note never appears in the CV preview. When filled, it is added to the PDF export as a labeled supplementary page with plain, extractable text.",
+    hiddenInfoPageTitle: "Private Note (Supplementary Page)",
+    hiddenInfoPageCaption:
+      "This note is plain, extractable PDF text, readable by ordinary PDF readers and extraction tools.",
     hiddenInfoPlaceholder: "e.g. a personal prayer or a private note…",
     clearHiddenInfo: "Clear field",
     // ---- CV customization (Customize tab) ---------------------------------
@@ -5652,7 +5658,10 @@ const fr: Dict = {
     sectionHiddenInfo: "Informations masquées",
     hiddenInfoLabel: "Votre note privée",
     hiddenInfoHint:
-      "Stockée de façon privée dans votre brouillon, séparément de la mise en page CV visible. Cette note n'apparaît jamais dans votre CV et n'est pas incluse dans l'export PDF.",
+      "Stockée de façon privée dans votre brouillon, séparément des sections CV visibles. La note n'apparaît jamais dans l'aperçu du CV. Quand elle est renseignée, elle est ajoutée à l'export PDF sous forme de page supplémentaire intitulée, en texte normal extractible.",
+    hiddenInfoPageTitle: "Note privée (Page supplémentaire)",
+    hiddenInfoPageCaption:
+      "Cette note est un texte PDF normal et extractible, lisible par les lecteurs et outils d'extraction PDF courants.",
     hiddenInfoPlaceholder: "p. ex. une prière personnelle ou une note privée…",
     clearHiddenInfo: "Effacer le champ",
     // ---- CV customization (onglet Personnaliser) --------------------------
@@ -7702,7 +7711,10 @@ const ar: Dict = {
     sectionHiddenInfo: "المعلومات المخفية",
     hiddenInfoLabel: "ملاحظتك الخاصة",
     hiddenInfoHint:
-      "تُخزَّن بشكل خاص في مسودتك، بشكل منفصل عن عرض السيرة الذاتية الظاهر. لا تظهر هذه الملاحظة في سيرتك الذاتية أبداً ولا تُدرَج في ملف PDF المُصدَّر.",
+      "تُخزَّن بشكل خاص في مسودتك، بشكل منفصل عن أقسام السيرة الذاتية الظاهرة. لا تظهر هذه الملاحظة في معاينة السيرة الذاتية أبداً. إذا تمت تعبئتها، تضاف إلى ملف PDF المصدَّر بوصفها صفحة مكمّلة موسومة بنص عادي قابل للاستخراج.",
+    hiddenInfoPageTitle: "ملاحظة خاصة (صفحة مكمّلة)",
+    hiddenInfoPageCaption:
+      "هذه الملاحظة نص عادي قابل للاستخراج في ملف PDF، ويمكن لبرامج القراءة والأدوات الاعتيادية لاستخراج النصوص الاطلاع عليه.",
     hiddenInfoPlaceholder: "على سبيل المثال: دعاء شخصي أو ملاحظة خاصة…",
     clearHiddenInfo: "مسح الحقل",
     // ---- تخصيص السيرة الذاتية (تبويب تخصيص) ---------------------------------

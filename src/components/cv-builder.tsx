@@ -42,6 +42,7 @@ import {
   CV_SHEET_WIDTH,
   type CvLabels,
 } from "@/components/cv-document";
+import { CvNotePage } from "@/components/cv-note-page";
 import { CvTemplateSelector } from "@/components/cv-template-selector";
 import { TEMPLATE_NAME_KEYS } from "@/components/cv-templates";
 import { buildDemoCv } from "@/components/cv-templates/demo-cv";
@@ -506,7 +507,7 @@ export function CvBuilder({
   profileFullName,
   profileEmail,
 }: CvBuilderProps) {
-  const { t, lang } = useI18n();
+  const { t, lang, dir } = useI18n();
   const router = useRouter();
 
   const [cv, setCv] = useState<CvDocument>(cvEmpty);
@@ -668,6 +669,14 @@ export function CvBuilder({
 
   const hasContent = cvHasContent(cv);
 
+  // Supplementary note page (print export only): when the private note is
+  // non-empty, ONE labeled page of plain extractable text is appended after
+  // the CV sheet inside the print root. Empty/whitespace-only → no page,
+  // the PDF is exactly the visible CV. The page reuses the user's configured
+  // sheet margins (same --cv-pad-* vars the templates set).
+  const hasHiddenNote = cv.hiddenInformation.trim() !== "";
+  const noteCustomization = cv.customization ?? defaultCvCustomization();
+
   // ---- Update helpers --------------------------------------------------------
   const setPersonal = useCallback((patch: Partial<CvPersonal>) => {
     setCv((c) => ({ ...c, personal: { ...c.personal, ...patch } }));
@@ -678,8 +687,9 @@ export function CvBuilder({
   }, []);
 
   // Private supplementary note — one canonical field (cv.hiddenInformation),
-  // persisted by the same autosave as the content. Never rendered, never
-  // exported, never transmitted (see CvDocument.hiddenInformation).
+  // persisted by the same autosave as the content. Never rendered by the CV
+  // templates (visible layout untouched), exported only as the labeled
+  // supplementary print page (CvNotePage), never transmitted to AI.
   const setHiddenInformation = useCallback((value: string) => {
     setCv((c) => ({ ...c, hiddenInformation: value }));
   }, []);
@@ -2069,12 +2079,25 @@ export function CvBuilder({
 
       {/* ====================== Print root (portal) ========================== */}
       {/* Rendered onto <body> outside the app shell; visible only in
-          @media print (see globals.css). Same CvDocument as the preview,
-          so the exported PDF is the preview with nothing else. */}
+          @media print (see globals.css). Same CvDocument as the preview, so
+          the exported PDF is the preview — plus, only when the private note
+          is non-empty, ONE labeled supplementary note page (CvNotePage)
+          appended after the sheet. The sheet markup itself is byte-identical
+          with or without the note. */}
       {typeof document !== "undefined" &&
         createPortal(
           <div className="cv-print-root" aria-hidden="true">
             <CvDocumentSheet cv={cv} labels={cvLabels} />
+            {hasHiddenNote && (
+              <CvNotePage
+                text={cv.hiddenInformation}
+                title={t("templates.hiddenInfoPageTitle")}
+                caption={t("templates.hiddenInfoPageCaption")}
+                dir={dir}
+                topMm={noteCustomization.spacing.topBottomMarginMm}
+                leftMm={noteCustomization.spacing.leftRightMarginMm}
+              />
+            )}
           </div>,
           document.body,
         )}
