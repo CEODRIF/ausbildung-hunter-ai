@@ -516,6 +516,9 @@ export function formatCvForPrompt(cv: CvDocument | null): string {
   if (!cv) {
     return "LEBENSLAUF: nicht verfügbar. Erfinde KEINE Lebenslaufangaben.";
   }
+  // NOTE: cv.hiddenInformation is a PRIVATE draft-only note (hidden
+  // information). It is intentionally NOT serialised here — it must never
+  // reach the model or any external provider.
   const lines: string[] = ["LEBENSLAUF (vom Nutzer gepflegte Daten):"];
   promptLine(lines, "Profil", cv.summary);
   promptLine(lines, "Berufsbezeichnung", cv.personal.professionalTitle);

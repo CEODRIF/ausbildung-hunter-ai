@@ -1454,6 +1454,13 @@ const de = {
     moveDown: "Nach unten verschieben",
     summaryPlaceholder:
       "Motivierte und organisierte Fachkraft mit Erfahrung in …",
+    // ---- Private note (hidden information) ---------------------------------
+    sectionHiddenInfo: "Zusätzliche private Notiz",
+    hiddenInfoLabel: "Ihre private Notiz",
+    hiddenInfoHint:
+      "Wird getrennt von der sichtbaren CV-Ansicht in Ihrem privaten Entwurf gespeichert. Diese Notiz erscheint nie im Lebenslauf und nicht im PDF-Export.",
+    hiddenInfoPlaceholder: "z. B. ein persönliches Gebet oder eine private Notiz …",
+    clearHiddenInfo: "Feld leeren",
     // ---- CV customization (Gestalten-Tab) ---------------------------------
     tabContent: "Inhalt",
     tabCustomize: "Gestalten",
@@ -3545,6 +3552,13 @@ const en: Dict = {
     moveDown: "Move down",
     summaryPlaceholder:
       "Motivated and organized professional with experience in...",
+    // ---- Private note (hidden information) ---------------------------------
+    sectionHiddenInfo: "Hidden Information",
+    hiddenInfoLabel: "Your private note",
+    hiddenInfoHint:
+      "Stored privately in your draft, separately from the visible CV layout. This note never appears in your CV and is not included in the PDF export.",
+    hiddenInfoPlaceholder: "e.g. a personal prayer or a private note…",
+    clearHiddenInfo: "Clear field",
     // ---- CV customization (Customize tab) ---------------------------------
     tabContent: "Content",
     tabCustomize: "Customize",
@@ -5634,6 +5648,13 @@ const fr: Dict = {
     moveDown: "Descendre",
     summaryPlaceholder:
       "Professionnel motivé et organisé avec de l'expérience en...",
+    // ---- Note privée (informations masquées) -------------------------------
+    sectionHiddenInfo: "Informations masquées",
+    hiddenInfoLabel: "Votre note privée",
+    hiddenInfoHint:
+      "Stockée de façon privée dans votre brouillon, séparément de la mise en page CV visible. Cette note n'apparaît jamais dans votre CV et n'est pas incluse dans l'export PDF.",
+    hiddenInfoPlaceholder: "p. ex. une prière personnelle ou une note privée…",
+    clearHiddenInfo: "Effacer le champ",
     // ---- CV customization (onglet Personnaliser) --------------------------
     tabContent: "Contenu",
     tabCustomize: "Personnaliser",
@@ -7677,6 +7698,13 @@ const ar: Dict = {
     moveUp: "تحريك لأعلى",
     moveDown: "تحريك لأسفل",
     summaryPlaceholder: "محترف دؤوب ومنظم لديه خبرة في...",
+    // ---- الملاحظة الخاصة (المعلومات المخفية) ---------------------------------
+    sectionHiddenInfo: "المعلومات المخفية",
+    hiddenInfoLabel: "ملاحظتك الخاصة",
+    hiddenInfoHint:
+      "تُخزَّن بشكل خاص في مسودتك، بشكل منفصل عن عرض السيرة الذاتية الظاهر. لا تظهر هذه الملاحظة في سيرتك الذاتية أبداً ولا تُدرَج في ملف PDF المصدَّر.",
+    hiddenInfoPlaceholder: "على سبيل المثال: دعاء شخصي أو ملاحظة خاصة…",
+    clearHiddenInfo: "مسح الحقل",
     // ---- تخصيص السيرة الذاتية (تبويب تخصيص) ---------------------------------
     tabContent: "المحتوى",
     tabCustomize: "تخصيص",

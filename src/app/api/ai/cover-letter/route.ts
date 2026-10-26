@@ -145,6 +145,11 @@ export async function POST(request: Request) {
   // The CV lives in the user's browser (per-user localStorage). The user
   // sends their OWN document; it is sanitized server-side (untrusted shape).
   const cv = sanitizeCvDocument(body.cv);
+  // Privacy guard (Hidden Information): the CV's private supplementary note
+  // is NEVER part of the cover-letter context. Blank it before ANY prompt
+  // assembly so the private text cannot reach an external AI provider —
+  // even though formatCvForPrompt already serialises visible fields only.
+  if (cv) cv.hiddenInformation = "";
   const profile = await fetchLatestProfile(user.id);
 
   const target = [
