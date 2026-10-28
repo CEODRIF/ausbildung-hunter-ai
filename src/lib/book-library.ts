@@ -229,11 +229,60 @@ export interface PublishedBookPage {
 }
 
 /**
+ * Filter criteria for the public library — the EXACT parameter names the
+ * data layer reads (`search` / `category` / `page`).
+ *
+ * The browser URL uses the shorter `q` / `cat` names (deep-linkable).
+ * `parseLibraryQuery` is the single, tested join point between the two
+ * shapes. History: the page once passed its own `{ q, cat, page }` object
+ * straight into `listPublishedBooks`, which read `params.search` /
+ * `params.category` — both `undefined`, so title + category filtering was
+ * silently ignored and every search rendered the unfiltered catalog
+ * (all-optional param types made the mismatch invisible to tsc).
+ */
+export interface LibraryFilters {
+  search: string | null;
+  category: string | null;
+  page: number;
+}
+
+/**
+ * Map the raw `searchParams` record (URL shape: `q`, `cat`, `page`) to the
+ * data-layer shape. Trims, treats whitespace-only as empty, clamps the page
+ * index to [1, 10000], and ignores non-string values (repeated params).
+ */
+export function parseLibraryQuery(
+  raw: Record<string, string | string[] | undefined>,
+): LibraryFilters {
+  const first = (key: string): string | null => {
+    const value = raw[key];
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+  const pageRaw = first("page");
+  const page = pageRaw
+    ? Math.max(1, Math.min(10_000, Number.parseInt(pageRaw, 10) || 1))
+    : 1;
+  return { search: first("q"), category: first("cat"), page };
+}
+
+/**
+ * Escape LIKE/ILIKE wildcards in a user-supplied fragment (Postgres'
+ * default escape character is the backslash) so a search for "100%" or
+ * "a_b" matches those literal characters instead of acting as wildcards.
+ */
+function escapeIlikeFragment(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+/**
  * Public listing: PUBLISHED books only, with title search, category filter
  * and cursor-free offset pagination (adequate for a curated book catalog).
  *
- * Throws on database failure — the page renders its error state from that;
- * the raw error never reaches the browser.
+ * The title match is case-insensitive (ILIKE); `search` and `category`
+ * narrow TOGETHER (SQL AND). Throws on database failure — the page renders
+ * its error state from that; the raw error never reaches the browser.
  */
 export async function listPublishedBooks(params: {
   search?: string | null;
@@ -252,7 +301,7 @@ export async function listPublishedBooks(params: {
       { count: "exact" },
     )
     .eq("published", true); // defence in depth on top of the RLS policy
-  if (search) query = query.ilike("title", `%${search}%`);
+  if (search) query = query.ilike("title", `%${escapeIlikeFragment(search)}%`);
   if (category) query = query.eq("category", category);
   query = query
     .order("created_at", { ascending: false })
@@ -637,11 +686,63 @@ export interface BookDownloadFail {
     | "book_unavailable"
     | "no_eligible_plan"
     | "quota_exhausted"
+    /** The quota schema (book_download_quota / reserve_book_download) is
+     *  absent from the database — migration 20261204000000 not applied.
+     *  A deployment gap, not a transient fault: retrying cannot fix it,
+     *  so the UI gets its own honest message instead of "try again". */
+    | "quota_unavailable"
     | "db_error";
   remaining: number;
   tier: BookQuotaTier;
 }
 export type BookDownloadResult = BookDownloadOk | BookDownloadFail;
+
+/** Redact JWT-shaped fragments before anything error-shaped reaches a log. */
+const REDACT_JWT =
+  /\beyJ[A-Za-z0-9._-]{8,}\.[A-Za-z0-9._-]{8,}\.[A-Za-z0-9._-]{8,}/g;
+
+function scrubLog(value: unknown): string {
+  return (typeof value === "string" ? value : String(value ?? "")).replace(
+    REDACT_JWT,
+    "[redacted-jwt]",
+  );
+}
+
+/**
+ * Failure signature of the quota schema being ABSENT from the database
+ * (migration 20261204000000 not applied): an unknown RPC (Postgres
+ * 42883 undefined_function / a PostgREST 404-class PGRST2xx schema-cache
+ * miss) or an unknown `book_download_quota` relation (42P01). These are
+ * DEPLOYMENT GAPS, not transient faults — no retry can fix them, and the
+ * user must not be told to "try again" forever. A runtime SQL fault inside
+ * the RPC (e.g. its `invalid_quota_limit` guard, code P0001) is NOT a
+ * schema miss and stays `db_error`. Exported for the regression tests.
+ */
+export function isQuotaSchemaMissing(
+  error:
+    | { message?: unknown; details?: unknown; code?: unknown }
+    | null
+    | undefined,
+): boolean {
+  if (!error) return false;
+  const code =
+    typeof error.code === "string" ? error.code.toUpperCase() : "";
+  if (
+    code === "42883" || // undefined_function
+    code === "42P01" || // undefined_table
+    code === "PGRST201" || // resource not found
+    code === "PGRST202" || // schema cache miss
+    code === "PGRST203" || // table not found
+    code === "PGRST204" // schema cache error
+  )
+    return true;
+  const text = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
+  return (
+    /does not exist/.test(text) ||
+    /could not find/.test(text) ||
+    /not found in the schema cache/.test(text)
+  );
+}
 
 /**
  * Authorize + record ONE download initiation for the session user.
@@ -687,10 +788,24 @@ export async function initiateBookDownload(
     p_limit: limit,
   });
   if (error) {
+    // Classify before responding: a MISSING schema (function/table) is an
+    // unresolved deployment gap — the user message must not invite endless
+    // retries, and the log must name the exact artifact to apply. The raw
+    // (scrubbed) PostgREST error stays server-side; the user only sees the
+    // stable code. No grant is ever issued on this branch.
+    const missingSchema = isQuotaSchemaMissing(error);
     console.error(
-      `[books] reserve_book_download RPC failed — "${error.message}" (is migration 20261204000000 applied?)`,
+      `[books] reserve_book_download RPC failed — code="${scrubLog(error.code ?? "?")}" message="${scrubLog(error.message)}" details="${scrubLog(error.details ?? "")}"` +
+        (missingSchema
+          ? " | ACTION REQUIRED: quota schema missing — apply supabase/migrations/20261204000000_book_download_quota.sql (table book_download_quota + function reserve_book_download)."
+          : " | check that supabase/migrations/20261204000000_book_download_quota.sql is applied and the service-role client is reachable."),
     );
-    return { ok: false, error: "db_error", remaining: 0, tier };
+    return {
+      ok: false,
+      error: missingSchema ? "quota_unavailable" : "db_error",
+      remaining: 0,
+      tier,
+    };
   }
 
   // House unwrap idiom: a scalar jsonb may arrive as an object or a 1-row array.
