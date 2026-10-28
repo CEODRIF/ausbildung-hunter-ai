@@ -1,18 +1,19 @@
+import { getServerT } from "@/lib/i18n/server";
 import { LoadingState } from "@/components/ui";
 
 /**
- * Partial-loading fallback (client navigation): shown while the dynamic
- * listing resolves. Full-page loads start with the server-rendered header
- * (LibraryShell is part of page.tsx), so this is intentionally compact.
+ * Partial-loading fallback (client navigation): rendered INSIDE the shared
+ * AppShell (bibliothek/layout.tsx), so only the content column is
+ * stand-in — same shape as the page's own chrome.
  */
-export default function BibliothekLoading() {
+export default async function BibliothekLoading() {
+  const t = await getServerT();
   return (
-    <main className="min-h-screen bg-background text-ink">
-      <div className="relative mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14 lg:px-10">
-        <div className="flex items-center justify-center py-24">
-          <LoadingState />
-        </div>
+    <div className="relative mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-10">
+      <p className="text-sm leading-relaxed text-muted">{t("library.intro")}</p>
+      <div className="flex items-center justify-center py-24">
+        <LoadingState />
       </div>
-    </main>
+    </div>
   );
 }

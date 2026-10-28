@@ -9,7 +9,7 @@ import { BOOK_CATEGORIES, categoryLabel } from "@/lib/book-categories";
 import { Button, ErrorState } from "@/components/ui";
 import { EmptyState } from "@/components/empty-state";
 import { Icon } from "@/components/icon";
-import { GradientMesh } from "@/components/ui/surfaces";
+
 
 /**
  * Deutsch Bibliothek — the PUBLIC book library.
@@ -201,27 +201,20 @@ export default async function BibliothekPage({
   );
 }
 
-/** Page chrome: the standalone header (the page is public — visitors from
- *  the landing page see no app-shell). */
+/**
+ * Page chrome INSIDE the shared AppShell (see bibliothek/layout.tsx): the
+ * shell supplies the sidebar, top bar, mobile drawer, background/mesh and
+ * the "Deutsch Bibliothek" heading (PAGE_HEADINGS entry). This is a plain
+ * centered content column — the same pattern as /wohnen — with an intro
+ * line so the section still reads on small viewports where the top-bar
+ * heading is hidden.
+ */
 function LibraryShell({ t, children }: { t: T; children: React.ReactNode }) {
   return (
-    <main className="min-h-screen bg-background text-ink">
-      <GradientMesh />
-      <div className="relative mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14 lg:px-10">
-        <header>
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-accent">
-            {t("library.kicker")}
-          </p>
-          <h1 className="display-title mt-2 text-3xl text-ink sm:text-4xl">
-            {t("library.pageTitle")}
-          </h1>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-            {t("library.pageSubtitle")}
-          </p>
-        </header>
-        {children}
-      </div>
-    </main>
+    <div className="relative mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-10">
+      <p className="text-sm leading-relaxed text-muted">{t("library.intro")}</p>
+      <div className="mt-5">{children}</div>
+    </div>
   );
 }
 
