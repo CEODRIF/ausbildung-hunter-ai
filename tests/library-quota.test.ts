@@ -45,6 +45,7 @@ import {
   BOOK_DOWNLOADS_PER_DAY,
   getBookQuotaState,
   initiateBookDownload,
+  isQuotaSchemaMissing,
   utcToday,
 } from "@/lib/book-library";
 
@@ -472,13 +473,69 @@ describe("initiateBookDownload — quota consume", () => {
     }
   });
 
-  it("the RPC error is db_error (loud log, no grant)", async () => {
+  it("RPC failure because the QUOTA TABLE is missing (42P01) → quota_unavailable, loud migration log, no grant", async () => {
     const state = makeAdminMock();
     withBook(state);
     vi.mocked(getEntitlements).mockResolvedValue(ent("pro", "subscription"));
     state.rpc.mockResolvedValue({
       data: null,
-      error: { message: "relation does not exist", code: "42P01" },
+      error: {
+        message: 'relation "public.book_download_quota" does not exist',
+        details: "",
+        hint: "",
+        code: "42P01",
+      },
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await initiateBookDownload(USER, BOOK_ID);
+    expect(result).toEqual({
+      ok: false,
+      error: "quota_unavailable",
+      remaining: 0,
+      tier: "pro",
+    });
+    // The log names the exact artifact to apply (deployment gap, not a
+    // transient fault) — and never a URL, token, or book id.
+    const logged = spy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logged).toContain("20261204000000_book_download_quota.sql");
+    expect(logged).not.toContain(PUBLISHED_BOOK.download_url);
+    spy.mockRestore();
+  });
+
+  it("RPC failure because the FUNCTION is missing (PostgREST 404 schema cache) → quota_unavailable", async () => {
+    const state = makeAdminMock();
+    withBook(state);
+    vi.mocked(getEntitlements).mockResolvedValue(ent("trial", "subscription"));
+    state.rpc.mockResolvedValue({
+      data: null,
+      error: {
+        message: "schema cache",
+        details:
+          'Resource "public.reserve_book_download" not found in the schema cache',
+        hint: "",
+        code: "PGRST202",
+      },
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await initiateBookDownload(USER, BOOK_ID);
+    expect(result.ok === false && result.error).toBe("quota_unavailable");
+    const logged = spy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logged).toContain("20261204000000_book_download_quota.sql");
+    spy.mockRestore();
+  });
+
+  it("a RUNTIME SQL fault inside the RPC (not a missing schema) stays db_error", async () => {
+    const state = makeAdminMock();
+    withBook(state);
+    vi.mocked(getEntitlements).mockResolvedValue(ent("pro", "subscription"));
+    state.rpc.mockResolvedValue({
+      data: null,
+      error: {
+        message: "invalid_quota_limit",
+        details: "",
+        hint: "",
+        code: "P0001",
+      },
     });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await initiateBookDownload(USER, BOOK_ID);
@@ -550,5 +607,65 @@ describe("utcToday — the reset key", () => {
     const today = utcToday();
     expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(today).toBe(new Date().toISOString().slice(0, 10));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. Failure classification (deployment gap vs transient fault)
+// ---------------------------------------------------------------------------
+
+describe("isQuotaSchemaMissing — RPC failure classification", () => {
+  it("detects a missing function (Postgres + PostgREST spellings)", () => {
+    expect(
+      isQuotaSchemaMissing({
+        message: 'function public.reserve_book_download(uuid,uuid,integer) does not exist',
+        code: "42883",
+      }),
+    ).toBe(true);
+    expect(
+      isQuotaSchemaMissing({
+        message: "schema cache",
+        details:
+          'Resource "public.reserve_book_download" not found in the schema cache',
+        code: "PGRST202",
+      }),
+    ).toBe(true);
+    expect(isQuotaSchemaMissing({ message: "Could not find the function", code: "PGRST204" })).toBe(true);
+  });
+
+  it("detects a missing quota table (42P01 or the message alone)", () => {
+    expect(
+      isQuotaSchemaMissing({
+        message: 'relation "public.book_download_quota" does not exist',
+        code: "42P01",
+      }),
+    ).toBe(true);
+    // Code-less message (some PostgREST versions only carry the text).
+    expect(isQuotaSchemaMissing({ message: "relation book_download_quota does not exist" })).toBe(true);
+  });
+
+  it("does NOT flag runtime SQL faults or unrelated errors as a schema miss", () => {
+    expect(
+      isQuotaSchemaMissing({ message: "invalid_quota_limit", code: "P0001" }),
+    ).toBe(false);
+    expect(
+      isQuotaSchemaMissing({ message: "permission denied for table book_download_quota", code: "42501" }),
+    ).toBe(false);
+    expect(isQuotaSchemaMissing({ message: "connection timeout", code: "08006" })).toBe(false);
+    expect(isQuotaSchemaMissing(null)).toBe(false);
+    expect(isQuotaSchemaMissing(undefined)).toBe(false);
+  });
+});
+
+describe("download error messages — locale completeness (regression)", () => {
+  it("quota_unavailable is translated in ALL four locales (never a raw key)", () => {
+    for (const lang of Object.keys(dictionaries)) {
+      const dict = dictionaries[lang as keyof typeof dictionaries];
+      const message = dict.library.download.errors.quota_unavailable;
+      expect(typeof message, `locale ${lang}`).toBe("string");
+      expect((message as string).length, `locale ${lang}`).toBeGreaterThan(10);
+      // A raw key leak would be the key itself.
+      expect(message).not.toBe("quota_unavailable");
+    }
   });
 });

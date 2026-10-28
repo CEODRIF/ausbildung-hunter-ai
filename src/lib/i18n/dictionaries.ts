@@ -1395,6 +1395,8 @@ const de = {
         quota_exhausted: "Das heutige Download-Limit ist erreicht.",
         no_eligible_plan: "Dein aktuelles Abo enthält keine Buch-Downloads.",
         book_unavailable: "Dieses Buch ist gerade nicht verfügbar.",
+        quota_unavailable:
+          "Das Download-System ist derzeit nicht verfügbar. Bitte versuche es später erneut.",
         db_error: "Der Download konnte nicht gestartet werden. Bitte erneut versuchen.",
       },
     },
@@ -3625,6 +3627,8 @@ const en: Dict = {
         quota_exhausted: "You have reached today's download limit.",
         no_eligible_plan: "Your current plan includes no book downloads.",
         book_unavailable: "This book is not currently available.",
+        quota_unavailable:
+          "The download service is currently unavailable. Please try again later.",
         db_error: "The download could not be started. Please try again.",
       },
     },
@@ -5850,6 +5854,8 @@ const fr: Dict = {
         quota_exhausted: "La limite de téléchargements du jour est atteinte.",
         no_eligible_plan: "Votre abonnement actuel n'inclut pas de téléchargements de livres.",
         book_unavailable: "Ce livre n'est pas disponible pour le moment.",
+        quota_unavailable:
+          "Le service de téléchargement est momentanément indisponible. Veuillez réessayer plus tard.",
         db_error: "Impossible de démarrer le téléchargement. Veuillez réessayer.",
       },
     },
@@ -8040,6 +8046,8 @@ const ar: Dict = {
         quota_exhausted: "تم بلوغ حد التنزيلات اليوم.",
         no_eligible_plan: "خطتك الحالية لا تتضمن تنزيلات كتب.",
         book_unavailable: "هذا الكتاب غير متاح حاليًا.",
+        quota_unavailable:
+          "خدمة التنزيل غير متاحة حاليًا. يرجى المحاولة مرة أخرى لاحقًا.",
         db_error: "تعذر بدء التنزيل. يرجى المحاولة مرة أخرى.",
       },
     },

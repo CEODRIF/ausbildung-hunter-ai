@@ -310,6 +310,34 @@ describe("action error outcomes", () => {
     expect(openSpy).not.toHaveBeenCalled();
   });
 
+  it("quota_unavailable (missing quota schema in the DB) → its OWN translated message, no URL, quota intact", async () => {
+    vi.mocked(initiateBookDownloadAction).mockResolvedValue({
+      ok: false,
+      error: "quota_unavailable",
+      remaining: 1,
+      tier: "trial",
+    });
+    render(<LibraryBookGrid books={[BOOK]} initialQuota={READY_TRIAL} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Buch herunterladen/ }));
+    // The dedicated, honest message — NOT the generic "try again" (a
+    // deployment gap does not clear itself on retry).
+    expect(
+      await screen.findByText(
+        "Das Download-System ist derzeit nicht verfügbar. Bitte versuche es später erneut.",
+      ),
+    ).toBeTruthy();
+    // The generic db_error message must NOT appear alongside it.
+    expect(
+      screen.queryByText(
+        "Der Download konnte nicht gestartet werden. Bitte erneut versuchen.",
+      ),
+    ).toBeNull();
+    // Nothing was opened and the quota state is untouched (no consume).
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(screen.getByText("1 von 1 Downloads heute noch möglich")).toBeTruthy();
+  });
+
   it("a thrown action → the db_error alert", async () => {
     vi.mocked(initiateBookDownloadAction).mockRejectedValue(new Error("boom"));
     render(<LibraryBookGrid books={[BOOK]} initialQuota={READY_TRIAL} />);

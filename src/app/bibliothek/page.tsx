@@ -5,13 +5,15 @@ import {
   bookCoverPublicUrl,
   getBookQuotaState,
   listPublishedBooks,
+  parseLibraryQuery,
+  type LibraryFilters,
   type PublishedBook,
 } from "@/lib/book-library";
-import { BOOK_CATEGORIES } from "@/lib/book-categories";
 import { Button, ErrorState } from "@/components/ui";
 import { EmptyState } from "@/components/empty-state";
 import { Icon } from "@/components/icon";
 import { LibraryBookGrid, type LibraryBookData } from "@/components/library-book-grid";
+import { LibrarySearchForm } from "@/components/library-search-form";
 
 
 /**
@@ -39,28 +41,15 @@ export const dynamic = "force-dynamic";
 
 type T = (path: string, vars?: Record<string, string | number>) => string;
 
-interface LibraryQuery {
-  q?: string;
-  cat?: string;
-  page?: number;
-}
-
-function parseQuery(raw: Record<string, string | string[] | undefined>): LibraryQuery {
-  const first = (key: string): string | undefined => {
-    const value = raw[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-    return undefined;
-  };
-  const pageRaw = first("page");
-  const page = pageRaw ? Math.max(1, Math.min(10_000, Number.parseInt(pageRaw, 10) || 1)) : 1;
-  return { q: first("q"), cat: first("cat"), page };
-}
-
-function queryString(q: LibraryQuery): string {
+/**
+ * URL form of the filters (the short `q` / `cat` names — deep-linkable,
+ * shareable, back/forward-friendly). Page index 1 is omitted (clean URLs).
+ */
+function queryString(filters: LibraryFilters): string {
   const params = new URLSearchParams();
-  if (q.q) params.set("q", q.q);
-  if (q.cat) params.set("cat", q.cat);
-  if (q.page && q.page > 1) params.set("page", String(q.page));
+  if (filters.search) params.set("q", filters.search);
+  if (filters.category) params.set("cat", filters.category);
+  if (filters.page > 1) params.set("page", String(filters.page));
   const s = params.toString();
   return s ? `?${s}` : "";
 }
@@ -75,7 +64,11 @@ export default async function BibliothekPage({
     searchParams,
     getCurrentUserAndProfile(),
   ]);
-  const query = parseQuery(rawParams);
+  // URL shape (q/cat/page) → data-layer shape (search/category/page).
+  // parseLibraryQuery is the single, tested join point — passing the raw
+  // URL keys straight to the data layer is exactly how title + category
+  // filtering got silently dropped (2026-10 regression).
+  const filters = parseLibraryQuery(rawParams);
 
   // Server-resolved daily download quota for the session user (guests get
   // the sign-in CTA; the action re-checks everything on each click).
@@ -83,7 +76,7 @@ export default async function BibliothekPage({
 
   let result: { books: PublishedBook[]; total: number; page: number; pageCount: number };
   try {
-    result = await listPublishedBooks(query);
+    result = await listPublishedBooks(filters);
   } catch (error) {
     // Server-rendered error state: the raw failure is logged (scrubbed of
     // any credential-shaped fragment) and the user sees a retryable state.
@@ -101,43 +94,16 @@ export default async function BibliothekPage({
     );
   }
 
-  const hasFilters = Boolean(query.q || query.cat);
+  const hasFilters = Boolean(filters.search || filters.category);
 
   return (
     <LibraryShell t={t}>
-      {/* Search + category filter (plain GET form — works without JS,
-          deep-linkable, no client state to desync). */}
-      <form method="GET" action="/bibliothek" className="mt-6 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
-        <div className="relative">
-          <span className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 text-faint">
-            <Icon name="search" size={16} />
-          </span>
-          <input
-            type="search"
-            name="q"
-            value={query.q ?? ""}
-            placeholder={t("library.searchPlaceholder")}
-            aria-label={t("library.searchAria")}
-            className="h-11 w-full rounded-2xl border border-line-strong bg-surface ps-10 pe-4 text-sm text-ink shadow-[var(--shadow-card)] outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10"
-          />
-        </div>
-        <select
-          name="cat"
-          defaultValue={query.cat ?? ""}
-          aria-label={t("library.categoryLabel")}
-          className="h-11 rounded-2xl border border-line-strong bg-surface px-3.5 text-sm text-ink-soft shadow-[var(--shadow-card)] outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10"
-        >
-          <option value="">{t("library.allCategories")}</option>
-          {BOOK_CATEGORIES.map((category) => (
-            <option key={category.slug} value={category.slug}>
-              {t(category.labelKey)}
-            </option>
-          ))}
-        </select>
-        <Button type="submit" variant="secondary">
-          {t("library.search")}
-        </Button>
-      </form>
+      {/* Search + category filter: a CLIENT form that performs a soft
+          App-Router navigation (no full page reload). The URL still carries
+          q/cat/page, so results stay deep-linkable and back/forward works;
+          the section's loading.tsx is the pending state. See
+          library-search-form.tsx for the rationale. */}
+      <LibrarySearchForm search={filters.search} category={filters.category} />
 
       {result.total > 0 && (
         <p className="mt-5 text-xs font-semibold text-faint" aria-live="polite">
@@ -191,7 +157,7 @@ export default async function BibliothekPage({
             >
               {result.page > 1 ? (
                 <Link
-                  href={`/bibliothek${queryString({ ...query, page: result.page - 1 })}`}
+                  href={`/bibliothek${queryString({ ...filters, page: result.page - 1 })}`}
                 >
                   <Button variant="secondary" size="sm">
                     <Icon name="arrowLeft" size={14} className="rtl:rotate-180" />
@@ -209,7 +175,7 @@ export default async function BibliothekPage({
               </span>
               {result.page < result.pageCount ? (
                 <Link
-                  href={`/bibliothek${queryString({ ...query, page: result.page + 1 })}`}
+                  href={`/bibliothek${queryString({ ...filters, page: result.page + 1 })}`}
                 >
                   <Button variant="secondary" size="sm">
                     {t("library.pagination.next")}

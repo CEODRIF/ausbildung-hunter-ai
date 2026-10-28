@@ -70,6 +70,7 @@ describe("initiateBookDownloadAction", () => {
       profile: null,
     });
     vi.mocked(initiateBookDownload).mockRejectedValue(new Error("boom"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await initiateBookDownloadAction(BOOK_ID);
     expect(result).toEqual({
       ok: false,
@@ -77,6 +78,34 @@ describe("initiateBookDownloadAction", () => {
       remaining: 0,
       tier: "none",
     });
+    // Diagnostics stay in the SERVER log (no stack out to the client).
+    const logged = spy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logged).toContain("boom");
+    spy.mockRestore();
+  });
+
+  it("a session-resolution failure is logged and becomes db_error — never a rejected promise, never a grant", async () => {
+    // JWT-shaped fragment (3 base64url segments ≥ 8 chars) — must be
+    // redacted from the log.
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefgh";
+    vi.mocked(getCurrentUserAndProfile).mockRejectedValue(
+      new Error(`supabase down: JWT ${jwt} expired`),
+    );
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await initiateBookDownloadAction(BOOK_ID);
+    expect(result).toEqual({
+      ok: false,
+      error: "db_error",
+      remaining: 0,
+      tier: "none",
+    });
+    expect(initiateBookDownload).not.toHaveBeenCalled();
+    // The JWT-shaped fragment is redacted in the log.
+    const logged = spy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logged).toContain("session resolution failed");
+    expect(logged).toContain("[redacted-jwt]");
+    expect(logged).not.toContain(jwt);
+    spy.mockRestore();
   });
 });
 
