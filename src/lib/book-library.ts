@@ -5,6 +5,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { getSupabaseEnv } from "@/lib/supabase/config";
 import { isBookCategorySlug } from "@/lib/book-categories";
+import { getEntitlements } from "@/lib/billing/entitlements";
+import { isUuidShape } from "@/lib/billing/trial";
+import type { PlanId } from "@/lib/billing/plans";
 
 /**
  * Deutsch Bibliothek — data + privileged operations for the public book
@@ -516,4 +519,203 @@ export async function deleteBook(bookId: string): Promise<BookAdminResult> {
   }
 
   return { ok: true };
+}
+
+// ======================================================================
+// DAILY DOWNLOAD QUOTAS (migration 20261204000000)
+// ======================================================================
+
+/**
+ * Daily book-download limits per plan (Deutsch Bibliothek).
+ *
+ * The map is EXHAUSTIVE over PlanId on purpose — the fail-closed
+ * philosophy of the entitlement layer: a missing mapping can never
+ * silently become a grant. Only trial/plus/pro are granted, per the
+ * feature specification; `free` (historical sentinel) and the
+ * premium_* commercial plans are 0 (premium_* = product decision to
+ * confirm — they are not in the spec's plan list).
+ */
+export const BOOK_DOWNLOADS_PER_DAY: Record<PlanId, number> = {
+  free: 0,
+  trial: 1,
+  plus: 10,
+  pro: 30,
+  premium_10d: 0,
+  premium_monthly: 0,
+};
+
+export type BookQuotaTier = "trial" | "plus" | "pro" | "none";
+
+export interface BookQuotaState {
+  /** guest = no session; ready = downloads left today; exhausted = limit
+   *  reached (or no eligible plan, which is a permanent 0 today). */
+  state: "guest" | "ready" | "exhausted";
+  tier: BookQuotaTier;
+  limit: number;
+  used: number;
+  remaining: number;
+}
+
+/**
+ * UTC day key — the application-wide daily-counter convention
+ * (public.daily_usage uses `(timezone('utc', now()))::date` in every
+ * counter RPC). The RPC and this helper must agree on the day.
+ */
+export function utcToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function tierFor(
+  planId: PlanId,
+  source: "subscription" | "default",
+): BookQuotaTier {
+  if (source !== "subscription") return "none";
+  switch (planId) {
+    case "trial":
+    case "plus":
+    case "pro":
+      return planId;
+    default:
+      return "none";
+  }
+}
+
+/**
+ * Quota state for display / pre-check. TRUSTED inputs only: the user id
+ * comes from the server session; the plan from getEntitlements
+ * (subscriptions + billing_plans via the service-role client). Nothing
+ * plan-related is ever accepted from the browser.
+ */
+export async function getBookQuotaState(
+  userId: string | null,
+): Promise<BookQuotaState> {
+  if (!userId) {
+    return { state: "guest", tier: "none", limit: 0, used: 0, remaining: 0 };
+  }
+
+  const entitlements = await getEntitlements(userId);
+  const tier = tierFor(entitlements.planId, entitlements.source);
+  const limit = BOOK_DOWNLOADS_PER_DAY[entitlements.planId] ?? 0;
+
+  if (limit === 0) {
+    // Expired trial / no plan / premium_* → zero downloads today.
+    return { state: "exhausted", tier, limit: 0, used: 0, remaining: 0 };
+  }
+
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("book_download_quota")
+    .select("used_count")
+    .eq("user_id", userId)
+    .eq("quota_day", utcToday())
+    .maybeSingle<{ used_count: number }>();
+  const used = data?.used_count ?? 0;
+  const remaining = Math.max(0, limit - used);
+  return {
+    state: remaining > 0 ? "ready" : "exhausted",
+    tier,
+    limit,
+    used,
+    remaining,
+  };
+}
+
+export interface BookDownloadOk {
+  ok: true;
+  /** The external source URL — delivered ONLY after the server granted
+   *  the initiation (the UI never sees it before quota authorization). */
+  url: string;
+  remaining: number;
+  tier: BookQuotaTier;
+  /** True when the RPC deduped a same-book retry (no extra count). */
+  deduplicated: boolean;
+}
+export interface BookDownloadFail {
+  ok: false;
+  error:
+    | "not_signed_in" // produced by the server action, never by this lib
+    | "book_unavailable"
+    | "no_eligible_plan"
+    | "quota_exhausted"
+    | "db_error";
+  remaining: number;
+  tier: BookQuotaTier;
+}
+export type BookDownloadResult = BookDownloadOk | BookDownloadFail;
+
+/**
+ * Authorize + record ONE download initiation for the session user.
+ *
+ *   1. the book exists and is PUBLISHED — re-checked server-side (a book
+ *      may have been unpublished since the page rendered);
+ *   2. plan resolution via getEntitlements → the daily limit (fail-closed
+ *      0 when nothing eligible resolves — absence of a profile/plan never
+ *      grants a trial);
+ *   3. the atomic service-role RPC `reserve_book_download` (row lock,
+ *      UTC day key = daily reset, 10 s same-book dedup) decides
+ *      granted/denied — the ONLY path that mutates the counter.
+ */
+export async function initiateBookDownload(
+  userId: string,
+  bookId: string,
+): Promise<BookDownloadResult> {
+  if (!isUuidShape(userId) || !isUuidShape(bookId)) {
+    return { ok: false, error: "book_unavailable", remaining: 0, tier: "none" };
+  }
+
+  const admin = createAdminClient();
+
+  const { data: book, error: bookError } = await admin
+    .from("german_books")
+    .select("id, download_url, published")
+    .eq("id", bookId)
+    .maybeSingle<{ id: string; download_url: string; published: boolean }>();
+  if (bookError || !book || book.published !== true) {
+    return { ok: false, error: "book_unavailable", remaining: 0, tier: "none" };
+  }
+
+  const entitlements = await getEntitlements(userId);
+  const tier = tierFor(entitlements.planId, entitlements.source);
+  const limit = BOOK_DOWNLOADS_PER_DAY[entitlements.planId] ?? 0;
+  if (limit === 0) {
+    return { ok: false, error: "no_eligible_plan", remaining: 0, tier };
+  }
+
+  const { data, error } = await admin.rpc("reserve_book_download", {
+    p_user_id: userId,
+    p_book_id: bookId,
+    p_limit: limit,
+  });
+  if (error) {
+    console.error(
+      `[books] reserve_book_download RPC failed — "${error.message}" (is migration 20261204000000 applied?)`,
+    );
+    return { ok: false, error: "db_error", remaining: 0, tier };
+  }
+
+  // House unwrap idiom: a scalar jsonb may arrive as an object or a 1-row array.
+  const obj = (Array.isArray(data) ? data[0] : data) as
+    | {
+        granted?: boolean;
+        deduplicated?: boolean;
+        used_count?: number;
+        limit?: number;
+      }
+    | null;
+  if (!obj || typeof obj.granted !== "boolean") {
+    return { ok: false, error: "db_error", remaining: 0, tier };
+  }
+  if (obj.granted !== true) {
+    return { ok: false, error: "quota_exhausted", remaining: 0, tier };
+  }
+
+  const usedCount = typeof obj.used_count === "number" ? obj.used_count : 0;
+  const effectiveLimit = typeof obj.limit === "number" ? obj.limit : limit;
+  return {
+    ok: true,
+    url: book.download_url,
+    remaining: Math.max(0, effectiveLimit - usedCount),
+    tier,
+    deduplicated: obj.deduplicated === true,
+  };
 }

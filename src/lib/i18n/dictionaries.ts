@@ -1386,7 +1386,25 @@ const de = {
       lesen: "Lesen",
       sonstiges: "Sonstiges",
     },
-    download: "Buch herunterladen",
+    download: {
+      button: "Buch herunterladen",
+      signIn: "Anmelden zum Herunterladen",
+      pending: "Wird geöffnet …",
+      errors: {
+        not_signed_in: "Bitte melde dich erneut an.",
+        quota_exhausted: "Das heutige Download-Limit ist erreicht.",
+        no_eligible_plan: "Dein aktuelles Abo enthält keine Buch-Downloads.",
+        book_unavailable: "Dieses Buch ist gerade nicht verfügbar.",
+        db_error: "Der Download konnte nicht gestartet werden. Bitte erneut versuchen.",
+      },
+    },
+    quota: {
+      guestHint: "Mit Anmeldung und aktivem Testabo oder Abo kannst du Bücher herunterladen.",
+      remaining: "{n} von {limit} Downloads heute noch möglich",
+      exhaustedFree: "لقد انتهت حصتك المجانية",
+      exhaustedPaid: "Das Download-Limit für heute ist erreicht. Morgen kannst du weitermachen.",
+    },
+
     count: "{count} Bücher",
     empty: {
       title: "Noch keine Bücher veröffentlicht",
@@ -3598,7 +3616,25 @@ const en: Dict = {
       lesen: "Reading",
       sonstiges: "Other",
     },
-    download: "Download book",
+    download: {
+      button: "Download book",
+      signIn: "Sign in to download",
+      pending: "Opening …",
+      errors: {
+        not_signed_in: "Please sign in again.",
+        quota_exhausted: "You have reached today's download limit.",
+        no_eligible_plan: "Your current plan includes no book downloads.",
+        book_unavailable: "This book is not currently available.",
+        db_error: "The download could not be started. Please try again.",
+      },
+    },
+    quota: {
+      guestHint: "Sign in with an active trial or subscription to download books.",
+      remaining: "{n} of {limit} downloads left today",
+      exhaustedFree: "لقد انتهت حصتك المجانية",
+      exhaustedPaid: "You've reached today's download limit. You can continue tomorrow.",
+    },
+
     count: "{count} books",
     empty: {
       title: "No books published yet",
@@ -5805,7 +5841,25 @@ const fr: Dict = {
       lesen: "Lecture",
       sonstiges: "Autre",
     },
-    download: "Télécharger le livre",
+    download: {
+      button: "Télécharger le livre",
+      signIn: "Se connecter pour télécharger",
+      pending: "Ouverture …",
+      errors: {
+        not_signed_in: "Veuillez vous reconnecter.",
+        quota_exhausted: "La limite de téléchargements du jour est atteinte.",
+        no_eligible_plan: "Votre abonnement actuel n'inclut pas de téléchargements de livres.",
+        book_unavailable: "Ce livre n'est pas disponible pour le moment.",
+        db_error: "Impossible de démarrer le téléchargement. Veuillez réessayer.",
+      },
+    },
+    quota: {
+      guestHint: "Connectez-vous avec un essai ou un abonnement actif pour télécharger des livres.",
+      remaining: "{n} téléchargements restants aujourd'hui sur {limit}",
+      exhaustedFree: "لقد انتهت حصتك المجانية",
+      exhaustedPaid: "La limite de téléchargements du jour est atteinte. Revenez demain.",
+    },
+
     count: "{count} livres",
     empty: {
       title: "Aucun livre publié pour l'instant",
@@ -7977,7 +8031,25 @@ const ar: Dict = {
       lesen: "قراءة",
       sonstiges: "أخرى",
     },
-    download: "تحميل الكتاب",
+    download: {
+      button: "تحميل الكتاب",
+      signIn: "سجّل الدخول للتحميل",
+      pending: "جارٍ الفتح …",
+      errors: {
+        not_signed_in: "يرجى تسجيل الدخول مرة أخرى.",
+        quota_exhausted: "تم بلوغ حد التنزيلات اليوم.",
+        no_eligible_plan: "خطتك الحالية لا تتضمن تنزيلات كتب.",
+        book_unavailable: "هذا الكتاب غير متاح حاليًا.",
+        db_error: "تعذر بدء التنزيل. يرجى المحاولة مرة أخرى.",
+      },
+    },
+    quota: {
+      guestHint: "سجّل الدخول بفترة تجريبية أو اشتراك نشط لتحميل الكتب.",
+      remaining: "متبقٍ {n} من {limit} تنزيلات اليوم",
+      exhaustedFree: "لقد انتهت حصتك المجانية",
+      exhaustedPaid: "تم بلوغ حد التنزيلات اليوم. يمكنك المتابعة غدًا.",
+    },
+
     count: "{count} كتب",
     empty: {
       title: "لا توجد كتب منشورة بعد",

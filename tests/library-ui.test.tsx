@@ -25,9 +25,10 @@ import { join } from "node:path";
  *      cover or a non-http(s) URL (no round-trip), and a valid submit
  *      carries the documented fields (incl. the cover File).
  *   4. Server error codes render as translated messages (never raw keys).
- *   5. Source invariants: the public page opens download URLs in a fresh,
- *      unassociated tab (noopener noreferrer nofollow, target=_blank) and
- *      never imports the admin surface; the nav integration exists.
+ *   5. Source invariants: the external download URL never reaches the
+ *      client payload (quota-gated action result only, opened in a fresh,
+ *      unassociated tab), the page never imports the admin surface; the
+ *      nav integration exists.
  */
 
 const { dictionaries } = await import("@/lib/i18n/dictionaries");
@@ -296,11 +297,20 @@ describe("source invariants", () => {
   const ROOT = join(__dirname, "..");
   const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 
-  it("the public page opens downloads in a fresh, unassociated tab and never links in-page", () => {
+  it("the external URL never reaches the client payload; it opens in a fresh, unassociated tab only after server authorization", () => {
     const page = read("src/app/bibliothek/page.tsx");
-    expect(page).toContain('target="_blank"');
-    expect(page).toContain('rel="noopener noreferrer nofollow"');
-    // No in-app navigation to the external URL, no download/scrape logic.
+    const grid = read("src/components/library-book-grid.tsx");
+    // The book serialization (page) and the grid props (client) carry NO
+    // download URL — the URL is delivered by the action result, AFTER the
+    // server authorized + recorded the initiation (quota gate).
+    expect(page).not.toContain("download_url");
+    expect(grid).not.toContain("download_url");
+    // Same safe external-link behavior as the plain-anchor implementation:
+    // a fresh, unassociated tab. The platform never fetches the file.
+    expect(grid).toContain(
+      'window.open(result.url, "_blank", "noopener,noreferrer")',
+    );
+    expect(grid).not.toMatch(/fetch\(/);
     expect(page).not.toMatch(/fetch\([\s\S]*download_url/);
   });
 
@@ -311,6 +321,10 @@ describe("source invariants", () => {
     expect(page).not.toContain("createAdminClient");
     expect(page).not.toMatch(/service.?role/i);
     expect(page).toContain("listPublishedBooks");
+    // Quota state comes from the SAME data layer (server-resolved; the
+    // privileged calls inside are service-role, invisible to this page).
+    expect(page).toContain("getBookQuotaState");
+    expect(page).toContain("getCurrentUserAndProfile");
     expect(page).toContain('export const dynamic = "force-dynamic"');
   });
 
