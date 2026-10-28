@@ -110,7 +110,9 @@ describe("admin actions — two-step confirmation (source contract)", () => {
 describe("i18n — admin.confirm* parity", () => {
   it("confirmBody carries both placeholders; all keys non-empty in 4 languages", () => {
     for (const lang of SUPPORTED_LANGUAGES) {
-      const admin = dictionaries[lang].admin as Record<string, string>;
+      // The admin block gained nested objects (books.*, 20261203 library);
+      // the confirm* keys under test stay flat strings in all languages.
+      const admin = dictionaries[lang].admin as unknown as Record<string, string>;
       for (const key of ["confirmBody", "confirmYes", "confirmNo"]) {
         expect(admin[key]).toBeTypeOf("string");
         expect(admin[key]?.trim()).not.toHaveLength(0);
