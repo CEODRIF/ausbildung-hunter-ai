@@ -1,23 +1,34 @@
 import Link from "next/link";
 import { getServerT } from "@/lib/i18n/server";
+import { getCurrentUserAndProfile } from "@/lib/auth";
 import {
   bookCoverPublicUrl,
+  getBookQuotaState,
   listPublishedBooks,
   type PublishedBook,
 } from "@/lib/book-library";
-import { BOOK_CATEGORIES, categoryLabel } from "@/lib/book-categories";
+import { BOOK_CATEGORIES } from "@/lib/book-categories";
 import { Button, ErrorState } from "@/components/ui";
 import { EmptyState } from "@/components/empty-state";
 import { Icon } from "@/components/icon";
+import { LibraryBookGrid, type LibraryBookData } from "@/components/library-book-grid";
 
 
 /**
  * Deutsch Bibliothek — the PUBLIC book library.
  *
- * No authentication required: the data path is the anon/auth Supabase
- * client, so the database RLS policy is the visibility boundary
- * (published rows only — drafts are unreachable here and through any
- * direct API request; see migration 20261203000000).
+ * Browsing is public: the data path is the anon/auth Supabase client, so
+ * the database RLS policy is the visibility boundary (published rows
+ * only — drafts are unreachable here and through any direct API request;
+ * see migration 20261203000000).
+ *
+ * DOWNLOADS are quota-gated (migration 20261204000000): each initiation
+ * goes through the `initiateBookDownloadAction` server action — session
+ * user → trusted subscription resolution (getEntitlements) → the atomic
+ * quota RPC, which the browser can never call directly (see the
+ * migration's grant block). The cards therefore do NOT carry the
+ * external URL; the grid component receives it from the action result
+ * after authorization (see library-book-grid.tsx).
  *
  * `force-dynamic` is deliberate: a book published in the admin panel must
  * appear here on the next request without any deployment or revalidation
@@ -59,8 +70,16 @@ export default async function BibliothekPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const [t, rawParams] = await Promise.all([getServerT(), searchParams]);
+  const [t, rawParams, auth] = await Promise.all([
+    getServerT(),
+    searchParams,
+    getCurrentUserAndProfile(),
+  ]);
   const query = parseQuery(rawParams);
+
+  // Server-resolved daily download quota for the session user (guests get
+  // the sign-in CTA; the action re-checks everything on each click).
+  const initialQuota = await getBookQuotaState(auth.user?.id ?? null);
 
   let result: { books: PublishedBook[]; total: number; page: number; pageCount: number };
   try {
@@ -152,11 +171,18 @@ export default async function BibliothekPage({
         </div>
       ) : (
         <>
-          <ul className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {result.books.map((book) => (
-              <BookCard key={book.id} book={book} t={t} />
-            ))}
-          </ul>
+          <LibraryBookGrid
+            books={result.books.map<LibraryBookData>((book) => ({
+              id: book.id,
+              title: book.title,
+              category: book.category,
+              description: book.description,
+              coverUrl: book.cover_path
+                ? bookCoverPublicUrl(book.cover_path)
+                : null,
+            }))}
+            initialQuota={initialQuota}
+          />
 
           {result.pageCount > 1 && (
             <nav
@@ -218,55 +244,3 @@ function LibraryShell({ t, children }: { t: T; children: React.ReactNode }) {
   );
 }
 
-/** One book card: cover, title, localized category, optional description,
- *  and the external download link (target=_blank + noopener noreferrer
- *  nofollow — the URL is admin-provided metadata, opened in a fresh,
- *  unassociated tab; this app never follows it). */
-function BookCard({ book, t }: { book: PublishedBook; t: T }) {
-  const coverUrl = book.cover_path ? bookCoverPublicUrl(book.cover_path) : null;
-  return (
-    <li className="surface-elevated group flex flex-col overflow-hidden rounded-3xl transition-transform duration-200 hover:-translate-y-0.5">
-      {coverUrl ? (
-        // Remote Supabase storage origin (allowed by the CSP img-src built
-        // from the Supabase URL); aspect ratio keeps the 3:4 cover box
-        // stable. next/image would need a remotePatterns allowlist, which
-        // would modify shared config — plain img keeps the feature additive.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={coverUrl}
-          alt=""
-          loading="lazy"
-          className="aspect-[3/4] w-full object-cover"
-        />
-      ) : (
-        <div
-          aria-hidden
-          className="flex aspect-[3/4] w-full items-center justify-center bg-surface-2 text-faint"
-        >
-          <Icon name="book" size={32} strokeWidth={1.4} />
-        </div>
-      )}
-      <div className="flex flex-1 flex-col gap-2 p-4">
-        <span className="w-fit rounded-full bg-accent-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-accent">
-          {categoryLabel(book.category, t)}
-        </span>
-        <h2 className="text-sm font-bold leading-snug text-ink">{book.title}</h2>
-        {book.description && (
-          <p className="line-clamp-3 text-xs leading-5 text-muted">
-            {book.description}
-          </p>
-        )}
-        <a
-          href={book.download_url}
-          target="_blank"
-          rel="noopener noreferrer nofollow"
-          className="mt-auto inline-flex items-center justify-center gap-2 rounded-2xl border border-line-strong bg-surface px-4 py-2.5 text-xs font-bold text-ink-soft transition-colors hover:border-accent hover:text-accent"
-        >
-          <Icon name="download" size={14} />
-          {t("library.download")}
-          <Icon name="external" size={12} className="text-faint" />
-        </a>
-      </div>
-    </li>
-  );
-}
