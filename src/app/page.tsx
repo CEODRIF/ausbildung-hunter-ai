@@ -40,6 +40,14 @@ export default async function Home() {
             <a href="#features" className="transition-colors hover:text-accent">
               {t("landing.navWhy")}
             </a>
+            {/* Deutsch Bibliothek — the public entry point for the book
+                library (no login required). */}
+            <Link
+              href="/bibliothek"
+              className="transition-colors hover:text-accent"
+            >
+              {t("library.nav")}
+            </Link>
             <Link
               href="/login"
               className="text-ink-soft transition-colors hover:text-accent"

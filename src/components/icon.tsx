@@ -60,6 +60,8 @@ export type IconName =
   | "chart"
   // Housing / Wohnen (MVP).
   | "home"
+  // Deutsch Bibliothek (public book library + admin nav).
+  | "book"
   // ID card (settings/profile), reply affordance, admin nav (shield),
   // bewerbung-automation address preview (pin).
   | "idCard"
@@ -287,6 +289,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M3 9.5 12 3l9 6.5" />
       <path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5" />
       <path d="M9.5 21v-6h5v6" />
+    </>
+  ),
+  // Open book (Deutsch Bibliothek): a book laid flat, spine at center.
+  book: (
+    <>
+      <path d="M12 6.5C10.8 5.2 8.8 4.5 6.5 4.5c-1 0-2 .1-2.5.4v13.2c.5-.3 1.5-.4 2.5-.4 2.3 0 4.3.7 5.5 2 1.2-1.3 3.2-2 5.5-2 1 0 2 .1 2.5.4V4.9c-.5-.3-1.5-.4-2.5-.4-2.3 0-4.3.7-5.5 2Z" />
+      <path d="M12 6.5V20" />
     </>
   ),
   idCard: (

@@ -5,16 +5,20 @@ import { usePathname } from "next/navigation";
 
 interface AdminNavLabels {
   users: string;
+  books: string;
 }
 
 /**
- * The /admin section nav — a single remaining surface (user/billing
- * management). Active state comes from the pathname (client-side,
- * cosmetic only — the page re-gates server-side).
+ * The /admin section nav — user/billing management + the Deutsch
+ * Bibliothek book management. Active state comes from the pathname
+ * (client-side, cosmetic only — every page re-gates server-side).
  */
 export function AdminNav({ labels }: { labels: AdminNavLabels }) {
   const pathname = usePathname();
-  const items = [{ href: "/admin/users", label: labels.users }];
+  const items = [
+    { href: "/admin/users", label: labels.users },
+    { href: "/admin/books", label: labels.books },
+  ];
 
   return (
     <nav

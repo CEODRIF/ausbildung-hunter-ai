@@ -58,7 +58,9 @@ export default async function AdminLayout({
         >
           ← {t("admin.back")}
         </Link>
-        <AdminNav labels={{ users: t("admin.navUsers") }} />
+        <AdminNav
+          labels={{ users: t("admin.navUsers"), books: t("admin.navBooks") }}
+        />
         {children}
       </div>
     </main>

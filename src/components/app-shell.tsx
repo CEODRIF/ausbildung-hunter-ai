@@ -29,6 +29,7 @@ import {
   BarChart3,
   Bell,
   Bookmark,
+  BookOpen,
   Briefcase,
   Check,
   ChevronDown,
@@ -134,6 +135,9 @@ const NAV_SECTIONS: NavSection[] = [
     titleKey: "guides.nav.section",
     items: [
       { labelKey: "guides.nav.gehalt", href: "/wohnen/gehalt", icon: "chart" },
+      // Deutsch Bibliothek — public book library (no login required; the
+      // item lives here so returning users reach it from the main nav).
+      { labelKey: "library.nav", href: "/bibliothek", icon: "book" },
     ],
   },
   {
@@ -213,6 +217,7 @@ const LUCIDE: Record<IconName, LucideIcon> = {
   refresh: RotateCw,
   logout: LogOut,
   chart: BarChart3,
+  book: BookOpen,
    home: Home,
    idCard: IdCard,
     reply: CornerUpLeft,
@@ -251,6 +256,10 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
   {
     match: (p) => p === "/wohnen",
     heading: { titleKey: "guides.page.landTitle", subtitleKey: "guides.page.landSubtitle" },
+  },
+  {
+    match: (p) => p === "/bibliothek",
+    heading: { titleKey: "library.pageTitle", subtitleKey: "library.pageSubtitle" },
   },
   {
     match: (p) => p === "/dashboard/templates",
