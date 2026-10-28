@@ -1367,7 +1367,7 @@ const de = {
   // ---- Deutsch Bibliothek (public library + admin) ---------------------------
   library: {
     nav: "Bibliothek",
-    kicker: "Deutsch lernen",
+    intro: "Lehr- und Übungsbücher für Ihre Ausbildung in Deutschland — zum Download über die Originalquellen.",
     pageTitle: "Deutsch Bibliothek",
     pageSubtitle:
       "Lehr- und Übungsbücher für Ihre Ausbildung in Deutschland — zum Download über die Originalquellen.",
@@ -3579,7 +3579,7 @@ const en: Dict = {
   // ---- Deutsch Bibliothek (public library + admin) ---------------------------
   library: {
     nav: "Library",
-    kicker: "Learn German",
+    intro: "Teaching and exercise books for your vocational training in Germany — download them from the original sources.",
     pageTitle: "Deutsch Bibliothek",
     pageSubtitle:
       "Teaching and exercise books for your vocational training in Germany — to download from the original sources.",
@@ -5786,7 +5786,7 @@ const fr: Dict = {
   // ---- Deutsch Bibliothek (public library + admin) ---------------------------
   library: {
     nav: "Bibliothèque",
-    kicker: "Apprendre l'allemand",
+    intro: "Livres d'enseignement et d'exercices pour votre formation en Allemagne — téléchargez-les depuis les sources originales.",
     pageTitle: "Deutsch Bibliothek",
     pageSubtitle:
       "Livres d'enseignement et d'exercices pour votre formation en Allemagne — à télécharger depuis les sources originales.",
@@ -7958,7 +7958,7 @@ const ar: Dict = {
   // ---- Deutsch Bibliothek (public library + admin) ---------------------------
   library: {
     nav: "المكتبة",
-    kicker: "تعلّم الألمانية",
+    intro: "كتب تعليم وتدرب لمسارك المهني في ألمانيا — حمّلها من مصادرها الأصلية.",
     pageTitle: "Deutsch Bibliothek",
     pageSubtitle:
       "كتب تعليم وتدرب لمسارك المهني في ألمانيا — لتحميلها من مصادرها الأصلية.",
