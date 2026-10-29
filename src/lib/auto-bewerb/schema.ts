@@ -268,6 +268,10 @@ export interface AutoBewerbWorkspace {
   /** False = the manual migration has not been applied yet (UI shows the
    *  "setup pending" state and no workflow data). */
   ready: boolean;
+  /** WHY it is not ready (null when ready): lets the UI tell "tables missing"
+   *  apart from "database reachable but the probe was blocked" — the two
+   *  states need different, both honest messages. */
+  setupIssue: "missing_tables" | "probe_error" | null;
   profile: {
     fileName: string;
     mimeType: string;
@@ -292,6 +296,33 @@ export const AUTO_BEWERB_TABLES = [
   "auto_bewerb_email_templates",
   "auto_bewerb_send_attempts",
 ] as const;
+
+/**
+ * Classify a schema-probe failure into its HONEST class:
+ *  - "missing": the relation does not exist (or PostgREST has not seen it
+ *    yet — schema-cache lag reports the same pgrst205/42P01 shape; that is
+ *    transient and the negative cache TTL lets a retry recover).
+ *  - "blocked": the table exists but the probe was refused or failed for
+ *    ANOTHER reason (permission 42501, missing column 42703, connection
+ *    error, …). Reporting these as "missing" would pin the page on a wrong
+ *    "tables not created" message forever.
+ * Pure string mapping over the PostgREST error text — safe to unit test.
+ */
+export function classifyProbeError(error: { message?: string } | null | undefined): "missing" | "blocked" {
+  const raw = error?.message ?? "";
+  if (
+    /pgrst205/i.test(raw) ||
+    /could not find a table/i.test(raw) ||
+    /could not find the table/i.test(raw) ||
+    // 42P01 only counts when it names one of OUR relations — a bare code
+    // match would misreport unrelated missing relations as "setup pending".
+    /42p01[^\n]*auto_bewerb_[a-z_]+/i.test(raw) ||
+    /relation\s+"?(?:public\.)?auto_bewerb_[a-z_]*"?\s+does not exist/i.test(raw)
+  ) {
+    return "missing";
+  }
+  return "blocked";
+}
 
 /** Normalize a company name into its dedupe key (server-side; the client
  *  mirrors this for optimistic duplicate warnings only). */

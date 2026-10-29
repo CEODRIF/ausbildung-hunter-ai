@@ -2515,6 +2515,8 @@ const de = {
     setupPendingTitle: "Setup ausstehend",
     setupPendingBody:
       "Die Datenbank-Tabellen für AUTO BEWERB wurden noch nicht angelegt. Bitte die Migration supabase/migrations/20261215000000_auto_bewerb.sql manuell anwenden und diese Seite neu laden.",
+    setupProbeErrorBody:
+      "Die Prüfung des Datenbankschemas konnte die AUTO-Bewerb-Tabellen nicht erreichen (Berechtigungs- oder Verbindungsfehler). Das bedeutet nicht, dass Tabellen fehlen — bitte erneut versuchen oder den Datenbankzugriff prüfen.",
     step1: "Lebenslauf",
     step2: "Unternehmen",
     step3: "Dokumente",
@@ -5235,6 +5237,8 @@ const en: Dict = {
     setupPendingTitle: "Setup pending",
     setupPendingBody:
       "The database tables for AUTO BEWERB have not been created yet. Please apply the migration supabase/migrations/20261215000000_auto_bewerb.sql manually and reload this page.",
+    setupProbeErrorBody:
+      "The database schema check could not reach the AUTO BEWERB tables (permission or connection error). This does not mean the tables are missing — please retry, or check database access.",
     step1: "CV",
     step2: "Companies",
     step3: "Documents",
@@ -7966,6 +7970,8 @@ const fr: Dict = {
     setupPendingTitle: "Configuration en attente",
     setupPendingBody:
       "Les tables de base de données d'AUTO BEWERB n'ont pas encore été créées. Veuillez appliquer manuellement la migration supabase/migrations/20261215000000_auto_bewerb.sql puis recharger cette page.",
+    setupProbeErrorBody:
+      "La vérification du schéma de base de données n'a pas pu accéder aux tables AUTO BEWERB (erreur d'autorisation ou de connexion). Cela ne signifie pas que les tables manquent — veuillez réessayer ou vérifier l'accès à la base de données.",
     step1: "CV",
     step2: "Entreprises",
     step3: "Documents",
@@ -10613,6 +10619,8 @@ const ar: Dict = {
     setupPendingTitle: "الإعداد قيد الانتظار",
     setupPendingBody:
       "لم يتم إنشاء جداول قاعدة بيانات AUTO BEWERB بعد. يرجى تطبيق الترحيل supabase/migrations/20261215000000_auto_bewerb.sql يدويًا ثم إعادة تحميل هذه الصفحة.",
+    setupProbeErrorBody:
+      "تعذّر على فحص مخطط قاعدة البيانات الوصول إلى جداول AUTO BEWERB (خطأ في الصلاحيات أو الاتصال). هذا لا يعني أن الجداول مفقودة — يرجى إعادة المحاولة أو التحقق من الوصول إلى قاعدة البيانات.",
     step1: "السيرة الذاتية",
     step2: "الشركات",
     step3: "المستندات",

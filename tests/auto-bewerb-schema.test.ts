@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   AUTO_BEWERB_COMPANY_LIMIT,
   AUTO_BEWERB_EMAIL_TOKENS,
+  AUTO_BEWERB_TABLES,
   adExtractSchema,
+  classifyProbeError,
   isValidEmail,
   normalizeCompanyKey,
   renderAutoBewerbEmailBody,
@@ -70,5 +72,51 @@ describe("isValidEmail (recipient validation)", () => {
     expect(isValidEmail("a@b")).toBe(false);
     expect(isValidEmail(" a@b.co ")).toBe(true); // trimmed
     expect(isValidEmail(`x@${"y".repeat(330)}.com`)).toBe(false); // > 320 chars
+  });
+});
+
+describe("schema probe (setup-pending honesty)", () => {
+  it("checks exactly the seven tables the migration creates", () => {
+    expect([...AUTO_BEWERB_TABLES]).toEqual([
+      "auto_bewerb_profiles",
+      "auto_bewerb_companies",
+      "auto_bewerb_documents",
+      "auto_bewerb_attachments",
+      "auto_bewerb_company_attachments",
+      "auto_bewerb_email_templates",
+      "auto_bewerb_send_attempts",
+    ]);
+  });
+
+  it("classifies 'relation not found' (incl. schema-cache lag) as missing tables", () => {
+    expect(
+      classifyProbeError({
+        message: "Could not find a table named 'public.auto_bewerb_profiles' in the schema cache",
+      }),
+    ).toBe("missing");
+    expect(classifyProbeError({ message: "42P01: relation public.auto_bewerb_companies does not exist" })).toBe(
+      "missing",
+    );
+    expect(classifyProbeError({ message: 'Could not find the table "public.auto_bewerb_documents"' })).toBe(
+      "missing",
+    );
+  });
+
+  it("classifies column, permission and connectivity failures as blocked — never as missing", () => {
+    // Regression: the old probe did select("id"), and two of the seven tables
+    // (company_attachments: composite PK, email_templates: user_id PK) have no
+    // id column → 42703 on a FULLY migrated database → permanent "setup pending".
+    expect(classifyProbeError({ message: '42703: column "id" does not exist' })).toBe("blocked");
+    expect(classifyProbeError({ message: "42501: permission denied for table auto_bewerb_companies" })).toBe(
+      "blocked",
+    );
+    expect(classifyProbeError({ message: "fetch failed" })).toBe("blocked");
+    expect(classifyProbeError(null)).toBe("blocked");
+  });
+
+  it("does not treat a missing UNRELATED relation as an AUTO BEWERB setup gap", () => {
+    expect(classifyProbeError({ message: "42P01: relation public.studio_applications does not exist" })).toBe(
+      "blocked",
+    );
   });
 });
