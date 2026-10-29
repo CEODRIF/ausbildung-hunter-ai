@@ -1,0 +1,1696 @@
+import "server-only";
+
+import { createHash, randomUUID } from "node:crypto";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { effectiveUploadLimitBytes } from "@/lib/billing/entitlement-service";
+import { detectFileType } from "@/lib/ai-service";
+import {
+  createEmailProvider,
+  type ProviderFailure,
+} from "@/lib/email-providers";
+import {
+  BEW_ATTACHMENT_BUCKET,
+  BEW_LETTER_PDF_MIME,
+  buildLetterFolio,
+  generateLetterPdf,
+  letterPdfFilename,
+} from "@/lib/bew-letter-pdf";
+import {
+  cvHasContent,
+  sanitizeCvDocument,
+  type CvDocument,
+} from "@/lib/templates/cv";
+import { candidateProfileSchema, type CandidateProfile } from "@/lib/bewerbung-schema";
+import {
+  autoBewerbLetterSchema,
+  AUTO_BEWERB_COMPANY_LIMIT,
+  AUTO_BEWERB_DOC_CATEGORIES,
+  AUTO_BEWERB_TABLES,
+  isValidEmail,
+  normalizeCompanyKey,
+  renderAutoBewerbEmailBody,
+  adExtractSchema,
+  adAnalysisSchema,
+  type AdAnalysis,
+  type AdExtract,
+  type AutoBewerbAttachmentRow,
+  type AutoBewerbCompanyRow,
+  type AutoBewerbDocumentRow,
+  type AutoBewerbProfileRow,
+  type AutoBewerbSendAttemptRow,
+  type AutoBewerbSendPayload,
+  type AutoBewerbAppStatus,
+} from "./schema";
+import { generateCvPdf, cvPdfFilename } from "./cv-pdf";
+import { parseAdDeadline } from "../studio/quality";
+import { zonedTimeToUtc } from "../studio/timezone";
+import {
+  emailBodyToHtml,
+  listUserEmailAccounts,
+  type StudioEmailAccount,
+} from "../studio";
+
+/**
+ * AUTO BEWERB — server-side data + dispatch engine (the /auto-bewerb workflow).
+ *
+ * Ownership contract (identical to the studio and bew tables): every read
+ * re-scopes by `user_id`;
+ * `user_id`; every write runs with the service role AFTER the ownership
+ * check, because RLS is SELECT-only for owners. The identity always comes
+ * from the session (or the cron worker's RPC) — never from client input.
+ *
+ * Send safety:
+ *  - a send requires approved = true (explicit user confirmation showing the
+ *    exact recipients + attachments) and an active, owned email account,
+ *    re-checked at dispatch time;
+ *  - each logical send is one auto_bewerb_send_attempts row with a unique
+ *    idempotency_key; the claim is an atomic `update … where status='queued'`,
+ *    so concurrent dispatchers can never double-send;
+ *  - "uncertain" provider failures are terminal (no auto-resend);
+ *  - temporary failures retry with backoff up to 3 attempts.
+ *  - The shared email-body template is rendered (token substitution) at
+ *    PREPARE time only — the stored row keeps the raw template/override so
+ *    editing the template updates every future send (never a past one).
+ */
+
+export type AutoBewerbErrorCode =
+  | "schema_pending"
+  | "not_found"
+  | "not_approved"
+  | "send_in_progress"
+  | "already_sent"
+  | "no_email_account"
+  | "invalid_recipient"
+  | "invalid_file_type"
+  | "file_too_large"
+  | "invalid_schedule"
+  | "schedule_after_deadline"
+  | "not_cancellable"
+  | "workflow_full"
+  | "company_duplicate"
+  | "not_deletable"
+  | "no_template"
+  | "invalid_document"
+  | "storage_error"
+  | "dispatch_error";
+
+export type AutoBewerbOpResult<T = undefined> =
+  | { ok: true; value?: T }
+  | { ok: false; code: AutoBewerbErrorCode; message: string };
+
+const fail = (code: AutoBewerbErrorCode, message: string): AutoBewerbOpResult<never> => ({
+  ok: false,
+  code,
+  message,
+});
+
+/** File types the private `application-attachments` bucket accepts
+ *  (same allow-list as the studio attachments). */
+const ATTACHMENT_MIME: Record<string, string> = {
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  png: "image/png",
+  jpeg: "image/jpeg",
+};
+const ATTACHMENT_BUCKET = "application-attachments";
+const ATTACHMENT_HARD_CAP_BYTES = 10 * 1024 * 1024;
+const MAX_SEND_ATTEMPTS = 3;
+const DOC_CATEGORIES_SET = new Set<string>(AUTO_BEWERB_DOC_CATEGORIES);
+
+/** Storage paths for the server-rendered per-company PDFs (private bucket). */
+export const autoBewerbCvPdfStoragePath = (userId: string, companyId: string): string =>
+  `auto-bewerb/cv/${userId}/${companyId}.pdf`;
+export const autoBewerbLetterPdfStoragePath = (userId: string, companyId: string): string =>
+  `auto-bewerb/letter/${userId}/${companyId}.pdf`;
+
+function sanitizeFileName(name: string): string {
+  // Character filter, then collapse dot-runs and strip leading dots so the
+  // display name can never contain '..' (traversal-ish names stay inert).
+  const filtered = name.replace(/[^a-zA-Z0-9.äöüßÄÖÜ-]/g, "_");
+  return (
+    filtered
+      .replace(/\.{2,}/g, ".")
+      .replace(/^\.+/, "")
+      .slice(0, 255) || "datei"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Schema probe (graceful degradation before the manual migration is applied)
+// ---------------------------------------------------------------------------
+
+/** A NEGATIVE probe is only trusted this long: a transient Supabase error
+ *  (or a migration applied moments later) must not pin the "setup pending"
+ *  state for the whole serverless instance. Positive results are cached. */
+const PROBE_NEGATIVE_TTL_MS = 60_000;
+
+let probeCache: { at: number; missing: string[] } | null = null;
+
+/** Names of the AUTO BEWERB tables that are NOT reachable right now
+ *  (empty array = fully ready). Safe to call from page, actions and routes. */
+export function getAutoBewerbMissingTables(): Promise<string[]> {
+  if (probeCache) {
+    const positive = probeCache.missing.length === 0;
+    if (positive || Date.now() - probeCache.at < PROBE_NEGATIVE_TTL_MS) {
+      return Promise.resolve(probeCache.missing);
+    }
+  }
+  return (async () => {
+    const results = await Promise.all(
+      AUTO_BEWERB_TABLES.map(async (table): Promise<string | null> => {
+        try {
+          const { error } = await createAdminClient().from(table).select("id").limit(1);
+          return error ? table : null;
+        } catch {
+          return table;
+        }
+      }),
+    );
+    const missing = results.filter((t): t is string => t !== null);
+    probeCache = { at: Date.now(), missing };
+    return missing;
+  })();
+}
+
+/** Boolean probe (true = all AUTO BEWERB tables reachable). */
+export function hasAutoBewerbSchema(): Promise<boolean> {
+  return getAutoBewerbMissingTables().then((missing) => missing.length === 0);
+}
+
+/** Map a PostgREST insert error to a safe, actionable UI outcome (only
+ *  allow-listed shapes are forwarded — raw driver details stay server-side). */
+function classifyInsertError(error: { message?: string } | null | undefined): AutoBewerbOpResult<never> {
+  const raw = error?.message ?? "";
+  const msg = raw.replace(/^\d{5}: /, "");
+  if (/could not find the table|pgrst205|relation "public\.auto_bewerb_companies" does not exist/i.test(msg)) {
+    return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  }
+  const col = msg.match(/^column "([a-z0-9_]+)" does not exist/i);
+  if (col) {
+    return fail(
+      "storage_error",
+      `Das Datenbank-Schema ist veraltet (Feld "${col[1]}" fehlt) — bitte die AUTO BEWERB Migration neu anwenden.`,
+    );
+  }
+  if (/value too long for type/i.test(msg)) {
+    return fail(
+      "storage_error",
+      "Das Datenbank-Schema ist veraltet (Spaltentyp zu kurz) — bitte die AUTO BEWERB Migration neu anwenden.",
+    );
+  }
+  // Two concurrent creates that both computed the same smallest free slot:
+  // the unique index refused the second one — a safe "workflow full", never
+  // an 11th company.
+  if (/auto_bewerb_companies_user_slot_unique/i.test(msg)) {
+    return fail("workflow_full", "Der Workflow ist voll (max. 10 Unternehmen). Bitte ein Unternehmen entfernen, um Platz zu schaffen.");
+  }
+  // Same company added twice: the partial unique index is the arbiter.
+  if (/auto_bewerb_companies_user_company_unique/i.test(msg)) {
+    return fail("company_duplicate", "Dieses Unternehmen wurde bereits hinzugefügt.");
+  }
+  if (/duplicate key/i.test(msg)) {
+    return fail("storage_error", "Dieser Eintrag wurde gerade eben gespeichert — bitte die Seite aktualisieren.");
+  }
+  console.error(`[auto-bewerb] unclassified auto_bewerb_companies write error: ${raw}`);
+  return fail("storage_error", "Speichern fehlgeschlagen. Bitte erneut versuchen.");
+}
+
+// ---------------------------------------------------------------------------
+// Step 1 — the analyzed CV profile (one row per user)
+// ---------------------------------------------------------------------------
+
+export async function getAutoBewerbProfile(userId: string): Promise<AutoBewerbProfileRow | null> {
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_profiles")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const row = data as unknown as AutoBewerbProfileRow;
+  // Re-validate the persisted extraction (defense in depth).
+  row.extracted = row.extracted
+    ? candidateProfileSchema.safeParse(row.extracted).success
+      ? candidateProfileSchema.parse(row.extracted)
+      : null
+    : null;
+  return row;
+}
+
+export interface SaveAutoBewerbProfileInput {
+  cvFileName: string;
+  cvMime: string;
+  cvSizeBytes: number;
+  cvStoragePath: string;
+  /** sha256 hex of the uploaded bytes (reuse fingerprint). */
+  cvHash: string;
+  extracted: CandidateProfile;
+}
+
+/** Upsert the user's CV profile. When the stored file differs, the OLD
+ *  storage object is removed (best effort) — the replacement is the source
+ *  of truth, and the extracted data belongs to the new file. */
+export async function saveAutoBewerbProfile(
+  userId: string,
+  input: SaveAutoBewerbProfileInput,
+): Promise<AutoBewerbOpResult<AutoBewerbProfileRow>> {
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  const parsed = candidateProfileSchema.safeParse(input.extracted);
+  if (!parsed.success) return fail("invalid_document", "Das extrahierte Profil ist ungültig.");
+  const extracted = { ...parsed.data, goal: "ausbildung" as const };
+  const admin = createAdminClient();
+
+  const { data: existingData } = await admin
+    .from("auto_bewerb_profiles")
+    .select("id, cv_storage_path")
+    .eq("user_id", userId)
+    .maybeSingle();
+  const existing = (existingData ?? null) as { id: string; cv_storage_path: string } | null;
+
+  if (existing && existing.cv_storage_path !== input.cvStoragePath) {
+    // Replace: drop the previous file so no orphan object remains.
+    await admin
+      .storage.from(ATTACHMENT_BUCKET)
+      .remove([existing.cv_storage_path])
+      .catch(() => undefined);
+  }
+
+  const now = new Date().toISOString();
+  if (existing) {
+    const { data, error } = await admin
+      .from("auto_bewerb_profiles")
+      .update({
+        cv_file_name: input.cvFileName.slice(0, 255),
+        cv_mime_type: input.cvMime,
+        cv_size_bytes: Math.max(0, input.cvSizeBytes),
+        cv_storage_path: input.cvStoragePath,
+        cv_hash: input.cvHash,
+        extracted,
+        analyzed_at: now,
+      })
+      .eq("id", existing.id)
+      .eq("user_id", userId)
+      .select("*")
+      .maybeSingle();
+    if (error || !data) return fail("storage_error", "Profil konnte nicht gespeichert werden.");
+    void logAutoBewerbActivity(userId, "auto_bewerb_profile_replaced", "AUTO BEWERB: Lebenslauf ersetzt");
+    return { ok: true, value: data as unknown as AutoBewerbProfileRow };
+  }
+
+  const { data, error } = await admin
+    .from("auto_bewerb_profiles")
+    .insert({
+      user_id: userId,
+      cv_file_name: input.cvFileName.slice(0, 255),
+      cv_mime_type: input.cvMime,
+      cv_size_bytes: Math.max(0, input.cvSizeBytes),
+      cv_storage_path: input.cvStoragePath,
+      cv_hash: input.cvHash,
+      extracted,
+      analyzed_at: now,
+    })
+    .select("*")
+    .single();
+  if (error || !data) {
+    console.error(`[auto-bewerb] profile insert failed: ${error?.message ?? "unknown"}`);
+    return fail("storage_error", "Profil konnte nicht gespeichert werden.");
+  }
+  void logAutoBewerbActivity(userId, "auto_bewerb_profile_created", "AUTO BEWERB: Lebenslauf analysiert");
+  return { ok: true, value: data as unknown as AutoBewerbProfileRow };
+}
+
+/** Persist the user's CORRECTIONS of the extracted profile (Step 1 review).
+ *  The file itself is untouched; the corrected profile becomes the source of
+ *  truth for every generated document (guarded against it, never the other
+ *  way round). */
+export async function updateAutoBewerbProfileExtract(
+  userId: string,
+  extracted: CandidateProfile,
+): Promise<AutoBewerbOpResult<AutoBewerbProfileRow>> {
+  const parsed = candidateProfileSchema.safeParse(extracted);
+  if (!parsed.success) return fail("invalid_document", "Das Profil ist ungültig.");
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_profiles")
+    .update({ extracted: { ...parsed.data, goal: "ausbildung" as const } })
+    .eq("user_id", userId)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) return fail("not_found", "Profil nicht gefunden.");
+  return { ok: true, value: data as unknown as AutoBewerbProfileRow };
+}
+
+/** Delete the whole CV profile (user request): removes the stored file and
+ *  the row. Already-generated company documents keep their reviewed content
+ *  (they are versioned copies, not live links). */
+export async function deleteAutoBewerbProfile(userId: string): Promise<AutoBewerbOpResult> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("auto_bewerb_profiles")
+    .select("cv_storage_path")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!data) return fail("not_found", "Profil nicht gefunden.");
+  await admin
+    .storage.from(ATTACHMENT_BUCKET)
+    .remove([(data as { cv_storage_path: string }).cv_storage_path])
+    .catch(() => undefined);
+  const { error } = await admin.from("auto_bewerb_profiles").delete().eq("user_id", userId);
+  if (error) return fail("storage_error", "Löschen fehlgeschlagen.");
+  void logAutoBewerbActivity(userId, "auto_bewerb_profile_deleted", "AUTO BEWERB: Lebenslauf gelöscht");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Step 2 — companies (one per job advertisement, max 10)
+// ---------------------------------------------------------------------------
+
+export interface CreateAutoBewerbCompanyInput {
+  adRaw: string;
+  /** Display name — from the user's edit or the extraction's company field. */
+  company?: string | null;
+  extract?: AdExtract | null;
+  analysis?: AdAnalysis | null;
+  /** Candidate-facts fingerprint ({ cvHash }) at analysis time (reuse proof). */
+  profileSnapshot?: unknown;
+}
+
+export async function createAutoBewerbCompany(
+  userId: string,
+  input: CreateAutoBewerbCompanyInput,
+): Promise<AutoBewerbOpResult<AutoBewerbCompanyRow>> {
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  const adRaw = input.adRaw.trim().slice(0, 30_000);
+  if (adRaw.length < 1) return fail("invalid_recipient", "Bitte einen Anzeigentext eingeben.");
+  const displayName = (input.company ?? input.extract?.company ?? input.extract?.jobTitle ?? "").trim().slice(0, 200);
+  const company = displayName || "Unternehmen";
+  const companyKey = normalizeCompanyKey(displayName);
+
+  const admin = createAdminClient();
+  // Duplicate check (upfront, for a friendly message + existing card):
+  if (companyKey) {
+    const { data: dup } = await admin
+      .from("auto_bewerb_companies")
+      .select("id, company")
+      .eq("user_id", userId)
+      .eq("company_key", companyKey)
+      .maybeSingle();
+    if (dup) {
+      return fail(
+        "company_duplicate",
+        `„${(dup as { company: string }).company}“ ist bereits in Ihrem Workflow. Bitte eine bestehende Karte bearbeiten.`,
+      );
+    }
+  }
+  // 10-company cap (server-enforced; slot unique index is the race arbiter).
+  const { data: slotRows, error: slotErr } = await admin
+    .from("auto_bewerb_companies")
+    .select("slot_no")
+    .eq("user_id", userId);
+  if (slotErr) return classifyInsertError(slotErr);
+  const active = (slotRows ?? []) as Array<{ slot_no?: number | null }>;
+  if (active.length >= AUTO_BEWERB_COMPANY_LIMIT) {
+    return fail("workflow_full", "Der Workflow ist voll (max. 10 Unternehmen). Bitte ein Unternehmen entfernen, um Platz zu schaffen.");
+  }
+  const usedSlots = new Set(
+    active.map((r) => r.slot_no).filter((s): s is number => typeof s === "number" && s >= 1 && s <= AUTO_BEWERB_COMPANY_LIMIT),
+  );
+  let slotNo = 1;
+  while (usedSlots.has(slotNo)) slotNo += 1;
+
+  const { data, error } = await admin
+    .from("auto_bewerb_companies")
+    .insert({
+      user_id: userId,
+      company,
+      company_key: companyKey,
+      slot_no: slotNo,
+      ad_raw: adRaw,
+      ad_extracted: input.extract ?? null,
+      ad_analysis: input.analysis ?? null,
+      profile_snapshot: input.profileSnapshot ?? null,
+      status: "draft",
+    })
+    .select("*")
+    .single();
+  if (error || !data) return classifyInsertError(error);
+  void logAutoBewerbActivity(userId, "auto_bewerb_company_created", "AUTO BEWERB: Unternehmen hinzugefügt", undefined, { company });
+  return { ok: true, value: data as unknown as AutoBewerbCompanyRow };
+}
+
+export async function listAutoBewerbCompanies(userId: string): Promise<AutoBewerbCompanyRow[]> {
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_companies")
+    .select("*")
+    .eq("user_id", userId)
+    .order("slot_no", { ascending: true })
+    .limit(AUTO_BEWERB_COMPANY_LIMIT);
+  if (error) return [];
+  return revalidateCompanies(data ?? []);
+}
+
+function revalidateCompanies(rows: unknown[]): AutoBewerbCompanyRow[] {
+  return (rows as unknown as AutoBewerbCompanyRow[]).map((row) => {
+    const app: AutoBewerbCompanyRow = { ...row };
+    // Re-validate persisted JSON (old/partial rows must never break the UI).
+    app.ad_extracted = app.ad_extracted
+      ? adExtractSchema.safeParse(app.ad_extracted).success
+        ? adExtractSchema.parse(app.ad_extracted)
+        : null
+      : null;
+    app.ad_analysis = app.ad_analysis
+      ? adAnalysisSchema.safeParse(app.ad_analysis).success
+        ? adAnalysisSchema.parse(app.ad_analysis)
+        : null
+      : null;
+    return app;
+  });
+}
+
+export interface AutoBewerbCompanyBundle {
+  company: AutoBewerbCompanyRow;
+  documents: AutoBewerbDocumentRow[];
+  /** Selected library attachment ids (ordered). */
+  selectedAttachmentIds: string[];
+  attempts: AutoBewerbSendAttemptRow[];
+}
+
+export async function getAutoBewerbCompany(
+  userId: string,
+  id: string,
+): Promise<AutoBewerbCompanyBundle | null> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("auto_bewerb_companies")
+    .select("*")
+    .eq("id", id)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const company = revalidateCompanies([data as unknown])[0];
+  const [docsRes, selRes, attsRes] = await Promise.all([
+    admin.from("auto_bewerb_documents").select("*").eq("company_id", id).order("version", { ascending: false }),
+    admin
+      .from("auto_bewerb_company_attachments")
+      .select("attachment_id")
+      .eq("company_id", id)
+      .order("attachment_id", { ascending: true }),
+    admin.from("auto_bewerb_send_attempts").select("*").eq("company_id", id).order("created_at", { ascending: false }),
+  ]);
+  return {
+    company,
+    documents: (docsRes.data ?? []) as unknown as AutoBewerbDocumentRow[],
+    selectedAttachmentIds: ((selRes.data ?? []) as Array<{ attachment_id: string }>).map((r) => r.attachment_id),
+    attempts: (attsRes.data ?? []) as unknown as AutoBewerbSendAttemptRow[],
+  };
+}
+
+export type AutoBewerbCompanyPatch = Partial<
+  Pick<
+    AutoBewerbCompanyRow,
+    | "company"
+    | "ad_raw"
+    | "ad_extracted"
+    | "ad_analysis"
+    | "profile_snapshot"
+    | "status"
+    | "recipient_email"
+    | "email_subject"
+    | "email_body"
+    | "email_attach_cv"
+    | "email_attach_letter"
+    | "email_account_id"
+    | "idempotency_key"
+    | "approved"
+    | "approved_at"
+    | "scheduled_at"
+    | "schedule_timezone"
+    | "sent_at"
+    | "provider_message_id"
+    | "last_failure_code"
+    | "ad_confirmed_at"
+    | "cv_reviewed_at"
+    | "letter_reviewed_at"
+  >
+> & {
+  /** Internal: derived from `company` by the engine (dedupe key). */
+  company_key?: string;
+};
+
+async function patchCompany(
+  userId: string,
+  id: string,
+  patch: AutoBewerbCompanyPatch,
+): Promise<AutoBewerbCompanyRow | null> {
+  // Invalidation: editing the extraction re-opens its confirmation; renaming
+  // the company re-derives the dedupe key (a rename into an existing name is
+  // a unique violation → company_duplicate at the caller).
+  const extended: AutoBewerbCompanyPatch = { ...patch };
+  if ("ad_extracted" in patch) extended.ad_confirmed_at = null;
+  if ("company" in patch && typeof patch.company === "string") {
+    extended.company_key = normalizeCompanyKey(patch.company);
+  }
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_companies")
+    .update(extended)
+    .eq("id", id)
+    .eq("user_id", userId)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) return null;
+  return revalidateCompanies([data as unknown])[0];
+}
+
+export async function updateAutoBewerbCompany(
+  userId: string,
+  id: string,
+  patch: AutoBewerbCompanyPatch,
+): Promise<AutoBewerbOpResult<AutoBewerbCompanyRow>> {
+  if ("company" in patch) {
+    const name = (patch.company ?? "").trim().slice(0, 200);
+    if (name.length < 1) return fail("company_duplicate", "Der Unternehmensname darf nicht leer sein.");
+  }
+  if ("recipient_email" in patch && patch.recipient_email !== null) {
+    const r = (patch.recipient_email ?? "").trim();
+    if (r.length > 0 && !isValidEmail(r)) return fail("invalid_recipient", "Ungültige Empfänger-E-Mail.");
+  }
+  if ("ad_raw" in patch) {
+    const ad = (patch.ad_raw ?? "").trim();
+    if (ad.length < 1 || ad.length > 30_000) return fail("invalid_document", "Der Anzeigentext ist ungültig.");
+  }
+  const app = await patchCompany(userId, id, patch);
+  if (!app) {
+    // Distinguish the unique-violation case (rename into an existing company)
+    // from a plain miss: re-run the probe-free check by error shape.
+    const probe = await createAdminClient()
+      .from("auto_bewerb_companies")
+      .select("id")
+      .eq("id", id)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!probe.data) return fail("not_found", "Unternehmen nicht gefunden.");
+    return fail("company_duplicate", "Dieses Unternehmen wurde bereits hinzugefügt.");
+  }
+  return { ok: true, value: app };
+}
+
+/** Explicit "Anzeige geprüft" confirmation (server-owned timestamp). */
+export async function markAutoBewerbAdConfirmed(
+  userId: string,
+  companyId: string,
+): Promise<AutoBewerbOpResult<AutoBewerbCompanyRow>> {
+  const app = await patchCompany(userId, companyId, { ad_confirmed_at: new Date().toISOString() });
+  if (!app) return fail("not_found", "Unternehmen nicht gefunden.");
+  return { ok: true, value: app };
+}
+
+export async function approveAutoBewerbCompany(
+  userId: string,
+  companyId: string,
+): Promise<AutoBewerbOpResult<AutoBewerbCompanyRow>> {
+  const admin = createAdminClient();
+  const { data: existing } = await admin
+    .from("auto_bewerb_companies")
+    .select("id, status")
+    .eq("id", companyId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!existing) return fail("not_found", "Unternehmen nicht gefunden.");
+  const current = (existing as { status: string }).status;
+  if (current === "sent") return fail("already_sent", "Diese Bewerbung wurde bereits versendet.");
+  const app = await patchCompany(userId, companyId, {
+    approved: true,
+    approved_at: new Date().toISOString(),
+    status: current === "draft" ? "ready" : (current as AutoBewerbAppStatus),
+  });
+  if (!app) return fail("not_found", "Unternehmen nicht gefunden.");
+  void logAutoBewerbActivity(userId, "auto_bewerb_company_approved", "AUTO BEWERB: Bewerbung genehmigt");
+  return { ok: true, value: app };
+}
+
+/** Delete one company: cancels queued attempts FIRST (never send after
+ *  cancellation), removes the company's rendered PDFs and child rows, then
+ *  the row (freeing its slot). The USER-LEVEL document library is untouched
+ *  (its objects are shared across companies). */
+export async function deleteAutoBewerbCompany(
+  userId: string,
+  companyId: string,
+): Promise<AutoBewerbOpResult> {
+  const admin = createAdminClient();
+  const { data: appData, error: appError } = await admin
+    .from("auto_bewerb_companies")
+    .select("*")
+    .eq("id", companyId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (appError || !appData) return fail("not_found", "Unternehmen nicht gefunden.");
+  const app = appData as unknown as AutoBewerbCompanyRow;
+  if (app.status === "sending") {
+    return fail("not_deletable", "Der Versand läuft gerade — bitte warten, bis er abgeschlossen ist.");
+  }
+
+  // 1) Cancel queued attempts so the scheduler can never fire.
+  const { data: attempts } = await admin
+    .from("auto_bewerb_send_attempts")
+    .select("id")
+    .eq("company_id", companyId)
+    .eq("user_id", userId);
+  for (const a of (attempts ?? []) as unknown as Array<{ id: string }>) {
+    await admin
+      .from("auto_bewerb_send_attempts")
+      .update({ status: "cancelled", failure_code: "company_deleted" })
+      .eq("id", a.id)
+      .eq("status", "queued");
+  }
+
+  // 2) Remove the company's rendered PDFs (library objects stay).
+  await admin
+    .storage.from(ATTACHMENT_BUCKET)
+    .remove([autoBewerbCvPdfStoragePath(userId, companyId), autoBewerbLetterPdfStoragePath(userId, companyId)])
+    .catch(() => undefined);
+
+  // 3) Delete child rows explicitly (scoped to this company AND the owner).
+  for (const table of ["auto_bewerb_documents", "auto_bewerb_send_attempts", "auto_bewerb_company_attachments"] as const) {
+    const { error: childError } = await admin
+      .from(table)
+      .delete()
+      .eq("company_id", companyId)
+      .eq("user_id", userId);
+    if (childError) return fail("storage_error", "Löschen fehlgeschlagen.");
+  }
+
+  // 4) Delete the company row itself (frees its slot_no).
+  const { error: delError } = await admin
+    .from("auto_bewerb_companies")
+    .delete()
+    .eq("id", companyId)
+    .eq("user_id", userId);
+  if (delError) return fail("storage_error", "Löschen fehlgeschlagen.");
+  void logAutoBewerbActivity(userId, "auto_bewerb_company_deleted", "AUTO BEWERB: Unternehmen entfernt", undefined, {
+    company: app.company,
+  });
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Steps 4–5 — versioned generated documents (per company)
+// ---------------------------------------------------------------------------
+
+export type AutoBewerbDocType = "cv" | "cover_letter";
+
+/** Save a NEW version of the company's tailored CV (CvDocument) or
+ *  Anschreiben ({ text, tone }). Regenerating one company never touches
+ *  another company's documents (separate rows per company_id). A new version
+ *  re-opens the matching review confirmation. */
+export async function saveAutoBewerbDocument(
+  userId: string,
+  companyId: string,
+  docType: AutoBewerbDocType,
+  content: unknown,
+): Promise<AutoBewerbOpResult<AutoBewerbDocumentRow>> {
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  const admin = createAdminClient();
+  const { data: app } = await admin
+    .from("auto_bewerb_companies")
+    .select("id")
+    .eq("id", companyId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!app) return fail("not_found", "Unternehmen nicht gefunden.");
+
+  // Server-side content validation (never trust the client's JSON shape).
+  let normalized: unknown = content;
+  if (docType === "cv") {
+    const cv = sanitizeCvDocument(content);
+    if (!cv || !cvHasContent(cv)) {
+      return fail("invalid_document", "Der Lebenslauf ist leer oder ungültig.");
+    }
+    normalized = cv;
+  } else {
+    const letter = autoBewerbLetterSchema.safeParse(content);
+    if (!letter.success) {
+      return fail("invalid_document", "Das Anschreiben ist ungültig.");
+    }
+    normalized = letter.data;
+  }
+
+  const { data: latest } = await admin
+    .from("auto_bewerb_documents")
+    .select("version")
+    .eq("company_id", companyId)
+    .eq("doc_type", docType)
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const version = ((latest?.version as number | undefined) ?? 0) + 1;
+
+  const { data, error } = await admin
+    .from("auto_bewerb_documents")
+    .insert({
+      company_id: companyId,
+      user_id: userId,
+      doc_type: docType,
+      version,
+      content: normalized,
+    })
+    .select("*")
+    .single();
+  if (error || !data) return fail("storage_error", "Dokument konnte nicht gespeichert werden.");
+  // A NEW version is not "reviewed" until the user confirms it again.
+  await patchCompany(userId, companyId, docType === "cv" ? { cv_reviewed_at: null } : { letter_reviewed_at: null });
+  return { ok: true, value: data as unknown as AutoBewerbDocumentRow };
+}
+
+/** Parse the latest stored document of a type into its typed content
+ *  (null = not generated yet or unparsable). */
+export async function getLatestAutoBewerbDocument(
+  userId: string,
+  companyId: string,
+  docType: AutoBewerbDocType,
+): Promise<AutoBewerbDocumentRow | null> {
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_documents")
+    .select("*")
+    .eq("company_id", companyId)
+    .eq("user_id", userId)
+    .eq("doc_type", docType)
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return data as unknown as AutoBewerbDocumentRow;
+}
+
+/** Typed accessor: latest CV as CvDocument (re-sanitized) or null. */
+export async function getLatestAutoBewerbCv(
+  userId: string,
+  companyId: string,
+): Promise<CvDocument | null> {
+  const doc = await getLatestAutoBewerbDocument(userId, companyId, "cv");
+  return doc ? sanitizeCvDocument(doc.content) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Step 3 — supporting-document library (user-level, reusable, hash-deduped)
+// ---------------------------------------------------------------------------
+
+export interface UploadAutoBewerbAttachmentResult {
+  row: AutoBewerbAttachmentRow;
+  /** true = identical bytes were already stored (no second upload). */
+  reused: boolean;
+}
+
+/** Upload a supporting document into the user's LIBRARY (not bound to any
+ *  company). Identical bytes for the same user reuse the existing row
+ *  (no duplicate storage object). Content is the source of truth: the file
+ *  type comes from magic bytes, never the browser hint. */
+export async function uploadAutoBewerbAttachment(
+  userId: string,
+  input: { name: string; buffer: Buffer; category: string },
+): Promise<AutoBewerbOpResult<UploadAutoBewerbAttachmentResult>> {
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  const admin = createAdminClient();
+
+  const detected = detectFileType(input.buffer);
+  if (!detected || !ATTACHMENT_MIME[detected]) {
+    return fail("invalid_file_type", "Nicht unterstützter Dateityp. Erlaubt: PDF, DOC, DOCX, PNG, JPEG.");
+  }
+  const cap = Math.min(await effectiveUploadLimitBytes(userId), ATTACHMENT_HARD_CAP_BYTES);
+  if (input.buffer.length > cap) {
+    return fail("file_too_large", `Datei ist zu groß (max. ${Math.floor(cap / 1024 / 1024)} MB).`);
+  }
+
+  const fileHash = createHash("sha256").update(input.buffer).digest("hex");
+  // Hash dedupe: same user + same bytes → the stored row wins (no second
+  // storage object, no duplicate library entry — retries are idempotent).
+  const { data: existingData } = await admin
+    .from("auto_bewerb_attachments")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("file_hash", fileHash)
+    .maybeSingle();
+  if (existingData) {
+    return { ok: true, value: { row: existingData as unknown as AutoBewerbAttachmentRow, reused: true } };
+  }
+
+  const displayName = sanitizeFileName(input.name);
+  const path = `${userId}/auto-bewerb/docs/${randomUUID()}-${displayName}`;
+  const mime = ATTACHMENT_MIME[detected];
+  const { error: uploadError } = await admin
+    .storage.from(ATTACHMENT_BUCKET)
+    .upload(path, input.buffer, { contentType: mime, upsert: false });
+  if (uploadError) return fail("storage_error", "Upload fehlgeschlagen. Bitte erneut versuchen.");
+
+  const { data, error } = await admin
+    .from("auto_bewerb_attachments")
+    .insert({
+      user_id: userId,
+      display_name: displayName,
+      doc_category: DOC_CATEGORIES_SET.has(input.category) ? input.category : "other",
+      mime_type: mime,
+      size_bytes: input.buffer.length,
+      storage_path: path,
+      file_hash: fileHash,
+    })
+    .select("*")
+    .single();
+  if (error || !data) {
+    // Roll the object back so no orphan private file remains.
+    await admin.storage.from(ATTACHMENT_BUCKET).remove([path]).catch(() => undefined);
+    if (/auto_bewerb_attachments_user_hash_unique/i.test(error?.message ?? "")) {
+      // Concurrent identical upload won the race — treat as a safe reuse.
+      const { data: winner } = await admin
+        .from("auto_bewerb_attachments")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("file_hash", fileHash)
+        .maybeSingle();
+      if (winner) return { ok: true, value: { row: winner as unknown as AutoBewerbAttachmentRow, reused: true } };
+    }
+    return fail("storage_error", "Upload konnte nicht abgeschlossen werden.");
+  }
+  void logAutoBewerbActivity(userId, "auto_bewerb_document_uploaded", "AUTO BEWERB: Dokument hochgeladen", undefined, {
+    name: displayName,
+  });
+  return { ok: true, value: { row: data as unknown as AutoBewerbAttachmentRow, reused: false } };
+}
+
+export async function listAutoBewerbAttachments(userId: string): Promise<AutoBewerbAttachmentRow[]> {
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_attachments")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+  if (error) return [];
+  return (data ?? []) as unknown as AutoBewerbAttachmentRow[];
+}
+
+async function fetchOwnedAttachment(userId: string, attachmentId: string): Promise<AutoBewerbAttachmentRow | null> {
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_attachments")
+    .select("*")
+    .eq("id", attachmentId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return data as unknown as AutoBewerbAttachmentRow;
+}
+
+export async function renameAutoBewerbAttachment(
+  userId: string,
+  attachmentId: string,
+  newName: string,
+): Promise<AutoBewerbOpResult> {
+  const name = sanitizeFileName(newName);
+  if (name.length < 2) return fail("invalid_file_type", "Ungültiger Dateiname.");
+  const existing = await fetchOwnedAttachment(userId, attachmentId);
+  if (!existing) return fail("not_found", "Dokument nicht gefunden.");
+  const { error } = await createAdminClient()
+    .from("auto_bewerb_attachments")
+    .update({ display_name: name })
+    .eq("id", attachmentId)
+    .eq("user_id", userId);
+  if (error) return fail("storage_error", "Umbenennung fehlgeschlagen.");
+  return { ok: true };
+}
+
+/** Delete a library document. Company selections to it cascade away (FK);
+ *  already-prepared send payloads keep their own storage references until
+ *  they are sent or cancelled (a send never reads this table at dispatch). */
+export async function deleteAutoBewerbAttachment(
+  userId: string,
+  attachmentId: string,
+): Promise<AutoBewerbOpResult> {
+  const existing = await fetchOwnedAttachment(userId, attachmentId);
+  if (!existing) return fail("not_found", "Dokument nicht gefunden.");
+  const admin = createAdminClient();
+  await admin.storage.from(ATTACHMENT_BUCKET).remove([existing.storage_path]).catch(() => undefined);
+  const { error } = await admin
+    .from("auto_bewerb_attachments")
+    .delete()
+    .eq("id", attachmentId)
+    .eq("user_id", userId);
+  if (error) return fail("storage_error", "Löschen fehlgeschlagen.");
+  void logAutoBewerbActivity(userId, "auto_bewerb_document_deleted", "AUTO BEWERB: Dokument gelöscht");
+  return { ok: true };
+}
+
+/** Explicit per-company selection (Step 3/6): which library documents are
+ *  attached to which application. Idempotent. */
+export async function selectAutoBewerbAttachment(
+  userId: string,
+  companyId: string,
+  attachmentId: string,
+): Promise<AutoBewerbOpResult> {
+  const admin = createAdminClient();
+  const { data: app } = await admin
+    .from("auto_bewerb_companies")
+    .select("id")
+    .eq("id", companyId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!app) return fail("not_found", "Unternehmen nicht gefunden.");
+  const att = await fetchOwnedAttachment(userId, attachmentId);
+  if (!att) return fail("not_found", "Dokument nicht gefunden.");
+  const { error } = await admin
+    .from("auto_bewerb_company_attachments")
+    .upsert(
+      { company_id: companyId, attachment_id: attachmentId, user_id: userId },
+      { onConflict: "company_id,attachment_id" },
+    );
+  if (error) return fail("storage_error", "Auswahl konnte nicht gespeichert werden.");
+  return { ok: true };
+}
+
+export async function deselectAutoBewerbAttachment(
+  userId: string,
+  companyId: string,
+  attachmentId: string,
+): Promise<AutoBewerbOpResult> {
+  const admin = createAdminClient();
+  const { data: app } = await admin
+    .from("auto_bewerb_companies")
+    .select("id")
+    .eq("id", companyId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!app) return fail("not_found", "Unternehmen nicht gefunden.");
+  const { error } = await admin
+    .from("auto_bewerb_company_attachments")
+    .delete()
+    .eq("company_id", companyId)
+    .eq("attachment_id", attachmentId)
+    .eq("user_id", userId);
+  if (error) return fail("storage_error", "Auswahl konnte nicht entfernt werden.");
+  return { ok: true };
+}
+
+export async function listCompanyAttachmentIds(userId: string, companyId: string): Promise<string[]> {
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_company_attachments")
+    .select("attachment_id")
+    .eq("company_id", companyId)
+    .eq("user_id", userId);
+  if (error) return [];
+  return ((data ?? []) as Array<{ attachment_id: string }>).map((r) => r.attachment_id);
+}
+
+// ---------------------------------------------------------------------------
+// Step 6 — the SHARED email-body template (one row per user)
+// ---------------------------------------------------------------------------
+
+export async function getAutoBewerbEmailTemplate(userId: string): Promise<string> {
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_email_templates")
+    .select("body")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data) return "";
+  return String((data as { body: string }).body ?? "");
+}
+
+export async function saveAutoBewerbEmailTemplate(
+  userId: string,
+  body: string,
+): Promise<AutoBewerbOpResult<string>> {
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  const normalized = body.trim().slice(0, 6_000);
+  const { error } = await createAdminClient()
+    .from("auto_bewerb_email_templates")
+    .upsert({ user_id: userId, body: normalized }, { onConflict: "user_id" });
+  if (error) return fail("storage_error", "Vorlage konnte nicht gespeichert werden.");
+  return { ok: true, value: normalized };
+}
+
+// ---------------------------------------------------------------------------
+// Step 7 — send preparation (immediate or scheduled)
+// ---------------------------------------------------------------------------
+
+export interface AutoBewerbScheduleInput {
+  timeZone: string;
+  year: number;
+  month: number; // 1-12
+  day: number;
+  hour: number; // 0-23
+  minute: number; // 0-59
+}
+
+export interface AutoBewerbSendInput {
+  companyId: string;
+  recipientEmail: string;
+  emailAccountId: string;
+  subject: string;
+  /** Per-company body override; empty = use the SHARED template. */
+  bodyOverride?: string | null;
+  /** User-library attachment ids to include (max 10). */
+  attachmentIds?: string[];
+  /** Attach the server-rendered tailored-CV PDF (default true). */
+  attachCv?: boolean;
+  /** Attach the server-rendered Anschreiben PDF (default true). */
+  attachLetter?: boolean;
+  schedule?: AutoBewerbScheduleInput | null;
+}
+
+export interface AutoBewerbSendResult {
+  ok: boolean;
+  code?: AutoBewerbErrorCode;
+  message?: string;
+  attemptId?: string;
+  scheduledAt?: string | null;
+  /** Set when an immediate send was dispatched inline. */
+  dispatchStatus?: "sent" | "failed" | "queued" | "duplicate";
+  failureCode?: string | null;
+}
+
+/** Fetch the user's profile letterhead facts (for the rendered PDFs). */
+async function fetchProfileLetterhead(userId: string): Promise<Record<string, string | null | undefined>> {
+  // NOTE: profiles is keyed by `id` (references auth.users) — NOT user_id
+  // (the studio's `.eq("user_id", …)` query silently returns no row).
+  const { data } = await createAdminClient()
+    .from("profiles")
+    .select("full_name, email, phone, street, postal_code, city, country")
+    .eq("id", userId)
+    .maybeSingle();
+  return (data ?? {}) as Record<string, string | null | undefined>;
+}
+
+export async function prepareAutoBewerbSend(
+  userId: string,
+  input: AutoBewerbSendInput,
+): Promise<AutoBewerbSendResult> {
+  if (!(await hasAutoBewerbSchema()))
+    return { ok: false, code: "schema_pending", message: "AUTO BEWERB Datenbank wird vorbereitet." };
+  const admin = createAdminClient();
+
+  const { data: appData, error: appError } = await admin
+    .from("auto_bewerb_companies")
+    .select("*")
+    .eq("id", input.companyId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (appError || !appData) return { ok: false, code: "not_found", message: "Unternehmen nicht gefunden." };
+  const app = revalidateCompanies([appData as unknown])[0];
+  if (!app.approved)
+    return { ok: false, code: "not_approved", message: "Bitte genehmigen Sie die Bewerbung zuerst." };
+  if (app.status === "sent")
+    return { ok: false, code: "already_sent", message: "Diese Bewerbung wurde bereits versendet." };
+  if (!isValidEmail(input.recipientEmail))
+    return { ok: false, code: "invalid_recipient", message: "Ungültige Empfänger-E-Mail." };
+  const subject = input.subject.trim().slice(0, 200);
+  if (!subject)
+    return { ok: false, code: "invalid_recipient", message: "Der E-Mail-Betreff ist erforderlich." };
+
+  // Body: per-company override wins; otherwise the SHARED template, rendered
+  // from THIS company's stored extraction (tokens never invented).
+  const bodyOverride = (input.bodyOverride ?? "").trim();
+  let bodyText: string;
+  if (bodyOverride) {
+    bodyText = bodyOverride.slice(0, 6_000);
+  } else {
+    const template = await getAutoBewerbEmailTemplate(userId);
+    if (!template.trim()) {
+      return { ok: false, code: "no_template", message: "Es fehlt die gemeinsame E-Mail-Vorlage. Bitte zuerst eine Vorlage speichern." };
+    }
+    bodyText = renderAutoBewerbEmailBody(template, app.ad_extracted).trim();
+    if (!bodyText) {
+      return { ok: false, code: "no_template", message: "Die E-Mail-Vorlage ist leer." };
+    }
+  }
+
+  // Email account: owned + active (createEmailProvider re-checks at send time).
+  const { data: account } = await admin
+    .from("email_accounts")
+    .select("id")
+    .eq("id", input.emailAccountId)
+    .eq("user_id", userId)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (!account)
+    return { ok: false, code: "no_email_account", message: "Kein aktives E-Mail-Konto verbunden." };
+
+  // Attachments: owned library documents first (ownership + cap checked).
+  const payloadAttachments: AutoBewerbSendPayload["attachments"] = [];
+  const wantIds = (input.attachmentIds ?? []).slice(0, 10);
+  if (wantIds.length > 0) {
+    const { data: atts } = await admin
+      .from("auto_bewerb_attachments")
+      .select("*")
+      .eq("user_id", userId)
+      .in("id", wantIds);
+    // Preserve the user's selection order.
+    const byId = new Map(((atts ?? []) as unknown as AutoBewerbAttachmentRow[]).map((a) => [a.id, a]));
+    for (const id of wantIds) {
+      const a = byId.get(id);
+      if (a) payloadAttachments.push({ filename: a.display_name, mimeType: a.mime_type, storagePath: a.storage_path });
+    }
+    if (payloadAttachments.length !== wantIds.filter(Boolean).length) {
+      return { ok: false, code: "not_found", message: "Ein ausgewähltes Dokument konnte nicht zugeordnet werden." };
+    }
+  }
+
+  // The tailored CV PDF — rendered locally from the REVIEWED stored CV
+  // (deterministic pdf-lib pipeline, zero cost). Missing/unrenderable CV →
+  // the attachment is dropped and logged (the review UI flags it before the
+  // user confirms; the send is never faked).
+  const attachCv = input.attachCv ?? true;
+  if (attachCv) {
+    const cv = await getLatestAutoBewerbCv(userId, app.id);
+    if (cv) {
+      try {
+        const bytes = await generateCvPdf(cv);
+        const path = autoBewerbCvPdfStoragePath(userId, app.id);
+        const { error: cvUploadError } = await admin
+          .storage.from(ATTACHMENT_BUCKET)
+          .upload(path, Buffer.from(bytes), { contentType: BEW_LETTER_PDF_MIME, upsert: true });
+        if (cvUploadError) {
+          console.error(`[auto-bewerb] CV PDF upload failed for company ${app.id}: ${cvUploadError.message}`);
+        } else {
+          payloadAttachments.push({
+            filename: cvPdfFilename(cv.personal.fullName),
+            mimeType: BEW_LETTER_PDF_MIME,
+            storagePath: path,
+          });
+        }
+      } catch (error) {
+        console.error("[auto-bewerb] CV PDF rendering failed:", error instanceof Error ? error.message : error);
+      }
+    }
+  }
+
+  // The Anschreiben PDF — rendered from the REVIEWED stored letter with the
+  // user's letterhead facts (missing fields omitted, never invented).
+  const attachLetter = input.attachLetter ?? true;
+  if (attachLetter) {
+    const letterDoc = await getLatestAutoBewerbDocument(userId, app.id, "cover_letter");
+    const letterParse = letterDoc ? autoBewerbLetterSchema.safeParse(letterDoc.content) : null;
+    if (letterParse?.success && letterParse.data.text.trim()) {
+      const pr = await fetchProfileLetterhead(userId);
+      try {
+        const folio = buildLetterFolio({
+          applicantName: pr.full_name ?? null,
+          applicantEmail: pr.email ?? null,
+          applicantStreet: pr.street ?? null,
+          applicantPostalCode: pr.postal_code ?? null,
+          applicantCity: pr.city ?? null,
+          applicantCountry: pr.country ?? null,
+          applicantPhone: pr.phone ?? null,
+          companyName: app.ad_extracted?.company ?? app.company,
+          companyContactName: app.ad_extracted?.contactPerson || null,
+          companyAddress: app.ad_extracted?.companyAddress || null,
+          subject: subject,
+          bodyHtml: emailBodyToHtml(letterParse.data.text),
+        });
+        const bytes = await generateLetterPdf(folio);
+        const path = autoBewerbLetterPdfStoragePath(userId, app.id);
+        const { error: letterUploadError } = await admin
+          .storage.from(ATTACHMENT_BUCKET)
+          .upload(path, Buffer.from(bytes), { contentType: BEW_LETTER_PDF_MIME, upsert: true });
+        if (letterUploadError) {
+          console.error(`[auto-bewerb] letter PDF upload failed for company ${app.id}: ${letterUploadError.message}`);
+        } else {
+          payloadAttachments.push({
+            filename: letterPdfFilename(app.ad_extracted?.company || app.company),
+            mimeType: BEW_LETTER_PDF_MIME,
+            storagePath: path,
+          });
+        }
+      } catch (error) {
+        console.error("[auto-bewerb] letter PDF rendering failed:", error instanceof Error ? error.message : error);
+      }
+    }
+  }
+
+  // Schedule validation (explicit timezone; future; before the ad deadline).
+  let scheduledAt: string | null = null;
+  let scheduleTz: string | null = null;
+  if (input.schedule) {
+    const utcMs = zonedTimeToUtc(
+      input.schedule.year, input.schedule.month, input.schedule.day,
+      input.schedule.hour, input.schedule.minute, input.schedule.timeZone,
+    );
+    if (utcMs === null)
+      return { ok: false, code: "invalid_schedule", message: "Ungültiges Datum, Uhrzeit oder Zeitzone." };
+    if (utcMs <= Date.now() + 60_000)
+      return { ok: false, code: "invalid_schedule", message: "Der Versandzeitpunkt muss in der Zukunft liegen." };
+    const deadline = parseAdDeadline(app.ad_extracted?.applicationDeadline ?? null);
+    if (deadline !== null && utcMs > deadline)
+      return { ok: false, code: "schedule_after_deadline", message: "Der geplante Versand liegt nach der Bewerbungsfrist." };
+    scheduledAt = new Date(utcMs).toISOString();
+    scheduleTz = input.schedule.timeZone;
+  }
+
+  const idempotencyKey = randomUUID();
+  const payload: AutoBewerbSendPayload = {
+    html: emailBodyToHtml(bodyText),
+    text: bodyText,
+    attachments: payloadAttachments,
+  };
+
+  // ATOMIC SEND-SLOT CLAIM (duplicate-send prevention, server-side): only ONE
+  // concurrent prepare for this company can flip the status out of
+  // {draft, ready, failed}; a losing racer (double click, two tabs, replayed
+  // request) sees zero rows and must NOT create a second attempt.
+  const { data: claimedRows } = await admin
+    .from("auto_bewerb_companies")
+    .update({
+      recipient_email: input.recipientEmail.trim().toLowerCase(),
+      email_account_id: input.emailAccountId,
+      idempotency_key: idempotencyKey,
+      // Store the RAW override (null = shared template) — never the rendered
+      // text, so editing the shared template keeps working for future sends.
+      email_subject: subject,
+      email_body: bodyOverride ? bodyOverride.slice(0, 6_000) : null,
+      email_attach_cv: attachCv,
+      email_attach_letter: attachLetter,
+      status: scheduledAt ? "scheduled" : "sending",
+      scheduled_at: scheduledAt,
+      schedule_timezone: scheduleTz,
+      last_failure_code: null,
+    })
+    .eq("id", app.id)
+    .eq("user_id", userId)
+    .in("status", ["draft", "ready", "failed"])
+    .select("id");
+  if (!claimedRows || claimedRows.length === 0) {
+    return { ok: false, code: "send_in_progress", message: "Es läuft bereits ein Versand für diese Bewerbung." };
+  }
+
+  const { data: attempt, error: attemptError } = await admin
+    .from("auto_bewerb_send_attempts")
+    .insert({
+      company_id: app.id,
+      user_id: userId,
+      idempotency_key: idempotencyKey,
+      recipient_email: input.recipientEmail.trim().toLowerCase(),
+      subject,
+      payload,
+      status: "queued",
+      scheduled_at: scheduledAt,
+    })
+    .select("*")
+    .single();
+  if (attemptError || !attempt) {
+    // Release the claim so the user can retry (no orphan "sending" state).
+    await patchCompany(userId, app.id, {
+      status: "ready", idempotency_key: null, scheduled_at: null, schedule_timezone: null,
+    });
+    return { ok: false, code: "storage_error", message: "Versand konnte nicht vorbereitet werden." };
+  }
+
+  void logAutoBewerbActivity(
+    userId,
+    scheduledAt ? "auto_bewerb_send_scheduled" : "auto_bewerb_send_requested",
+    scheduledAt ? "AUTO BEWERB: Versand geplant" : "AUTO BEWERB: Versand gestartet",
+    undefined,
+    { companyId: app.id, recipient: input.recipientEmail, company: app.company },
+  );
+
+  // Immediate dispatch happens inline (server action context — same trust
+  // boundary as every other send in this codebase).
+  if (!scheduledAt) {
+    const result = await dispatchAutoBewerbAttempt((attempt as unknown as AutoBewerbSendAttemptRow).id);
+    return {
+      ok: true,
+      attemptId: (attempt as unknown as AutoBewerbSendAttemptRow).id,
+      scheduledAt: null,
+      dispatchStatus: result.duplicate ? "duplicate" : result.ok ? "sent" : "failed",
+      failureCode: result.failureCode ?? null,
+    };
+  }
+  return { ok: true, attemptId: (attempt as unknown as AutoBewerbSendAttemptRow).id, scheduledAt };
+}
+
+// ---------------------------------------------------------------------------
+// Cancellation
+// ---------------------------------------------------------------------------
+
+export async function cancelAutoBewerbSend(
+  userId: string,
+  attemptId: string,
+): Promise<AutoBewerbOpResult> {
+  const admin = createAdminClient();
+  const { data: attemptData } = await admin
+    .from("auto_bewerb_send_attempts")
+    .select("id, company_id, status")
+    .eq("id", attemptId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!attemptData) return fail("not_found", "Versand nicht gefunden.");
+  const attempt = attemptData as { id: string; company_id: string; status: string };
+  if (attempt.status !== "queued")
+    return fail("not_cancellable", "Nur geplante (noch nicht laufende) Versände können abgebrochen werden.");
+  const { error } = await admin
+    .from("auto_bewerb_send_attempts")
+    .update({ status: "cancelled" })
+    .eq("id", attempt.id)
+    .eq("user_id", userId);
+  if (error) return fail("storage_error", "Abbrechen fehlgeschlagen.");
+  await patchCompany(userId, attempt.company_id, {
+    status: "ready",
+    scheduled_at: null,
+    schedule_timezone: null,
+  });
+  void logAutoBewerbActivity(userId, "auto_bewerb_send_cancelled", "AUTO BEWERB: Versand abgebrochen");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch (the only place an AUTO BEWERB email can leave the building)
+// ---------------------------------------------------------------------------
+
+export interface AutoBewerbDispatchResult {
+  ok: boolean;
+  duplicate: boolean;
+  status: "sent" | "failed" | "queued" | "skipped";
+  failureCode?: string | null;
+}
+
+const backoffMs = (attempt: number): number => 2 * 60_000 * 2 ** (attempt - 1); // 2m, 4m, 8m
+
+/**
+ * Dispatch ONE send attempt. The ONLY code path that can send an AUTO
+ * BEWERB email.
+ *
+ * Claim semantics: exactly one dispatcher may execute a given attempt.
+ *  - `claimed: false` (inline / page-load path): an atomic
+ *    `update … where status = 'queued'` is the claim; a zero-row result
+ *    means another dispatcher won (duplicate).
+ *  - `claimed: true` (cron path): the RPC `claim_due_auto_bewerb_attempts`
+ *    already flipped the row to 'sending' under FOR UPDATE SKIP LOCKED and
+ *    returned it to this worker exclusively — skip the inline claim.
+ *
+ * attempt_count is incremented EXACTLY ONCE per executed claim (inside the
+ * claim update or right after the RPC claim) — never by the RPC itself — so
+ * both paths count identically and the retry budget (3) cannot be bypassed
+ * or double-consumed.
+ */
+export async function dispatchAutoBewerbAttempt(
+  attemptId: string,
+  opts: { claimed?: boolean } = {},
+): Promise<AutoBewerbDispatchResult> {
+  const admin = createAdminClient();
+
+  const { data: attemptData } = await admin
+    .from("auto_bewerb_send_attempts")
+    .select("*")
+    .eq("id", attemptId)
+    .maybeSingle();
+  if (!attemptData) return { ok: false, duplicate: false, status: "skipped" };
+  const attempt = attemptData as unknown as AutoBewerbSendAttemptRow;
+  if (attempt.status === "sent") return { ok: true, duplicate: true, status: "sent" };
+  if (attempt.status === "cancelled" || attempt.status === "failed")
+    return { ok: false, duplicate: false, status: "skipped" };
+
+  // Re-check consent + company state at EXECUTION time (a scheduled send may
+  // be hours old; the user could have reconnected a different mailbox). All
+  // three failures are TERMINAL (no auto-retry): they only resolve by a new,
+  // explicitly confirmed send.
+  const { data: appData } = await admin
+    .from("auto_bewerb_companies")
+    .select("id, approved, email_account_id, status")
+    .eq("id", attempt.company_id)
+    .maybeSingle();
+  if (!appData)
+    return terminalAttempt(admin, attempt, "company_missing", "Unternehmen nicht mehr vorhanden.");
+  const app = appData as { id: string; approved: boolean; email_account_id: string | null; status: string };
+  if (!app.approved)
+    return terminalAttempt(admin, attempt, "not_approved", "Bewerbung wurde nicht genehmigt.");
+  if (!app.email_account_id)
+    return terminalAttempt(admin, attempt, "no_email_account", "E-Mail-Konto wurde getrennt.");
+
+  // The claim (atomic on the inline path; the increment happens here).
+  let executedCount: number;
+  if (opts.claimed) {
+    executedCount = attempt.attempt_count + 1;
+    await admin
+      .from("auto_bewerb_send_attempts")
+      .update({ attempt_count: executedCount })
+      .eq("id", attempt.id);
+  } else {
+    const { data: claimedRows } = await admin
+      .from("auto_bewerb_send_attempts")
+      .update({ status: "sending", attempt_count: attempt.attempt_count + 1 })
+      .eq("id", attempt.id)
+      .eq("status", "queued")
+      .select("id, attempt_count");
+    if (!claimedRows || claimedRows.length === 0)
+      return { ok: true, duplicate: true, status: "skipped" };
+    executedCount = Number((claimedRows[0] as { attempt_count?: number }).attempt_count ?? attempt.attempt_count + 1);
+  }
+
+  try {
+    const provider = await createEmailProvider(attempt.user_id, app.email_account_id, attempt.payload.attachments);
+    const result = await provider.sendEmail({
+      to: attempt.recipient_email,
+      subject: attempt.subject,
+      html: attempt.payload.html,
+      text: attempt.payload.text,
+      attachments: [], // provider fetches the (ownership-checked) storage paths itself
+    });
+    const sentAt = new Date().toISOString();
+    await admin
+      .from("auto_bewerb_send_attempts")
+      .update({ status: "sent", provider_message_id: result.providerMessageId, sent_at: sentAt, next_attempt_at: null })
+      .eq("id", attempt.id);
+    await admin
+      .from("auto_bewerb_companies")
+      .update({ status: "sent", sent_at: sentAt, provider_message_id: result.providerMessageId, last_failure_code: null })
+      .eq("id", app.id);
+    void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_application_sent", "AUTO BEWERB: Bewerbung versendet", undefined, {
+      recipient: attempt.recipient_email,
+      providerMessageId: result.providerMessageId,
+    });
+    return { ok: true, duplicate: false, status: "sent" };
+  } catch (error) {
+    const pf = (error as Partial<ProviderFailure>) ?? {};
+    const code = pf.code ?? "dispatch_error";
+    const message = (pf.message ?? "Versand fehlgeschlagen.").slice(0, 300);
+    // `executedCount` = attempts actually made, INCLUDING this one.
+    if (pf.uncertain || executedCount >= MAX_SEND_ATTEMPTS || !pf.temporary) {
+      // uncertain = maybe already delivered → NEVER auto-retry.
+      await admin
+        .from("auto_bewerb_send_attempts")
+        .update({
+          status: "failed",
+          failure_code: code,
+          failure_message: message,
+          next_attempt_at: null,
+          attempt_count: executedCount,
+        })
+        .eq("id", attempt.id);
+      await admin
+        .from("auto_bewerb_companies")
+        .update({ status: "failed", last_failure_code: code })
+        .eq("id", app.id);
+      void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_send_failed", "AUTO BEWERB: Versand fehlgeschlagen", message, { code });
+      return { ok: false, duplicate: false, status: "failed", failureCode: code };
+    }
+    // Temporary provider hiccup → retry with backoff. The row goes back to
+    // 'queued'; the next dispatch re-validates consent + account first, and
+    // the idempotent claim guarantees at most one execution at a time.
+    const next = new Date(Date.now() + backoffMs(Math.max(1, executedCount))).toISOString();
+    await admin
+      .from("auto_bewerb_send_attempts")
+      .update({ status: "queued", next_attempt_at: next, failure_code: code, failure_message: message, attempt_count: executedCount })
+      .eq("id", attempt.id);
+    void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_send_retry", "AUTO BEWERB: Versand wird wiederholt", message, { code, next });
+    return { ok: false, duplicate: false, status: "queued", failureCode: code };
+  }
+}
+
+/** Terminal failure (no retry budget): pre-claim validation errors. */
+async function terminalAttempt(
+  admin: ReturnType<typeof createAdminClient>,
+  attempt: AutoBewerbSendAttemptRow,
+  code: string,
+  message: string,
+): Promise<AutoBewerbDispatchResult> {
+  await admin
+    .from("auto_bewerb_send_attempts")
+    .update({ status: "failed", failure_code: code, failure_message: message, next_attempt_at: null })
+    .eq("id", attempt.id);
+  await admin
+    .from("auto_bewerb_companies")
+    .update({ status: "failed", last_failure_code: code })
+    .eq("id", attempt.company_id);
+  void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_send_failed", "AUTO BEWERB: Versand nicht möglich", message, { code });
+  return { ok: false, duplicate: false, status: "failed", failureCode: code };
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler entry points (cron + page-load catch-up)
+// ---------------------------------------------------------------------------
+
+export interface AutoBewerbSweepResult {
+  recovered: number;
+  claimed: number;
+  results: AutoBewerbDispatchResult[];
+}
+
+/** Cron worker: recover stale rows, claim due attempts, dispatch each. */
+export async function claimAndDispatchDueAutoBewerbAttempts(limit = 5, budgetMs = 45_000): Promise<AutoBewerbSweepResult> {
+  const deadline = Date.now() + budgetMs;
+  const admin = createAdminClient();
+  const { data: recovered } = await admin.rpc("recover_stale_auto_bewerb_attempts");
+  const recoveredCount = Number(recovered ?? 0) || 0;
+  const { data: rows, error } = await admin.rpc("claim_due_auto_bewerb_attempts", { p_limit: limit });
+  if (error || !Array.isArray(rows))
+    return { recovered: recoveredCount, claimed: 0, results: [] };
+  const results: AutoBewerbDispatchResult[] = [];
+  for (const row of rows as Array<Pick<AutoBewerbSendAttemptRow, "id">>) {
+    // Soft wall-clock budget: stop dispatching early; rows already flipped
+    // to 'sending' by the claim RPC are recovered by the next tick's
+    // recover_stale_auto_bewerb_attempts (durable Postgres state, no loss).
+    if (Date.now() > deadline) break;
+    // The RPC already flipped the row to 'sending' (exclusive claim), so
+    // dispatch runs WITHOUT re-claiming — the attempt budget is still
+    // enforced inside dispatch (attempt_count += 1 exactly once).
+    results.push(await dispatchAutoBewerbAttempt(row.id, { claimed: true }));
+    if (results.length >= 10) break;
+  }
+  return { recovered: recoveredCount, claimed: rows.length, results };
+}
+
+/** Best-effort page-load catch-up: process at most `limit` DUE attempts of
+ *  the visiting user (server-side; the browser only triggers the re-check). */
+export async function processDueAutoBewerbAttemptsForUser(userId: string, limit = 1): Promise<AutoBewerbSweepResult> {
+  const admin = createAdminClient();
+  const nowMs = Date.now();
+  const due = (ts: string | null): boolean => ts === null || new Date(ts).getTime() <= nowMs;
+  const { data: rows } = await admin
+    .from("auto_bewerb_send_attempts")
+    .select("id, scheduled_at, next_attempt_at")
+    .eq("user_id", userId)
+    .eq("status", "queued")
+    .order("created_at", { ascending: true })
+    .limit(10);
+  const dueRows = ((rows ?? []) as Array<{ id: string; scheduled_at: string | null; next_attempt_at: string | null }>)
+    .filter((r) => due(r.scheduled_at) && due(r.next_attempt_at))
+    .slice(0, limit);
+  const results: AutoBewerbDispatchResult[] = [];
+  for (const row of dueRows) {
+    results.push(await dispatchAutoBewerbAttempt(row.id));
+  }
+  return { recovered: 0, claimed: results.length, results };
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail (shared activity_logs table — best-effort, never breaks flow)
+// ---------------------------------------------------------------------------
+
+async function logAutoBewerbActivity(
+  userId: string,
+  activityType: string,
+  title: string,
+  description?: string,
+  metadata?: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await createAdminClient().from("activity_logs").insert({
+      user_id: userId,
+      activity_type: activityType.slice(0, 80),
+      title: title.slice(0, 160),
+      description: description?.slice(0, 1000) ?? null,
+      metadata: metadata ?? {},
+    });
+  } catch (error) {
+    console.error("[auto-bewerb] activity log failed", error instanceof Error ? error.message : error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Workspace view (the single server-side assembly for the page)
+// ---------------------------------------------------------------------------
+
+export type { AutoBewerbCompanyView, AutoBewerbWorkspace, AutoBewerbEmailAccount } from "./schema";
+import type { AutoBewerbCompanyView, AutoBewerbWorkspace } from "./schema";
+
+/**
+ * The full AUTO BEWERB workspace in a bounded number of queries:
+ * profile + template + accounts + library (4) and, when companies exist,
+ * documents + selections + attempts in 3 bulk queries (never per company).
+ */
+export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerbWorkspace> {
+  const missing = await getAutoBewerbMissingTables();
+  const ready = missing.length === 0;
+  const empty: AutoBewerbWorkspace = {
+    ready,
+    profile: null,
+    companies: [],
+    attachments: [],
+    emailTemplate: "",
+    emailAccounts: [],
+  };
+  if (!ready) return empty;
+
+  const admin = createAdminClient();
+  const [profileRow, templateRes, companies, attachments, emailAccounts] = await Promise.all([
+    getAutoBewerbProfile(userId),
+    admin.from("auto_bewerb_email_templates").select("body").eq("user_id", userId).maybeSingle(),
+    listAutoBewerbCompanies(userId),
+    listAutoBewerbAttachments(userId),
+    listUserEmailAccounts(userId),
+  ]);
+  const ids = companies.map((c) => c.id);
+  const [docsRes, selRes, attemptsRes] = ids.length
+    ? await Promise.all([
+        admin.from("auto_bewerb_documents").select("*").in("company_id", ids),
+        admin.from("auto_bewerb_company_attachments").select("company_id, attachment_id").in("company_id", ids),
+        admin.from("auto_bewerb_send_attempts").select("*").in("company_id", ids),
+      ])
+    : ([
+        { data: null, error: null },
+        { data: null, error: null },
+        { data: null, error: null },
+      ] as const);
+
+  const group = <T extends { company_id: string }>(rows: T[]): Map<string, T[]> => {
+    const m = new Map<string, T[]>();
+    for (const r of rows) {
+      const list = m.get(r.company_id) ?? [];
+      list.push(r);
+      m.set(r.company_id, list);
+    }
+    return m;
+  };
+  const docsByCompany = group((docsRes.data ?? []) as unknown as AutoBewerbDocumentRow[]);
+  const selByCompany = group((selRes.data ?? []) as unknown as Array<{ company_id: string; attachment_id: string }>);
+  const attemptsByCompany = group((attemptsRes.data ?? []) as unknown as AutoBewerbSendAttemptRow[]);
+
+  const views: AutoBewerbCompanyView[] = companies.map((company) => {
+    const docs = (docsByCompany.get(company.id) ?? []).sort((a, b) => b.version - a.version);
+    const cvDoc = docs.find((d) => d.doc_type === "cv") ?? null;
+    const letterDoc = docs.find((d) => d.doc_type === "cover_letter") ?? null;
+    const cv = cvDoc ? sanitizeCvDocument(cvDoc.content) : null;
+    const parsedLetter = letterDoc ? autoBewerbLetterSchema.safeParse(letterDoc.content) : null;
+    const attempts = (attemptsByCompany.get(company.id) ?? []).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    return {
+      company,
+      cv,
+      cvVersion: cvDoc ? cvDoc.version : null,
+      letter: parsedLetter?.success
+        ? { text: parsedLetter.data.text, tone: parsedLetter.data.tone }
+        : null,
+      letterVersion: letterDoc ? letterDoc.version : null,
+      selectedAttachmentIds: (selByCompany.get(company.id) ?? []).map((s) => s.attachment_id),
+      latestAttempt: attempts[0] ?? null,
+    };
+  });
+
+  return {
+    ready: true,
+    profile: profileRow
+      ? {
+          fileName: profileRow.cv_file_name,
+          mimeType: profileRow.cv_mime_type,
+          sizeBytes: profileRow.cv_size_bytes,
+          cvHash: profileRow.cv_hash,
+          analyzedAt: profileRow.analyzed_at,
+          extracted: profileRow.extracted,
+        }
+      : null,
+    companies: views,
+    attachments,
+    emailTemplate: String((templateRes.data as { body?: string } | null)?.body ?? ""),
+    emailAccounts,
+  };
+}

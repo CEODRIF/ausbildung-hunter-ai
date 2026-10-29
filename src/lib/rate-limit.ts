@@ -48,6 +48,10 @@ export type RateLimitScope =
   // per-feature DAILY quota (ai_assistant / resume_ai / email_drafts meters)
   // is the real gate — this only caps bursts.
   | "studio_ai"
+   // AUTO BEWERB (/auto-bewerb) AI endpoints (ad analysis, CV generation,
+   // letter + email drafting). Same cost profile as studio_ai — the
+   // per-feature DAILY quota is the real gate, this only caps bursts.
+   | "auto_bewerb_ai"
    // Paid third-party web lookups issued by the Germany copilot chat.
    | "web_search"
    // Unauthenticated auth flows — keyed by a hashed client IP, never a user id
@@ -101,6 +105,8 @@ export const RATE_LIMITS: Record<
   scanner_scan: { max: 6, windowSeconds: 600 },
   // studio_ai: paid Studio AI calls (see scope comment above).
   studio_ai: { max: 10, windowSeconds: 60 },
+   // auto_bewerb_ai: paid AUTO BEWERB AI calls (see scope comment above).
+   auto_bewerb_ai: { max: 10, windowSeconds: 60 },
   // web_search: one live lookup per question that needs current information.
   // Generous for a real conversation, but a cap on third-party spend.
   web_search: { max: 20, windowSeconds: 600 },
