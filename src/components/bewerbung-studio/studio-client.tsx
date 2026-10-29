@@ -122,6 +122,23 @@ export { jsonApi };
 
 const cvStorageKey = (userId: string) => `aha:cv:${userId}`;
 
+/** SHA-256 hex of a string (Web Crypto). Returns null when the API is
+ *  unavailable (non-secure context) — the analysis route then simply
+ *  cannot reuse a stored result (safe fallback: fresh analysis). The
+ *  server hashes the SAME canonical JSON it receives, so the fingerprint
+ *  is comparable across the JSON round-trip. */
+async function sha256Hex(input: string): Promise<string | null> {
+  try {
+    if (typeof crypto === "undefined" || !crypto.subtle) return null;
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main component — the workspace shell
 // ---------------------------------------------------------------------------
@@ -180,7 +197,14 @@ export function StudioClient({ initial }: { initial: StudioInitial }) {
 
   const openNewApplication = useCallback(() => {
     setView("editor");
-    if (initial.bundle?.app) router.push("/bewerbung-studio");
+    if (initial.bundle?.app) {
+      // An application editor is open → server-render the intake view.
+      router.push("/bewerbung-studio");
+    } else {
+      // Already on the intake view (no app bundle) — the click must not be
+      // a silent no-op: focus the advertisement field.
+      document.getElementById("studio-ad-text")?.focus();
+    }
   }, [router, initial.bundle?.app]);
 
   // -----------------------------------------------------------------------
@@ -213,6 +237,11 @@ export function StudioClient({ initial }: { initial: StudioInitial }) {
       nextExtract: AdExtract,
       nextAnalysis: AdAnalysis | null,
     ): Promise<ApiOutcome<StudioApplicationRow>> => {
+      // CV-context fingerprint: lets a LATER re-analysis of this application
+      // (unchanged ad + unchanged CV) reuse the stored result instead of
+      // paying for a second AI call.
+      const cvHash =
+        baseCv && cvHasContent(baseCv) ? await sha256Hex(JSON.stringify(baseCv)) : null;
       const res = await createApplicationAction({
         adRaw: text,
         extract: nextExtract,
@@ -223,6 +252,7 @@ export function StudioClient({ initial }: { initial: StudioInitial }) {
           phone: initial.userFacts.phone,
           location: initial.userFacts.location,
           cvContent: baseCv ? cvHasContent(baseCv) : false,
+          cvHash,
           at: new Date().toISOString(),
         },
       });

@@ -10,7 +10,7 @@
  * corrects every extracted field before it is used for generation.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/icon";
 import { Button, Input, Textarea } from "@/components/ui";
@@ -96,6 +96,10 @@ export function AnalysisPanel({
   const [createFailed, setCreateFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AdExtract | null>(extract);
+  /** In-flight guard: a rapid double-click (before the disabled state
+   *  re-renders) must NOT start a second analyze/create chain — that would
+   *  mean two PAID AI calls and, in new mode, two applications. */
+  const chainInFlight = useRef(false);
   /** Re-analysis result pending in EDIT mode (applied on explicit save —
    *  re-analysis must never overwrite persisted data silently). */
   const [pendingAnalysis, setPendingAnalysis] = useState<AdAnalysis | null | undefined>(undefined);
@@ -116,51 +120,61 @@ export function AnalysisPanel({
   );
 
   const handleAnalyze = useCallback(async () => {
-    if (tooShort) return;
-    setAnalyzing(true);
-    setError(null);
-    const outcome = await onAnalyze(adText);
-    setAnalyzing(false);
-    if (!outcome.ok) {
-      if (outcome.code === "quota_exhausted") setError(t("studio.quotaError"));
-      else setError(outcome.error);
-      return;
-    }
-    if (mode === "new") {
-      // New application: the extraction becomes the working extract
-      // immediately (nothing is persisted until onCreate succeeds).
-      onExtractChange(outcome.value.extract);
-    }
-    setDraft(outcome.value.extract);
-    setPendingAnalysis(outcome.value.analysis);
-    if (mode === "new" && onCreate) {
-      // Create immediately — the analysis is the point of no return for a
-      // fresh application. The user can still correct every field afterwards.
-      setCreateBusy(true);
-      const created = await onCreate(adText, outcome.value.extract, outcome.value.analysis);
-      setCreateBusy(false);
-      if (!created.ok) {
-        // Keep the ad text + extracted fields (draft) — the user must not
-        // lose the analysis; only the SAVE step failed.
-        setCreateFailed(true);
-        setError(createErrorMessage(created));
+    if (tooShort || chainInFlight.current) return;
+    chainInFlight.current = true;
+    try {
+      setAnalyzing(true);
+      setError(null);
+      const outcome = await onAnalyze(adText);
+      setAnalyzing(false);
+      if (!outcome.ok) {
+        if (outcome.code === "quota_exhausted") setError(t("studio.quotaError"));
+        else setError(outcome.error);
+        return;
       }
+      if (mode === "new") {
+        // New application: the extraction becomes the working extract
+        // immediately (nothing is persisted until onCreate succeeds).
+        onExtractChange(outcome.value.extract);
+      }
+      setDraft(outcome.value.extract);
+      setPendingAnalysis(outcome.value.analysis);
+      if (mode === "new" && onCreate) {
+        // Create immediately — the analysis is the point of no return for a
+        // fresh application. The user can still correct every field afterwards.
+        setCreateBusy(true);
+        const created = await onCreate(adText, outcome.value.extract, outcome.value.analysis);
+        setCreateBusy(false);
+        if (!created.ok) {
+          // Keep the ad text + extracted fields (draft) — the user must not
+          // lose the analysis; only the SAVE step failed.
+          setCreateFailed(true);
+          setError(createErrorMessage(created));
+        }
+      }
+    } finally {
+      chainInFlight.current = false;
     }
   }, [adText, tooShort, onAnalyze, onExtractChange, onCreate, mode, t, createErrorMessage]);
 
   /** Retry ONLY the failed create — the (paid) analysis result is reused,
    *  never re-run. This is the recovery path for a failed save step. */
   const handleRetryCreate = useCallback(async () => {
-    if (!draft || !onCreate) return;
-    setError(null);
-    setCreateBusy(true);
-    const created = await onCreate(adText, draft, pendingAnalysis !== undefined ? pendingAnalysis : analysis);
-    setCreateBusy(false);
-    if (!created.ok) {
-      setCreateFailed(true);
-      setError(createErrorMessage(created));
-    } else {
-      setCreateFailed(false);
+    if (!draft || !onCreate || chainInFlight.current) return;
+    chainInFlight.current = true;
+    try {
+      setError(null);
+      setCreateBusy(true);
+      const created = await onCreate(adText, draft, pendingAnalysis !== undefined ? pendingAnalysis : analysis);
+      setCreateBusy(false);
+      if (!created.ok) {
+        setCreateFailed(true);
+        setError(createErrorMessage(created));
+      } else {
+        setCreateFailed(false);
+      }
+    } finally {
+      chainInFlight.current = false;
     }
   }, [draft, onCreate, adText, pendingAnalysis, analysis, createErrorMessage]);
 
