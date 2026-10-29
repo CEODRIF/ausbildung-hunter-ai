@@ -557,15 +557,71 @@ describe("batch view (getStudioBatchView)", () => {
       "aaaaaaaa-0000-4000-8000-000000000001",
       "aaaaaaaa-0000-4000-8000-000000000002",
     ]);
-    // slot 1 unlocked but incomplete → blocks slot 2
+    // slot 1 unlocked but incomplete → blocks slot 2 (unlock rule preserved:
+    // slot 2 stays LOCKED even though its own data is complete)
     expect(view.apps[0].slot.unlocked).toBe(true);
     expect(view.apps[0].slot.complete).toBe(false);
     expect(view.apps[1].slot.unlocked).toBe(false);
-    expect(view.canAdd).toBe(false);
+    // CREATION is cap-gated, NOT completion-gated (bug fix: the Add button
+    // must work while apps are incomplete). The blocking app is still
+    // reported — the navigator uses it for the ghost-slot lock hint.
+    expect(view.canAdd).toBe(true);
     expect(view.blockingAppId).toBe("aaaaaaaa-0000-4000-8000-000000000001");
     expect(view.missingForBlockingApp.length).toBeGreaterThan(0);
     // the locked slot 2 is COMPLETE (its data is done) — counting ≠ unlocked
     expect(view.completeCount).toBe(1);
+  });
+
+  it("canAdd is false at the 10-app cap (and only then), regardless of completion", async () => {
+    const nine = Array.from({ length: STUDIO_BATCH_LIMIT - 1 }, (_, i) =>
+      appRow({ id: `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, "0")}`, created_at: `2026-12-0${(i % 8) + 1}T0${i % 10}:00:00.000Z` }),
+    );
+    db.tables.studio_applications = nine;
+    const { getStudioBatchView } = await studio();
+    let view = (await getStudioBatchView("user-a"))!;
+    expect(view.apps.length).toBe(STUDIO_BATCH_LIMIT - 1);
+    expect(view.apps[0].slot.complete).toBe(false); // all nine are incomplete drafts
+    expect(view.canAdd).toBe(true); // 9 < 10 → Add must be available
+
+    // the 10th app (complete this time) → cap reached → canAdd false
+    db.tables.studio_applications = [
+      ...nine,
+      completeAppRow({ id: "aaaaaaaa-0000-4000-8000-000000000009", created_at: "2026-12-09T09:00:00.000Z" }),
+    ];
+    db.tables.studio_documents = completeDocs("aaaaaaaa-0000-4000-8000-000000000009");
+    db.tables.studio_attachments = [attRow("aaaaaaaa-0000-4000-8000-000000000009", "Schulzeugnis.pdf", "school_certificate")];
+    view = (await getStudioBatchView("user-a"))!;
+    expect(view.apps.length).toBe(STUDIO_BATCH_LIMIT);
+    expect(view.canAdd).toBe(false);
+  });
+
+  it("bulk-loads child rows: exactly ONE query per child table for the whole batch (no N+1)", async () => {
+    const a1 = completeAppRow({ id: "aaaaaaaa-0000-4000-8000-000000000001", created_at: "2026-12-01T00:00:00.000Z" });
+    const a2 = completeAppRow({ id: "aaaaaaaa-0000-4000-8000-000000000002", created_at: "2026-12-02T00:00:00.000Z" });
+    db.tables.studio_applications = [a1, a2];
+    db.tables.studio_documents = [
+      ...completeDocs(a1.id as string).map((d) => ({ ...d, id: `${d.id}-1` })),
+      ...completeDocs(a2.id as string).map((d) => ({ ...d, id: `${d.id}-2` })),
+    ];
+    db.tables.studio_attachments = [
+      { ...attRow(a1.id as string, "Schulzeugnis.pdf", "school_certificate"), id: "att-1" },
+      { ...attRow(a2.id as string, "Schulzeugnis.pdf", "school_certificate"), id: "att-2" },
+    ];
+    const { getStudioBatchView } = await studio();
+    await getStudioBatchView("user-a");
+    for (const table of ["studio_documents", "studio_attachments", "studio_send_attempts"]) {
+      // child-row selects only (hasStudioSchema's table probe is unrelated)
+      const childSelects = db.calls.filter(
+        (c) => c.table === table && c.op === "select" && (c.filters["in:application_id"] || c.filters["eq:application_id"]),
+      );
+      // exactly ONE bulk query for the whole batch (was 2 per app before)
+      expect(childSelects.length, `${table} queried ${childSelects.length}×`).toBe(1);
+      // …keyed by IN (…all batch ids…), never one eq per app
+      expect(childSelects[0].filters["in:application_id"]).toEqual(
+        expect.arrayContaining([a1.id, a2.id]),
+      );
+      expect(childSelects[0].filters["eq:application_id"]).toBeUndefined();
+    }
   });
 
   it("all complete → every slot unlocked and canAdd=true (no send required)", async () => {

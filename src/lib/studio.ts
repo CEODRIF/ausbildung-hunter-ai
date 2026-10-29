@@ -749,6 +749,16 @@ export interface StudioBatchView {
  * The batch workspace view: all owned applications in SLOT ORDER
  * (created_at ASC) with server-computed completion + sequential unlock
  * state. This is the single source of truth for the navigator.
+ *
+ * CREATION is CAP-gated (≤10 active) — NOT completion-gated: applications
+ * may be created up to the cap at any time (approved reference: Add stays
+ * enabled while slot 1 is still incomplete). The sequential unlock rule
+ * (`studioUnlockStates`) governs OPENING/WORKING on slot N+1 (locked until
+ * slot N is complete) — never creating it.
+ *
+ * PERFORMANCE: the child rows (documents / attachments / send attempts) are
+ * loaded in THREE bulk queries for the whole batch instead of four queries
+ * per application — every page render and navigator refresh pays this cost.
  */
 export async function getStudioBatchView(userId: string): Promise<StudioBatchView | null> {
   if (!(await hasStudioSchema())) return null;
@@ -757,15 +767,62 @@ export async function getStudioBatchView(userId: string): Promise<StudioBatchVie
     .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
     .slice(0, STUDIO_BATCH_LIMIT);
 
-  const bundles = await Promise.all(apps.map((a) => getStudioApplication(userId, a.id)));
+  // Bulk child-row load (ownership-safe: `ids` come from the ownership-
+  // scoped listStudioApplications above).
+  const ids = apps.map((a) => a.id);
+  const admin = createAdminClient();
+  const [docsRes, attsRes, attemptsRes] = ids.length
+    ? await Promise.all([
+        admin.from("studio_documents").select("*").in("application_id", ids),
+        admin.from("studio_attachments").select("*").in("application_id", ids),
+        admin.from("studio_send_attempts").select("*").in("application_id", ids),
+      ])
+    : ([
+        { data: null, error: null },
+        { data: null, error: null },
+        { data: null, error: null },
+      ] as const);
+  const group = <T extends { application_id: string; created_at: string }>(
+    rows: T[],
+    asc: boolean,
+  ): Map<string, T[]> => {
+    const m = new Map<string, T[]>();
+    for (const r of rows) {
+      const list = m.get(r.application_id) ?? [];
+      list.push(r);
+      m.set(r.application_id, list);
+    }
+    for (const list of m.values())
+      list.sort((a, b) => (a.created_at < b.created_at ? (asc ? -1 : 1) : a.created_at > b.created_at ? (asc ? 1 : -1) : 0));
+    return m;
+  };
+  const docsByApp = group((docsRes.data ?? []) as unknown as StudioDocumentRow[], false);
+  const attsByApp = group((attsRes.data ?? []) as unknown as StudioAttachmentRow[], true);
+  const attemptsByApp = group((attemptsRes.data ?? []) as unknown as StudioSendAttemptRow[], false);
+
   const completions: StudioCompletion[] = [];
   const views: StudioBatchAppView[] = [];
-  for (const bundle of bundles) {
-    if (!bundle) continue;
-    const extract = bundle.app.ad_extracted;
-    const cvDoc = bundle.documents.find((d) => d.doc_type === "cv") ?? null;
-    const letterDoc = bundle.documents.find((d) => d.doc_type === "cover_letter") ?? null;
-    const emailDoc = bundle.documents.find((d) => d.doc_type === "email") ?? null;
+  for (const row of apps) {
+    // Same per-app re-validation getStudioApplication performs (defense in
+    // depth: old/partial rows must never break the UI).
+    const app: StudioApplicationRow = { ...row };
+    app.ad_extracted = app.ad_extracted
+      ? adExtractSchema.safeParse(app.ad_extracted).success
+        ? adExtractSchema.parse(app.ad_extracted)
+        : null
+      : null;
+    app.ad_analysis = app.ad_analysis
+      ? adAnalysisSchema.safeParse(app.ad_analysis).success
+        ? adAnalysisSchema.parse(app.ad_analysis)
+        : null
+      : null;
+    const documents = docsByApp.get(app.id) ?? [];
+    const attachments = attsByApp.get(app.id) ?? [];
+    const attempts = attemptsByApp.get(app.id) ?? [];
+    const extract = app.ad_extracted;
+    const cvDoc = documents.find((d) => d.doc_type === "cv") ?? null;
+    const letterDoc = documents.find((d) => d.doc_type === "cover_letter") ?? null;
+    const emailDoc = documents.find((d) => d.doc_type === "email") ?? null;
     const cv = parseStoredCv(cvDoc);
     const letter = parseStoredLetter(letterDoc);
     const email = parseStoredEmail(emailDoc);
@@ -782,22 +839,22 @@ export async function getStudioBatchView(userId: string): Promise<StudioBatchVie
       : null;
     const blockingIssues = runDeterministicQuality({
       extract,
-      analysis: bundle.app.ad_analysis,
+      analysis: app.ad_analysis,
       cv,
       letter: letterNorm,
       email,
-      recipientEmail: bundle.app.recipient_email,
-      attachments: bundle.attachments,
+      recipientEmail: app.recipient_email,
+      attachments,
     }).filter((i) => i.severity === "blocking");
     const completion = computeStudioCompletion({
-      app: bundle.app,
+      app,
       docs: { cv: cvDoc, letter: letterDoc, email: emailDoc },
-      attachments: bundle.attachments,
+      attachments,
       blockingIssues,
     });
     completions.push(completion);
     views.push({
-      app: bundle.app,
+      app,
       completion,
       slot: { unlocked: false, complete: completion.complete, missing: completion.missing },
       hasCv: Boolean(cv),
@@ -811,8 +868,8 @@ export async function getStudioBatchView(userId: string): Promise<StudioBatchVie
         letter: letterDoc ? (letterDoc.version ?? null) : null,
         email: emailDoc ? (emailDoc.version ?? null) : null,
       },
-      attachmentCount: bundle.attachments.length,
-      latestAttempt: bundle.attempts[0] ?? null,
+      attachmentCount: attachments.length,
+      latestAttempt: attempts[0] ?? null,
     });
   }
 
@@ -824,7 +881,8 @@ export async function getStudioBatchView(userId: string): Promise<StudioBatchVie
     limit: STUDIO_BATCH_LIMIT,
     apps: views,
     completeCount,
-    canAdd: views.length < STUDIO_BATCH_LIMIT && views.every((v) => v.slot.complete),
+    // CAP-gated only — see the doc comment above.
+    canAdd: views.length < STUDIO_BATCH_LIMIT,
     blockingAppId: blocking === -1 ? null : views[blocking].app.id,
     missingForBlockingApp: blocking === -1 ? [] : views[blocking].slot.missing,
   };

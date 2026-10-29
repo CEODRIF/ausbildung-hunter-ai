@@ -15,6 +15,20 @@ export type AIMessage = {
         image_url?: { url: string };
       }>;
 };
+/**
+ * Per-request generation options (all optional, backward compatible):
+ *  - `temperature`: sampling temperature (0 = deterministic — use for
+ *    structured extraction where the output must be reproducible).
+ *  - `systemPrompt`: replaces the default platform SYSTEM_PROMPT with a
+ *    task-specific system prompt. Structured-extraction routes pass a
+ *    compact prompt (security contract preserved) so they do not pay the
+ *    prefill cost of the full platform context.
+ */
+export type GenerateTextOptions = {
+  temperature?: number;
+  systemPrompt?: string;
+};
+
 export type AIProvider = {
   /**
    * Generate a text response.
@@ -22,7 +36,11 @@ export type AIProvider = {
    *        structured extractions (e.g. the full CV scanner profile) may
    *        pass a larger budget.
    */
-  generateText(messages: AIMessage[], timeoutMs?: number): Promise<string>;
+  generateText(
+    messages: AIMessage[],
+    timeoutMs?: number,
+    options?: GenerateTextOptions,
+  ): Promise<string>;
   /**
    * @param systemContext optional extra system message placed directly after
    *        the main system prompt — used for live web-search results, which
@@ -100,24 +118,29 @@ async function requestChat(
   stream: boolean,
   timeoutMs = 60000,
   systemContext?: string,
+  genOpts?: GenerateTextOptions,
 ) {
   const { apiKey, baseUrl, model } = config();
   // The extra system message (live web-search results) sits directly after the
   // main prompt so it is privileged reference material, never user content.
+  // `genOpts.systemPrompt` lets a structured-extraction route replace the
+  // default platform prompt with a compact task-specific one.
   const systemMessages: AIMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: genOpts?.systemPrompt ?? SYSTEM_PROMPT },
   ];
   if (systemContext) {
     systemMessages.push({ role: "system", content: systemContext });
   }
+  const payload: Record<string, unknown> = {
+    model,
+    messages: [...systemMessages, ...messages],
+    stream,
+  };
+  if (typeof genOpts?.temperature === "number") payload.temperature = genOpts.temperature;
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: headers(apiKey),
-    body: JSON.stringify({
-      model,
-      messages: [...systemMessages, ...messages],
-      stream,
-    }),
+    body: JSON.stringify(payload),
     cache: "no-store",
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -182,8 +205,8 @@ async function streamResponse(response: Response) {
 
 export function createAIProvider(): AIProvider {
   return {
-    generateText: async (messages, timeoutMs) =>
-      textResponse(await requestChat(messages, false, timeoutMs)),
+    generateText: async (messages, timeoutMs, options) =>
+      textResponse(await requestChat(messages, false, timeoutMs, undefined, options)),
     // Streaming: the timeout is a total-generation budget, not per-chunk —
     // long answers must not be killed mid-stream (a 60s cap truncated
     // responses, and the truncated history then produced repeated answers).

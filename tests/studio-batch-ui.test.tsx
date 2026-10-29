@@ -14,8 +14,10 @@
  *      navigator strip (internal scroll), no fixed px widths on the shell
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { sanitizeCvDocument, type CvDocument } from "@/lib/templates/cv";
+import { BatchNavigator } from "@/components/bewerbung-studio/batch-navigator";
+import { AnalysisPanel } from "@/components/bewerbung-studio/panels-input";
 
 const { dictionaries } = await import("@/lib/i18n/dictionaries");
 
@@ -138,12 +140,13 @@ function makeBatch(over: Record<string, unknown> = {}) {
   return {
     limit: 10,
     completeCount: 1,
-    canAdd: false,
+    // post-fix server semantics: creation is CAP-gated, not completion-gated
+    canAdd: true,
     blockingAppId: APP_ID,
     missingForBlockingApp: ["cv"],
     ...over,
     apps,
-  };
+  } as unknown as Parameters<typeof BatchNavigator>[0]["batch"];
 }
 
 function initial(over: Record<string, unknown> = {}) {
@@ -212,8 +215,10 @@ describe("batch navigator", () => {
     expect(screen.getAllByText(/Lebenslauf geprüft/).length).toBeGreaterThan(0);
     // the locked slot shows the lock hint with the exact missing item
     expect(screen.getAllByText(/Fehlt: Lebenslauf geprüft/).length).toBeGreaterThan(0);
-    // add button is blocked and names the blocking company
-    expect(screen.getAllByText(/Zuerst Tech GmbH abschließen/).length).toBeGreaterThan(0);
+    // the FIRST ghost names the company to finish first (per approved
+    // reference: "Finish Voyage … first"); the Add button itself is NOT
+    // blocked by completion (it is cap-gated — see the dedicated test)
+    expect(screen.getAllByText(/Zuerst Beta AG abschließen/).length).toBeGreaterThan(0);
     // batch progress in the header
     expect(screen.getAllByText(/1\/10 vollständig/).length).toBeGreaterThan(0);
   });
@@ -242,6 +247,73 @@ describe("batch navigator", () => {
     for (const b of adds) expect((b as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("Add stays ENABLED while an app is incomplete (creation is cap-gated, bug #1)", () => {
+    const incomplete = batchApp({ id: APP_ID }, {
+      completion: { done: { ...ALL_DONE, cv: false }, missing: ["cv"], complete: false, progress: 6 / 7 },
+      slot: { unlocked: true, complete: false, missing: ["cv"] },
+    });
+    // exactly what the fixed server sends: canAdd=true below the cap, the
+    // blocking app is still reported for the ghost-slot lock hint
+    render(
+      <StudioClient
+        initial={initial({ batch: makeBatch({ apps: [incomplete], canAdd: true, blockingAppId: APP_ID, missingForBlockingApp: ["cv"] }) })}
+      />,
+    );
+    const adds = screen.getAllByRole("button", { name: "Bewerbung hinzufügen" });
+    expect(adds.length).toBeGreaterThan(0);
+    for (const b of adds) expect((b as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("placeholder slots are real buttons (clicking one starts the add flow — no silent failure) and are not counted", () => {
+    const incomplete = batchApp({ id: APP_ID }, {
+      completion: { done: { ...ALL_DONE, cv: false }, missing: ["cv"], complete: false, progress: 6 / 7 },
+      slot: { unlocked: true, complete: false, missing: ["cv"] },
+    });
+    const onNew = vi.fn();
+    render(
+      <BatchNavigator
+        batch={makeBatch({ apps: [incomplete], canAdd: true, blockingAppId: APP_ID, missingForBlockingApp: ["cv"] })}
+        activeAppId={null}
+        onOpen={vi.fn()}
+        onNew={onNew}
+        onRemove={vi.fn()}
+      />,
+    );
+    // one persisted app + four placeholders — the label counts PERSISTED only
+    expect(screen.getAllByText(/Bewerbungen · 1\/10/).length).toBeGreaterThan(0);
+    // desktop column + mobile strip render both (jsdom) → ghost buttons exist
+    const ghosts = screen.getAllByRole("button", { name: /^Bewerbung hinzufügen: / });
+    expect(ghosts.length).toBeGreaterThanOrEqual(4);
+    for (const g of ghosts) expect((g as HTMLButtonElement).disabled).toBe(false);
+    // the FIRST placeholder names the company to finish first (reference),
+    // deeper ones name the sequential rule
+    expect(screen.getAllByText("Zuerst Tech GmbH abschließen").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Vorherige Bewerbung zuerst abschließen").length).toBeGreaterThan(0);
+    // clicking a placeholder runs the SAME add flow as the Add button
+    fireEvent.click(ghosts[0]);
+    expect(onNew).toHaveBeenCalledTimes(1);
+  });
+
+  it("all placeholders addable (prev complete): no lock icon, 'Neue Bewerbung' label", () => {
+    const onNew = vi.fn();
+    render(
+      <BatchNavigator
+        batch={makeBatch({ apps: [batchApp({ id: APP_ID })], canAdd: true, blockingAppId: null, missingForBlockingApp: [] })}
+        activeAppId={null}
+        onOpen={vi.fn()}
+        onNew={onNew}
+        onRemove={vi.fn()}
+      />,
+    );
+    // the NEXT placeholder is directly addable ("Neue Bewerbung" + plus)
+    expect(screen.getAllByText("Neue Bewerbung").length).toBeGreaterThan(0);
+    // deeper placeholders still show the sequential rule (that slot cannot
+    // exist before the previous one is created AND complete)
+    expect(screen.getAllByText("Vorherige Bewerbung zuerst abschließen").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByRole("button", { name: /^Bewerbung hinzufügen: Neue Bewerbung/ })[0]);
+    expect(onNew).toHaveBeenCalledTimes(1);
+  });
+
   it("delete requires the two-step confirmation, names the exact company, and does NOT navigate", async () => {
     render(<StudioClient initial={initial()} />);
     pushMock.mockClear();
@@ -259,6 +331,106 @@ describe("batch navigator", () => {
     fireEvent.click(screen.getAllByLabelText(/^Bewerbung löschen: Tech GmbH/).at(0)!);
     fireEvent.click(screen.getAllByText("Ja, löschen").at(0)!);
     await waitFor(() => expect(actions.deleteApplicationAction).toHaveBeenCalledWith(APP_ID));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Analyze double-click protection (one PAID AI call, one app per click)
+// ---------------------------------------------------------------------------
+
+describe("analyze double-click protection", () => {
+  const MIN_ANALYSIS = {
+    matchScore: 50,
+    matched: [],
+    missing: [],
+    transferable: [],
+    weaknesses: [],
+    recommendations: [],
+    questions: [],
+  };
+
+  it("a rapid second click while the chain is in flight is ignored: ONE analyze, ONE create", async () => {
+    let resolveAnalyze: (v: unknown) => void = () => undefined;
+    const onAnalyze = vi.fn(
+      () =>
+        new Promise((res) => {
+          resolveAnalyze = res;
+        }),
+    );
+    const onCreate = vi.fn(async () => ({ ok: true as const, value: {} as never }));
+    render(
+      <AnalysisPanel
+        mode="new"
+        adText={"x".repeat(60)}
+        onAdTextChange={vi.fn()}
+        onAnalyze={onAnalyze as never}
+        onCreate={onCreate as never}
+        extract={null}
+        analysis={null}
+        onExtractChange={vi.fn()}
+        onPersist={async () => false}
+        onGoProfile={vi.fn()}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: "Anzeige analysieren" });
+    // two clicks in ONE act batch — the real-browser race window before the
+    // busy/disabled re-render lands (BusyButton alone would NOT cover this)
+    act(() => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(onAnalyze).toHaveBeenCalledTimes(1);
+    // the single analyze resolves → exactly ONE create follows
+    resolveAnalyze({ ok: true, value: { extract: BASE_APP.ad_extracted, analysis: MIN_ANALYSIS } });
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  });
+
+  it("retry-create reuses the analysis (never re-analyzes) and is also double-click-safe", async () => {
+    let resolveAnalyze: (v: unknown) => void = () => undefined;
+    const onAnalyze = vi.fn(
+      () =>
+        new Promise((res) => {
+          resolveAnalyze = res;
+        }),
+    );
+    let onCreateCalls = 0;
+    const onCreate = vi.fn(async () => {
+      onCreateCalls++;
+      // the FIRST create fails (DB save failure) — the analysis must be kept
+      if (onCreateCalls === 1) return { ok: false as const, code: "storage_error", error: "Fehler" };
+      return { ok: true as const, value: {} as never };
+    });
+    render(
+      <AnalysisPanel
+        mode="new"
+        adText={"x".repeat(60)}
+        onAdTextChange={vi.fn()}
+        onAnalyze={onAnalyze as never}
+        onCreate={onCreate as never}
+        extract={null}
+        analysis={null}
+        onExtractChange={vi.fn()}
+        onPersist={async () => false}
+        onGoProfile={vi.fn()}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: "Anzeige analysieren" });
+    act(() => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    resolveAnalyze({ ok: true, value: { extract: BASE_APP.ad_extracted, analysis: MIN_ANALYSIS } });
+    // create failed → specific error + retry button, draft kept
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(/Fehler/)).toBeTruthy();
+    const retry = screen.getByRole("button", { name: "Erneut speichern" });
+    // rapid double-click on the retry button
+    act(() => {
+      retry.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      retry.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(2));
+    // the (PAID) analysis was run exactly ONCE — the retry reused it
+    expect(onAnalyze).toHaveBeenCalledTimes(1);
   });
 });
 

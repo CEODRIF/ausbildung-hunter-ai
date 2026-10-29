@@ -184,24 +184,15 @@ export function BatchNavigator({
   addBusy?: boolean;
 }) {
   const { t } = useI18n();
-  const { apps, limit, canAdd, missingForBlockingApp } = batch;
+  const { apps, limit, canAdd } = batch;
 
   const isFull = apps.length >= limit;
-  const blockingCompany = batch.blockingAppId
-    ? apps.find((a) => a.app.id === batch.blockingAppId)
-    : undefined;
   // Add-button state (server-computed, never client-guessed):
   //  - full → disabled + "Maximum 10 applications reached"
-  //  - blocked → disabled + the exact blocking company/requirements
-  //  - otherwise → enabled
+  //  - otherwise → enabled (creation is CAP-gated, NOT completion-gated —
+  //    the sequential unlock rule is communicated on the locked cards and
+  //    ghost slots, per the approved reference design)
   const addDisabled = isFull || !canAdd || addBusy;
-  const addHint = isFull
-    ? t("studio.navMaxReached")
-    : canAdd
-      ? null
-      : t("studio.navBlocked", { company: blockingCompany ? companyOf(blockingCompany) : "—" });
-  const blockedMissing =
-    isFull || canAdd ? [] : missingForBlockingApp.map((k) => t(REQ_KEYS[k]));
 
   const list = (variant: "column" | "strip") => (
     <div
@@ -222,30 +213,55 @@ export function BatchNavigator({
           onRemove={() => onRemove(v.app.id)}
         />
       ))}
-       {/* passive placeholder slots: five initial slots, expandable to the
-          limit. Adding is done with the "+ Add application" button above
-          the list (sequential unlocking means only the next slot can ever
-          be created — its availability is shown there, not per slot). */}
-       {apps.length < limit
-         ? Array.from(
-             { length: Math.min(limit, Math.max(apps.length, STUDIO_BATCH_INITIAL_SLOTS)) - apps.length },
-             (_, gi) => (
-               <div
-                 key={`slot-${gi + 1}`}
-                 className={[
-                   "flex min-h-[72px] items-center justify-center rounded-2xl border border-dashed",
-                   variant === "strip" ? "min-w-[180px] shrink-0 snap-start" : "w-full",
-                   "border-border/70 text-faint",
-                 ].join(" ")}
-                 aria-hidden="true"
-               >
-                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[11px] font-bold">
-                   {apps.length + gi + 1}
-                 </span>
-               </div>
-             ),
-           )
-         : null}
+        {/* placeholder slots: five initial slots, expandable to the limit.
+           They are REAL BUTTONS (clicking one starts the same add flow as
+           the "+ Add application" button — never a silent no-op). Placeholders
+           are never counted in the n/limit label above (apps.length is the
+           number of persisted applications only). The lock hint per the
+           approved reference: the next slot names the company to finish
+           first; deeper slots name the sequential rule. */}
+        {apps.length < limit
+          ? Array.from(
+              { length: Math.min(limit, Math.max(apps.length, STUDIO_BATCH_INITIAL_SLOTS)) - apps.length },
+              (_, gi) => {
+                const isFirst = gi === 0;
+                const prev = apps.length > 0 ? apps[apps.length - 1] : null;
+                const prevIncomplete = prev ? !prev.completion.complete : false;
+                const addable = isFirst && !prevIncomplete;
+                const label = isFirst && prevIncomplete && prev
+                  ? t("studio.navBlocked", { company: companyOf(prev) })
+                  : addable
+                    ? t("studio.navAdd")
+                    : t("studio.navGhostLocked");
+                return (
+                  <button
+                    key={`slot-${gi + 1}`}
+                    type="button"
+                    onClick={onNew}
+                    aria-label={`${t("studio.navAddApplication")}: ${label}`}
+                    title={label}
+                    className={[
+                      "flex min-h-[72px] items-center gap-2 rounded-2xl border border-dashed transition",
+                      variant === "strip" ? "min-w-[180px] shrink-0 snap-start" : "w-full",
+                      "border-border/70 bg-surface/50 px-3 text-left hover:border-primary/50 hover:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                    ].join(" ")}
+                  >
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-bold text-faint">
+                      {apps.length + gi + 1}
+                    </span>
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] leading-4 text-faint">
+                      {addable ? (
+                        <Icon name="plus" size={11} strokeWidth={2.5} className="shrink-0" />
+                      ) : (
+                        <Icon name="lock" size={11} className="shrink-0" />
+                      )}
+                      <span className="min-w-0 truncate">{label}</span>
+                    </span>
+                  </button>
+                );
+              },
+            )
+          : null}
      </div>
    );
 
@@ -271,13 +287,9 @@ export function BatchNavigator({
     </div>
   );
 
-  // State line under the Add button: "Maximum 10 …" when full, or the
-  // exact blocking company + the missing requirements when locked.
-  const stateHint = isFull
-    ? addHint
-    : canAdd
-      ? null
-      : [addHint, blockedMissing.join(" · ")].filter(Boolean).join(" — ");
+  // State line under the Add button: only the cap message. The sequential
+  // rule is communicated on the locked cards + ghost slots (per reference).
+  const stateHint = isFull ? t("studio.navMaxReached") : null;
 
   return (
     <nav aria-label={t("studio.navAria")} className="min-w-0">

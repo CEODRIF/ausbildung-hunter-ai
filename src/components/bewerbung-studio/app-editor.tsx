@@ -116,7 +116,10 @@ export function AppEditor({
         const res = await fetch("/api/bewerbung-studio/analyze-ad", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ adText: text, cv: baseCv }),
+          // applicationId: lets the server REUSE the stored analysis when
+          // the ad (and CV context) is unchanged — a retried/accidental
+          // re-analysis costs no AI call and no quota.
+          body: JSON.stringify({ adText: text, cv: baseCv, applicationId: app.id }),
         });
         const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
         if (!res.ok) {
@@ -131,7 +134,7 @@ export function AppEditor({
         return { ok: false, code: "network", error: t("studio.error") };
       }
     },
-    [baseCv, t],
+    [app.id, baseCv, t],
   );
 
   /** Persist analysis into the OPEN application. */
