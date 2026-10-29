@@ -43,6 +43,11 @@ export type RateLimitScope =
   | "ai_upload"
   | "ai_generate_file"
   | "scanner_scan"
+  // AI Bewerbung Studio generation endpoints (ad analysis, CV generation,
+  // email drafting, AI quality pass). Each request is a paid AI call; the
+  // per-feature DAILY quota (ai_assistant / resume_ai / email_drafts meters)
+  // is the real gate — this only caps bursts.
+  | "studio_ai"
    // Paid third-party web lookups issued by the Germany copilot chat.
    | "web_search"
    // Unauthenticated auth flows — keyed by a hashed client IP, never a user id
@@ -94,6 +99,8 @@ export const RATE_LIMITS: Record<
   // scanner_scan: one request = up to 10 documents analysed by the vision
   // model in a single synchronous run. 6 per 10 min.
   scanner_scan: { max: 6, windowSeconds: 600 },
+  // studio_ai: paid Studio AI calls (see scope comment above).
+  studio_ai: { max: 10, windowSeconds: 60 },
   // web_search: one live lookup per question that needs current information.
   // Generous for a real conversation, but a cap on third-party spend.
   web_search: { max: 20, windowSeconds: 600 },
