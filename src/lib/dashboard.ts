@@ -161,8 +161,6 @@ export type DashboardData = {
   /** Display-only subscription state (null = could not be resolved → the
    *  card is omitted rather than guessing). */
   subscription: DashboardSubscription | null;
-  /** Count of application campaigns (the real data source). */
-  applicationsCount: number;
   activities: ActivityLog[];
   emailAccount: SafeEmailAccount | null;
   hasCompletedScan: boolean;
@@ -226,14 +224,9 @@ function scrub(message: string): string {
 export async function getDashboardData(userId: string): Promise<DashboardData> {
   const supabase = await createClient();
   const admin = createAdminClient();
-  // Drafts feature removal: "Applications" counts CAMPAIGNS (the records
-  // that survive the draft-free workflow) once the migration is applied;
-  // pre-migration the legacy count over composer drafts is kept.
-  const owned = await hasCampaignOwnedContent();
   const [
     profileResult,
     usageResult,
-    applicationsResult,
     activityResult,
     emailAccountResult,
     scanResult,
@@ -243,17 +236,6 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
   ] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", userId).single<Profile>(),
     supabase.rpc("get_or_create_daily_usage").single<DailyUsage>(),
-    // "Applications prepared" — campaigns are the real data source (the
-    // legacy `applications` table is never written by the product).
-    owned
-      ? supabase
-          .from("email_campaigns")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", userId)
-      : supabase
-          .from("application_drafts")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", userId),
     supabase
       .from("activity_logs")
       .select("id, activity_type, title, description, metadata, created_at")
@@ -303,12 +285,6 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
       `[dashboard] query failed target="get_or_create_daily_usage" error="${scrub(usageResult.error.message)}"`,
     );
     throw new Error("Unable to load daily usage.");
-  }
-  if (applicationsResult.error) {
-    console.error(
-      `[dashboard] query failed target="${owned ? "email_campaigns" : "application_drafts"}" error="${scrub(applicationsResult.error.message)}"`,
-    );
-    throw new Error("Unable to load applications.");
   }
   if (activityResult.error) {
     console.error(
@@ -364,9 +340,6 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
   // the historical draft + campaign/message join.
   const recentApplications = await loadRecentApplications(admin, userId);
   const hasApplication = recentApplications.some((item) => item.has_content);
-  const campaign = recentApplications
-    .filter((item) => item.campaign_id && item.campaign_status)
-    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
 
   // Saved preview with Phase 7 staleness semantics (never silently current).
   const savedPreview: SavedPreviewItem[] = saved.slice(0, 5).map((row) => {
@@ -400,16 +373,8 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     hasProfile: Boolean(candidateProfile),
     completeness,
     savedTotal: saved.length,
-    completeMatchCount: matching.completeCount,
     hasApplication,
     hasEmailAccount: Boolean(emailAccountResult.data),
-    campaign:
-      campaign?.campaign_id && campaign?.campaign_status
-        ? {
-            id: campaign.campaign_id,
-            status: campaign.campaign_status,
-          }
-        : null,
   });
 
   // Display-only subscription summary for the dashboard card.
@@ -447,7 +412,6 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     aiLimit,
     aiEntitlement,
     subscription,
-    applicationsCount: applicationsResult.count ?? 0,
     activities: (activityResult.data ?? []) as ActivityLog[],
     emailAccount: emailAccountResult.data as SafeEmailAccount | null,
     hasCompletedScan: (scanResult.count ?? 0) > 0,

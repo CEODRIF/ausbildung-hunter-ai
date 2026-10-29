@@ -135,13 +135,9 @@ export interface NextActionInput {
   hasProfile: boolean;
   completeness: ProfileCompleteness | null;
   savedTotal: number;
-  /** Saved opportunities whose stored snapshot is a complete match. */
-  completeMatchCount: number;
   /** A prepared application exists (has content, not just a stub). */
   hasApplication: boolean;
   hasEmailAccount: boolean;
-  /** Most relevant campaign for the user (server-read), or null. */
-  campaign: { id: string; status: string } | null;
 }
 
 export interface NextAction {
@@ -150,11 +146,7 @@ export interface NextAction {
     | "complete_profile"
     | "find_opportunities"
     | "review_matches"
-    | "prepare_application"
     | "connect_email"
-    | "review_send"
-    | "track_sending"
-    | "track_sent"
     | "explore";
   /** Short UI label (English dashboard shell). */
   label: string;
@@ -207,16 +199,6 @@ export function resolveNextAction(input: NextActionInput): NextAction {
     };
   }
   if (!input.hasApplication) {
-    if (input.completeMatchCount > 0) {
-      return {
-        id: "prepare_application",
-        label: "Prepare your application",
-        reason:
-          "You have saved matches, but no application has been prepared yet.",
-        href: "/applications/new",
-        ctaLabel: "Prepare application",
-      };
-    }
     return {
       id: "review_matches",
       label: "Review your matches",
@@ -235,49 +217,6 @@ export function resolveNextAction(input: NextActionInput): NextAction {
       href: "/settings/email",
       ctaLabel: "Connect email",
     };
-  }
-  if (input.campaign) {
-    const { id, status } = input.campaign;
-    if (status === "draft") {
-      return {
-        id: "review_send",
-        label: "Review and send your application",
-        reason:
-          "A campaign is ready in draft status — review the email before sending.",
-        href: `/applications/campaign/${id}`,
-        ctaLabel: "Review campaign",
-      };
-    }
-    if (status === "queued" || status === "sending") {
-      return {
-        id: "track_sending",
-        label: "Your application is being sent",
-        reason: `Campaign status: ${status}. You can follow delivery on the campaign page.`,
-        href: `/applications/campaign/${id}`,
-        ctaLabel: "Track campaign",
-      };
-    }
-    if (status === "completed" || status === "partially_failed") {
-      return {
-        id: "track_sent",
-        label: "Track your sent application",
-        reason:
-          status === "completed"
-            ? "The campaign finished sending. Watch for replies in your inbox."
-            : "The campaign finished with at least one failed recipient — review the campaign.",
-        href: `/applications/campaign/${id}`,
-        ctaLabel: "Open campaign",
-      };
-    }
-    if (status === "failed" || status === "cancelled") {
-      return {
-        id: "explore",
-        label: "Find more opportunities",
-        reason: `The last campaign ended as ${status}. Continue with another opportunity.`,
-        href: "/opportunities",
-        ctaLabel: "Search opportunities",
-      };
-    }
   }
   return {
     id: "explore",

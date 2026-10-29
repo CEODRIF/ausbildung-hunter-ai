@@ -385,12 +385,6 @@ export default async function OpportunityDetailsPage({
             >
               {applyLabel}
             </a>
-            <Link
-              href={`/applications/new?opp=${encodeURIComponent(opportunity.id)}`}
-              className="inline-flex rounded-xl bg-accent-soft px-5 py-3 text-sm font-semibold text-accent"
-            >
-              {t("account.prepareApplication")}
-            </Link>
             <SaveOpportunityButton
               opportunityKey={opportunity.id}
               initialSaved={savedKeys.has(opportunity.id)}

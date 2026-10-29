@@ -345,7 +345,6 @@ describe("reassignDraftSender — success & preservation", () => {
     expect(update.payload).toEqual({ sender_email_account_id: ACC_B });
     expect(update.filters).toEqual({ id: DRAFT, user_id: USER });
     expect(revalidatePath).toHaveBeenCalledWith("/settings/email");
-    expect(revalidatePath).toHaveBeenCalledWith("/applications/new");
   });
 
   it("preserves the entire draft (subject/body/goal/opportunity data)", async () => {

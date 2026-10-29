@@ -830,12 +830,7 @@ describe("sender slot pacing (worker orchestration, fake timers)", () => {
 
 describe("UI + wiring (source of truth)", () => {
   const LIB = readFileSync("src/lib/email-campaigns.ts", "utf8");
-  const PAGE = readFileSync("src/app/applications/campaign/[id]/page.tsx", "utf8");
   const SETTINGS = readFileSync("src/app/settings/email/page.tsx", "utf8");
-  const ACTIONS = readFileSync(
-    "src/app/applications/campaign/[id]/actions.ts",
-    "utf8",
-  );
 
   it("the worker reserves the slot BEFORE claiming (no check-then-act)", () => {
     const loop = LIB.slice(
@@ -866,19 +861,6 @@ describe("UI + wiring (source of truth)", () => {
     expect(logFn).not.toContain("secret");
     expect(logFn).not.toContain("recipient_email");
     expect(logFn).not.toContain("body_html");
-  });
-
-  it("the campaign page shows the REAL waiting state (no fake progress)", () => {
-    expect(PAGE).toContain("getSenderSlotWaitMs(user.id, id)");
-    expect(PAGE).toContain("Waiting for sending slot…");
-    expect(PAGE).toContain("Sending…");
-    // The state is conditional on the actual slot read, not invented.
-    expect(PAGE).toContain("senderSlotWaitMs > 0");
-  });
-
-  it("the drain action reports the slot wait to the monitor", () => {
-    expect(ACTIONS).toContain("getSenderSlotWaitMs(user.id, campaignId)");
-    expect(ACTIONS).toContain("slotWaitMs");
   });
 
   it("email settings shows Smart Sending — enabled, 5–6s, no lowerable control", () => {

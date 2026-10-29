@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { applicationTemplates } from "@/lib/application-templates";
 import {
   COMPANY_FALLBACK,
-  COMPANY_TOKEN,
-  CONTACT_TOKEN,
   GREETING_FALLBACK,
-  GREETING_TOKEN,
-  GREETING_TOKEN as GREETING,
   PersonalizationError,
   hasPersonalizationTokens,
   parseSalutation,
@@ -336,80 +331,5 @@ describe("per-recipient rendering", () => {
     expect(renderTextTemplate("hallo {{company_name}}", { company_name: "Bosch" })).toBe(
       "hallo Bosch",
     );
-  });
-});
-
-describe("templates", () => {
-  it("all three templates carry the greeting + company variables", () => {
-    for (const goal of ["ausbildung", "arbeit", "praktikum"] as const) {
-      const template = applicationTemplates[goal];
-      expect(template.body).toContain(GREETING);
-      expect(template.body).toContain(COMPANY_TOKEN);
-      expect(template.subject).toContain(COMPANY_TOKEN);
-      // The static greeting is gone from the templates (it is now a variable).
-      expect(template.body).not.toContain("Sehr geehrte Damen und Herren,");
-    }
-    expect(Object.keys(applicationTemplates).sort()).toEqual([
-      "arbeit",
-      "ausbildung",
-      "praktikum",
-    ]);
-    // All three tokens are part of the documented variable set.
-    expect([COMPANY_TOKEN, CONTACT_TOKEN, GREETING_TOKEN]).toEqual([
-      "{{company_name}}",
-      "{{contact_name}}",
-      "{{greeting}}",
-    ]);
-  });
-
-  it("the Ausbildung template renders as natural, grammatical German", () => {
-    const rendered = renderPersonalizedMessage(
-      {
-        subject: applicationTemplates.ausbildung.subject,
-        bodyHtml: applicationTemplates.ausbildung.body,
-        bodyText: "irrelevant",
-      },
-      { email: "bewerbung@carrier.de" },
-    );
-    expect(rendered.subject).toBe("Bewerbung um einen Ausbildungsplatz bei Carrier");
-    expect(rendered.bodyHtml).toBe(
-      "<p>Sehr geehrte Damen und Herren,</p><p>hiermit bewerbe ich mich um einen Ausbildungsplatz bei Carrier. Ich möchte meine Kenntnisse erweitern, praktische Erfahrungen sammeln und mich fachlich weiterentwickeln.</p><p>Ich bin motiviert, mich engagiert in Ihr Team einzubringen, neue Aufgaben zuverlässig zu übernehmen und von erfahrenen Fachkräften zu lernen.</p><p>Über die Gelegenheit, meine Motivation in einem persönlichen Gespräch näher vorzustellen, freue ich mich sehr.</p><p>Mit freundlichen Grüßen</p><p>Mustapha Drif</p>",
-    );
-    // Unknown company → still grammatical.
-    const fallback = renderPersonalizedMessage(
-      {
-        subject: applicationTemplates.ausbildung.subject,
-        bodyHtml: applicationTemplates.ausbildung.body,
-        bodyText: "",
-      },
-      { email: "me@gmail.com" },
-    );
-    expect(fallback.bodyHtml).toContain(
-      "um einen Ausbildungsplatz bei Ihrem Unternehmen.",
-    );
-    expect(fallback.subject).toBe("Bewerbung um einen Ausbildungsplatz bei Ihrem Unternehmen");
-  });
-
-  it("the Arbeit template renders with a personalized greeting when metadata exists", () => {
-    const rendered = renderPersonalizedMessage(
-      {
-        subject: applicationTemplates.arbeit.subject,
-        bodyHtml: applicationTemplates.arbeit.body,
-        bodyText: "",
-      },
-      { email: "jobs@bmw.de", contactName: "Frau Dr. Schmidt" },
-    );
-    expect(rendered.subject).toBe("Bewerbung bei BMW");
-    expect(rendered.bodyHtml).toContain("<p>Sehr geehrte Frau Dr. Schmidt,</p>");
-    expect(rendered.bodyHtml).toContain(
-      "um eine passende berufliche Möglichkeit bei BMW.",
-    );
-  });
-
-  it("applying a template is a pure data hand-off (no send side effects)", () => {
-    // The composer copies subject/body into the editable draft only — the
-    // templates module itself performs no I/O and no rendering.
-    expect(applicationTemplates.ausbildung.body).toContain("{{greeting}}");
-    expect(applicationTemplates.arbeit.body).toContain("{{greeting}}");
   });
 });

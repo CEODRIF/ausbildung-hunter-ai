@@ -9,10 +9,6 @@ import {
   parseRecipientInput,
 } from "@/lib/email-recipients";
 import { validateRecipientList } from "@/lib/application-drafts";
-import {
-  normalizeEmails,
-  validateRecipients,
-} from "@/components/recipient-manager";
 
 /**
  * Email-list import contract (Email Sender / Email Composer).
@@ -289,41 +285,7 @@ describe("server-side gate: the password never reaches storage", () => {
   });
 });
 
-describe("client-side input paths use the same layer", () => {
-  it("paste path: normalizeEmails strips the suffix", () => {
-    expect(normalizeEmails("melvin.loinette@windstream.net:Lake2018")).toEqual([
-      "melvin.loinette@windstream.net",
-    ]);
-    expect(normalizeEmails("a@example.com:1\nb@example.com:2")).toEqual([
-      "a@example.com",
-      "b@example.com",
-    ]);
-  });
-
-  it("paste path: validateRecipients marks the cleaned address valid", () => {
-    const result = validateRecipients(["user@example.com:secret"]);
-    expect(result).toEqual([{ email: "user@example.com", status: "valid" }]);
-  });
-
-  it("paste path: duplicates against already-added recipients are flagged", () => {
-    const result = validateRecipients(
-      ["USER@example.com:other"],
-      [{ email: "user@example.com", status: "valid" }],
-    );
-    expect(result).toEqual([{ email: "user@example.com", status: "duplicate" }]);
-  });
-
-  it("file path: the import runs every cell through the shared layer", () => {
-    const source = readFileSync(
-      `${root}/src/components/recipient-manager.tsx`,
-      "utf8",
-    );
-    expect(source).toContain("normalizeRecipientEmail(cell)");
-    // The old permissive regex must be gone from the component.
-    expect(source).not.toContain("const emailPattern");
-    expect(source).not.toContain("[^\\s@]+@[^\\s@]+");
-  });
-
+describe("server-side validation path", () => {
   it("the old permissive regex is gone from the server validator too", () => {
     const source = readFileSync(`${root}/src/lib/application-drafts.ts`, "utf8");
     expect(source).toContain("normalizeRecipientEmail(recipient.email)");
@@ -341,9 +303,8 @@ describe("security: no credentials in logs", () => {
     expect(source).not.toContain('import "server-only"');
   });
 
-  it("does not log the raw line in the two call sites", () => {
+  it("does not log the raw line at the call sites", () => {
     for (const file of [
-      "src/components/recipient-manager.tsx",
       "src/lib/application-drafts.ts",
     ]) {
       const source = readFileSync(`${root}/${file}`, "utf8");

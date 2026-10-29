@@ -88,6 +88,5 @@ export async function reassignDraftSender(formData: FormData): Promise<void> {
     redirect("/settings/email?error=reassign_failed");
   }
   revalidatePath("/settings/email");
-  revalidatePath("/applications/new");
   redirect("/settings/email?reassigned=1");
 }

@@ -121,8 +121,6 @@ const NAV_SECTIONS: NavSection[] = [
         href: "/bewerbung-scanner",
         icon: "scan",
       },
-      { labelKey: "nav.bewerbungen", href: "/applications", icon: "briefcase" },
-      { labelKey: "studio.nav", href: "/bewerbung-studio", icon: "wand" },
       { labelKey: "nav.autoBewerb", href: "/auto-bewerb", icon: "send" },
       {
         labelKey: "nav.savedOpportunities",
@@ -239,7 +237,6 @@ const LUCIDE: Record<IconName, LucideIcon> = {
 const MOBILE_NAV: NavItem[] = [
   { labelKey: "nav.dashboard", href: "/dashboard", icon: "grid" },
   { labelKey: "nav.opportunities", href: "/opportunities", icon: "target" },
-  { labelKey: "nav.bewerbungen", href: "/applications", icon: "briefcase" },
   { labelKey: "nav.aiAssistant", href: "/ai", icon: "spark" },
 ];
 
@@ -309,24 +306,8 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
     heading: { titleKey: "pages.opportunities.title", subtitleKey: "pages.opportunities.subtitle" },
   },
   {
-    match: (p) => p === "/applications/new" || p.startsWith("/applications/new/"),
-    heading: { titleKey: "pages.newApplication.title", subtitleKey: "pages.newApplication.subtitle" },
-  },
-  {
-    match: (p) => p.startsWith("/applications/campaign/"),
-    heading: { titleKey: "pages.campaign.title", subtitleKey: "pages.campaign.subtitle" },
-  },
-  {
-    match: (p) => p === "/applications" || p.startsWith("/applications/"),
-    heading: { titleKey: "pages.bewerbungen.title", subtitleKey: "pages.bewerbungen.subtitle" },
-  },
-  {
     match: (p) => p === "/bewerbung-scanner" || p.startsWith("/bewerbung-scanner/"),
     heading: { titleKey: "pages.scanner.title", subtitleKey: "pages.scanner.subtitle" },
-  },
-  {
-    match: (p) => p === "/bewerbung-studio" || p.startsWith("/bewerbung-studio/"),
-    heading: { titleKey: "studio.pageTitle", subtitleKey: "studio.pageSubtitle" },
   },
   {
     match: (p) => p === "/auto-bewerb" || p.startsWith("/auto-bewerb/"),
