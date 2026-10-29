@@ -61,6 +61,7 @@ function appRow(over: Record<string, unknown> = {}) {
     cv_reviewed_at: null,
     letter_reviewed_at: null,
     checklist_ack_at: null,
+    slot_no: 1,
     email_account_id: ACCT_ID,
     recipient_email: "jobs@tech-gmbh.de",
     idempotency_key: null,

@@ -129,10 +129,15 @@ function SlotCard({ view, index, active, compact = false, onOpen, onRemove }: Sl
         </div>
       </button>
 
-      {/* remove — two-step confirmation, no window.confirm */}
+      {/* remove — small × at the top-right (per approved reference),
+          two-step confirmation naming the EXACT application, no
+          window.confirm. It is a sibling of the open-button (not nested),
+          so clicking it can never trigger card navigation. */}
       {confirming ? (
         <div className="absolute right-2 top-2 flex items-center gap-1 rounded-xl border border-danger/40 bg-surface px-2 py-1 shadow-sm">
-          <span className="text-[11px] font-medium text-danger">{t("studio.navDeleteQ")}</span>
+          <span className="max-w-[130px] truncate text-[11px] font-medium text-danger" title={company}>
+            {t("studio.navDeleteQ", { company })}
+          </span>
           <button
             type="button"
             onClick={onRemove}
@@ -152,11 +157,11 @@ function SlotCard({ view, index, active, compact = false, onOpen, onRemove }: Sl
         <button
           type="button"
           onClick={() => setConfirming(true)}
-          aria-label={t("studio.navDelete")}
-          title={t("studio.navDelete")}
-          className="absolute right-2 top-2 rounded-lg p-1 text-faint transition hover:bg-danger/10 hover:text-danger"
+          aria-label={`${t("studio.navDelete")}: ${company}`}
+          title={`${t("studio.navDelete")}: ${company}`}
+          className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg border border-danger/40 text-danger/70 transition hover:bg-danger/10 hover:text-danger focus:outline-none focus-visible:ring-2 focus-visible:ring-danger/50"
         >
-          <Icon name="trash" size={13} />
+          <Icon name="x" size={13} strokeWidth={2.5} />
         </button>
       )}
     </div>
@@ -179,23 +184,24 @@ export function BatchNavigator({
   addBusy?: boolean;
 }) {
   const { t } = useI18n();
-  const { apps, limit, completeCount, canAdd, missingForBlockingApp } = batch;
+  const { apps, limit, canAdd, missingForBlockingApp } = batch;
 
+  const isFull = apps.length >= limit;
   const blockingCompany = batch.blockingAppId
     ? apps.find((a) => a.app.id === batch.blockingAppId)
     : undefined;
-  const addLabel =
-    apps.length >= limit
-      ? t("studio.navFull")
-      : canAdd
-        ? t("studio.navAdd")
-        : t("studio.navBlocked", {
-            company: blockingCompany ? companyOf(blockingCompany) : "—",
-          });
+  // Add-button state (server-computed, never client-guessed):
+  //  - full → disabled + "Maximum 10 applications reached"
+  //  - blocked → disabled + the exact blocking company/requirements
+  //  - otherwise → enabled
+  const addDisabled = isFull || !canAdd || addBusy;
+  const addHint = isFull
+    ? t("studio.navMaxReached")
+    : canAdd
+      ? null
+      : t("studio.navBlocked", { company: blockingCompany ? companyOf(blockingCompany) : "—" });
   const blockedMissing =
-    canAdd || apps.length >= limit
-      ? []
-      : missingForBlockingApp.map((k) => t(REQ_KEYS[k]));
+    isFull || canAdd ? [] : missingForBlockingApp.map((k) => t(REQ_KEYS[k]));
 
   const list = (variant: "column" | "strip") => (
     <div
@@ -216,87 +222,76 @@ export function BatchNavigator({
           onRemove={() => onRemove(v.app.id)}
         />
       ))}
-      {/* empty slots: five initial slots, expandable to the limit. The FIRST
-          empty slot is the actionable one (add / blocked / full); the rest
-          are passive placeholders (sequential unlocking means only the next
-          slot can ever be created). */}
-      {apps.length < limit ? (
-        Array.from({ length: Math.min(limit, Math.max(apps.length, STUDIO_BATCH_INITIAL_SLOTS)) - apps.length }, (_, gi) =>
-          gi === 0 ? (
-            <button
-              key="ghost"
-              type="button"
-              onClick={canAdd ? onNew : undefined}
-              disabled={!canAdd || addBusy}
-              className={[
-                "flex min-h-[72px] items-center justify-center gap-2 rounded-2xl border border-dashed text-sm font-medium transition",
-                variant === "strip" ? "min-w-[180px] shrink-0 snap-start" : "w-full",
-                canAdd
-                  ? "border-primary/50 text-primary hover:bg-primary/5"
-                  : "cursor-not-allowed border-border text-faint",
-              ].join(" ")}
-            >
-              <Icon name="plus" size={15} />
-              {addLabel}
-            </button>
-          ) : (
-            <div
-              key={`ghost-${gi}`}
-              className={[
-                "flex min-h-[72px] items-center justify-center rounded-2xl border border-dashed",
-                variant === "strip" ? "min-w-[180px] shrink-0 snap-start" : "w-full",
-                "border-border/70 text-faint",
-              ].join(" ")}
-              aria-hidden="true"
-            >
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[11px] font-bold">
-                {apps.length + gi + 1}
-              </span>
-            </div>
-          ),
-        )
-      ) : (
-        <div
-          className={[
-            "flex min-h-[72px] items-center justify-center gap-2 rounded-2xl border border-dashed text-sm font-medium",
-            variant === "strip" ? "min-w-[180px] shrink-0 snap-start" : "w-full",
-            "cursor-not-allowed border-border text-faint",
-          ].join(" ")}
-        >
-          <Icon name="lock" size={14} />
-          {t("studio.navFull")}
-        </div>
-      )}
+       {/* passive placeholder slots: five initial slots, expandable to the
+          limit. Adding is done with the "+ Add application" button above
+          the list (sequential unlocking means only the next slot can ever
+          be created — its availability is shown there, not per slot). */}
+       {apps.length < limit
+         ? Array.from(
+             { length: Math.min(limit, Math.max(apps.length, STUDIO_BATCH_INITIAL_SLOTS)) - apps.length },
+             (_, gi) => (
+               <div
+                 key={`slot-${gi + 1}`}
+                 className={[
+                   "flex min-h-[72px] items-center justify-center rounded-2xl border border-dashed",
+                   variant === "strip" ? "min-w-[180px] shrink-0 snap-start" : "w-full",
+                   "border-border/70 text-faint",
+                 ].join(" ")}
+                 aria-hidden="true"
+               >
+                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[11px] font-bold">
+                   {apps.length + gi + 1}
+                 </span>
+               </div>
+             ),
+           )
+         : null}
+     </div>
+   );
+
+  const addRow = () => (
+    <div className="mb-2 flex items-center justify-between gap-2">
+      <h2 className="min-w-0 flex-1 truncate text-xs font-bold uppercase tracking-[0.12em] text-faint">
+        {t("studio.navTitle")} · {apps.length}/{limit}
+      </h2>
+      <button
+        type="button"
+        onClick={onNew}
+        disabled={addDisabled}
+        className={[
+          "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+          addDisabled
+            ? "cursor-not-allowed border border-border bg-surface text-faint"
+            : "bg-primary text-primary-foreground hover:opacity-90",
+        ].join(" ")}
+      >
+        <Icon name="plus" size={13} strokeWidth={3} />
+        {t("studio.navAddApplication")}
+      </button>
     </div>
   );
+
+  // State line under the Add button: "Maximum 10 …" when full, or the
+  // exact blocking company + the missing requirements when locked.
+  const stateHint = isFull
+    ? addHint
+    : canAdd
+      ? null
+      : [addHint, blockedMissing.join(" · ")].filter(Boolean).join(" — ");
 
   return (
     <nav aria-label={t("studio.navAria")} className="min-w-0">
       {/* Desktop: left column */}
       <div className="hidden lg:block">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-xs font-bold uppercase tracking-[0.12em] text-faint">
-            {t("studio.navTitle")} · {apps.length}/{limit}
-          </h2>
-          {completeCount > 0 ? (
-            <span className="text-[11px] font-medium text-success">
-              {t("studio.navCompleteCount", { n: completeCount })}
-            </span>
-          ) : null}
-        </div>
+        {addRow()}
+        {stateHint ? <p className="mb-2 text-[11px] leading-4 text-muted">{stateHint}</p> : null}
         {list("column")}
-        {blockedMissing.length > 0 ? (
-          <p className="mt-2 text-[11px] leading-4 text-muted">{blockedMissing.join(" · ")}</p>
-        ) : null}
       </div>
 
       {/* Mobile / tablet: top strip */}
       <div className="lg:hidden">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-xs font-bold uppercase tracking-[0.12em] text-faint">
-            {t("studio.navTitle")} · {apps.length}/{limit}
-          </h2>
-        </div>
+        {addRow()}
+        {stateHint ? <p className="mb-2 text-[11px] leading-4 text-muted">{stateHint}</p> : null}
         {list("strip")}
       </div>
     </nav>

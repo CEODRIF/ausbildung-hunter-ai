@@ -210,6 +210,12 @@ function classifyInsertError(error: { message?: string } | null | undefined): St
       `Das Datenbank-Schema ist veraltet (Feld "${col[1]}" fehlt) — bitte das Studio-Migrations-Skript neu anwenden.`,
     );
   }
+  // Two concurrent creates that both computed the same last free slot:
+  // the unique index refused the second one — a safe "batch full", never
+  // an 11th active application.
+  if (/studio_applications_user_slot_unique/i.test(msg)) {
+    return fail("batch_full", "Der Batch ist voll (max. 10 Bewerbungen). Bitte eine Bewerbung löschen, um einen neuen Platz zu schaffen.");
+  }
   if (/duplicate key/i.test(msg)) {
     return fail("storage_error", "Diese Bewerbung wurde gerade eben gespeichert — bitte die Seite aktualisieren.");
   }
@@ -289,15 +295,25 @@ export async function createStudioApplication(
   },
 ): Promise<StudioOpResult<StudioApplicationRow>> {
   if (!(await hasStudioSchema())) return fail("schema_pending", "Studio-Datenbank wird vorbereitet.");
-  // Batch limit (server-enforced): a user has at most 10 studio
-  // applications; deleting one frees its slot again.
-  const { data: countRows } = await createAdminClient()
+  // Batch limit (server-enforced): at most 10 ACTIVE studio applications.
+  // The cap counts active rows (deleting one frees its slot again — this is
+  // NOT a lifetime counter). The new application takes the SMALLEST FREE
+  // slot in 1..10; the partial UNIQUE index (user_id, slot_no) makes the
+  // database the final arbiter even for concurrent creates (a lost race
+  // hits the unique violation and is mapped to batch_full below).
+  const { data: slotRows } = await createAdminClient()
     .from("studio_applications")
-    .select("id")
+    .select("slot_no")
     .eq("user_id", userId);
-  if ((countRows ?? []).length >= STUDIO_BATCH_LIMIT) {
+  const active = (slotRows ?? []) as Array<{ slot_no?: number | null }>;
+  if (active.length >= STUDIO_BATCH_LIMIT) {
     return fail("batch_full", "Der Batch ist voll (max. 10 Bewerbungen). Bitte eine Bewerbung löschen, um einen neuen Platz zu schaffen.");
   }
+  const usedSlots = new Set(
+    active.map((r) => r.slot_no).filter((s): s is number => typeof s === "number" && s >= 1 && s <= STUDIO_BATCH_LIMIT),
+  );
+  let slotNo = 1;
+  while (usedSlots.has(slotNo)) slotNo += 1;
   const { data, error } = await createAdminClient()
     .from("studio_applications")
     .insert({
@@ -307,6 +323,7 @@ export async function createStudioApplication(
       ad_analysis: input.analysis ?? null,
       profile_snapshot: input.profileSnapshot ?? null,
       status: "draft",
+      slot_no: slotNo,
     })
     .select("*")
     .single();
@@ -617,8 +634,11 @@ export async function markStudioStepConfirmed(
 /**
  * Delete a whole application (user-confirmed in the UI): cancels any
  * pending scheduled attempt FIRST (never send after cancellation), removes
- * the private files, then deletes the row (documents/attachments/attempts
- * cascade). A send in flight ('sending') cannot be deleted mid-dispatch.
+ * the private files, then deletes the child rows (documents, attachments,
+ * attempts) explicitly — scoped to this application + owner, so other
+ * applications' data is never touched — and finally the row itself (which
+ * frees its slot_no for reuse). A send in flight ('sending') cannot be
+ * deleted mid-dispatch.
  */
 export async function deleteStudioApplication(
   userId: string,
@@ -669,7 +689,21 @@ export async function deleteStudioApplication(
     .remove([letterPdfStoragePath(userId, applicationId)])
     .catch(() => undefined);
 
-  // 3) Delete the row (FK cascades documents, attachments, attempts).
+  // 3) Delete the child rows EXPLICITLY (scoped to this application AND the
+  //    owner — other applications' data is never touched). The FKs in
+  //    20261210000000_bewerbung_studio.sql also carry `on delete cascade`,
+  //    so this is defense in depth: no orphans even if a cascade were ever
+  //    missing.
+  for (const table of ["studio_documents", "studio_attachments", "studio_send_attempts"] as const) {
+    const { error: childError } = await admin
+      .from(table)
+      .delete()
+      .eq("application_id", applicationId)
+      .eq("user_id", userId);
+    if (childError) return fail("storage_error", "Löschen fehlgeschlagen.");
+  }
+
+  // 4) Delete the application row itself (frees its slot_no for reuse).
   const { error: delError } = await admin
     .from("studio_applications")
     .delete()
