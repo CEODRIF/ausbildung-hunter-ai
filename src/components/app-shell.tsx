@@ -123,6 +123,7 @@ const NAV_SECTIONS: NavSection[] = [
       },
       { labelKey: "nav.bewerbungen", href: "/applications", icon: "briefcase" },
       { labelKey: "studio.nav", href: "/bewerbung-studio", icon: "wand" },
+      { labelKey: "nav.autoBewerb", href: "/auto-bewerb", icon: "send" },
       {
         labelKey: "nav.savedOpportunities",
         href: "/opportunities/saved",
@@ -326,6 +327,10 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
   {
     match: (p) => p === "/bewerbung-studio" || p.startsWith("/bewerbung-studio/"),
     heading: { titleKey: "studio.pageTitle", subtitleKey: "studio.pageSubtitle" },
+  },
+  {
+    match: (p) => p === "/auto-bewerb" || p.startsWith("/auto-bewerb/"),
+    heading: { titleKey: "pages.autoBewerb.title", subtitleKey: "pages.autoBewerb.subtitle" },
   },
   {
     match: (p) => p === "/settings/email" || p.startsWith("/settings/email/"),
