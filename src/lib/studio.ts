@@ -40,7 +40,17 @@ import {
   type StudioSendPayload,
   type StudioAppStatus,
 } from "./studio/schema";
-import { parseAdDeadline } from "./studio/quality";
+import { parseAdDeadline, runDeterministicQuality } from "./studio/quality";
+import {
+  STUDIO_BATCH_LIMIT,
+  computeStudioCompletion,
+  studioUnlockStates,
+  type StudioCompletion,
+  type StudioCompletionKey,
+  type StudioSlotState,
+} from "./studio/completion";
+import { parseStoredCv, parseStoredLetter, parseStoredEmail } from "./studio/stored-docs";
+export { parseStoredCv, parseStoredLetter, parseStoredEmail };
 import { zonedTimeToUtc } from "./studio/timezone";
 
 /**
@@ -73,6 +83,8 @@ export type StudioErrorCode =
   | "invalid_schedule"
   | "schedule_after_deadline"
   | "not_cancellable"
+  | "batch_full"
+  | "not_deletable"
   | "storage_error"
   | "dispatch_error";
 
@@ -277,6 +289,15 @@ export async function createStudioApplication(
   },
 ): Promise<StudioOpResult<StudioApplicationRow>> {
   if (!(await hasStudioSchema())) return fail("schema_pending", "Studio-Datenbank wird vorbereitet.");
+  // Batch limit (server-enforced): a user has at most 10 studio
+  // applications; deleting one frees its slot again.
+  const { data: countRows } = await createAdminClient()
+    .from("studio_applications")
+    .select("id")
+    .eq("user_id", userId);
+  if ((countRows ?? []).length >= STUDIO_BATCH_LIMIT) {
+    return fail("batch_full", "Der Batch ist voll (max. 10 Bewerbungen). Bitte eine Bewerbung löschen, um einen neuen Platz zu schaffen.");
+  }
   const { data, error } = await createAdminClient()
     .from("studio_applications")
     .insert({
@@ -311,6 +332,11 @@ export type StudioAppPatch = Partial<
     | "provider_message_id"
     | "idempotency_key"
     | "last_failure_code"
+    | "ad_confirmed_at"
+    | "profile_confirmed_at"
+    | "cv_reviewed_at"
+    | "letter_reviewed_at"
+    | "checklist_ack_at"
   >
 >;
 
@@ -319,9 +345,16 @@ async function patchApplication(
   id: string,
   patch: StudioAppPatch,
 ): Promise<StudioApplicationRow | null> {
+  // Completion invalidation: editing the underlying data re-opens the
+  // matching requirement (a changed extraction is no longer "confirmed",
+  // a changed profile no longer "confirmed"). Explicit confirmation
+  // timestamps are NEVER set here — only by markStudioStepConfirmed.
+  const extended: StudioAppPatch = { ...patch };
+  if ("ad_extracted" in patch) extended.ad_confirmed_at = null;
+  if ("profile_snapshot" in patch) extended.profile_confirmed_at = null;
   const { data, error } = await createAdminClient()
     .from("studio_applications")
-    .update(patch)
+    .update(extended)
     .eq("id", id)
     .eq("user_id", userId)
     .select("*")
@@ -384,6 +417,10 @@ export async function saveStudioDocument(
     .select("*")
     .single();
   if (error || !data) return fail("storage_error", "Dokument konnte nicht gespeichert werden.");
+  // Completion invalidation: a NEW version of the CV / cover letter is not
+  // "reviewed" until the user confirms it again (explicit button, step UI).
+  if (docType === "cv") await patchApplication(userId, applicationId, { cv_reviewed_at: null });
+  if (docType === "cover_letter") await patchApplication(userId, applicationId, { letter_reviewed_at: null });
   return { ok: true, value: data as unknown as StudioDocumentRow };
 }
 
@@ -405,23 +442,8 @@ export async function getLatestStudioDocument(
   return data as unknown as StudioDocumentRow;
 }
 
-/** Parse a stored CV document row into a valid CvDocument (or null). */
-export function parseStoredCv(doc: StudioDocumentRow | null): CvDocument | null {
-  if (!doc) return null;
-  return sanitizeCvDocument(doc.content);
-}
-
-export function parseStoredLetter(
-  doc: StudioDocumentRow | null,
-): { text: string; tone: string } | null {
-  if (!doc) return null;
-  const c = doc.content as { text?: unknown; tone?: unknown };
-  if (typeof c?.text !== "string" || !c.text.trim()) return null;
-  return {
-    text: c.text.slice(0, 16_000),
-    tone: typeof c?.tone === "string" ? c.tone : "professional",
-  };
-}
+// (parseStoredCv / parseStoredLetter / parseStoredEmail are re-exported from
+//  the isomorphic ./studio/stored-docs at the top of this file.)
 
 // ---------------------------------------------------------------------------
 // Attachments (private bucket application-attachments)
@@ -480,6 +502,9 @@ export async function uploadStudioAttachment(
   void logStudioActivity(userId, "studio_attachment_uploaded", "Bewerbungs-Studio: Dokument hochgeladen", undefined, {
     name: sanitizeFileName(input.name),
   });
+  // The document checklist changed — an earlier "acknowledge missing docs"
+  // no longer stands.
+  await patchApplication(userId, applicationId, { checklist_ack_at: null });
   return { ok: true, value: data as unknown as StudioAttachmentRow };
 }
 
@@ -554,7 +579,221 @@ export async function deleteStudioAttachment(
     .eq("user_id", userId);
   if (error) return fail("storage_error", "Löschen fehlgeschlagen.");
   void logStudioActivity(userId, "studio_attachment_deleted", "Bewerbungs-Studio: Dokument gelöscht");
+  // The document checklist changed — re-derive completion.
+  await patchApplication(userId, existing.application_id, { checklist_ack_at: null });
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Batch workspace: confirmations, completion, sequential unlock, delete
+// ---------------------------------------------------------------------------
+
+export type StudioConfirmField = "ad" | "profile" | "cv" | "letter" | "checklist";
+
+const CONFIRM_COLUMN: Record<StudioConfirmField, keyof StudioApplicationRow> = {
+  ad: "ad_confirmed_at",
+  profile: "profile_confirmed_at",
+  cv: "cv_reviewed_at",
+  letter: "letter_reviewed_at",
+  checklist: "checklist_ack_at",
+};
+
+/**
+ * Explicit user confirmation of one requirement (server-owned timestamp).
+ * Called from the "Bestätigen / Geprüft" buttons in the step UI.
+ */
+export async function markStudioStepConfirmed(
+  userId: string,
+  applicationId: string,
+  field: StudioConfirmField,
+): Promise<StudioOpResult<StudioApplicationRow>> {
+  const app = await patchApplication(userId, applicationId, {
+    [CONFIRM_COLUMN[field]]: new Date().toISOString(),
+  });
+  if (!app) return fail("not_found", "Anwendung nicht gefunden.");
+  return { ok: true, value: app };
+}
+
+/**
+ * Delete a whole application (user-confirmed in the UI): cancels any
+ * pending scheduled attempt FIRST (never send after cancellation), removes
+ * the private files, then deletes the row (documents/attachments/attempts
+ * cascade). A send in flight ('sending') cannot be deleted mid-dispatch.
+ */
+export async function deleteStudioApplication(
+  userId: string,
+  applicationId: string,
+): Promise<StudioOpResult> {
+  const admin = createAdminClient();
+  const { data: appData, error: appError } = await admin
+    .from("studio_applications")
+    .select("*")
+    .eq("id", applicationId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (appError || !appData) return fail("not_found", "Anwendung nicht gefunden.");
+  const app = appData as unknown as StudioApplicationRow;
+  if (app.status === "sending") {
+    return fail("not_deletable", "Der Versand läuft gerade — bitte warten, bis er abgeschlossen ist.");
+  }
+
+  // 1) Cancel queued/scheduled attempts so the scheduler can never fire.
+  const { data: attempts } = await admin
+    .from("studio_send_attempts")
+    .select("id")
+    .eq("application_id", applicationId)
+    .eq("user_id", userId);
+  for (const a of (attempts ?? []) as unknown as Array<{ id: string }>) {
+    // A SCHEDULED attempt is status='queued' with scheduled_at set — no
+    // 'scheduled' value exists in studio_send_status.
+    await admin
+      .from("studio_send_attempts")
+      .update({ status: "cancelled", failure_code: "application_deleted" })
+      .eq("id", a.id)
+      .eq("status", "queued");
+  }
+
+  // 2) Remove private files (attachments + rendered letter PDF).
+  const { data: atts } = await admin
+    .from("studio_attachments")
+    .select("storage_path")
+    .eq("application_id", applicationId)
+    .eq("user_id", userId);
+  const paths = ((atts ?? []) as unknown as Array<{ storage_path: string }>).map((a) => a.storage_path);
+  if (paths.length > 0) {
+    await admin.storage.from(ATTACHMENT_BUCKET).remove(paths).catch(() => undefined);
+  }
+  await admin
+    .storage
+    .from(BEW_ATTACHMENT_BUCKET)
+    .remove([letterPdfStoragePath(userId, applicationId)])
+    .catch(() => undefined);
+
+  // 3) Delete the row (FK cascades documents, attachments, attempts).
+  const { error: delError } = await admin
+    .from("studio_applications")
+    .delete()
+    .eq("id", applicationId)
+    .eq("user_id", userId);
+  if (delError) return fail("storage_error", "Löschen fehlgeschlagen.");
+  void logStudioActivity(userId, "studio_application_deleted", "Bewerbungs-Studio: Bewerbung gelöscht");
+  return { ok: true };
+}
+
+export interface StudioBatchAppView {
+  app: StudioApplicationRow;
+  completion: StudioCompletion;
+  slot: StudioSlotState;
+  /** Latest document versions present (for the navigator's summary). */
+  hasCv: boolean;
+  hasLetter: boolean;
+  hasEmail: boolean;
+  /** Stored email subject (batch send review summary). */
+  emailSubject: string | null;
+  /** Stored email body + selected attachment ids — the EXACT content the
+   *  batch send dispatches (never re-composed, never cross-company). */
+  emailBody: string | null;
+  emailAttachmentIds: string[];
+  /** Latest stored document versions per type (null = not generated yet). */
+  docVersions: { cv: number | null; letter: number | null; email: number | null };
+  attachmentCount: number;
+  latestAttempt: StudioSendAttemptRow | null;
+}
+
+export interface StudioBatchView {
+  limit: number;
+  apps: StudioBatchAppView[];
+  completeCount: number;
+  /** First index that can accept a NEW application (or null when full). */
+  canAdd: boolean;
+  /** The application that currently blocks the next slot, if any. */
+  blockingAppId: string | null;
+  missingForBlockingApp: StudioCompletionKey[];
+}
+
+/**
+ * The batch workspace view: all owned applications in SLOT ORDER
+ * (created_at ASC) with server-computed completion + sequential unlock
+ * state. This is the single source of truth for the navigator.
+ */
+export async function getStudioBatchView(userId: string): Promise<StudioBatchView | null> {
+  if (!(await hasStudioSchema())) return null;
+  const rows = await listStudioApplications(userId);
+  const apps = rows
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
+    .slice(0, STUDIO_BATCH_LIMIT);
+
+  const bundles = await Promise.all(apps.map((a) => getStudioApplication(userId, a.id)));
+  const completions: StudioCompletion[] = [];
+  const views: StudioBatchAppView[] = [];
+  for (const bundle of bundles) {
+    if (!bundle) continue;
+    const extract = bundle.app.ad_extracted;
+    const cvDoc = bundle.documents.find((d) => d.doc_type === "cv") ?? null;
+    const letterDoc = bundle.documents.find((d) => d.doc_type === "cover_letter") ?? null;
+    const emailDoc = bundle.documents.find((d) => d.doc_type === "email") ?? null;
+    const cv = parseStoredCv(cvDoc);
+    const letter = parseStoredLetter(letterDoc);
+    const email = parseStoredEmail(emailDoc);
+    const letterNorm = letter
+      ? {
+          text: letter.text,
+          tone:
+            letter.tone === "formal"
+              ? ("formal" as const)
+              : letter.tone === "engaged"
+                ? ("engaged" as const)
+                : ("professional" as const),
+        }
+      : null;
+    const blockingIssues = runDeterministicQuality({
+      extract,
+      analysis: bundle.app.ad_analysis,
+      cv,
+      letter: letterNorm,
+      email,
+      recipientEmail: bundle.app.recipient_email,
+      attachments: bundle.attachments,
+    }).filter((i) => i.severity === "blocking");
+    const completion = computeStudioCompletion({
+      app: bundle.app,
+      docs: { cv: cvDoc, letter: letterDoc, email: emailDoc },
+      attachments: bundle.attachments,
+      blockingIssues,
+    });
+    completions.push(completion);
+    views.push({
+      app: bundle.app,
+      completion,
+      slot: { unlocked: false, complete: completion.complete, missing: completion.missing },
+      hasCv: Boolean(cv),
+      hasLetter: Boolean(letter?.text?.trim()),
+      hasEmail: Boolean(email?.body?.trim()),
+      emailSubject: email?.subject?.trim() || null,
+      emailBody: email ? email.body : null,
+      emailAttachmentIds: email?.attachmentIds ?? [],
+      docVersions: {
+        cv: cvDoc ? (cvDoc.version ?? null) : null,
+        letter: letterDoc ? (letterDoc.version ?? null) : null,
+        email: emailDoc ? (emailDoc.version ?? null) : null,
+      },
+      attachmentCount: bundle.attachments.length,
+      latestAttempt: bundle.attempts[0] ?? null,
+    });
+  }
+
+  const slots = studioUnlockStates(completions);
+  views.forEach((v, i) => (v.slot = slots[i]));
+  const completeCount = views.filter((v) => v.slot.complete).length;
+  const blocking = views.findIndex((v) => !v.slot.complete);
+  return {
+    limit: STUDIO_BATCH_LIMIT,
+    apps: views,
+    completeCount,
+    canAdd: views.length < STUDIO_BATCH_LIMIT && views.every((v) => v.slot.complete),
+    blockingAppId: blocking === -1 ? null : views[blocking].app.id,
+    missingForBlockingApp: blocking === -1 ? [] : views[blocking].slot.missing,
+  };
 }
 
 // ---------------------------------------------------------------------------

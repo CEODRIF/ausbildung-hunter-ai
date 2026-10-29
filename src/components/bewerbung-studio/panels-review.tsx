@@ -336,7 +336,8 @@ export function EmailPanel({
 
 const COMMON_TZS = ["Europe/Berlin", "Europe/Zurich", "Europe/Paris", "Europe/Vienna", "America/New_York"];
 
-function useTimeZones(): string[] {
+/** Exported for the batch-send panel (shared IANA timezone list). */
+export function useTimeZones(): string[] {
   return useMemo(() => {
     try {
       const all = (Intl as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? [];

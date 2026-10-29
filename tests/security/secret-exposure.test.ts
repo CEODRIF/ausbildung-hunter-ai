@@ -51,7 +51,20 @@ function walk(dir: string): string[] {
 }
 
 const allSourceFiles = walk(srcDir);
-const read = (file: string) => readFileSync(file, "utf8");
+
+// The import graph is walked once per client entry file, and shared hub
+// modules (ui, icon, i18n, studio panels) are reachable from most entries.
+// Memoize file CONTENT and the parsed import edges so each file is read and
+// scanned exactly once — the analysis itself is unchanged (same bytes,
+// same edges, same server-only / server-action rules).
+const fileContentCache = new Map<string, string>();
+const read = (file: string): string => {
+  const hit = fileContentCache.get(file);
+  if (hit !== undefined) return hit;
+  const content = readFileSync(file, "utf8");
+  fileContentCache.set(file, content);
+  return content;
+};
 const isServerOnly = (file: string) => /^import\s+"server-only";/m.test(read(file));
 const isClientEntry = (file: string) => /^\s*"use client";/m.test(read(file));
 /**
@@ -89,7 +102,10 @@ function resolveLocal(fromFile: string, specifier: string): string | null {
  * `profile-menu.tsx -> lib/auth.ts`, which the Next build would otherwise have
  * rejected outright.
  */
+const localImportsCache = new Map<string, string[]>();
 function localImports(file: string): string[] {
+  const hit = localImportsCache.get(file);
+  if (hit) return hit;
   const source = read(file);
   const out: string[] = [];
   const statement =
@@ -110,6 +126,7 @@ function localImports(file: string): string[] {
     const resolved = resolveLocal(file, match[2]);
     if (resolved) out.push(resolved);
   }
+  localImportsCache.set(file, out);
   return out;
 }
 
