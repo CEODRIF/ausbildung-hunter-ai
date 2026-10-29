@@ -291,7 +291,7 @@ function CompanyCard({
           {job && <p className="truncate text-sm text-muted">{job}</p>}
         </div>
         <div className="flex items-center gap-2">
-          {statusPill(c.status)}
+          {statusPill(c.status, t)}
           <Button variant="ghost" size="sm" onClick={onEdit} disabled={locked} title={t("autoBewerb.editButton")}>
             <Pencil size={14} />
           </Button>

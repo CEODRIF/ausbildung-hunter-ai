@@ -14,7 +14,6 @@ import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui";
 import { StatusPill, type StatusTone } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
-import { refreshWorkspaceAction } from "@/app/auto-bewerb/actions";
 import type {
   AutoBewerbCompanyRow,
   AutoBewerbLetter,
@@ -52,6 +51,7 @@ export interface AutoBewerbContextValue {
   goToStep: (n: number) => void;
   toast: { kind: ToastKind; text: string } | null;
   notify: (kind: ToastKind, text: string) => void;
+  dismissToast: () => void;
   /** True while a full-workspace refresh is in flight. */
   syncing: boolean;
   /** Currently selected company (steps 3-7 share one selection). */
@@ -88,8 +88,7 @@ const STATUS_TONE: Record<AutoBewerbCompanyRow["status"], StatusTone> = {
   cancelled: "skipped",
 };
 
-export function statusPill(status: AutoBewerbCompanyRow["status"]) {
-  const { t } = useI18n();
+export function statusPill(status: AutoBewerbCompanyRow["status"], t: ReturnType<typeof useI18n>["t"]) {
   const label =
     status === "draft"
       ? t("autoBewerb.statusDraft")
@@ -266,38 +265,30 @@ export function StepShell({
   );
 }
 
-/** Inline toast host (top of the workflow area). */
+/** Inline toast host (top of the workflow area). The context toast is the
+ *  single source of truth; auto-hide runs in the timer callback. */
 export function ToastHost() {
-  const { toast } = useAutoBewerb();
-  const [visible, setVisible] = useState<ToastKind | null>(null);
-  const [text, setText] = useState("");
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { toast, dismissToast } = useAutoBewerb();
 
   useEffect(() => {
-    if (toast) {
-      setVisible(toast.kind);
-      setText(toast.text);
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setVisible(null), 5000);
-    }
-    return () => {
-      if (timer.current) clearTimeout(timer.current);
-    };
-  }, [toast]);
+    if (!toast) return;
+    const timer = setTimeout(dismissToast, 5000);
+    return () => clearTimeout(timer);
+  }, [toast, dismissToast]);
 
-  if (!visible) return null;
+  if (!toast) return null;
   return (
     <div className="fixed inset-x-0 top-4 z-[60] flex justify-center px-4" role="status" aria-live="polite">
       <div
         className={`max-w-lg rounded-2xl border px-4 py-3 text-sm font-semibold shadow-lg ${
-          visible === "success"
+          toast.kind === "success"
             ? "border-success/30 bg-success-soft text-success"
-            : visible === "error"
+            : toast.kind === "error"
               ? "border-danger/30 bg-danger-soft text-danger"
               : "border-line-strong bg-surface text-ink-soft"
         }`}
       >
-        {text}
+        {toast.text}
       </div>
     </div>
   );
@@ -339,7 +330,7 @@ export function CompanyPicker({
           >
             <span className="max-w-[160px] truncate font-semibold">{name}</span>
             {job && <span className="max-w-[180px] truncate text-xs text-muted">{job}</span>}
-            {statusPill(c.company.status)}
+            {statusPill(c.company.status, t)}
           </button>
         );
       })}

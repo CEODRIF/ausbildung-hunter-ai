@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Mail, Save, Sparkles } from "lucide-react";
 import { Button, Input, Textarea } from "@/components/ui";
@@ -31,16 +31,15 @@ const TOKEN_KEYS: Record<string, string> = {
 export function Step6Email() {
   const { ws, refresh, notify, companyId, selectCompany, goToStep } = useAutoBewerb();
   const { t } = useI18n();
-  const [templateText, setTemplateText] = useState(ws.emailTemplate);
+  // Local template edits are buffered as a DRAFT against the server value
+  // (null = follow the server) — step navigation never discards an unsaved edit.
+  const [templateDraft, setTemplateDraft] = useState<string | null>(null);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [draftResult, setDraftResult] = useState<{ subject: string; body: string } | null>(null);
 
-  useEffect(() => {
-    setTemplateText(ws.emailTemplate);
-  }, [ws.emailTemplate]);
-
-  const templateDirty = templateText !== ws.emailTemplate;
+  const templateText = templateDraft ?? ws.emailTemplate;
+  const templateDirty = templateDraft !== null && templateDraft !== ws.emailTemplate;
   const templateTooLong = templateText.length > AUTO_BEWERB_EMAIL_TEMPLATE_MAX;
 
   const saveTemplate = async () => {
@@ -48,6 +47,7 @@ export function Step6Email() {
     const res = await saveEmailTemplateAction(templateText);
     setSavingTemplate(false);
     if (res.ok) {
+      setTemplateDraft(null);
       await refresh();
       notify("success", t("autoBewerb.saved"));
     } else notify("error", t("autoBewerb.saveError"));
@@ -121,7 +121,7 @@ export function Step6Email() {
           hint={`${templateText.length} / ${AUTO_BEWERB_EMAIL_TEMPLATE_MAX}`}
           rows={8}
           value={templateText}
-          onChange={(e) => setTemplateText(e.target.value)}
+          onChange={(e) => setTemplateDraft(e.target.value)}
         />
         {templateTooLong && <div className="mt-2"><Note kind="error">{t("autoBewerb.templateTooLong")}</Note></div>}
         <div className="mt-3 flex flex-wrap gap-2">
@@ -130,7 +130,12 @@ export function Step6Email() {
               key={tok}
               type="button"
               title={t(TOKEN_KEYS[tok] as "autoBewerb.tokenCompany")}
-              onClick={() => setTemplateText((s) => `${s}${s.endsWith(" ") || s.length === 0 ? "" : " "}${tok}`)}
+              onClick={() =>
+                setTemplateDraft((s) => {
+                  const base = s ?? ws.emailTemplate;
+                  return `${base}${base.endsWith(" ") || base.length === 0 ? "" : " "}${tok}`;
+                })
+              }
               className="rounded-full border border-line-strong bg-surface-2 px-3 py-1 font-mono text-xs text-ink-soft transition-colors hover:border-accent hover:text-accent"
             >
               {tok}
@@ -145,7 +150,7 @@ export function Step6Email() {
             <p className="text-xs font-semibold text-ink-soft">{t("autoBewerb.subjectLabel")}: {draftResult.subject}</p>
             <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-xl bg-surface p-3 text-xs leading-5 text-ink-soft">{draftResult.body}</pre>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="secondary" size="sm" onClick={() => setTemplateText(draftResult.body)}>
+              <Button variant="secondary" size="sm" onClick={() => setTemplateDraft(draftResult.body)}>
                 {t("autoBewerb.applyDraftToTemplate")}
               </Button>
               <Button variant="primary" size="sm" onClick={() => void applyDraftToCompany()}>
@@ -171,7 +176,9 @@ export function Step6Email() {
 
       {/* Per-company editor */}
       <CompanyPicker value={companyId} onChange={selectCompany} />
-      <CompanyEmailEditor key={activeId} view={active} template={templateText} />
+      {/* Key includes the server row's updated_at: after save/refresh the editor
+          re-initializes from the new row via remount (no state-sync effect). */}
+      <CompanyEmailEditor key={`${activeId}:${active.company.updated_at}`} view={active} template={templateText} />
     </div>
   );
 }
@@ -189,20 +196,6 @@ function CompanyEmailEditor({ view, template }: { view: AutoBewerbCompanyView; t
   const [attachLetter, setAttachLetter] = useState(row.email_attach_letter);
   const [accountId, setAccountId] = useState(row.email_account_id ?? "");
   const [saving, setSaving] = useState(false);
-  const [updatedAt, setUpdatedAt] = useState(row.updated_at);
-
-  // Re-sync local state after a server round-trip (save/refresh).
-  useEffect(() => {
-    if (row.updated_at !== updatedAt) {
-      setUpdatedAt(row.updated_at);
-      setRecipient(row.recipient_email ?? "");
-      setSubject(row.email_subject ?? "");
-      setBodyOverride(row.email_body ?? "");
-      setAttachCv(row.email_attach_cv);
-      setAttachLetter(row.email_attach_letter);
-      setAccountId(row.email_account_id ?? "");
-    }
-  }, [row, updatedAt]);
 
   const dirty =
     recipient !== (row.recipient_email ?? "") ||

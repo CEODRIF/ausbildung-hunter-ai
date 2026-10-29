@@ -10,7 +10,7 @@ import {
   markDocumentReviewedAction,
   saveCompanyDocumentAction,
 } from "@/app/auto-bewerb/actions";
-import { CompanyPicker, Note, SectionCard, companyLabel, useAutoBewerb } from "./shared";
+import { CompanyPicker, Note, SectionCard, useAutoBewerb } from "./shared";
 
 const s2a = (s: string): string[] => s.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
 const a2s = (a: string[]): string => a.join(", ");
@@ -94,8 +94,6 @@ export function Step4CvGeneration() {
       notify("success", t("autoBewerb.docReviewedNote"));
     } else notify("error", t("autoBewerb.saveError"));
   };
-
-  const { name } = companyLabel(row);
 
   return (
     <div className="space-y-5">

@@ -9,7 +9,6 @@ import {
   type ProviderFailure,
 } from "@/lib/email-providers";
 import {
-  BEW_ATTACHMENT_BUCKET,
   BEW_LETTER_PDF_MIME,
   buildLetterFolio,
   generateLetterPdf,
@@ -47,7 +46,6 @@ import { zonedTimeToUtc } from "../studio/timezone";
 import {
   emailBodyToHtml,
   listUserEmailAccounts,
-  type StudioEmailAccount,
 } from "../studio";
 
 /**

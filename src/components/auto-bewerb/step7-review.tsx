@@ -208,7 +208,7 @@ export function Step7Review() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="truncate text-sm font-bold text-ink">{name}</span>
                     {job && <span className="truncate text-xs text-muted">{job}</span>}
-                    {statusPill(r.status)}
+                    {statusPill(r.status, t)}
                     {res && (
                       <span className={`text-xs font-semibold ${res.ok ? "text-success" : "text-danger"}`}>
                         {res.ok

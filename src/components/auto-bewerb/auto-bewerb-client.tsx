@@ -68,6 +68,10 @@ export function AutoBewerbClient({ initial }: { initial: AutoBewerbWorkspace }) 
     setToast({ kind, text });
   }, []);
 
+  const dismissToast = useCallback(() => {
+    setToast(null);
+  }, []);
+
   const refresh = useCallback(
     async (silent = false) => {
       setSyncing(true);
@@ -89,9 +93,21 @@ export function AutoBewerbClient({ initial }: { initial: AutoBewerbWorkspace }) 
 
   // Page-load catch-up: due scheduled sends are processed server-side by the
   // refresh action itself, so the first read shows an HONEST current status.
+  // The state update happens in the promise callback (not synchronously in
+  // the effect body); on error the server-rendered snapshot stays honest.
   useEffect(() => {
-    void refresh(true);
-  }, [refresh]);
+    let cancelled = false;
+    void refreshWorkspaceAction()
+      .then((res) => {
+        if (!cancelled && res.ok) setWs(res.value);
+      })
+      .catch(() => {
+        /* silent catch-up — keep the server-rendered snapshot */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const goToStep = useCallback((n: number) => {
     setStep(Math.min(7, Math.max(1, n)));
@@ -108,14 +124,13 @@ export function AutoBewerbClient({ initial }: { initial: AutoBewerbWorkspace }) 
     [],
   );
 
-  // Keep the shared selection valid when companies are added/removed.
-  useEffect(() => {
-    if (companyId && !ws.companies.some((c) => c.company.id === companyId)) {
-      setCompanyId(ws.companies[0]?.company.id ?? null);
-    } else if (!companyId && ws.companies.length > 0) {
-      setCompanyId(ws.companies[0].company.id);
-    }
-  }, [ws.companies, companyId]);
+  // Keep the shared selection valid when companies are added/removed —
+  // DERIVED during render (no state-sync effect): an unknown id or no
+  // selection falls back honestly to the first company.
+  const effectiveCompanyId =
+    companyId && ws.companies.some((c) => c.company.id === companyId)
+      ? companyId
+      : (ws.companies[0]?.company.id ?? null);
 
   const value = useMemo(
     () => ({
@@ -125,13 +140,14 @@ export function AutoBewerbClient({ initial }: { initial: AutoBewerbWorkspace }) 
       goToStep,
       toast,
       notify,
+      dismissToast,
       syncing,
-      companyId,
+      companyId: effectiveCompanyId,
       selectCompany,
       drafts,
       setDraft,
     }),
-    [ws, refresh, step, goToStep, toast, notify, syncing, companyId, selectCompany, drafts, setDraft],
+    [ws, refresh, step, goToStep, toast, notify, dismissToast, syncing, effectiveCompanyId, selectCompany, drafts, setDraft],
   );
 
   // SETUP PENDING: the manual migration has not been applied yet. Be honest —
