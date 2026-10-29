@@ -150,14 +150,19 @@ export function AutoBewerbClient({ initial }: { initial: AutoBewerbWorkspace }) 
     [ws, refresh, step, goToStep, toast, notify, dismissToast, syncing, effectiveCompanyId, selectCompany, drafts, setDraft],
   );
 
-  // SETUP PENDING: the manual migration has not been applied yet. Be honest —
-  // no fake workflow data, no simulated progress.
+  // SETUP PENDING: the database is not ready. Be honest about WHY —
+  // missing tables and a blocked probe (permissions/connectivity) are
+  // different states with different remedies; no fake workflow data either way.
   if (!ws.ready) {
     return (
       <div className="mx-auto w-full max-w-3xl px-4 py-16 sm:px-6">
         <ErrorState
           title={t("autoBewerb.setupPendingTitle")}
-          reason={t("autoBewerb.setupPendingBody")}
+          reason={
+            ws.setupIssue === "probe_error"
+              ? t("autoBewerb.setupProbeErrorBody")
+              : t("autoBewerb.setupPendingBody")
+          }
           onRetry={() => void refresh()}
           retryLabel={t("autoBewerb.retry")}
         />

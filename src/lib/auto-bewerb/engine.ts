@@ -25,6 +25,7 @@ import {
   AUTO_BEWERB_COMPANY_LIMIT,
   AUTO_BEWERB_DOC_CATEGORIES,
   AUTO_BEWERB_TABLES,
+  classifyProbeError,
   isValidEmail,
   normalizeCompanyKey,
   renderAutoBewerbEmailBody,
@@ -139,41 +140,74 @@ function sanitizeFileName(name: string): string {
 // ---------------------------------------------------------------------------
 
 /** A NEGATIVE probe is only trusted this long: a transient Supabase error
- *  (or a migration applied moments later) must not pin the "setup pending"
- *  state for the whole serverless instance. Positive results are cached. */
+ *  (or a migration applied moments later — including the PostgREST
+ *  schema-cache refresh that follows a migration) must not pin the "setup
+ *  pending" state for the whole serverless instance. Positive results are
+ *  cached. */
 const PROBE_NEGATIVE_TTL_MS = 60_000;
 
-let probeCache: { at: number; missing: string[] } | null = null;
+let probeCache: { at: number; missing: string[]; blocked: string[] } | null = null;
 
-/** Names of the AUTO BEWERB tables that are NOT reachable right now
- *  (empty array = fully ready). Safe to call from page, actions and routes. */
-export function getAutoBewerbMissingTables(): Promise<string[]> {
+export interface AutoBewerbProbeResult {
+  /** Relations that do not exist yet (or that PostgREST has not seen yet —
+   *  schema-cache lag reports the same error shape; transient). */
+  missing: string[];
+  /** Relations whose probe was refused/failed for a reason OTHER than
+   *  "not found" (permissions, connectivity, …). These are never reported
+   *  as missing tables. */
+  blocked: string[];
+}
+
+/**
+ * Probe all seven AUTO BEWERB tables through the SAME admin client the
+ * engine uses for its real queries, so probe failure tracks the actual
+ * access problem.
+ *
+ * The probe query is deliberately `select("*")` — NOT `select("id")`: not
+ * every table has an `id` column (`auto_bewerb_company_attachments` has a
+ * composite primary key, `auto_bewerb_email_templates` is keyed by
+ * `user_id`). A column-specific probe reports a fully migrated database as
+ * "tables missing" forever — no retry can fix that.
+ *
+ * Error classes stay distinct: only the "relation not found" shape counts
+ * as missing; everything else is logged with its PostgREST error text
+ * (server-side diagnostics) and surfaced as a separate honest UI state.
+ */
+export async function getAutoBewerbProbe(): Promise<AutoBewerbProbeResult> {
   if (probeCache) {
-    const positive = probeCache.missing.length === 0;
+    const positive = probeCache.missing.length === 0 && probeCache.blocked.length === 0;
     if (positive || Date.now() - probeCache.at < PROBE_NEGATIVE_TTL_MS) {
-      return Promise.resolve(probeCache.missing);
+      return { missing: probeCache.missing, blocked: probeCache.blocked };
     }
   }
-  return (async () => {
-    const results = await Promise.all(
-      AUTO_BEWERB_TABLES.map(async (table): Promise<string | null> => {
-        try {
-          const { error } = await createAdminClient().from(table).select("id").limit(1);
-          return error ? table : null;
-        } catch {
-          return table;
-        }
-      }),
-    );
-    const missing = results.filter((t): t is string => t !== null);
-    probeCache = { at: Date.now(), missing };
-    return missing;
-  })();
+  const results = await Promise.all(
+    AUTO_BEWERB_TABLES.map(async (table): Promise<{ table: string; error: string | null }> => {
+      try {
+        const { error } = await createAdminClient().from(table).select("*").limit(1);
+        return { table, error: error?.message ?? null };
+      } catch (e) {
+        return { table, error: e instanceof Error ? e.message : String(e) };
+      }
+    }),
+  );
+  const missing: string[] = [];
+  const blocked: string[] = [];
+  for (const { table, error } of results) {
+    if (!error) continue;
+    if (classifyProbeError({ message: error }) === "missing") {
+      missing.push(table);
+    } else {
+      blocked.push(table);
+      console.error(`[auto-bewerb] schema probe blocked on "${table}": ${error}`);
+    }
+  }
+  probeCache = { at: Date.now(), missing, blocked };
+  return { missing, blocked };
 }
 
 /** Boolean probe (true = all AUTO BEWERB tables reachable). */
 export function hasAutoBewerbSchema(): Promise<boolean> {
-  return getAutoBewerbMissingTables().then((missing) => missing.length === 0);
+  return getAutoBewerbProbe().then((p) => p.missing.length === 0 && p.blocked.length === 0);
 }
 
 /** Map a PostgREST insert error to a safe, actionable UI outcome (only
@@ -1608,10 +1642,19 @@ import type { AutoBewerbCompanyView, AutoBewerbWorkspace } from "./schema";
  * documents + selections + attempts in 3 bulk queries (never per company).
  */
 export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerbWorkspace> {
-  const missing = await getAutoBewerbMissingTables();
-  const ready = missing.length === 0;
+  const probe = await getAutoBewerbProbe();
+  const ready = probe.missing.length === 0 && probe.blocked.length === 0;
+  // "missing_tables" wins for the message when both classes occur: it is the
+  // more actionable one (apply the migration), and a blocked probe on a
+  // missing database is the same root cause anyway.
+  const setupIssue: AutoBewerbWorkspace["setupIssue"] = !ready
+    ? probe.missing.length > 0
+      ? "missing_tables"
+      : "probe_error"
+    : null;
   const empty: AutoBewerbWorkspace = {
     ready,
+    setupIssue,
     profile: null,
     companies: [],
     attachments: [],
@@ -1676,6 +1719,7 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
 
   return {
     ready: true,
+    setupIssue: null,
     profile: profileRow
       ? {
           fileName: profileRow.cv_file_name,
