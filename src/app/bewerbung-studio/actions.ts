@@ -5,13 +5,18 @@ import {
   approveApplication,
   cancelStudioSend,
   createStudioApplication,
+  deleteStudioApplication,
   getStudioApplication,
+  getStudioBatchView,
   hasStudioSchema,
+  markStudioStepConfirmed,
   prepareStudioSend,
   processDueStudioAttemptsForUser,
   saveStudioDocument,
   updateStudioApplication,
   type StudioAppPatch,
+  type StudioBatchView,
+  type StudioConfirmField,
   type StudioDocType,
   type StudioSendInput,
 } from "@/lib/studio";
@@ -155,6 +160,37 @@ export async function cancelSendAction(attemptId: string): Promise<ActionResult<
   const { user } = await getCurrentUserAndProfile();
   if (!user) return unauthorized();
   return toResult(await cancelStudioSend(user.id, attemptId), { ok: true as const }) as ActionResult<{ ok: true }>;
+}
+
+/** Delete a whole application (UI shows the confirmation dialog first).
+ *  Cancels pending scheduled attempts first — never sends after deletion. */
+export async function deleteApplicationAction(applicationId: string): Promise<ActionResult<{ ok: true }>> {
+  const { user } = await getCurrentUserAndProfile();
+  if (!user) return unauthorized();
+  return toResult(await deleteStudioApplication(user.id, applicationId), { ok: true as const }) as ActionResult<{ ok: true }>;
+}
+
+/** Explicit user confirmation of one completion requirement
+ *  (ad / profile / cv / letter / checklist). Server-owned timestamp. */
+export async function confirmStepAction(
+  applicationId: string,
+  field: string,
+): Promise<ActionResult<StudioApplicationRow>> {
+  const { user } = await getCurrentUserAndProfile();
+  if (!user) return unauthorized();
+  const allowed: StudioConfirmField[] = ["ad", "profile", "cv", "letter", "checklist"];
+  if (!allowed.includes(field as StudioConfirmField))
+    return { ok: false, code: "invalid_field", message: "Ungültige Bestätigung." };
+  return toResult(await markStudioStepConfirmed(user.id, applicationId, field as StudioConfirmField)) as ActionResult<StudioApplicationRow>;
+}
+
+/** Re-read the batch workspace view (navigator state: slots, completion,
+ *  sequential unlock). Returns value=null when the schema is pending. */
+export async function refreshBatchAction(): Promise<ActionResult<StudioBatchView | null>> {
+  const { user } = await getCurrentUserAndProfile();
+  if (!user) return unauthorized();
+  const view = await getStudioBatchView(user.id);
+  return { ok: true, value: view };
 }
 
 export interface StudioRefreshPayload {

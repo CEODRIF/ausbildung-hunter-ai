@@ -226,6 +226,14 @@ export interface StudioApplicationRow {
   sent_at: string | null;
   provider_message_id: string | null;
   last_failure_code: string | null;
+  /** Batch workspace confirmations (migration 20261211000000_studio_batch).
+   *  NULL = not yet confirmed; editing the underlying data clears the
+   *  matching timestamp (completion is re-derived server-side). */
+  ad_confirmed_at: string | null;
+  profile_confirmed_at: string | null;
+  cv_reviewed_at: string | null;
+  letter_reviewed_at: string | null;
+  checklist_ack_at: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -5,9 +5,11 @@ import type { CandidateProfile } from "@/lib/bewerbung-schema";
 import {
   getLatestCandidateProfile,
   getStudioApplication,
+  getStudioBatchView,
   getStudioMissingTables,
   listStudioApplications,
   listUserEmailAccounts,
+  type StudioBatchView,
 } from "@/lib/studio";
 import {
   adExtractSchema,
@@ -54,13 +56,16 @@ export default async function StudioPage({
   let appSummaries: StudioInitial["appSummaries"] = [];
   let emailAccounts: StudioInitial["emailAccounts"] = [];
   let candidateProfile: CandidateProfile | null = null;
+  let batch: StudioBatchView | null = null;
 
   if (available) {
-    const [apps, accounts, prof] = await Promise.all([
+    const [apps, accounts, prof, batchView] = await Promise.all([
       listStudioApplications(user.id),
       listUserEmailAccounts(user.id),
       getLatestCandidateProfile(user.id),
+      getStudioBatchView(user.id),
     ]);
+    batch = batchView;
     appSummaries = apps.map((a) => {
       const extract = a.ad_extracted
         ? adExtractSchema.safeParse(a.ad_extracted)
@@ -135,6 +140,7 @@ export default async function StudioPage({
     },
     emailAccounts,
     appSummaries,
+    batch,
     bundle,
     profile: candidateProfile,
   };
