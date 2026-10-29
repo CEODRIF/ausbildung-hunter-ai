@@ -114,28 +114,6 @@ jobs:
             -H "Authorization: Bearer $CRON_SECRET" \
             "$DEPLOY_URL/api/cron/bew-scheduler")"
           echo "Bew scheduler tick: $body"
-      - name: Bewerbung-Studio scheduler tick
-        env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          DEPLOY_URL: ${{ vars.EMAIL_SCHEDULER_URL || 'https://ausbildungsweg.net' }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CRON_SECRET:-}" ]; then
-            echo "::error::CRON_SECRET is not set in repository secrets."
-            exit 1
-          fi
-          : "${DEPLOY_URL:=https://ausbildungsweg.net}"
-          DEPLOY_URL="${DEPLOY_URL%/}"
-          # The AI Bewerbung Studio drain — SAME secret, SAME cadence, SAME
-          # concurrency group. Ticks /api/cron/studio-scheduler, which
-          # recovers stale attempts and claims+dispatches due SCHEDULED
-          # application sends (FOR UPDATE SKIP LOCKED, atomic re-claim —
-          # nothing double-sends). Deploy the branch before enabling the
-          # variable if it is not yet live (a 404 fails the run on purpose).
-          body="$(curl -sS --fail-with-body --max-time 90 --retry 3 --retry-delay 10 \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            "$DEPLOY_URL/api/cron/studio-scheduler")"
-          echo "Studio scheduler tick: $body"
       - name: AUTO-Bewerb scheduler tick
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}

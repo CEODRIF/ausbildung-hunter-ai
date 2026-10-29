@@ -45,7 +45,6 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
     usageSnapshot,
     aiEntitlement,
     subscription,
-    applicationsCount,
     emailAccount,
     hasCompletedScan,
     matching,
@@ -151,7 +150,7 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
       {/* ----------------------------------------------------------------- */}
       {/* Feature cards — the four ways in, each with a real action.         */}
       {/* ----------------------------------------------------------------- */}
-      <section className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <section className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <FeatureCard
           icon="spark"
           title={t("dash.features.assistant.title")}
@@ -176,15 +175,6 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
             href: "/opportunities",
           }}
         />
-        <FeatureCard
-          icon="briefcase"
-          title={t("dash.features.applications.title")}
-          text={t("dash.features.applications.text")}
-          action={{
-            label: t("dash.features.applications.action"),
-            href: "/applications",
-          }}
-        />
       </section>
 
       <NextActionCard action={nextAction} t={t} />
@@ -192,18 +182,8 @@ export async function DashboardContent({ data }: { data: DashboardData }) {
       {/* ----------------------------------------------------------------- */}
       {/* User progress — real backend values only.                          */}
       {/* ----------------------------------------------------------------- */}
-      <section className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <UsageCard snapshot={usageSnapshot} t={t} />
-        <MetricCard
-          label={t("dash.metrics.applications")}
-          value={applicationsCount}
-          detail={t("dash.metrics.applicationsDetail")}
-          icon="file"
-          tone="success"
-          href="/applications/new"
-          hrefLabel={t("dash.metrics.applicationsCta")}
-          badge={t("badges.you")}
-        />
         <MetricCard
           label={t("dash.metrics.saved")}
           value={matching.savedTotal}
@@ -516,12 +496,6 @@ function RecommendationRow({
             opportunityKey={opportunity.id}
             initialSaved={saved}
           />
-          <Link
-            href={`/applications/new?opp=${encodeURIComponent(opportunity.id)}`}
-            className="rounded-xl bg-accent-soft px-3 py-1.5 text-xs font-bold text-accent transition-colors hover:bg-accent hover:text-white"
-          >
-            {t("dash.buttons.prepare")}
-          </Link>
         </div>
       </div>
     </div>
@@ -603,12 +577,6 @@ function SavedPreviewCard({ items, t }: { items: SavedPreviewItem[]; t: T }) {
                     className="rounded-xl border border-line-strong bg-surface px-3 py-1.5 text-xs font-bold text-accent transition-colors hover:bg-accent-soft"
                   >
                     {t("dash.buttons.view")}
-                  </Link>
-                  <Link
-                    href={`/applications/new?opp=${encodeURIComponent(item.opportunity_key)}`}
-                    className="rounded-xl bg-accent-soft px-3 py-1.5 text-xs font-bold text-accent transition-colors hover:bg-accent hover:text-white"
-                  >
-                    {t("apps.openDraft")}
                   </Link>
                 </div>
               </div>
@@ -757,13 +725,6 @@ function WorkflowNav({ goalLabel, t }: { goalLabel: string; t: T }) {
       href: "/opportunities/saved",
       label: t("workflow.saved.label"),
       desc: t("workflow.saved.desc"),
-    },
-    {
-      key: "newApplication",
-      icon: "edit",
-      href: "/applications/new",
-      label: t("workflow.newApplication.label"),
-      desc: t("workflow.newApplication.desc"),
     },
     {
       key: "email",

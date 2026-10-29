@@ -191,12 +191,6 @@ function SavedCard({
           >
             {t("account.viewDetails")}
           </Link>
-          <Link
-            href={`/applications/new?opp=${encodeURIComponent(item.opportunity_key)}`}
-            className="rounded-xl bg-accent-soft px-4 py-2 text-xs font-semibold text-accent"
-          >
-            {t("account.prepareApplication")}
-          </Link>
           {item.source_url && (
             <a
               href={item.source_url}

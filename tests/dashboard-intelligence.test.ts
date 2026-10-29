@@ -386,10 +386,8 @@ describe("next action", () => {
       hasProfile: false,
       completeness: null,
       savedTotal: 0,
-      completeMatchCount: 0,
       hasApplication: false,
       hasEmailAccount: false,
-      campaign: null,
     });
     expect(action.id).toBe("scan_profile");
     expect(action.href).toBe("/bewerbung-scanner");
@@ -401,10 +399,8 @@ describe("next action", () => {
       hasProfile: true,
       completeness: sparse,
       savedTotal: 0,
-      completeMatchCount: 0,
       hasApplication: false,
       hasEmailAccount: false,
-      campaign: null,
     });
     expect(action.id).toBe("complete_profile");
     expect(action.reason).toContain("Target roles");
@@ -415,40 +411,22 @@ describe("next action", () => {
       hasProfile: true,
       completeness: complete,
       savedTotal: 0,
-      completeMatchCount: 0,
       hasApplication: false,
       hasEmailAccount: true,
-      campaign: null,
     });
     expect(action.id).toBe("find_opportunities");
     expect(action.href).toBe("/opportunities");
   });
 
-  it("saved but no complete matches, no draft → review matches", () => {
+  it("saved but nothing prepared → review matches", () => {
     const action = resolveNextAction({
       hasProfile: true,
       completeness: complete,
       savedTotal: 2,
-      completeMatchCount: 0,
       hasApplication: false,
       hasEmailAccount: true,
-      campaign: null,
     });
     expect(action.id).toBe("review_matches");
-  });
-
-  it("complete matches saved, no draft → prepare an application", () => {
-    const action = resolveNextAction({
-      hasProfile: true,
-      completeness: complete,
-      savedTotal: 2,
-      completeMatchCount: 1,
-      hasApplication: false,
-      hasEmailAccount: true,
-      campaign: null,
-    });
-    expect(action.id).toBe("prepare_application");
-    expect(action.href).toBe("/applications/new");
   });
 
   it("draft exists, no email → connect email", () => {
@@ -456,37 +434,23 @@ describe("next action", () => {
       hasProfile: true,
       completeness: complete,
       savedTotal: 2,
-      completeMatchCount: 1,
       hasApplication: true,
       hasEmailAccount: false,
-      campaign: null,
     });
     expect(action.id).toBe("connect_email");
     expect(action.href).toBe("/settings/email");
   });
 
-  it.each([
-    ["draft", "review_send"],
-    ["queued", "track_sending"],
-    ["sending", "track_sending"],
-    ["completed", "track_sent"],
-    ["partially_failed", "track_sent"],
-    ["failed", "explore"],
-    ["cancelled", "explore"],
-  ])("campaign %s → %s", (status, expected) => {
+  it("everything ready → explore", () => {
     const action = resolveNextAction({
       hasProfile: true,
       completeness: complete,
       savedTotal: 2,
-      completeMatchCount: 1,
       hasApplication: true,
       hasEmailAccount: true,
-      campaign: { id: "campaign-1", status },
     });
-    expect(action.id).toBe(expected);
-    if (expected.startsWith("track") || expected === "review_send") {
-      expect(action.href).toBe("/applications/campaign/campaign-1");
-    }
+    expect(action.id).toBe("explore");
+    expect(action.href).toBe("/opportunities");
   });
 
   it("is deterministic", () => {
@@ -494,10 +458,8 @@ describe("next action", () => {
       hasProfile: true,
       completeness: complete,
       savedTotal: 3,
-      completeMatchCount: 2,
       hasApplication: true,
       hasEmailAccount: true,
-      campaign: { id: "c1", status: "completed" } as const,
     };
     expect(resolveNextAction(input)).toEqual(resolveNextAction(input));
   });
@@ -867,9 +829,9 @@ describe("getDashboardData", () => {
       sent_at: "2026-09-25T11:05:00.000Z",
     });
 
-    // Next action reflects the persisted campaign, not an assumption.
-    expect(data.nextAction.id).toBe("track_sent");
-    expect(data.nextAction.href).toBe("/applications/campaign/camp-1");
+    // Next action: everything ready → explore (no assumption-based state).
+    expect(data.nextAction.id).toBe("explore");
+    expect(data.nextAction.href).toBe("/opportunities");
 
     // Usage comes from the server-side quota function, not the browser.
     // No subscription row in this fixture → the displayed AI limit is the
@@ -956,11 +918,6 @@ describe("getDashboardData", () => {
       target: "get_or_create_daily_usage",
       op: "rpc",
       message: "Unable to load daily usage.",
-    },
-    {
-      target: "application_drafts",
-      op: "list",
-      message: "Unable to load applications.",
     },
     {
       target: "activity_logs",

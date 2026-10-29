@@ -116,16 +116,6 @@ export const CATEGORIES: FaqCategory[] = [
     },
   },
   {
-    id: "applications",
-    icon: "briefcase",
-    label: {
-      de: "Bewerbungen",
-      en: "Applications",
-      fr: "Candidatures",
-      ar: "طلبات التقديم",
-    },
-  },
-  {
     id: "email-sending",
     icon: "send",
     label: {

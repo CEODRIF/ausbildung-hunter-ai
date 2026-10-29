@@ -11,7 +11,6 @@ import { scannerItems } from "./items/scanner";
 import { cvTemplatesItems } from "./items/cv-templates";
 import { coverLetterItems } from "./items/cover-letter";
 import { deckblattItems } from "./items/deckblatt";
-import { applicationsItems } from "./items/applications";
 import { emailSendingItems } from "./items/email-sending";
 import { privacyItems } from "./items/privacy";
 import { billingItems } from "./items/billing";
@@ -23,7 +22,7 @@ export { CATEGORIES, CATEGORY_BY_ID } from "./categories";
 export { searchFaq, normalizeQuery } from "./search";
 
 /**
- * All FAQ items, across the 17 categories, in display order. This is the
+ * All FAQ items, across the 15 categories, in display order. This is the
  * single source of truth: every item carries all four languages, so cross-
  * language parity is guaranteed by construction.
  */
@@ -39,7 +38,6 @@ export const ALL_ITEMS: FaqItem[] = [
   ...cvTemplatesItems,
   ...coverLetterItems,
   ...deckblattItems,
-  ...applicationsItems,
   ...emailSendingItems,
   ...privacyItems,
   ...billingItems,

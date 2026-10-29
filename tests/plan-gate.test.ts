@@ -201,7 +201,6 @@ describe("plan gate — redirect-loop / safe-exit source contract", () => {
 
   const GATED_TOOL_AREAS = [
     "dashboard",
-    "applications",
     "deckblatt",
     "opportunities",
     "bewerbung-automation",

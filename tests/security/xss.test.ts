@@ -155,8 +155,6 @@ describe("innerHTML sinks are fed sanitized data", () => {
 
   it("every write path that stores body_html runs it through the sanitizer", () => {
     for (const [file, marker] of [
-      ["src/app/applications/new/actions.ts", "sanitizeEmailHtml"],
-      ["src/lib/opportunity-prefill.ts", "sanitizeEmailHtml"],
       ["src/lib/email-campaigns.ts", "sanitizeEmailHtml"],
     ] as const) {
       expect(readFileSync(join(root, file), "utf8")).toContain(marker);
