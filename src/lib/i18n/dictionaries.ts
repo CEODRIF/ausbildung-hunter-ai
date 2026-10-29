@@ -2298,6 +2298,9 @@ const de = {
     openLabel: "Öffnen",
     backToList: "Zur Übersicht",
     schemaPending: "Das Studio wird gerade vorbereitet. Bitte versuchen Sie es in einigen Minuten erneut.",
+    schemaMissingTables:
+      "Fehlende Datenbank-Tabellen: {tables} — bitte das Studio-Migrations-Skript (20261210000000_bewerbung_studio.sql) anwenden und die Seite neu laden.",
+    retryCreate: "Erneut speichern",
     statusDraft: "Entwurf",
     statusReady: "Bereit",
     statusScheduled: "Geplant",
@@ -4682,6 +4685,9 @@ const en: Dict = {
     openLabel: "Open",
     backToList: "Back to overview",
     schemaPending: "The studio is being prepared. Please try again in a few minutes.",
+    schemaMissingTables:
+      "Missing database tables: {tables} — apply the studio migration script (20261210000000_bewerbung_studio.sql), then reload the page.",
+    retryCreate: "Retry saving",
     statusDraft: "Draft",
     statusReady: "Ready",
     statusScheduled: "Scheduled",
@@ -7077,6 +7083,9 @@ const fr: Dict = {
     openLabel: "Ouvrir",
     backToList: "Retour à l'aperçu",
     schemaPending: "Le studio est en cours de préparation. Réessayez dans quelques minutes.",
+    schemaMissingTables:
+      "Tables de base de données manquantes : {tables} — appliquez le script de migration du studio (20261210000000_bewerbung_studio.sql), puis rechargez la page.",
+    retryCreate: "Réessayer l'enregistrement",
     statusDraft: "Brouillon",
     statusReady: "Prête",
     statusScheduled: "Planifiée",
@@ -9388,6 +9397,9 @@ const ar: Dict = {
     openLabel: "فتح",
     backToList: "العودة إلى القائمة",
     schemaPending: "جارٍ إعداد الاستوديو. يرجى المحاولة بعد بضع دقائق.",
+    schemaMissingTables:
+      "جداول قاعدة البيانات الناقصة: {tables} — يُرجى تطبيق سكريبت ترحيل الاستوديو (20261210000000_bewerbung_studio.sql) ثم إعادة تحميل الصفحة.",
+    retryCreate: "إعادة الحفظ",
     statusDraft: "مسودة",
     statusReady: "جاهز",
     statusScheduled: "مجدول",

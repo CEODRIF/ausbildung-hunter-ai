@@ -5,7 +5,7 @@ import type { CandidateProfile } from "@/lib/bewerbung-schema";
 import {
   getLatestCandidateProfile,
   getStudioApplication,
-  hasStudioSchema,
+  getStudioMissingTables,
   listStudioApplications,
   listUserEmailAccounts,
 } from "@/lib/studio";
@@ -45,7 +45,10 @@ export default async function StudioPage({
   const params = await searchParams;
   const requestedId = typeof params.app === "string" ? params.app : null;
 
-  const available = await hasStudioSchema();
+  // Probe ALL four studio tables — a partially applied migration must show
+  // the exact missing prerequisites, not a generic error (PR #86 report).
+  const missingTables = await getStudioMissingTables();
+  const available = missingTables.length === 0;
 
   let bundle: StudioInitial["bundle"] = null;
   let appSummaries: StudioInitial["appSummaries"] = [];
@@ -121,6 +124,7 @@ export default async function StudioPage({
 
   const initial: StudioInitial = {
     available,
+    missingTables,
     userId: user.id,
     userFacts: {
       fullName: profile?.full_name ?? "",

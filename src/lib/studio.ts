@@ -135,22 +135,73 @@ export function emailBodyToHtml(body: string): string {
 // Schema probe (graceful degradation before the manual migration is applied)
 // ---------------------------------------------------------------------------
 
-let schemaProbe: Promise<boolean> | null = null;
-export function hasStudioSchema(): Promise<boolean> {
-  if (!schemaProbe) {
-    schemaProbe = (async () => {
-      try {
-        const { error } = await createAdminClient()
-          .from("studio_applications")
-          .select("id")
-          .limit(1);
-        return error === null;
-      } catch {
-        return false;
-      }
-    })();
+/** Every table the studio feature needs — the manual migration creates all
+ *  four, so the probe checks all four (a partially applied migration must
+ *  not look "ready"). */
+export const STUDIO_TABLES = [
+  "studio_applications",
+  "studio_documents",
+  "studio_attachments",
+  "studio_send_attempts",
+] as const;
+
+/** A NEGATIVE probe is only trusted this long: a transient Supabase error
+ *  (or a migration applied moments later) must not pin the "setup pending"
+ *  state for the whole serverless instance. Positive results are cached. */
+const PROBE_NEGATIVE_TTL_MS = 60_000;
+
+let probeCache: { at: number; missing: string[] } | null = null;
+
+/** Names of the studio tables that are NOT reachable right now
+ *  (empty array = fully ready). Safe to call from page, actions and routes. */
+export function getStudioMissingTables(): Promise<string[]> {
+  if (probeCache) {
+    const positive = probeCache.missing.length === 0;
+    if (positive || Date.now() - probeCache.at < PROBE_NEGATIVE_TTL_MS) {
+      return Promise.resolve(probeCache.missing);
+    }
   }
-  return schemaProbe;
+  return (async () => {
+    const results = await Promise.all(
+      STUDIO_TABLES.map(async (table): Promise<string | null> => {
+        try {
+          const { error } = await createAdminClient().from(table).select("id").limit(1);
+          return error ? table : null;
+        } catch {
+          return table;
+        }
+      }),
+    );
+    const missing = results.filter((t): t is string => t !== null);
+    probeCache = { at: Date.now(), missing };
+    return missing;
+  })();
+}
+
+/** Backward-compatible boolean probe (true = all studio tables reachable). */
+export function hasStudioSchema(): Promise<boolean> {
+  return getStudioMissingTables().then((missing) => missing.length === 0);
+}
+
+/** Map a PostgREST insert error to a safe, actionable UI outcome.
+ *  Only allow-listed error shapes are forwarded (missing table / missing
+ *  column / duplicate key) — raw driver details never reach the client. */
+function classifyInsertError(error: { message?: string } | null | undefined): StudioOpResult<never> {
+  const msg = error?.message ?? "";
+  if (/could not find the table|pgrst205|relation "public\.studio_applications" does not exist/i.test(msg)) {
+    return fail("schema_pending", "Studio-Datenbank wird vorbereitet.");
+  }
+  const col = msg.match(/^column "([a-z0-9_]+)" does not exist/i);
+  if (col) {
+    return fail(
+      "storage_error",
+      `Das Datenbank-Schema ist veraltet (Feld "${col[1]}" fehlt) — bitte das Studio-Migrations-Skript neu anwenden.`,
+    );
+  }
+  if (/duplicate key/i.test(msg)) {
+    return fail("storage_error", "Diese Bewerbung wurde gerade eben gespeichert — bitte die Seite aktualisieren.");
+  }
+  return fail("storage_error", "Speichern fehlgeschlagen. Bitte erneut versuchen.");
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +289,7 @@ export async function createStudioApplication(
     })
     .select("*")
     .single();
-  if (error || !data) return fail("storage_error", "Anwendung konnte nicht gespeichert werden.");
+  if (error || !data) return classifyInsertError(error);
   void logStudioActivity(userId, "studio_application_created", "Bewerbungs-Studio: neue Bewerbung erstellt");
   return { ok: true, value: data as unknown as StudioApplicationRow };
 }

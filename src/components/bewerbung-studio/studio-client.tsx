@@ -57,6 +57,9 @@ import { Note, StepIndicator, type StudioStep } from "./studio-ui";
 
 export interface StudioInitial {
   available: boolean;
+  /** Studio tables that are missing right now (empty = ready). Shown as the
+   *  exact prerequisite in the setup-pending notice. */
+  missingTables?: string[];
   userId: string;
   userFacts: {
     fullName: string;
@@ -215,13 +218,15 @@ export function StudioClient({ initial }: { initial: StudioInitial }) {
     [app, flash],
   );
 
-  /** Create a NEW application from the analyzed ad (then load its bundle). */
+  /** Create a NEW application from the analyzed ad (then load its bundle).
+   *  Returns the structured outcome — the specific server error (code +
+   *  message) must reach the UI, never a generic "something went wrong". */
   const createFromAnalysis = useCallback(
     async (
       text: string,
       nextExtract: AdExtract,
       nextAnalysis: AdAnalysis | null,
-    ): Promise<boolean> => {
+    ): Promise<ApiOutcome<StudioApplicationRow>> => {
       const res = await createApplicationAction({
         adRaw: text,
         extract: nextExtract,
@@ -235,15 +240,14 @@ export function StudioClient({ initial }: { initial: StudioInitial }) {
           at: new Date().toISOString(),
         },
       });
-      if (!res.ok) {
-        flash(res.message);
-        return false;
-      }
+      if (!res.ok) return { ok: false, code: res.code, error: res.message };
       // Full server round-trip: the page reloads the owned bundle (?app=).
+      // The application id comes from the server response and is used for
+      // every subsequent step — never a client-guessed value.
       openApplication(res.value.id);
-      return true;
+      return { ok: true, value: res.value };
     },
-    [initial.userFacts, baseCv, flash, openApplication],
+    [initial.userFacts, baseCv, openApplication],
   );
 
   // -----------------------------------------------------------------------
@@ -494,6 +498,11 @@ export function StudioClient({ initial }: { initial: StudioInitial }) {
     return (
       <div className="mx-auto max-w-3xl p-4 sm:p-6">
         <Note kind="info">{t("studio.schemaPending")}</Note>
+        {initial.missingTables && initial.missingTables.length > 0 ? (
+          <p className="mt-3 break-words font-mono text-xs text-muted">
+            {t("studio.schemaMissingTables", { tables: initial.missingTables.join(", ") })}
+          </p>
+        ) : null}
       </div>
     );
   }

@@ -55,6 +55,8 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
   let failTables: Set<string> = new Set();
   let rpcImpl: ((fn: string, args: Record<string, unknown>) => { data: unknown; error: unknown } | Promise<{ data: unknown; error: unknown }>) | null = null;
   let uploadError: unknown = null;
+  /** Inject a PostgREST-style insert error per table (e.g. missing column). */
+  const insertErrors: Record<string, string> = {};
 
   function rows(table: string): Record<string, unknown>[] {
     return tables[table] ?? [];
@@ -129,6 +131,9 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
       const matched = ts.filter((r) => matches(r, st.filters));
       if (st.pending?.op === "insert") {
         calls.push({ table, op: "insert", filters: filterMap(st), args: [st.pending.vals] });
+        if (insertErrors[table]) {
+          return { data: null, error: { message: insertErrors[table] } };
+        }
         if (uniqueConflict(table, st.pending.vals)) {
           return {
             data: null,
@@ -217,6 +222,8 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     admin,
     /** Simulate the pre-migration state (tables do not exist yet). */
     failTables: (names: string[]) => (failTables = new Set(names)),
+    /** Force a specific PostgREST insert error on the next inserts for a table. */
+    failInsert: (table: string, message: string) => (insertErrors[table] = message),
     setRpc: (impl: NonNullable<typeof rpcImpl>) => (rpcImpl = impl),
     setUploadError: (e: unknown) => (uploadError = e),
   };
