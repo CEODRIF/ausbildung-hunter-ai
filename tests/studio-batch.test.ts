@@ -371,6 +371,53 @@ describe("batch limit (server-enforced)", () => {
     expect(sql).toMatch(/where slot_no > 0/i);
   });
 
+  // Production incident: the Supabase env behind the deployment was missing
+  // the slot_no column (third studio migration not applied). PostgREST
+  // returns the error SQLSTATE-prefixed — the classifier must map it to the
+  // actionable "schema outdated" message, not the generic catch-all
+  // ("Speichern fehlgeschlagen. Bitte erneut versuchen.").
+  it("a SQLSTATE-prefixed missing-column error (42703) maps to the actionable schema-outdated message", async () => {
+    db.tables.studio_applications = [];
+    db.failInsert("studio_applications", '42703: column "slot_no" does not exist');
+    const { createStudioApplication } = await studio();
+    const res = await createStudioApplication("user-a", { adRaw: "x".repeat(60) });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.code).toBe("storage_error");
+      expect(res.message).toMatch(/Schema ist veraltet/);
+      expect(res.message).toContain("slot_no");
+      expect(res.message).not.toContain("Speichern fehlgeschlagen");
+    }
+  });
+
+  it("a too-narrow column (22001 value too long) maps to the schema-outdated message", async () => {
+    db.tables.studio_applications = [];
+    db.failInsert("studio_applications", "22001: value too long for type character varying(255)");
+    const { createStudioApplication } = await studio();
+    const res = await createStudioApplication("user-a", { adRaw: "x".repeat(60) });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.code).toBe("storage_error");
+      expect(res.message).toMatch(/Schema ist veraltet/);
+      expect(res.message).not.toContain("Speichern fehlgeschlagen");
+    }
+  });
+
+  it("the slot query error is checked BEFORE the insert (early failure, no doomed insert)", async () => {
+    db.tables.studio_applications = [];
+    db.failSelect("studio_applications", "slot_no", '42703: column "slot_no" does not exist');
+    const { createStudioApplication } = await studio();
+    const res = await createStudioApplication("user-a", { adRaw: "x".repeat(60) });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.code).toBe("storage_error");
+      expect(res.message).toContain("slot_no");
+      expect(res.message).not.toContain("Speichern fehlgeschlagen");
+    }
+    // the insert was never attempted
+    expect(db.calls.some((c) => c.table === "studio_applications" && c.op === "insert")).toBe(false);
+  });
+
   it("deleting one application leaves another application's documents and attachments intact", async () => {
     const aId = "aaaaaaaa-0000-4000-8000-000000000001";
     const bId = "bbbbbbbb-0000-4000-8000-000000000002";

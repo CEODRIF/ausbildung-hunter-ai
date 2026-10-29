@@ -36,6 +36,7 @@ interface ChainState {
     | null;
   shape: "rows" | "single" | "maybeSingle";
   selectAfter: boolean;
+  selectCols: string[] | null;
 }
 
 export function createStudioDb(seed: Record<string, Record<string, unknown>[]> = {}) {
@@ -57,6 +58,10 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
   let uploadError: unknown = null;
   /** Inject a PostgREST-style insert error per table (e.g. missing column). */
   const insertErrors: Record<string, string> = {};
+  /** Inject a PostgREST-style select error for queries that REQUEST A
+   *  SPECIFIC COLUMN (e.g. a stale schema missing slot_no). Column-aware so
+   *  unrelated selects on the same table (schema probe selects "id") pass. */
+  let selectFail: { table: string; col: string; message: string } | null = null;
 
   function rows(table: string): Record<string, unknown>[] {
     return tables[table] ?? [];
@@ -100,11 +105,13 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
   }
 
   function makeChain(table: string) {
-    const st: ChainState = { table, filters: [], limit: null, pending: null, shape: "rows", selectAfter: false };
+    const st: ChainState = { table, filters: [], limit: null, pending: null, shape: "rows", selectAfter: false, selectCols: null };
 
     const chain: Record<string | symbol, unknown> = {
-      select: (..._args: unknown[]) => {
-        // Column lists intentionally not modeled — full rows are returned.
+      select: (...args: unknown[]) => {
+        // Column lists are captured (for failSelect) but not enforced —
+        // full rows are returned.
+        st.selectCols = typeof args[0] === "string" ? [args[0]] : null;
         st.selectAfter = st.pending !== null;
         if (st.pending === null) st.pending = { op: "select" };
         return chain;
@@ -131,6 +138,9 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     function execute(): { data: unknown; error: unknown } {
       if (failTables.has(table)) {
         return { data: null, error: { message: `relation "public.${table}" does not exist` } };
+      }
+      if (selectFail && selectFail.table === table && st.selectCols?.includes(selectFail.col)) {
+        return { data: null, error: { message: selectFail.message } };
       }
       const ts = rows(table);
       const matched = ts.filter((r) => matches(r, st.filters));
@@ -239,6 +249,8 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     failTables: (names: string[]) => (failTables = new Set(names)),
     /** Force a specific PostgREST insert error on the next inserts for a table. */
     failInsert: (table: string, message: string) => (insertErrors[table] = message),
+    /** Force a select error for queries requesting `col` on `table`. */
+    failSelect: (table: string, col: string, message: string) => (selectFail = { table, col, message }),
     setRpc: (impl: NonNullable<typeof rpcImpl>) => (rpcImpl = impl),
     setUploadError: (e: unknown) => (uploadError = e),
   };

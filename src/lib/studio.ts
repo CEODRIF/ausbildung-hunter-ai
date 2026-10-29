@@ -199,7 +199,13 @@ export function hasStudioSchema(): Promise<boolean> {
  *  Only allow-listed error shapes are forwarded (missing table / missing
  *  column / duplicate key) — raw driver details never reach the client. */
 function classifyInsertError(error: { message?: string } | null | undefined): StudioOpResult<never> {
-  const msg = error?.message ?? "";
+  // PostgREST prefixes error messages with the SQLSTATE code, e.g.
+  // '42703: column "slot_no" does not exist' — strip it so the allow-list
+  // below matches the REAL production message shape (an anchored pattern
+  // would otherwise let a stale-schema error fall into the generic
+  // catch-all, which is exactly what users saw).
+  const raw = error?.message ?? "";
+  const msg = raw.replace(/^\d{5}: /, "");
   if (/could not find the table|pgrst205|relation "public\.studio_applications" does not exist/i.test(msg)) {
     return fail("schema_pending", "Studio-Datenbank wird vorbereitet.");
   }
@@ -208,6 +214,14 @@ function classifyInsertError(error: { message?: string } | null | undefined): St
     return fail(
       "storage_error",
       `Das Datenbank-Schema ist veraltet (Feld "${col[1]}" fehlt) — bitte das Studio-Migrations-Skript neu anwenden.`,
+    );
+  }
+  if (/value too long for type/i.test(msg)) {
+    // Column exists but is too narrow (e.g. varchar instead of text) —
+    // same remedy: re-apply the studio migration.
+    return fail(
+      "storage_error",
+      "Das Datenbank-Schema ist veraltet (Spaltentyp zu kurz) — bitte das Studio-Migrations-Skript neu anwenden.",
     );
   }
   // Two concurrent creates that both computed the same last free slot:
@@ -219,6 +233,10 @@ function classifyInsertError(error: { message?: string } | null | undefined): St
   if (/duplicate key/i.test(msg)) {
     return fail("storage_error", "Diese Bewerbung wurde gerade eben gespeichert — bitte die Seite aktualisieren.");
   }
+  // Diagnostics only: the raw driver message goes to the SERVER log so a
+  // future environment issue is visible in the deployment logs — it never
+  // reaches the client.
+  console.error(`[studio] unclassified studio_applications write error: ${raw}`);
   return fail("storage_error", "Speichern fehlgeschlagen. Bitte erneut versuchen.");
 }
 
@@ -301,10 +319,17 @@ export async function createStudioApplication(
   // slot in 1..10; the partial UNIQUE index (user_id, slot_no) makes the
   // database the final arbiter even for concurrent creates (a lost race
   // hits the unique violation and is mapped to batch_full below).
-  const { data: slotRows } = await createAdminClient()
+  const { data: slotRows, error: slotErr } = await createAdminClient()
     .from("studio_applications")
     .select("slot_no")
     .eq("user_id", userId);
+  if (slotErr) {
+    // A stale schema (e.g. the slot_no column from the third studio
+    // migration missing) surfaces HERE, before the insert — fail with the
+    // actionable classification instead of the generic catch-all the
+    // doomed insert would produce.
+    return classifyInsertError(slotErr);
+  }
   const active = (slotRows ?? []) as Array<{ slot_no?: number | null }>;
   if (active.length >= STUDIO_BATCH_LIMIT) {
     return fail("batch_full", "Der Batch ist voll (max. 10 Bewerbungen). Bitte eine Bewerbung löschen, um einen neuen Platz zu schaffen.");
