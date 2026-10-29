@@ -17,8 +17,9 @@ import {
   dateTokens,
   validateGeneratedCv,
 } from "@/lib/studio/facts";
-import { CV_TEMPLATE_IDS, sanitizeCvDocument } from "@/lib/templates/cv";
+import { CV_TEMPLATE_IDS, cvEmpty, sanitizeCvDocument } from "@/lib/templates/cv";
 import type { CvDocument } from "@/lib/templates/cv";
+import type { CandidateProfile } from "@/lib/bewerbung-schema";
 
 // ---------------------------------------------------------------------------
 // Test candidate (mirrors the screenshot profile: year-only German CV dates)
@@ -174,6 +175,90 @@ describe("fact guard — genuine fabrications must be REJECTED (protection kept)
   it("rejects a different phone number", () => {
     const v = validateGeneratedCv(facts, generatedVariant({ phone: "0170 999 888 77" }));
     expect(v.some((x) => x.field === "personal.phone")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Production incident (2nd round): the candidate's OWN verified identity
+// (fullName / email / phone) was rejected whenever the browser CV's personal
+// section DISAGREES with the scanner profile. The model only SEES the
+// profile's contacts (formatCvForPrompt omits the CV's), so its faithful
+// output must be accepted against ANY verified source.
+// ---------------------------------------------------------------------------
+
+const PROFILE_CANDIDATE = {
+  candidate: {
+    full_name: "Mustapha Drif",
+    location: "Berlin",
+    country: "Deutschland",
+    contact: { email: "mustapha.drif@example.de", phone: "+49 151 2345678" },
+  },
+} as unknown as CandidateProfile;
+
+const staleCv = (): CvDocument => {
+  const cv = JSON.parse(JSON.stringify(BASE_CV)) as CvDocument;
+  cv.personal.fullName = "M. Drif";
+  cv.personal.email = "old.person@example.de";
+  cv.personal.phone = "+49 170 1234567";
+  return cv;
+};
+
+describe("identity: the candidate's own verified values are accepted", () => {
+  // CV and profile are BOTH the candidate's own verified data, but they
+  // disagree (stale CV personal section). The model echoes the profile —
+  // the only identity it can see.
+  const facts = collectVerifiedFacts(sanitizeCvDocument(staleCv()), PROFILE_CANDIDATE, null);
+
+  it("accepts faithful output echoing the PROFILE identity (re-formatted phone included)", () => {
+    // BASE_CV personal === profile identity; phone written domestic-style
+    const v = validateGeneratedCv(facts, generatedVariant({ phone: "0151 2345678" }));
+    expect(v, JSON.stringify(v)).toEqual([]);
+  });
+
+  it("accepts the CV-side identity too (any verified source is grounded)", () => {
+    const v = validateGeneratedCv(facts, sanitizeCvDocument(staleCv())!);
+    expect(v, JSON.stringify(v)).toEqual([]);
+  });
+
+  it("still rejects a name/email/phone present in NEITHER source", () => {
+    const generated = generatedVariant();
+    generated.personal.fullName = "Ergänzt Person";
+    generated.personal.email = "nobody@unknown.de";
+    generated.personal.phone = "0170 999 888 77";
+    const v = validateGeneratedCv(facts, generated);
+    expect(v.map((x) => x.field).sort()).toEqual(["personal.email", "personal.fullName", "personal.phone"]);
+  });
+
+  it("rejects generated identity when NO source has one (no-fabrication kept)", () => {
+    const f = collectVerifiedFacts(cvEmpty(), { candidate: {} } as unknown as CandidateProfile, null);
+    const v = validateGeneratedCv(f, generatedVariant());
+    for (const field of ["personal.fullName", "personal.email", "personal.phone"]) {
+      expect(v.some((x) => x.field === field), field).toBe(true);
+    }
+  });
+
+  it("email: case and whitespace variants of a verified address are equivalent", () => {
+    const f = collectVerifiedFacts(sanitizeCvDocument(BASE_CV), null, null);
+    for (const email of ["MUSTAPHA.DRIF@example.de", "mustapha.drif @ example.de "]) {
+      const g = generatedVariant();
+      g.personal.email = email;
+      expect(validateGeneratedCv(f, g).some((x) => x.field === "personal.email"), email).toBe(false);
+    }
+    const g = generatedVariant();
+    g.personal.email = "mustapha.drif@other-domain.de";
+    expect(validateGeneratedCv(f, g).some((x) => x.field === "personal.email")).toBe(true);
+  });
+
+  it("phone: local ↔ international equivalence for non-DE country codes (+212)", () => {
+    const src = cvEmpty();
+    src.personal.phone = "+212 612 345 678";
+    const f = collectVerifiedFacts(src, null, null);
+    const ok = cvEmpty();
+    ok.personal.phone = "0612 345 678";
+    expect(validateGeneratedCv(f, ok).some((x) => x.field === "personal.phone")).toBe(false);
+    const bad = cvEmpty();
+    bad.personal.phone = "0699 888 777";
+    expect(validateGeneratedCv(f, bad).some((x) => x.field === "personal.phone")).toBe(true);
   });
 });
 

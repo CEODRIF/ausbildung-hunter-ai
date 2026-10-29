@@ -105,17 +105,41 @@ function buildMonthYearPool(sources: string[]): {
   return { years, byYear, anyMonths, hasMonths: anyMonths.size > 0 };
 }
 
-/** German phone comparison: digit-only, with the country-code / leading-zero
- *  equivalence ("+49 151 2345678" ≡ "0151 2345678" ≡ "00491512345678"). */
+/** Phone comparison: digit-only, with country-code / leading-zero
+ *  equivalence in both directions and for ANY 2–3 digit country code
+ *  ("+49 151 …" ≡ "0151 …", "+212 6 12 …" ≡ "06 12 …"). Re-formatting the
+ *  SAME number is not a new fact; a different number still fails — the
+ *  national part must match exactly and be long enough to be a real number. */
 function phoneMatches(a: string, b: string): boolean {
   const digits = (v: string) => v.replace(/\D/g, "");
   const da = digits(a);
   const db = digits(b);
   if (!da && !db) return true;
-  if (da === db) return true;
-  const strip = (d: string) =>
-    d.startsWith("0049") ? d.slice(4) : d.startsWith("49") ? d.slice(2) : d.startsWith("0") ? d.slice(1) : d;
-  return strip(da) === strip(db);
+  /** Notation variants: national leading zero and the international "00"
+   *  prefix (optionally with the 2–3 digit country code) stripped. */
+  const variants = (d: string): string[] => {
+    const out = [d];
+    if (d.startsWith("0")) out.push(d.slice(1));
+    if (d.startsWith("00")) out.push(d.slice(2), d.slice(4), d.slice(5));
+    return out;
+  };
+  /** One side may carry a 2–3 digit country code in front of the other
+   *  side's national form (international ↔ national representation). */
+  const ccRelated = (x: string, y: string): boolean => {
+    const diff = x.length - y.length;
+    if (diff === 2 || diff === 3) return y.length >= 6 && x.slice(diff) === y;
+    if (diff === -2 || diff === -3) return x.length >= 6 && y.slice(-diff) === x;
+    return false;
+  };
+  for (const x of variants(da)) for (const y of variants(db)) if (x === y || ccRelated(x, y)) return true;
+  return false;
+}
+
+/** Email comparison: case- and whitespace-insensitive (formatting, not a new
+ *  fact). Any other difference is a different address. */
+function emailMatches(a: string, b: string): boolean {
+  const norm = (v: string) => v.toLowerCase().replace(/\s+/g, "");
+  return norm(a) === norm(b);
 }
 
 /** Canonical CEFR rank for level wording (null = unranked phrasing).
@@ -227,12 +251,31 @@ export function collectVerifiedFacts(
     push(skills, user.linkedin);
   }
 
+  // Identity unions: every verified value from every source the user
+  // provided (browser CV, account facts, scanner profile). The guard accepts
+  // a generated identity if it is grounded in ANY of them.
+  const names: string[] = [];
+  const emails: string[] = [];
+  const phones: string[] = [];
+  const addAll = (list: string[], ...vals: Array<string | null | undefined>) => {
+    for (const v of vals) {
+      const t = v?.trim();
+      if (t && !list.includes(t)) list.push(t);
+    }
+  };
+  addAll(names, cv?.personal.fullName, user?.fullName, profile?.candidate?.full_name);
+  addAll(emails, cv?.personal.email, user?.email, profile?.candidate?.contact?.email);
+  addAll(phones, cv?.personal.phone, user?.phone, profile?.candidate?.contact?.phone);
+
   return {
     name: (cv?.personal.fullName || user?.fullName || profile?.candidate?.full_name || "").trim(),
     email: (cv?.personal.email || user?.email || profile?.candidate?.contact?.email || "").trim(),
     phone: (cv?.personal.phone || user?.phone || profile?.candidate?.contact?.phone || "").trim(),
     location: (cv?.personal.location || user?.location || profile?.candidate?.location || "").trim(),
     linkedin: (cv?.personal.linkedin || user?.linkedin || profile?.candidate?.contact?.linkedin || "").trim(),
+    names,
+    emails,
+    phones,
     education,
     experience,
     skills,
@@ -273,14 +316,20 @@ export function validateGeneratedCv(
     violations.push({ field, value, reason });
 
   const p = cv.personal;
-  if (p.fullName.trim() && normalizeFact(p.fullName) !== normalizeFact(facts.name))
+  // Identity: a generated value must be grounded in at least one VERIFIED
+  // source (browser CV, account facts, scanner profile). The model only
+  // SEES the profile's contacts (formatCvForPrompt omits the CV's), so
+  // comparing against a single CV-priority value rejects the candidate's
+  // OWN values whenever the two verified sources disagree. Everything
+  // outside the union is still fabrication and rejected — including any
+  // value when no source has one.
+  if (p.fullName.trim() && !facts.names.some((n) => normalizeFact(n) === normalizeFact(p.fullName)))
     bad("personal.fullName", p.fullName);
-  if (p.email.trim() && normalizeFact(p.email) !== normalizeFact(facts.email))
+  if (p.email.trim() && !facts.emails.some((e) => emailMatches(e, p.email)))
     bad("personal.email", p.email);
-  // Phone: digit-level comparison with German country-code equivalence
-  // ("+49 151 …" ≡ "0151 …") — re-formatting is NOT a new fact, a different
-  // number still is.
-  if (p.phone.trim() && !phoneMatches(p.phone, facts.phone))
+  // Phone: digit-level comparison with country-code / leading-zero
+  // equivalence — re-formatting is NOT a new fact, a different number is.
+  if (p.phone.trim() && !facts.phones.some((ph) => phoneMatches(ph, p.phone)))
     bad("personal.phone", p.phone);
   if (p.location.trim() && !inPool(p.location, [facts.location, ...facts.skills]))
     bad("personal.location", p.location);

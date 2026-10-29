@@ -130,6 +130,14 @@ export interface VerifiedFacts {
   phone: string;
   location: string;
   linkedin: string;
+  /** EVERY verified name from any source (browser CV, account, scanner profile).
+   *  The model only SEES the profile's contacts, so the guard must accept a
+   *  value grounded in ANY verified source — not just the CV-priority one. */
+  names: string[];
+  /** EVERY verified email from any source. */
+  emails: string[];
+  /** EVERY verified phone from any source. */
+  phones: string[];
   /** All known education degrees/institutions/years. */
   education: string[];
   /** All known job titles/companies/date ranges. */
