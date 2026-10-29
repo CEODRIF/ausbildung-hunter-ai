@@ -234,6 +234,11 @@ export interface StudioApplicationRow {
   cv_reviewed_at: string | null;
   letter_reviewed_at: string | null;
   checklist_ack_at: string | null;
+  /** 1-based batch slot (smallest free in 1..10); 0 = legacy row from
+   *  before migration 20261212000000_studio_slot_no. The partial unique
+   *  index on (user_id, slot_no) WHERE slot_no > 0 is the race-proof
+   *  backstop for the 10-active limit. */
+  slot_no: number;
   created_at: string;
   updated_at: string;
 }

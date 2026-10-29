@@ -101,6 +101,7 @@ const BASE_APP = {
   cv_reviewed_at: null,
   letter_reviewed_at: null,
   checklist_ack_at: null,
+  slot_no: 1,
   schedule_timezone: null,
   sent_at: null,
   provider_message_id: null,
@@ -211,39 +212,51 @@ describe("batch navigator", () => {
     expect(screen.getAllByText(/Lebenslauf geprüft/).length).toBeGreaterThan(0);
     // the locked slot shows the lock hint with the exact missing item
     expect(screen.getAllByText(/Fehlt: Lebenslauf geprüft/).length).toBeGreaterThan(0);
-    // add slot is blocked and names the blocking company
+    // add button is blocked and names the blocking company
     expect(screen.getAllByText(/Zuerst Tech GmbH abschließen/).length).toBeGreaterThan(0);
     // batch progress in the header
     expect(screen.getAllByText(/1\/10 vollständig/).length).toBeGreaterThan(0);
   });
 
-  it("add slot offers the new application when everything is complete (canAdd)", () => {
+  it("the Add button is enabled and offers the new application when everything is complete (canAdd)", () => {
     render(
       <StudioClient
         initial={initial({ batch: makeBatch({ canAdd: true, blockingAppId: null, missingForBlockingApp: [] }) })}
       />,
     );
-    expect(screen.getAllByText("Neue Bewerbung").length).toBeGreaterThan(0);
+    // desktop column + mobile strip → two Add buttons, both enabled
+    const adds = screen.getAllByRole("button", { name: "Bewerbung hinzufügen" });
+    expect(adds.length).toBeGreaterThan(0);
+    for (const b of adds) expect((b as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("shows 'batch full' at the 10-slot cap", () => {
+  it("at the 10-slot cap: Add is disabled and the max message is shown", () => {
     const apps = Array.from({ length: 10 }, (_, i) =>
       batchApp({ id: `cccccccc-0000-4000-8000-${String(i).padStart(12, "0")}` }),
     );
     render(<StudioClient initial={initial({ batch: makeBatch({ apps, canAdd: false }) })} />);
-    expect(screen.getAllByText("Batch voll (max. 10)").length).toBeGreaterThan(0);
+    // "Maximum 10 applications reached" (per language: de message)
+    expect(screen.getAllByText("Maximum 10 Bewerbungen erreicht.").length).toBeGreaterThan(0);
+    const adds = screen.getAllByRole("button", { name: "Bewerbung hinzufügen" });
+    expect(adds.length).toBeGreaterThan(0);
+    for (const b of adds) expect((b as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("delete requires the two-step confirmation and calls the server action with the slot's id", async () => {
+  it("delete requires the two-step confirmation, names the exact company, and does NOT navigate", async () => {
     render(<StudioClient initial={initial()} />);
-    const del = screen.getAllByLabelText("Bewerbung löschen").at(0)!;
+    pushMock.mockClear();
+    // × button: per-card, labeled with the application it deletes
+    const del = screen.getAllByLabelText(/^Bewerbung löschen: Tech GmbH/).at(0)!;
     fireEvent.click(del);
-    expect(screen.getAllByText("Löschen?").length).toBeGreaterThan(0);
+    // clicking × must not open the application
+    expect(pushMock).not.toHaveBeenCalled();
+    // the confirmation names the EXACT company that will be deleted
+    expect(screen.getAllByText(/„Tech GmbH“ löschen\?/).length).toBeGreaterThan(0);
     // cancel path first
     fireEvent.click(screen.getAllByText("Abbrechen").at(0)!);
     expect(actions.deleteApplicationAction).not.toHaveBeenCalled();
-    // confirm path
-    fireEvent.click(screen.getAllByLabelText("Bewerbung löschen").at(0)!);
+    // confirm path — the server action receives THIS slot's id
+    fireEvent.click(screen.getAllByLabelText(/^Bewerbung löschen: Tech GmbH/).at(0)!);
     fireEvent.click(screen.getAllByText("Ja, löschen").at(0)!);
     await waitFor(() => expect(actions.deleteApplicationAction).toHaveBeenCalledWith(APP_ID));
   });

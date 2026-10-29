@@ -76,6 +76,11 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
   }
 
   function uniqueConflict(table: string, vals: Record<string, unknown>): boolean {
+    // Mirrors the real partial unique index from
+    // 20261212000000_studio_slot_no.sql: (user_id, slot_no) WHERE slot_no > 0.
+    if (table === "studio_applications" && typeof vals.slot_no === "number" && vals.slot_no > 0) {
+      return rows(table).some((r) => r.user_id === vals.user_id && r.slot_no === vals.slot_no);
+    }
     if (table === "studio_send_attempts" && vals.idempotency_key != null) {
       return rows(table).some((r) => r.idempotency_key === vals.idempotency_key && r.id !== vals.id);
     }
@@ -135,9 +140,19 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
           return { data: null, error: { message: insertErrors[table] } };
         }
         if (uniqueConflict(table, st.pending.vals)) {
+          // Postgres-accurate constraint name so engine classification
+          // (which matches on the constraint) is tested faithfully.
+          const constraint =
+            table === "studio_applications" && typeof st.pending.vals.slot_no === "number" && st.pending.vals.slot_no > 0
+              ? "studio_applications_user_slot_unique"
+              : table === "studio_send_attempts"
+                ? "studio_send_attempts_idempotency_key_key"
+                : table === "studio_documents"
+                  ? "studio_documents_application_id_doc_type_version_key"
+                  : "unknown_unique";
           return {
             data: null,
-            error: { message: "duplicate key value violates unique constraint" },
+            error: { message: `duplicate key value violates unique constraint "${constraint}"` },
           };
         }
         const row: Record<string, unknown> = {

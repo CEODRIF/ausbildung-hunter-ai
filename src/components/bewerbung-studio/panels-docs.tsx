@@ -123,9 +123,22 @@ export function CvPanel({
         const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
         if (res.status === 422) {
           setFactWarning(true);
-          setError(
-            typeof data.error === "string" ? data.error : t("studio.factWarning"),
-          );
+          const base = typeof data.error === "string" ? data.error : t("studio.factWarning");
+          // The server returns the exact offending fields — show them so the
+          // candidate sees WHAT to fix, not just that something failed.
+          const violations = Array.isArray(data.violations)
+            ? (data.violations as Array<{ field?: unknown; value?: unknown }>)
+            : [];
+          const fields = violations
+            .slice(0, 3)
+            .map((v) =>
+              [typeof v.field === "string" ? v.field : "", typeof v.value === "string" ? v.value : ""]
+                .filter(Boolean)
+                .join(": "),
+            )
+            .filter(Boolean)
+            .join(", ");
+          setError(fields ? `${base} — ${t("studio.factFields", { fields })}` : base);
           return;
         }
         if (!res.ok) {

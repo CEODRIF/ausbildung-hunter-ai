@@ -38,6 +38,7 @@ function appRow(over: Record<string, unknown> = {}) {
     cv_reviewed_at: null,
     letter_reviewed_at: null,
     checklist_ack_at: null,
+    slot_no: 0,
     email_account_id: null,
     recipient_email: null,
     idempotency_key: null,

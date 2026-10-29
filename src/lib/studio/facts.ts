@@ -48,6 +48,95 @@ export function dateTokens(value: string): Set<string> {
   return out;
 }
 
+/** Ordered date tokens of a single date string: "y2019" / "m09" per word,
+ *  in order of appearance (needed to attribute a month to its year). */
+function orderedDateTokens(value: string): string[] {
+  const out: string[] = [];
+  const lower = value.toLowerCase();
+  for (const word of lower.split(/[^a-z0-9]+/)) {
+    if (GERMAN_MONTHS.has(word)) {
+      out.push(`m${word}`);
+      continue;
+    }
+    const n = Number(word);
+    if (/^\d{1,2}$/.test(word) && n >= 1 && n <= 12) {
+      out.push(`m${String(n).padStart(2, "0")}`);
+      continue;
+    }
+    if (/(?:19|20)\d{2}/.test(word)) out.push(`y${word.match(YEAR_RE)![0]}`);
+  }
+  return out;
+}
+
+/**
+ * Attribute source months to their years: each month token pairs with the
+ * NEXT year token in the same date string (German style "09/2019",
+ * "september 2022"); a trailing month pairs with the previous year.
+ * Unattributable months still land in `anyMonths` as a lenient fallback.
+ */
+function buildMonthYearPool(sources: string[]): {
+  years: Set<string>;
+  byYear: Map<string, Set<string>>;
+  anyMonths: Set<string>;
+  hasMonths: boolean;
+} {
+  const years = new Set<string>();
+  const byYear = new Map<string, Set<string>>();
+  const anyMonths = new Set<string>();
+  for (const s of sources) {
+    const tokens = orderedDateTokens(s);
+    let prevYear: string | null = null;
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t.startsWith("y")) {
+        years.add(t);
+        prevYear = t;
+      } else {
+        anyMonths.add(t);
+        const nextYear = tokens.slice(i + 1).find((x) => x.startsWith("y")) ?? null;
+        const target = nextYear ?? prevYear;
+        if (target) {
+          if (!byYear.has(target)) byYear.set(target, new Set());
+          byYear.get(target)!.add(t);
+        }
+      }
+    }
+  }
+  return { years, byYear, anyMonths, hasMonths: anyMonths.size > 0 };
+}
+
+/** German phone comparison: digit-only, with the country-code / leading-zero
+ *  equivalence ("+49 151 2345678" ≡ "0151 2345678" ≡ "00491512345678"). */
+function phoneMatches(a: string, b: string): boolean {
+  const digits = (v: string) => v.replace(/\D/g, "");
+  const da = digits(a);
+  const db = digits(b);
+  if (!da && !db) return true;
+  if (da === db) return true;
+  const strip = (d: string) =>
+    d.startsWith("0049") ? d.slice(4) : d.startsWith("49") ? d.slice(2) : d.startsWith("0") ? d.slice(1) : d;
+  return strip(da) === strip(db);
+}
+
+/** Canonical CEFR rank for level wording (null = unranked phrasing).
+ *  "Muttersprache" entails every lower level; a generated level may never
+ *  rank HIGHER than the source (that would be inflation). */
+const LEVEL_RANK: Array<[RegExp, number]> = [
+  [/muttersprache|muttersprachlich|native|nativ/, 7],
+  [/\bc2\b/, 6],
+  [/\bc1\b|verhandlungssicher|fliessend|fließend/, 5],
+  [/\bb2\b/, 4],
+  [/\bb1\b/, 3],
+  [/\ba2\b|grundkenntnisse/, 2],
+  [/\ba1\b/, 1],
+];
+function levelRank(level: string): number | null {
+  const n = normalizeFact(level);
+  if (!n) return null;
+  for (const [re, rank] of LEVEL_RANK) if (re.test(n)) return rank;
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Collect verified facts from the sources the user actually provided
 // ---------------------------------------------------------------------------
@@ -188,7 +277,10 @@ export function validateGeneratedCv(
     bad("personal.fullName", p.fullName);
   if (p.email.trim() && normalizeFact(p.email) !== normalizeFact(facts.email))
     bad("personal.email", p.email);
-  if (p.phone.trim() && normalizeFact(p.phone) !== normalizeFact(facts.phone))
+  // Phone: digit-level comparison with German country-code equivalence
+  // ("+49 151 …" ≡ "0151 …") — re-formatting is NOT a new fact, a different
+  // number still is.
+  if (p.phone.trim() && !phoneMatches(p.phone, facts.phone))
     bad("personal.phone", p.phone);
   if (p.location.trim() && !inPool(p.location, [facts.location, ...facts.skills]))
     bad("personal.location", p.location);
@@ -198,22 +290,35 @@ export function validateGeneratedCv(
   // had something; empty source + generated value = fabrication.
   if (p.website.trim() && !inPool(p.website, facts.skills)) bad("personal.website", p.website);
 
-  // All known dates in the sources form the allowed date-token pool.
-  const datePool = new Set<string>();
-  for (const s of [...facts.education, ...facts.experience, ...facts.skills]) {
-    for (const t of dateTokens(s)) datePool.add(t);
-  }
+  // Date pool: years are ALWAYS checked (an invented year is a fabricated
+  // timeline). Months are checked against their source year; when the source
+  // is year-only (very common in German CVs: "2019 – 2024"), adding month
+  // precision to a VERIFIED year is a formatting choice, not a new fact —
+  // the candidate still sees and confirms the exact dates in the review
+  // step before the CV counts as done.
+  const datePool = buildMonthYearPool([...facts.education, ...facts.experience, ...facts.skills]);
   const checkDate = (field: string, value: string) => {
-    const tokens = dateTokens(value);
+    const tokens = new Set(dateTokens(value));
     if (tokens.size === 0) return; // "heute"/"laufend" etc. — no checkable tokens
-    if (datePool.size === 0) {
+    if (datePool.years.size === 0 && !datePool.hasMonths) {
       bad(field, value, "date_not_in_source");
       return;
     }
     for (const t of tokens) {
-      if (!datePool.has(t)) {
-        bad(field, value, "date_not_in_source");
-        return;
+      if (t.startsWith("y")) {
+        if (!datePool.years.has(t)) {
+          bad(field, value, "date_not_in_source");
+          return;
+        }
+      } else if (!datePool.hasMonths) {
+        continue; // year-only source: month precision on a verified year
+      } else {
+        const yearsOfToken = orderedDateTokens(value).filter((x) => x.startsWith("y"));
+        const attributed = yearsOfToken.length === 1 ? datePool.byYear.get(yearsOfToken[0]) : undefined;
+        if (attributed ? !attributed.has(t) && !datePool.anyMonths.has(t) : !datePool.anyMonths.has(t)) {
+          bad(field, value, "date_not_in_source");
+          return;
+        }
       }
     }
   };
@@ -238,8 +343,39 @@ export function validateGeneratedCv(
   }
   for (const l of cv.languages) {
     const combined = [l.language, l.level].filter(Boolean).join(" ");
-    if (combined && !inPool(combined, facts.languages))
+    if (!combined.trim()) continue;
+    const lang = normalizeFact(l.language);
+    if (!lang) continue;
+    // Source entries for THIS language (pool entries are "language level").
+    const entries = facts.languages.filter((entry) => {
+      const n = normalizeFact(entry);
+      return n === lang || n.startsWith(`${lang} `);
+    });
+    if (entries.length === 0) {
+      bad("languages", combined); // invented language
+      continue;
+    }
+    const gLevel = l.level?.trim() ?? "";
+    if (!gLevel) continue; // language is grounded, no level claim made
+    const gN = normalizeFact(gLevel);
+    // 1) exact level match
+    if (entries.some((e) => normalizeFact(e) === `${lang} ${gN}` || normalizeFact(e) === gN)) continue;
+    // 2) a source level exists for this language and the generated claim is
+    //    the SAME or a WEAKER (entailed) level → grounded. A HIGHER rank is
+    //    inflation and falls through to rejection.
+    const sourceRanks = entries
+      .map((e) => levelRank(normalizeFact(e).replace(lang, "").trim()))
+      .filter((r): r is number => r !== null);
+    const gRank = levelRank(gN);
+    if (gRank !== null && sourceRanks.length > 0 && gRank <= Math.max(...sourceRanks)) continue;
+    // 3) generated level but NO source level for this language → invented
+    //    precision (e.g. source "Englisch", generated "Englisch C1").
+    if (sourceRanks.length === 0 && !entries.some((e) => normalizeFact(e) !== lang)) {
       bad("languages", combined);
+      continue;
+    }
+    // 4) legacy lenient substring fallback for unranked phrasings
+    if (!inPool(combined, facts.languages)) bad("languages", combined);
   }
   for (const c of cv.certificates) {
     if (c.name.trim() && !inPool(c.name, facts.skills)) bad("certificates.name", c.name);

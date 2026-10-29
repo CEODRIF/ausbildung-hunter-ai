@@ -93,6 +93,7 @@ const APP = {
   cv_reviewed_at: null,
   letter_reviewed_at: null,
   checklist_ack_at: null,
+  slot_no: 1,
   schedule_timezone: null,
   sent_at: null,
   provider_message_id: null,
