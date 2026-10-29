@@ -78,6 +78,7 @@ import {
   Upload,
   User,
   Users,
+  Wand2,
   X,
 } from "lucide-react";
 import type { Profile } from "@/lib/auth";
@@ -121,6 +122,7 @@ const NAV_SECTIONS: NavSection[] = [
         icon: "scan",
       },
       { labelKey: "nav.bewerbungen", href: "/applications", icon: "briefcase" },
+      { labelKey: "studio.nav", href: "/bewerbung-studio", icon: "wand" },
       {
         labelKey: "nav.savedOpportunities",
         href: "/opportunities/saved",
@@ -223,6 +225,7 @@ const LUCIDE: Record<IconName, LucideIcon> = {
     reply: CornerUpLeft,
     shield: Shield,
     pin: Pin,
+    wand: Wand2,
   // Brand marks: the shell never renders these — the profile social tiles
   // use the filled official glyphs from the Icon component. These are
   // stroke-set placeholders that keep the Record exhaustive.
@@ -319,6 +322,10 @@ const PAGE_HEADINGS: Array<{ match: (pathname: string) => boolean; heading: Page
   {
     match: (p) => p === "/bewerbung-scanner" || p.startsWith("/bewerbung-scanner/"),
     heading: { titleKey: "pages.scanner.title", subtitleKey: "pages.scanner.subtitle" },
+  },
+  {
+    match: (p) => p === "/bewerbung-studio" || p.startsWith("/bewerbung-studio/"),
+    heading: { titleKey: "studio.pageTitle", subtitleKey: "studio.pageSubtitle" },
   },
   {
     match: (p) => p === "/settings/email" || p.startsWith("/settings/email/"),

@@ -613,6 +613,67 @@ textarea:focus-visible,
 }
 
 /* ------------------------------------------------------------------ */
+/* AI Bewerbung Studio print export                                    */
+/* ------------------------------------------------------------------ */
+/* Same philosophy as the CV/letter builders: the printable sheet lives
+   in a portal on <body>, hidden on screen. The Studio CV reuses the
+   existing .cv-sheet renderer, so the same print sizing applies; the
+   letter is a plain DIN 5008 text sheet (.studio-letter-sheet). Only the
+   portal for the step the user actually prints is mounted at a time. */
+.studio-print-root {
+  display: none;
+}
+
+@media print {
+  body.studio-print-cv,
+  body.studio-print-letter {
+    /* Hide the app shell for the duration of the print. */
+    .app-shell-root {
+      display: none !important;
+    }
+  }
+  body.studio-print-cv .studio-print-root {
+    display: block !important;
+  }
+  body.studio-print-cv .studio-print-root .cv-sheet {
+    width: 210mm !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    border: 0 !important;
+    padding: var(--cv-pad-block, 14mm) var(--cv-pad-inline, 15mm) !important;
+  }
+  body.studio-print-cv .studio-print-root .cv-sheet h2 {
+    break-after: avoid;
+  }
+  body.studio-print-cv .studio-print-root .cv-sheet section > div > div {
+    break-inside: avoid;
+  }
+  body.studio-print-letter .studio-print-root {
+    display: block !important;
+  }
+  .studio-letter-sheet {
+    background: #fff !important;
+    color: #111 !important;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 11pt;
+    line-height: 1.5;
+    width: 210mm;
+    min-height: 297mm;
+    margin: 0;
+    padding: 20mm 25mm;
+    box-sizing: border-box;
+  }
+  .studio-letter-sheet p {
+    margin: 0 0 1em;
+    orphans: 2;
+    widows: 2;
+    white-space: pre-line;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Deckblatt print export (AI Deckblatt Generator)                     */
 /* ------------------------------------------------------------------ */
 /* Same philosophy as the CV/letter builders: the printable sheet lives
