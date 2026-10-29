@@ -32,18 +32,22 @@ const makeT = () => (key: string, params?: Record<string, unknown>) => {
 };
 
 vi.mock("@/lib/i18n", () => ({ useI18n: () => ({ t: makeT(), lang: "de" }) }));
+const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }));
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: pushMock }),
 }));
 
+type ActionResult = { ok: true; value: unknown } | { ok: false; code: string; message: string };
 const actions = {
-  createApplicationAction: vi.fn(async () => ({ ok: true, value: { id: "new-app" } })),
-  updateApplicationAction: vi.fn(async () => ({ ok: true, value: null })),
-  saveDocumentAction: vi.fn(async () => ({ ok: true })),
-  approveApplicationAction: vi.fn(async () => ({ ok: true, value: {} })),
-  sendApplicationAction: vi.fn(async () => ({ ok: true, value: { attemptId: "att", scheduledAt: null, dispatchStatus: "sent" } })),
-  cancelSendAction: vi.fn(async () => ({ ok: true })),
-  refreshApplicationAction: vi.fn(async () => ({ ok: true, value: { app: null } })),
+  createApplicationAction: vi.fn<() => Promise<ActionResult>>(async () => ({ ok: true, value: { id: "new-app" } })),
+  updateApplicationAction: vi.fn<() => Promise<ActionResult>>(async () => ({ ok: true, value: null })),
+  saveDocumentAction: vi.fn<() => Promise<ActionResult>>(async () => ({ ok: true, value: null })),
+  approveApplicationAction: vi.fn<() => Promise<ActionResult>>(async () => ({ ok: true, value: {} })),
+  sendApplicationAction: vi.fn<() => Promise<ActionResult>>(
+    async () => ({ ok: true, value: { attemptId: "att", scheduledAt: null, dispatchStatus: "sent" } }),
+  ),
+  cancelSendAction: vi.fn<() => Promise<ActionResult>>(async () => ({ ok: true, value: null })),
+  refreshApplicationAction: vi.fn<() => Promise<ActionResult>>(async () => ({ ok: true, value: { app: null } })),
 };
 vi.mock("@/app/bewerbung-studio/actions", () => actions);
 
@@ -95,6 +99,7 @@ const APP = {
 function initial(over: Partial<Parameters<typeof StudioClient>[0]["initial"]> = {}) {
   return {
     available: true,
+    missingTables: [],
     userId: "user-a",
     userFacts: { fullName: "Test User", email: "test@example.de", phone: null, location: "Berlin", linkedin: null },
     emailAccounts: [
@@ -131,12 +136,106 @@ beforeEach(() => {
   localStorage.clear();
 });
 
-afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
 
 describe("setup-pending state (migration not applied yet)", () => {
-  it("shows the graceful notice instead of an error", () => {
-    render(<StudioClient initial={initial({ available: false, bundle: null, appSummaries: [] })} />);
+  it("shows the graceful notice — with the EXACT missing tables as prerequisite", () => {
+    render(
+      <StudioClient
+        initial={initial({
+          available: false,
+          bundle: null,
+          appSummaries: [],
+          missingTables: ["studio_documents", "studio_send_attempts"],
+        })}
+      />,
+    );
     expect(screen.getByText(/Studio wird gerade vorbereitet/i)).toBeTruthy();
+    expect(screen.getByText(/studio_documents, studio_send_attempts/)).toBeTruthy();
+  });
+});
+
+describe("create failure after successful analysis (PR #86 regression)", () => {
+  const ANALYSIS = {
+    matchScore: 55,
+    matched: [],
+    missing: [],
+    transferable: [],
+    weaknesses: [],
+    recommendations: [],
+    questions: [],
+  };
+  const AD_TEXT = "Wir suchen eine/n Fachinformatiker/in in Berlin. Bewerbung bis 30.06.2026 an jobs@tech-gmbh.de.";
+
+  const makeFetchOk = () =>
+    vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("analyze-ad")) {
+        return new Response(JSON.stringify({ extract: APP.ad_extracted, analysis: ANALYSIS }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+  const fillAndAnalyze = async () => {
+    const adBox = document.getElementById("studio-ad-text") as HTMLTextAreaElement;
+    fireEvent.change(adBox, { target: { value: AD_TEXT } });
+    fireEvent.click(screen.getByRole("button", { name: /Anzeige analysieren/ }));
+    await waitFor(() => expect(actions.createApplicationAction).toHaveBeenCalledTimes(1));
+  };
+
+  it("schema_pending: specific message (not generic), state preserved, create-only retry", async () => {
+    const fetchMock = makeFetchOk();
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = { ok: false, code: "schema_pending", message: "Studio-Datenbank wird vorbereitet." } as const;
+    actions.createApplicationAction.mockResolvedValueOnce(pending).mockResolvedValueOnce(pending);
+
+    render(<StudioClient initial={initial({ bundle: null, appSummaries: [] })} />);
+    await fillAndAnalyze();
+
+    // Analysis succeeded → the extraction form is populated (company from the ad).
+    expect((document.getElementById("st-company") as HTMLInputElement).value).toBe("Tech GmbH");
+    // The SPECIFIC failure reason is shown — never the generic "something went wrong".
+    expect(screen.getByText(/wird gerade vorbereitet/)).toBeTruthy();
+    expect(screen.queryByText(/Etwas ist schiefgelaufen/)).toBeNull();
+    // The pasted advertisement is NOT lost.
+    expect((document.getElementById("studio-ad-text") as HTMLTextAreaElement).value).toBe(AD_TEXT);
+    // A create-only retry exists (no re-analysis).
+    const retry = screen.getByRole("button", { name: /Erneut speichern/ }) as HTMLButtonElement;
+    expect(retry).toBeTruthy();
+    fireEvent.click(retry);
+    await waitFor(() => expect(actions.createApplicationAction).toHaveBeenCalledTimes(2));
+    expect(fetchMock).toHaveBeenCalledTimes(1); // analysis ran exactly once
+  });
+
+  it("retry succeeds: navigates to the SERVER-RETURNED application id", async () => {
+    vi.stubGlobal("fetch", makeFetchOk());
+    actions.createApplicationAction
+      .mockResolvedValueOnce({ ok: false, code: "schema_pending", message: "Studio-Datenbank wird vorbereitet." })
+      .mockResolvedValueOnce({ ok: true, value: APP });
+
+    render(<StudioClient initial={initial({ bundle: null, appSummaries: [] })} />);
+    await fillAndAnalyze();
+    fireEvent.click(screen.getByRole("button", { name: /Erneut speichern/ }));
+    await waitFor(() =>
+      expect(pushMock).toHaveBeenCalledWith(`/bewerbung-studio?app=${APP.id}`),
+    );
+  });
+
+  it("storage_error with a specific server message: shown verbatim (safe + actionable)", async () => {
+    vi.stubGlobal("fetch", makeFetchOk());
+    const msg =
+      'Das Datenbank-Schema ist veraltet (Feld "ad_raw" fehlt) — bitte das Studio-Migrations-Skript neu anwenden.';
+    actions.createApplicationAction.mockResolvedValueOnce({ ok: false, code: "storage_error", message: msg });
+
+    render(<StudioClient initial={initial({ bundle: null, appSummaries: [] })} />);
+    await fillAndAnalyze();
+    expect(screen.getByText(msg)).toBeTruthy();
+    expect(screen.queryByText(/Etwas ist schiefgelaufen/)).toBeNull();
   });
 });
 

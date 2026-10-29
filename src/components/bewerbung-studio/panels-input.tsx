@@ -16,7 +16,7 @@ import { Icon } from "@/components/icon";
 import { Button, Input, Textarea } from "@/components/ui";
 import { useI18n } from "@/lib/i18n";
 import type { CandidateProfile } from "@/lib/bewerbung-schema";
-import { type AdAnalysis, type AdExtract } from "@/lib/studio/schema";
+import { type AdAnalysis, type AdExtract, type StudioApplicationRow } from "@/lib/studio/schema";
 import { cvHasContent, type CvDocument } from "@/lib/templates/cv";
 import { BusyButton, Field, Note, SectionCard } from "./studio-ui";
 import type { ApiOutcome } from "./studio-client";
@@ -76,8 +76,12 @@ export function AnalysisPanel({
   adText: string;
   onAdTextChange: (v: string) => void;
   onAnalyze: (text: string) => Promise<ApiOutcome<{ extract: AdExtract; analysis: AdAnalysis }>>;
-  /** New mode only: create the application from the analysis. */
-  onCreate: ((text: string, extract: AdExtract, analysis: AdAnalysis | null) => Promise<boolean>) | null;
+  /** New mode only: create the application from the analysis. Returns the
+   *  structured outcome so the specific failure reason (database setup,
+   *  quota, …) can be shown — never a generic "something went wrong". */
+  onCreate:
+    | ((text: string, extract: AdExtract, analysis: AdAnalysis | null) => Promise<ApiOutcome<StudioApplicationRow>>)
+    | null;
   extract: AdExtract | null;
   analysis: AdAnalysis | null;
   onExtractChange: (e: AdExtract) => void;
@@ -89,6 +93,7 @@ export function AnalysisPanel({
   const [analyzing, setAnalyzing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
+  const [createFailed, setCreateFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AdExtract | null>(extract);
   /** Re-analysis result pending in EDIT mode (applied on explicit save —
@@ -96,6 +101,19 @@ export function AnalysisPanel({
   const [pendingAnalysis, setPendingAnalysis] = useState<AdAnalysis | null | undefined>(undefined);
 
   const tooShort = adText.trim().length < 40;
+
+  /** Map a create failure to a specific, actionable message. The generic
+   *  "something went wrong" is the LAST resort, not the default. */
+  const createErrorMessage = useCallback(
+    (out: ApiOutcome<StudioApplicationRow>): string => {
+      if (out.ok) return t("studio.error");
+      if (out.code === "schema_pending") return t("studio.schemaPending");
+      if (out.code === "quota_exhausted") return t("studio.quotaError");
+      if (out.error) return out.error; // server-provided, already localized + sanitized
+      return t("studio.error");
+    },
+    [t],
+  );
 
   const handleAnalyze = useCallback(async () => {
     if (tooShort) return;
@@ -121,9 +139,30 @@ export function AnalysisPanel({
       setCreateBusy(true);
       const created = await onCreate(adText, outcome.value.extract, outcome.value.analysis);
       setCreateBusy(false);
-      if (!created) setError(t("studio.error"));
+      if (!created.ok) {
+        // Keep the ad text + extracted fields (draft) — the user must not
+        // lose the analysis; only the SAVE step failed.
+        setCreateFailed(true);
+        setError(createErrorMessage(created));
+      }
     }
-  }, [adText, tooShort, onAnalyze, onExtractChange, onCreate, mode, t]);
+  }, [adText, tooShort, onAnalyze, onExtractChange, onCreate, mode, t, createErrorMessage]);
+
+  /** Retry ONLY the failed create — the (paid) analysis result is reused,
+   *  never re-run. This is the recovery path for a failed save step. */
+  const handleRetryCreate = useCallback(async () => {
+    if (!draft || !onCreate) return;
+    setError(null);
+    setCreateBusy(true);
+    const created = await onCreate(adText, draft, pendingAnalysis !== undefined ? pendingAnalysis : analysis);
+    setCreateBusy(false);
+    if (!created.ok) {
+      setCreateFailed(true);
+      setError(createErrorMessage(created));
+    } else {
+      setCreateFailed(false);
+    }
+  }, [draft, onCreate, adText, pendingAnalysis, analysis, createErrorMessage]);
 
   const handleSave = useCallback(async () => {
     if (!draft) return;
@@ -182,14 +221,21 @@ export function AnalysisPanel({
             ) : null}
           </p>
           {mode === "new" ? (
-            <BusyButton
-              busy={analyzing || createBusy}
-              disabled={tooShort}
-              onClick={handleAnalyze}
-              title={tooShort ? t("studio.adTooShort") : undefined}
-            >
-              {analyzing || createBusy ? t("studio.analyzing") : t("studio.analyzeButton")}
-            </BusyButton>
+            <div className="flex items-center gap-2">
+              {createFailed && draft ? (
+                <BusyButton variant="secondary" busy={createBusy} onClick={handleRetryCreate}>
+                  {t("studio.retryCreate")}
+                </BusyButton>
+              ) : null}
+              <BusyButton
+                busy={analyzing || createBusy}
+                disabled={tooShort}
+                onClick={handleAnalyze}
+                title={tooShort ? t("studio.adTooShort") : undefined}
+              >
+                {analyzing || createBusy ? t("studio.analyzing") : t("studio.analyzeButton")}
+              </BusyButton>
+            </div>
           ) : null}
         </div>
         <Note kind="info">

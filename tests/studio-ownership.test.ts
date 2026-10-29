@@ -208,6 +208,103 @@ describe("attachments: upload validation + ownership", () => {
   });
 });
 
+describe("schema probe: missing tables, TTL, actionable create errors", () => {
+  const probeSelects = () =>
+    db.calls.filter((c) => c.table === "studio_applications" && c.op === "select").length;
+
+  it("reports EXACTLY the missing tables (a partial migration is visible)", async () => {
+    db.failTables(["studio_documents", "studio_send_attempts"]);
+    const { getStudioMissingTables } = await studio();
+    (createAdminClient as ReturnType<typeof vi.fn>).mockReturnValue(db.admin);
+    const missing = await getStudioMissingTables();
+    expect([...missing].sort()).toEqual(["studio_documents", "studio_send_attempts"]);
+  });
+
+  it("caches a negative probe for 60s (no re-probe), re-probes after the TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-12-01T00:00:00Z"));
+    try {
+      db.failTables(["studio_applications"]);
+      const { getStudioMissingTables } = await studio();
+      (createAdminClient as ReturnType<typeof vi.fn>).mockReturnValue(db.admin);
+
+      // NOTE: the helper records calls only for NON-failing queries, so the
+      // probe volume is counted via a healthy sibling table (studio_documents).
+      const goodSelects = () =>
+        db.calls.filter((c) => c.table === "studio_documents" && c.op === "select").length;
+
+      expect(await getStudioMissingTables()).toEqual(["studio_applications"]);
+      const afterFirst = goodSelects();
+      expect(afterFirst).toBe(1);
+
+      // within the TTL → cached, no new probe
+      vi.advanceTimersByTime(59_000);
+      await getStudioMissingTables();
+      expect(goodSelects()).toBe(afterFirst);
+
+      // past the TTL → re-probe (a migration applied in the meantime is picked up)
+      vi.advanceTimersByTime(2_000);
+      await getStudioMissingTables();
+      expect(goodSelects()).toBe(afterFirst + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a positive probe is cached (no endless re-probing of ready state)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-12-01T00:00:00Z"));
+    try {
+      const { getStudioMissingTables } = await studio();
+      (createAdminClient as ReturnType<typeof vi.fn>).mockReturnValue(db.admin);
+      expect(await getStudioMissingTables()).toEqual([]);
+      const afterFirst = probeSelects();
+      vi.advanceTimersByTime(60 * 60 * 1000); // 1 h later
+      expect(await getStudioMissingTables()).toEqual([]);
+      expect(probeSelects()).toBe(afterFirst);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("create → schema_pending when the applications table is missing", async () => {
+    db.failTables(["studio_applications"]);
+    const { createStudioApplication } = await studio();
+    (createAdminClient as ReturnType<typeof vi.fn>).mockReturnValue(db.admin);
+    const res = await createStudioApplication("user-a", { adRaw: "x".repeat(50) });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("schema_pending");
+  });
+
+  it("create maps a stale-schema (missing column) insert error to a safe, actionable message", async () => {
+    db.failInsert("studio_applications", 'column "ad_raw" does not exist');
+    const { createStudioApplication } = await studio();
+    (createAdminClient as ReturnType<typeof vi.fn>).mockReturnValue(db.admin);
+    const res = await createStudioApplication("user-a", { adRaw: "x".repeat(50) });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.code).toBe("storage_error");
+      expect(res.message).toContain("ad_raw");
+      expect(res.message).toContain("Migrations-Skript");
+      // no raw driver/credential material may leak into the UI message
+      expect(res.message).not.toMatch(/service_role|supabase|token|bearer|password/i);
+    }
+  });
+
+  it("unknown insert errors fall back to a generic safe message (nothing leaked)", async () => {
+    db.failInsert("studio_applications", "internal error: password=hunter2 details-here");
+    const { createStudioApplication } = await studio();
+    (createAdminClient as ReturnType<typeof vi.fn>).mockReturnValue(db.admin);
+    const res = await createStudioApplication("user-a", { adRaw: "x".repeat(50) });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.code).toBe("storage_error");
+      expect(res.message).toBe("Speichern fehlgeschlagen. Bitte erneut versuchen.");
+      expect(res.message).not.toContain("hunter2");
+    }
+  });
+});
+
 describe("no public document URLs (static source invariant)", () => {
   it("feature code never requests signed or public storage URLs", () => {
     const files = [
