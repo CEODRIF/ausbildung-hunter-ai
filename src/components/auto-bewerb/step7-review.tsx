@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { CalendarClock, Paperclip, Send, XCircle } from "lucide-react";
+import { CalendarClock, CheckCircle2, Paperclip, Send, XCircle } from "lucide-react";
 import { Button, Modal } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
 import { ScheduleForm } from "@/components/schedule-form";
 import { useI18n } from "@/lib/i18n";
 import { isValidEmail, resolveAutoBewerbRecipient, type AutoBewerbCompanyView } from "@/lib/auto-bewerb/schema";
 import {
+  approveCompanyAction,
   cancelSendAction,
   scheduleCompaniesAction,
   sendCompaniesAction,
@@ -39,6 +40,7 @@ export function Step7Review() {
   const [sending, setSending] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [results, setResults] = useState<SendCompanyResult[] | null>(null);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   const s = ws.emailSettings; // null = legacy database (per-company rows)
   const globalComplete = Boolean(s && s.body.trim() && s.subject.trim() && s.accountId);
@@ -71,6 +73,9 @@ export function Step7Review() {
     const r = v.company;
     const base = r.status === "draft" || r.status === "ready" || r.status === "failed" || r.status === "cancelled";
     if (!base) return false;
+    // Explicit approval is REQUIRED (engine gate — set via the row's
+    // "Genehmigen" button; the engine re-checks it server-side at send).
+    if (!r.approved) return false;
     const cfg = emailCfg(v);
     if (s) {
       // Global configuration: complete settings + a resolvable verified
@@ -83,6 +88,8 @@ export function Step7Review() {
 
   const missing = (v: AutoBewerbCompanyView): string[] => {
     const out: string[] = [];
+    const r = v.company;
+    if (!r.approved) out.push(t("autoBewerb.missingApproval"));
     const cfg = emailCfg(v);
     if (!cfg.body) out.push(t("autoBewerb.templateEmptyNote"));
     if (!cfg.subject) out.push(t("autoBewerb.missingSubject"));
@@ -134,6 +141,20 @@ export function Step7Review() {
     });
   };
 
+  /** Explicit per-company approval — the engine refuses every send without
+   *  approved = true; this is the UI path that sets it (scoped by company id). */
+  const approve = async (companyId: string) => {
+    setApprovingId(companyId);
+    const res = await approveCompanyAction(companyId);
+    setApprovingId(null);
+    if (res.ok) {
+      await refresh();
+      notify("success", t("autoBewerb.approvedNote"));
+    } else {
+      notify("error", res.code === "already_sent" ? t("autoBewerb.alreadySentNote") : t("autoBewerb.saveError"));
+    }
+  };
+
   const cancelScheduled = async (attemptId: string) => {
     const res = await cancelSendAction(attemptId);
     if (res.ok) {
@@ -147,6 +168,23 @@ export function Step7Review() {
   }
 
   const resultFor = (id: string) => results?.find((r) => r.companyId === id) ?? null;
+
+  /** Honest, ACTIONABLE per-company result text (an approval failure names
+   *  the exact fix instead of a bare code). */
+  const resultText = (r: SendCompanyResult): string => {
+    if (r.ok) {
+      if (r.dispatchStatus === "sent") return t("autoBewerb.resultSent");
+      if (r.dispatchStatus === "queued") return t("autoBewerb.resultQueued");
+      if (r.dispatchStatus === "duplicate") return t("autoBewerb.resultDuplicate");
+      if (r.scheduledAt) return t("autoBewerb.resultScheduled", { time: new Date(r.scheduledAt).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" }) });
+      return t("autoBewerb.resultSent");
+    }
+    const code = r.failureCode ?? r.code ?? "";
+    if (code === "already_sent") return t("autoBewerb.alreadySentNote");
+    if (code === "not_approved") return t("autoBewerb.notApprovedResult");
+    if (code === "no_email_account") return t("autoBewerb.emailAccountNoneBody");
+    return t("autoBewerb.resultFailed", { code });
+  };
 
   return (
     <div className="space-y-5">
@@ -169,21 +207,7 @@ export function Step7Review() {
               const v = ws.companies.find((c) => c.company.id === r.companyId);
               const label = v ? companyLabel(v.company).name : r.companyId;
               const tone = r.ok ? "success" : "error";
-              const text = r.ok
-                ? r.dispatchStatus === "sent"
-                  ? t("autoBewerb.resultSent")
-                  : r.dispatchStatus === "queued"
-                    ? t("autoBewerb.resultQueued")
-                    : r.dispatchStatus === "duplicate"
-                      ? t("autoBewerb.resultDuplicate")
-                      : r.scheduledAt
-                        ? t("autoBewerb.resultScheduled", { time: new Date(r.scheduledAt).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" }) })
-                        : t("autoBewerb.resultSent")
-                : r.code === "already_sent"
-                  ? t("autoBewerb.alreadySentNote")
-                  : r.code === "no_email_account"
-                    ? t("autoBewerb.emailAccountNoneBody")
-                    : t("autoBewerb.resultFailed", { code: r.failureCode ?? r.code ?? "?" });
+              const text = resultText(r);
               return (
                 <li key={r.companyId} className={`rounded-2xl border px-4 py-3 text-sm ${tone === "success" ? "border-success/25 bg-success-soft/50 text-success" : "border-danger/25 bg-danger-soft/50 text-danger"}`}>
                   <span className="font-bold">{label}:</span> {text}
@@ -242,13 +266,14 @@ export function Step7Review() {
                     <span className="truncate text-sm font-bold text-ink">{name}</span>
                     {job && <span className="truncate text-xs text-muted">{job}</span>}
                     {statusPill(r.status, t)}
+                    {r.approved && (
+                      <span className="rounded-full border border-success/30 bg-success-soft/50 px-2 py-0.5 text-[10px] font-bold text-success">
+                        {t("autoBewerb.approvedChip")}
+                      </span>
+                    )}
                     {res && (
                       <span className={`text-xs font-semibold ${res.ok ? "text-success" : "text-danger"}`}>
-                        {res.ok
-                          ? res.dispatchStatus === "queued" || res.scheduledAt
-                            ? t("autoBewerb.resultQueued")
-                            : t("autoBewerb.resultSent")
-                          : t("autoBewerb.resultFailed", { code: res.failureCode ?? res.code ?? "?" })}
+                        {res.ok ? (res.dispatchStatus === "queued" || res.scheduledAt ? t("autoBewerb.resultQueued") : t("autoBewerb.resultSent")) : resultText(res)}
                       </span>
                     )}
                   </div>
@@ -280,10 +305,17 @@ export function Step7Review() {
                   </dl>
                   {gaps.length > 0 && (
                     <p className="mt-1 text-xs text-warning">
-                      {gaps.join(" · ")} —{" "}
-                      <button type="button" className="font-semibold underline underline-offset-2" onClick={() => goToStep(6)}>
-                        {t("autoBewerb.fixInStep6")}
-                      </button>
+                      {gaps.join(" · ")}
+                      {/* Approval is fixed RIGHT HERE (row button) — the Step 6
+                          link only applies to the e-mail configuration gaps. */}
+                      {gaps.some((g) => g !== t("autoBewerb.missingApproval")) && (
+                        <>
+                          {" — "}
+                          <button type="button" className="font-semibold underline underline-offset-2" onClick={() => goToStep(6)}>
+                            {t("autoBewerb.fixInStep6")}
+                          </button>
+                        </>
+                      )}
                     </p>
                   )}
                   {r.scheduled_at && (
@@ -296,6 +328,12 @@ export function Step7Review() {
                   <Button variant="ghost" size="sm" onClick={() => void cancelScheduled(v.latestAttempt!.id)}>
                     <XCircle size={14} />
                     {t("autoBewerb.cancelSchedule")}
+                  </Button>
+                )}
+                {r.status !== "sent" && !r.approved && (
+                  <Button variant="secondary" size="sm" onClick={() => void approve(r.id)} disabled={approvingId !== null}>
+                    <CheckCircle2 size={14} />
+                    {approvingId === r.id ? t("autoBewerb.approving") : t("autoBewerb.approveButton")}
                   </Button>
                 )}
               </li>
