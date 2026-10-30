@@ -174,9 +174,13 @@ type ModalProps = {
   onClose: () => void;
   title: string;
   children: ReactNode;
+  /** "md" (default) = compact popup. "wide" = document-preview workspace:
+   *  ~80vw (max 1200px) × up to 92vh, flex column so a viewer can fill the
+   *  remaining height. Near-full-screen on mobile. */
+  size?: "md" | "wide";
 };
 
-export function Modal({ open, onClose, title, children }: ModalProps) {
+export function Modal({ open, onClose, title, children, size = "md" }: ModalProps) {
   const { t } = useI18n();
   useEffect(() => {
     if (!open) return;
@@ -191,9 +195,10 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
   }, [open, onClose]);
 
   if (!open) return null;
+  const wide = size === "wide";
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className={wide ? "fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-5" : "fixed inset-0 z-50 flex items-center justify-center p-4"}
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -203,11 +208,17 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
         aria-label={t("common.close")}
         onClick={onClose}
       />
-      <div className="relative z-10 w-full max-w-md rounded-2xl border border-line bg-surface p-5 shadow-2xl">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 className="text-lg font-bold text-ink">{title}</h2>
+      <div
+        className={
+          wide
+            ? "relative z-10 flex max-h-[94vh] w-[96vw] max-w-[1200px] flex-col overflow-hidden rounded-2xl border border-line bg-surface p-3 shadow-2xl sm:max-h-[90vh] sm:w-[82vw] sm:p-4"
+            : "relative z-10 w-full max-w-md rounded-2xl border border-line bg-surface p-5 shadow-2xl"
+        }
+      >
+        <div className={wide ? "mb-3 flex shrink-0 items-center justify-between gap-4" : "mb-4 flex items-start justify-between gap-4"}>
+          <h2 className={wide ? "min-w-0 truncate text-base font-bold text-ink sm:text-lg" : "text-lg font-bold text-ink"}>{title}</h2>
           <button
-            className="rounded-lg p-1.5 text-faint hover:bg-surface-2 hover:text-ink"
+            className="shrink-0 rounded-lg p-1.5 text-faint hover:bg-surface-2 hover:text-ink"
             onClick={onClose}
             aria-label={t("common.close")}
           >

@@ -112,8 +112,8 @@ function renderPreview(companyId = "comp-a", version = 1) {
 describe("Step 4 viewer — pdf.js canvas rendering", () => {
   it("renders EVERY page as a visible canvas — no iframe, no download", async () => {
     renderPreview();
-    // Fit layout + both pages rendered (the toolbar shows the page count).
-    await screen.findByText("2 Seiten");
+    // Fit layout + both pages rendered (the toolbar shows "1 / 2").
+    await screen.findByText(/^1 \/ 2$/);
     await waitFor(() => expect(renderedPageCount()).toBe(2));
     const canvases = document.querySelectorAll("canvas");
     expect(canvases.length).toBe(2);
@@ -123,15 +123,48 @@ describe("Step 4 viewer — pdf.js canvas rendering", () => {
     expect(window.open).not.toHaveBeenCalled();
     // Fit-to-width = 100% on first render.
     expect(screen.getByText("100%")).toBeInTheDocument();
+    // The toolbar lives INSIDE the document stage (role="region").
+    const stage = document.querySelector('[role="region"]');
+    expect(stage).not.toBeNull();
+    expect(stage?.textContent).toContain("1 / 2");
   });
 
   it("zoom in re-renders every page at the new scale", async () => {
     renderPreview();
-    await screen.findByText("2 Seiten");
+    await screen.findByText(/^1 \/ 2$/);
     await waitFor(() => expect(renderedPageCount()).toBe(2));
     fireEvent.click(screen.getByRole("button", { name: "Vergrößern" }));
     await waitFor(() => expect(renderedPageCount()).toBe(4));
     expect(screen.getByText("125%")).toBeInTheDocument();
+  });
+
+  it("fit-to-width never overflows the stage horizontally at 100% zoom", async () => {
+    // Stage width is 400px (fake ResizeObserver) and the page row has
+    // 24px of horizontal padding → the fit width is 376px. The rendered
+    // canvas CSS width must stay within it (no horizontal scrollbar).
+    renderPreview();
+    await screen.findByText(/^1 \/ 2$/);
+    await waitFor(() => expect(renderedPageCount()).toBe(2));
+    const canvas = document.querySelector("canvas");
+    expect(canvas).not.toBeNull();
+    const cssWidth = parseFloat(canvas!.style.width); // "376px" → 376
+    expect(cssWidth).toBeGreaterThan(0);
+    expect(cssWidth).toBeLessThanOrEqual(400 - 24);
+  });
+
+  it("the fullscreen button toggles the browser fullscreen API on the viewer", async () => {
+    renderPreview();
+    await screen.findByText(/^1 \/ 2$/);
+    const proto = HTMLDivElement.prototype as unknown as { requestFullscreen?: unknown };
+    const requestFullscreen = vi.fn(() => Promise.resolve());
+    const orig = proto.requestFullscreen;
+    proto.requestFullscreen = requestFullscreen;
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Vollbild" }));
+      expect(requestFullscreen).toHaveBeenCalledTimes(1);
+    } finally {
+      proto.requestFullscreen = orig;
+    }
   });
 
   it("401 → explicit session-expired error + Retry refetches", async () => {
@@ -184,7 +217,7 @@ describe("Step 4 viewer — pdf.js canvas rendering", () => {
         <CvPdfPreview companyId="comp-a" version={1} name="Firma A" />
       </I18nProvider>,
     );
-    await screen.findByText("2 Seiten");
+    await screen.findByText(/^1 \/ 2$/);
     await waitFor(() => expect(renderedPageCount()).toBe(2));
     expect(mockedFetch()).toHaveBeenCalledTimes(1);
 
@@ -199,7 +232,7 @@ describe("Step 4 viewer — pdf.js canvas rendering", () => {
     expect(String(mockedFetch().mock.calls[1][0])).toContain("companyId=comp-b");
     expect(String(mockedFetch().mock.calls[1][0])).not.toContain("comp-a");
     // The new company's document renders (its own canvases).
-    await screen.findByText("2 Seiten");
+    await screen.findByText(/^1 \/ 2$/);
     expect(docs.length).toBeGreaterThanOrEqual(2);
   });
 });
