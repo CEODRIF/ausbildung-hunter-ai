@@ -1,11 +1,14 @@
 /**
  * AUTO BEWERB — Step 6: ONE global e-mail configuration for the whole batch.
  *
- * Every company receives the EXACT SAME recipient (unless the user sets an
- * explicit global one), subject, body (sent VERBATIM — no substitution),
- * sending account and attachment flags. The only per-company value is the
- * delivery destination: the verified application email of each company's
- * ad (legacy manual value preserved).
+ * Every company receives the SAME shared template (subject + body), sending
+ * account and attachment flags. The template is personalized PER RECIPIENT
+ * at send time from verified data only ({{candidate_name}}, {{contact_person}},
+ * {{company_name}}, {{greeting}}, {{position}} — missing values render EMPTY:
+ * never a leftover placeholder, never invented). The only per-company value
+ * for delivery is the destination: the verified application email of each
+ * company's ad (legacy manual value preserved). The body is sanitized HTML
+ * (single allowlist in @/lib/email-sanitize — sanitized on save AND on send).
  *
  * Pinned here (real engine, in-memory DB, sends SCHEDULED — no dispatch,
  * no real email):
@@ -16,10 +19,15 @@
  *   3. a newly added company uses the global configuration automatically;
  *   4. an explicit global recipient is used for ALL companies;
  *   5. scheduled sends carry the same global configuration;
- *   6. source contracts: no token substitution, no per-company override
- *      path anywhere (Step 6 UI, Step 7 review, actions, engine);
- *   7. the AI prompt generates a company-neutral template (no tokens);
- *   8. the generate-email route stays global + metered.
+ *   6. per-recipient personalization (tokens from verified data only;
+ *      missing → empty; no placeholder survives);
+ *   7. HTML sanitization on save (actions) and on send (engine);
+ *   8. per-company CV/letter isolation + blocking; no duplicate attachments;
+ *   9. source contracts: no per-company override path anywhere (Step 6
+ *      UI, Step 7 review, actions, engine);
+ *   10. the AI prompt generates a shared, company-neutral template that
+ *      may only use the supported tokens;
+ *   11. the generate-email route stays global + metered.
  */
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -60,6 +68,8 @@ const { createStudioDb } = await import("./helpers-studio");
 const { buildAutoBewerbEmailTemplatePrompt } = await import("@/lib/auto-bewerb/prompts");
 const { resolveAutoBewerbRecipient } = await import("@/lib/auto-bewerb/schema");
 const { cvEmpty } = await import("@/lib/templates/cv");
+const { saveEmailTemplateAction, saveEmailSettingsAction } = await import("@/app/auto-bewerb/actions");
+const { sanitizeEmailHtml, htmlToText } = await import("@/lib/email-sanitize");
 
 const read = (p: string) => readFileSync(p, "utf8");
 const STEP6 = read("src/components/auto-bewerb/step6-email.tsx");
@@ -221,9 +231,9 @@ describe("one global configuration — functional (engine, fake DB, scheduled)",
     const a2 = attempt(CO2);
     const a3 = attempt(CO3);
     // Identical shared content for everyone:
-    expect(a1.payload.text).toBe(GLOBAL_BODY);
-    expect(a2.payload.text).toBe(GLOBAL_BODY);
-    expect(a3.payload.text).toBe(GLOBAL_BODY);
+    expect(a1.payload.html).toBe(GLOBAL_BODY);
+    expect(a2.payload.html).toBe(GLOBAL_BODY);
+    expect(a3.payload.html).toBe(GLOBAL_BODY);
     expect(a1.subject).toBe(GLOBAL_SUBJECT);
     expect(a2.subject).toBe(GLOBAL_SUBJECT);
     expect(a3.subject).toBe(GLOBAL_SUBJECT);
@@ -249,7 +259,7 @@ describe("one global configuration — functional (engine, fake DB, scheduled)",
     // Global content wins over every legacy config value:
     expect(a.subject).toBe(GLOBAL_SUBJECT);
     expect(a.subject).not.toBe("Legacy-Betreff");
-    expect(a.payload.text).toBe(GLOBAL_BODY);
+    expect(a.payload.html).toBe(GLOBAL_BODY);
     expect(a.payload.text).not.toContain("LEGACY OVERRIDETEXT");
     // But the legacy recipient is a preserved per-company DELIVERY
     // destination (user-entered earlier) — it is honored, never overwritten:
@@ -280,7 +290,7 @@ describe("one global configuration — functional (engine, fake DB, scheduled)",
     const res = await prepareAutoBewerbSend(USER, { companyId: CO_NEW, schedule: FUTURE });
     expect(res.ok, JSON.stringify(res)).toBe(true);
     const a = attempt(CO_NEW);
-    expect(a.payload.text).toBe(GLOBAL_BODY);
+    expect(a.payload.html).toBe(GLOBAL_BODY);
     expect(a.subject).toBe(GLOBAL_SUBJECT);
     expect(a.recipient_email).toBe("neu@neu-gmbh.de");
   });
@@ -299,7 +309,7 @@ describe("one global configuration — functional (engine, fake DB, scheduled)",
     expect(res.ok).toBe(true);
     const a = attempt(CO2);
     expect(a.scheduled_at).toBeTruthy();
-    expect(a.payload.text).toBe(GLOBAL_BODY);
+    expect(a.payload.html).toBe(GLOBAL_BODY);
     expect(a.subject).toBe(GLOBAL_SUBJECT);
   });
 });
@@ -388,7 +398,7 @@ describe("per-company CV + cover-letter attachments (global flags, own documents
 
     // (3) Identical shared content for everyone:
     for (const a of [a1, a2, a3]) {
-      expect(a.payload.text).toBe(GLOBAL_BODY);
+      expect(a.payload.html).toBe(GLOBAL_BODY);
       expect(a.subject).toBe(GLOBAL_SUBJECT);
     }
 
@@ -507,6 +517,155 @@ describe("per-company CV + cover-letter attachments (global flags, own documents
     // The company's documents remain stored, ownership unchanged:
     expect(db.tables.auto_bewerb_documents.filter((d) => d.company_id === CO1).length).toBe(2);
   });
+
+  it("no duplicate attachments within one mail (dedupe by real storage path + filename)", async () => {
+    seed(ATTACH_ON);
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    const res = await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE });
+    expect(res.ok).toBe(true);
+    const a = fullAttempt(CO1);
+    const paths = a.payload.attachments.map((x) => x.storagePath);
+    const names = a.payload.attachments.map((x) => x.filename);
+    expect(new Set(paths).size).toBe(paths.length);
+    expect(new Set(names).size).toBe(names.length);
+    // Exactly cv + letter + the one shared library doc — real PDFs, no
+    // temp/preview/thumbnail/system files:
+    expect(paths).toHaveLength(3);
+    for (const p of paths) {
+      expect(p).toMatch(/\.pdf$/);
+      expect(p).not.toMatch(/temp|preview|thumb/i);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-recipient personalization — ONE shared template, tokens substituted
+// from VERIFIED data only (missing → empty, never invented, no leftovers)
+// ---------------------------------------------------------------------------
+
+const PERSONA_SUBJECT = "Bewerbung um einen Ausbildungsplatz – {{position}}";
+const PERSONA_BODY =
+  "<p>{{greeting}}</p><p>hiermit bewerbe ich mich bei {{company_name}} als {{position}}.</p><p>Mit freundlichen Grüßen</p><p>{{candidate_name}}</p>";
+
+describe("per-recipient personalization (shared template, verified data only)", () => {
+  it("3 companies → each gets ITS OWN position/company/greeting; candidate name identical; no placeholder survives", async () => {
+    seed(globalTemplate({ subject: PERSONA_SUBJECT, body: PERSONA_BODY }));
+    db.tables.profiles.push({ id: USER, full_name: "Mustapha Drif" } as never);
+    // CO2's ad names a contact person → its greeting is personalized:
+    const row2 = db.tables.auto_bewerb_companies.find((r) => r.id === CO2)! as { ad_extracted: { contactPerson: string } };
+    row2.ad_extracted.contactPerson = "Frau Müller";
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    for (const id of [CO1, CO2, CO3]) {
+      const res = await prepareAutoBewerbSend(USER, { companyId: id, schedule: FUTURE });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+    }
+    const a1 = fullAttempt(CO1);
+    const a2 = fullAttempt(CO2);
+    const a3 = fullAttempt(CO3);
+    // Subject: the SAME template, each with its OWN position:
+    expect(a1.subject).toBe("Bewerbung um einen Ausbildungsplatz – Anlagenmechaniker SHK");
+    expect(a2.subject).toBe("Bewerbung um einen Ausbildungsplatz – Fachinformatiker");
+    expect(a3.subject).toBe("Bewerbung um einen Ausbildungsplatz – Anlagenmechaniker SHK");
+    // Body: company + position personalized per recipient:
+    expect(a1.payload.html).toContain("bei Kältebau Nord GmbH als Anlagenmechaniker SHK");
+    expect(a2.payload.html).toContain("bei Tech Süd AG als Fachinformatiker");
+    expect(a3.payload.html).toContain("bei Heizungsbau Ost GmbH als Anlagenmechaniker SHK");
+    // Greeting: verified contact person when available, neutral default otherwise:
+    expect(a1.payload.html).toContain("Sehr geehrte Damen und Herren,");
+    expect(a2.payload.html).toContain("Sehr geehrte/r Frau Müller,");
+    expect(a3.payload.html).toContain("Sehr geehrte Damen und Herren,");
+    // Candidate name (from the profile) is the SAME for everyone; no
+    // placeholder survives in the HTML or the text part:
+    for (const a of [a1, a2, a3]) {
+      expect(a.payload.html).toContain("Mustapha Drif");
+      expect(a.payload.html).not.toContain("{{");
+      expect(a.payload.text).not.toContain("{{");
+    }
+    expect(a2.payload.text).toContain("Tech Süd AG");
+    expect(a2.payload.text).toContain("Frau Müller");
+  });
+
+  it("no profile row → candidate_name renders EMPTY (never invented, no leftover)", async () => {
+    seed(globalTemplate({ subject: PERSONA_SUBJECT, body: PERSONA_BODY }));
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    const res = await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    const a = fullAttempt(CO1);
+    expect(a.payload.html).not.toContain("{{");
+    expect(a.payload.html).not.toContain("undefined");
+    // The verified default greeting is still present:
+    expect(a.payload.html).toContain("Sehr geehrte Damen und Herren,");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HTML sanitization — pure allowlist, on save (actions) and on send (engine)
+// ---------------------------------------------------------------------------
+
+describe("HTML sanitization (save + send + pure)", () => {
+  it("the pure allowlist strips scripts/handlers/dangerous URLs, keeps formatting + safe links", () => {
+    const out = sanitizeEmailHtml(
+      '<p onclick="x()">hi</p><script>alert(1)</script><img src=x onerror=alert(1)>' +
+        '<a href="javascript:alert(1)">bad</a><a href="https://ok.de">good</a><ul><li>one</li></ul><strong>b</strong>',
+    );
+    expect(out).not.toContain("<script");
+    expect(out).not.toContain("onclick");
+    expect(out).not.toContain("onerror");
+    expect(out).not.toContain("<img");
+    expect(out).not.toContain("javascript:");
+    expect(out).toContain("hi");
+    expect(out).toContain('<a href="https://ok.de"');
+    expect(out).toContain('target="_blank"');
+    expect(out).toContain("noopener");
+    expect(out).toContain("<li>one</li>");
+    expect(out).toContain("<strong>b</strong>");
+    expect(htmlToText(out)).not.toContain("<");
+  });
+
+  it("the SAVE actions persist sanitized HTML (template + settings saves)", async () => {
+    seed(globalTemplate());
+    (createClient as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      ...db.admin,
+      auth: { getUser: async () => ({ data: { user: { id: USER } } }) },
+    }));
+    const evil = '<p onclick="x()">hallo</p><script>evil()</script><a href="javascript:alert(1)">x</a><a href="https://ok.de">link</a>';
+    const r1 = await saveEmailTemplateAction(evil);
+    expect(r1.ok).toBe(true);
+    let saved = String(db.tables.auto_bewerb_email_templates[0].body);
+    expect(saved).not.toContain("<script");
+    expect(saved).not.toContain("onclick");
+    expect(saved).not.toContain("javascript:");
+    expect(saved).toContain("hallo");
+    expect(saved).toContain("https://ok.de");
+
+    const r2 = await saveEmailSettingsAction({
+      body: evil,
+      recipient: "",
+      subject: "Bewerbung – {{position}}",
+      accountId: ACCT_ID,
+      attachCv: false,
+      attachLetter: false,
+    });
+    expect(r2.ok).toBe(true);
+    saved = String(db.tables.auto_bewerb_email_templates[0].body);
+    expect(saved).not.toContain("<script");
+    expect(saved).not.toContain("onclick");
+    expect(saved).not.toContain("javascript:");
+  });
+
+  it("the SEND path re-sanitizes (defense in depth): a hostile stored body never reaches the payload", async () => {
+    seed(globalTemplate({ body: "<p>hallo</p><script>evil()</script><img src=x onerror=alert(1)>" }));
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    const res = await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    const a = fullAttempt(CO1);
+    expect(a.payload.html).not.toContain("<script");
+    expect(a.payload.html).not.toContain("onerror");
+    expect(a.payload.html).not.toContain("<img");
+    expect(a.payload.html).toContain("hallo");
+    expect(a.payload.text).not.toContain("<");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -567,21 +726,34 @@ describe("single global configuration (source contracts)", () => {
     expect(ENGINE).toContain("code: \"letter_render_failed\"");
   });
 
-  it("the schema no longer offers a token renderer or token list", () => {
-    expect(SCHEMA).not.toContain("renderAutoBewerbEmailBody");
-    expect(SCHEMA).not.toContain("AUTO_BEWERB_EMAIL_TOKENS");
+  it("the schema is the single source of truth for tokens, substitution, greeting + defaults", () => {
+    expect(SCHEMA).toContain("export const AUTO_BEWERB_EMAIL_TOKENS");
+    expect(SCHEMA).toContain("export function substituteEmailTokens");
+    expect(SCHEMA).toContain("export function buildAutoBewerbGreeting");
+    expect(SCHEMA).toContain("export const AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT");
+    expect(SCHEMA).toContain("export const AUTO_BEWERB_EMAIL_DEFAULT_BODY");
     expect(SCHEMA).toContain("export function resolveAutoBewerbRecipient");
+    expect(SCHEMA).not.toContain("renderAutoBewerbEmailBody");
+    // The concise default subject from the spec:
+    expect(SCHEMA).toContain("Bewerbung um einen Ausbildungsplatz – {{position}}");
   });
 
-  it("Step 6 UI: one global configuration + one Save; no token chips; legacy mode is read-only", () => {
+  it("Step 6 UI: rich-text editor + live preview + manifest; one global Save; no per-company email save path", () => {
     expect(STEP6).toContain("saveEmailSettingsAction");
     expect(STEP6).toContain("resolveAutoBewerbRecipient");
     expect(STEP6).toContain("ws.emailSettingsSupported");
-    expect(STEP6).not.toContain("AUTO_BEWERB_EMAIL_TOKENS");
+    // The professional rich-text editor + the attachment manifest:
+    expect(STEP6).toContain("EmailRichEditor");
+    expect(STEP6).toContain("AttachmentManifest");
+    // Client-side sanitization + personalization power the live preview:
+    expect(STEP6).toContain("sanitizeEmailHtml");
+    expect(STEP6).toContain("substituteEmailTokens");
+    expect(STEP6).toContain("buildAutoBewerbGreeting");
+    // The concise default German e-mail is pre-filled:
+    expect(STEP6).toContain("AUTO_BEWERB_EMAIL_DEFAULT_BODY");
+    expect(STEP6).toContain("AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT");
     expect(STEP6).not.toContain("renderAutoBewerbEmailBody");
     expect(STEP6).not.toContain("updateCompanyAction"); // no per-company email save path
-    // The body is previewed verbatim (the template text itself):
-    expect(STEP6).toContain("{templateText || t(\"autoBewerb.templateEmptyNote\")}");
   });
 
   it("Step 7: inputs are company ids + confirmation only; the modal shows the exact shared config + per-company destination", () => {
@@ -603,6 +775,8 @@ describe("single global configuration (source contracts)", () => {
     expect(ACTIONS).toContain("saveEmailSettingsAction");
     // Both the immediate and the scheduled path pass only companyId (+ schedule):
     expect(ACTIONS).toContain("companyId: input.companyId,\n      schedule: input.schedule ?? null,");
+    // The rich-text body is sanitized before persisting (the save path):
+    expect(ACTIONS).toContain("sanitizeEmailHtml");
   });
 
   it("the i18n dictionaries have no token keys and document the global configuration", () => {
@@ -616,18 +790,20 @@ describe("single global configuration (source contracts)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AI prompt — company-neutral, no tokens
+// AI prompt — shared, company-neutral; ONLY the supported tokens allowed
 // ---------------------------------------------------------------------------
 
-describe("buildAutoBewerbEmailTemplatePrompt (company-neutral, no tokens)", () => {
-  it("forbids tokens and company names — the text is sent UNCHANGED to everyone", () => {
+describe("buildAutoBewerbEmailTemplatePrompt (shared template, supported tokens only)", () => {
+  it("allows ONLY the supported tokens — no hard-coded company names", () => {
     const p = buildAutoBewerbEmailTemplatePrompt({ sharedAttachmentNames: [] });
+    for (const token of ["{{company_name}}", "{{position}}", "{{contact_person}}", "{{greeting}}", "{{candidate_name}}"]) {
+      expect(p).toContain(token);
+    }
     expect(p).not.toContain("{company} →");
     expect(p).not.toContain("{position} →");
     expect(p).not.toContain("{contactName} →");
-    expect(p).toContain("EXAKT denselben Text");
-    expect(p).toContain("KEIN Firmenname");
-    expect(p).toContain("KEIN Platzhalter");
+    expect(p).not.toContain("EXAKT denselben Text");
+    expect(p).not.toContain("KEIN Platzhalter");
   });
 
   it("keeps the no-invention rules and the attachment contract", () => {
@@ -747,7 +923,7 @@ describe("generate-email route (global, metered)", () => {
     expect(completeFeatureOp).not.toHaveBeenCalled();
   });
 
-  it("NO company input needed — the prompt is global, token-free, profile-grounded", async () => {
+  it("NO company input needed — the prompt is shared, token-aware, profile-grounded", async () => {
     await post({ attachmentNames: ["Abiturzeugnis.pdf"] });
     const p = lastPrompt();
     expect(p).not.toContain("{company} →");

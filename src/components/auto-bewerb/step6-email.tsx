@@ -2,44 +2,66 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Mail, Save, Sparkles } from "lucide-react";
-import { Button, Input, Textarea } from "@/components/ui";
+import { AlertTriangle, Eye, Mail, Save, Sparkles } from "lucide-react";
+import { Button, Input } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
-import { AUTO_BEWERB_EMAIL_TEMPLATE_MAX, isValidEmail, resolveAutoBewerbRecipient } from "@/lib/auto-bewerb/schema";
+import {
+  AUTO_BEWERB_EMAIL_TEMPLATE_MAX,
+  AUTO_BEWERB_EMAIL_DEFAULT_BODY,
+  AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT,
+  buildAutoBewerbGreeting,
+  isValidEmail,
+  resolveAutoBewerbRecipient,
+  substituteEmailTokens,
+} from "@/lib/auto-bewerb/schema";
+import { sanitizeEmailHtml } from "@/lib/email-sanitize";
 import { saveEmailSettingsAction, saveEmailTemplateAction } from "@/app/auto-bewerb/actions";
+import { EmailRichEditor } from "./email-rich-editor";
+import { AttachmentManifest } from "./attachment-manifest";
 import { Note, SectionCard, companyLabel, useAutoBewerb } from "./shared";
 
 /**
- * Step 6 — ONE global e-mail configuration for the ENTIRE batch.
+ * Step 6 — professional e-mail editor + ONE global configuration + manifest.
  *
- * Supported mode (email-settings migration applied): a single shared
- * configuration — recipient (optional), subject, body, sending account and
- * attachment flags — saved with ONE button. Every company receives the
- * EXACT SAME subject and body (sent verbatim, no substitution); the only
- * per-company value is the delivery destination, which stays that
- * company's verified application email (or the explicit global recipient
- * when the user deliberately sets one). Supporting documents are GLOBAL:
- * the whole user library is attached to every application.
+ * Supported mode (email-settings migration applied): a rich-text editor for the
+ * SHARED e-mail (subject + body), a live preview, ONE global configuration
+ * (optional shared recipient, sending account, attach-CV / attach-letter
+ * flags) saved with a single button, and a read-only per-company attachment
+ * manifest. The body is sanitized HTML; the supported {{tokens}} are
+ * personalized per recipient at send time (missing → empty, never invented).
+ * Each company keeps its verified delivery address + its OWN CV/Anschreiben.
  *
- * Legacy mode (migration not applied yet): the pre-existing per-company
- * values (if any) are displayed READ-ONLY and still honored by the send
- * engine; the shared body stays editable above. A pending-migration notice
- * explains how to unlock the single global configuration.
+ * Legacy mode (migration not applied yet): the shared body is still editable
+ * (saved separately); the per-company values are shown READ-ONLY and still
+ * honored by the send engine. A pending-migration notice explains the upgrade.
  */
+
+const looksLikeHtml = (s: string) => /<[a-z][\s\/>]/i.test(s);
+/** Render legacy PLAIN-TEXT bodies as paragraphs so they stay readable in the
+ *  rich-text editor; HTML passes through untouched. */
+function plainToHtmlSafe(s: string): string {
+  if (!s || looksLikeHtml(s)) return s;
+  const esc = (x: string) => x.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s
+    .split(/\n{2,}/)
+    .map((p) => esc(p.trim()).replace(/\n/g, "<br>"))
+    .filter(Boolean)
+    .map((p) => `<p>${p}</p>`)
+    .join("\n");
+}
+
 export function Step6Email() {
   const { ws, refresh, notify, goToStep } = useAutoBewerb();
   const { t } = useI18n();
   const supported = ws.emailSettingsSupported;
   const s = ws.emailSettings;
 
-  // Local edits are buffered against the server value (the body as a DRAFT,
-  // null = follow the server) — step navigation never discards an unsaved
-  // edit. ALL global settings live in the parent, so the AI draft can apply
-  // to the configuration as a whole (body + shared subject).
+  // Local edits are buffered against the server value (body as a DRAFT, null =
+  // follow the server) — step navigation never discards an unsaved edit.
   const [templateDraft, setTemplateDraft] = useState<string | null>(null);
   const [recipient, setRecipient] = useState(s?.recipient ?? "");
-  const [subject, setSubject] = useState(s?.subject ?? "");
+  const [subject, setSubject] = useState(supported && s ? s.subject || AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT : "");
   const [accountId, setAccountId] = useState(s?.accountId ?? "");
   const [attachCv, setAttachCv] = useState(s?.attachCv ?? true);
   const [attachLetter, setAttachLetter] = useState(s?.attachLetter ?? true);
@@ -48,19 +70,23 @@ export function Step6Email() {
   const [drafting, setDrafting] = useState(false);
   const [draftResult, setDraftResult] = useState<{ subject: string; body: string } | null>(null);
 
-  const templateText = templateDraft ?? ws.emailTemplate;
-  const templateDirty = templateDraft !== null && templateDraft !== ws.emailTemplate;
-  const templateTooLong = templateText.length > AUTO_BEWERB_EMAIL_TEMPLATE_MAX;
-  const settingsDirty =
-    recipient !== (s?.recipient ?? "") ||
+  const serverBody = ws.emailTemplate;
+  const bodyDisplay = templateDraft ?? plainToHtmlSafe(serverBody || AUTO_BEWERB_EMAIL_DEFAULT_BODY);
+  const bodyDirty = bodyDisplay !== serverBody;
+  const templateTooLong = bodyDisplay.length > AUTO_BEWERB_EMAIL_TEMPLATE_MAX;
+  const globalDirty =
+    bodyDirty ||
     subject !== (s?.subject ?? "") ||
+    recipient !== (s?.recipient ?? "") ||
     accountId !== (s?.accountId ?? "") ||
     attachCv !== (s?.attachCv ?? true) ||
     attachLetter !== (s?.attachLetter ?? true);
 
+  const account = ws.emailAccounts.find((a) => a.id === accountId) ?? null;
+
   const saveTemplate = async () => {
     setSavingTemplate(true);
-    const res = await saveEmailTemplateAction(templateText);
+    const res = await saveEmailTemplateAction(bodyDisplay);
     setSavingTemplate(false);
     if (res.ok) {
       setTemplateDraft(null);
@@ -69,11 +95,11 @@ export function Step6Email() {
     } else notify("error", t("autoBewerb.saveError"));
   };
 
-  /** One Save — the complete global configuration (body included). */
+  /** One Save — the complete global configuration (subject + body included). */
   const saveSettings = async () => {
     setSaving(true);
     const res = await saveEmailSettingsAction({
-      body: templateText,
+      body: bodyDisplay,
       recipient,
       subject,
       accountId,
@@ -92,15 +118,12 @@ export function Step6Email() {
     return <EmptyState title={t("autoBewerb.emailEmpty")} body={t("autoBewerb.emailEmptyBody")} illustration={<Mail size={34} strokeWidth={1.6} />} ctaIcon={<Button variant="primary" onClick={() => goToStep(2)}>{t("autoBewerb.goToCompanies")}</Button>} />;
   }
 
-  /** GLOBAL library — every application carries all of these documents. */
   const sharedDocNames = ws.attachments.map((a) => a.display_name);
 
   const generateDraft = async () => {
     setDrafting(true);
     setDraftResult(null);
     try {
-      // GLOBAL template draft — no company input (the e-mail must stay
-      // company-neutral; only the shared document library is contextual).
       const res = await fetch("/api/auto-bewerb/generate-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -116,18 +139,30 @@ export function Step6Email() {
     }
   };
 
+  /** The AI draft is PLAIN text → convert to HTML for the rich editor. */
   const applyDraft = (d: { subject: string; body: string }) => {
-    setTemplateDraft(d.body);
-    // Supported mode: the draft's subject fills the ONE shared subject.
-    // Legacy mode: subjects stay per company — only the body is applied.
+    setTemplateDraft(plainToHtmlSafe(d.body));
     if (supported) setSubject(d.subject);
   };
+
+  // Live preview: the SAME sanitized template, personalized for the first
+  // company (a representative recipient). Rendered as sanitized HTML only.
+  const previewCompany = ws.companies[0];
+  const previewValues = {
+    candidate_name: ws.candidateName,
+    contact_person: String(previewCompany?.company.ad_extracted?.contactPerson ?? "").trim(),
+    company_name: String(previewCompany?.company.ad_extracted?.company || previewCompany?.company.company || "").trim(),
+    greeting: buildAutoBewerbGreeting(previewCompany?.company.ad_extracted?.contactPerson),
+    position: String(previewCompany?.company.ad_extracted?.jobTitle || previewCompany?.company.ad_extracted?.occupation || "").trim(),
+  };
+  const previewHtml = sanitizeEmailHtml(substituteEmailTokens(bodyDisplay, previewValues));
+  const previewSubject = substituteEmailTokens(subject, previewValues).trim();
 
   return (
     <div className="space-y-5">
       {!supported && <Note kind="error">{t("autoBewerb.emailSettingsMigrationPending")}</Note>}
 
-      {/* Shared e-mail body (one for ALL companies — sent verbatim) */}
+      {/* E-mail message — shared subject + rich-text body + live preview */}
       <SectionCard
         title={t("autoBewerb.templateTitle")}
         aside={
@@ -136,10 +171,8 @@ export function Step6Email() {
               <Sparkles size={14} />
               {drafting ? t("autoBewerb.generatingButton") : t("autoBewerb.emailDraftButton")}
             </Button>
-            {/* LEGACY mode only: without the settings migration the body is
-                saved separately (per-company settings stay in the row below). */}
             {!supported && (
-              <Button variant="primary" size="sm" onClick={() => void saveTemplate()} disabled={savingTemplate || !templateDirty || templateTooLong}>
+              <Button variant="primary" size="sm" onClick={() => void saveTemplate()} disabled={savingTemplate || !bodyDirty || templateTooLong}>
                 <Save size={14} />
                 {t("autoBewerb.templateSaveButton")}
               </Button>
@@ -147,19 +180,55 @@ export function Step6Email() {
           </div>
         }
       >
-        <Textarea
-          label={t("autoBewerb.templateLabel")}
-          hint={`${templateText.length} / ${AUTO_BEWERB_EMAIL_TEMPLATE_MAX}`}
-          rows={8}
-          value={templateText}
-          onChange={(e) => setTemplateDraft(e.target.value)}
-        />
-        {templateTooLong && (
-          <div className="mt-2">
-            <Note kind="error">{t("autoBewerb.templateTooLong")}</Note>
+        <p className="mb-3 text-xs leading-5 text-muted">{t("autoBewerb.emailMessageIntro")}</p>
+
+        {supported && (
+          <div className="mb-3">
+            <Input
+              label={t("autoBewerb.globalSubjectLabel")}
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              hint={t("autoBewerb.subjectTokenHint")}
+            />
           </div>
         )}
-        <p className="mt-2 text-xs leading-5 text-muted">{t("autoBewerb.templateHint")}</p>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div>
+            <span className="mb-1.5 block text-sm font-semibold text-ink-soft">{t("autoBewerb.templateLabel")}</span>
+            <EmailRichEditor value={bodyDisplay} onChange={(html) => setTemplateDraft(html)} placeholder={t("autoBewerb.templateEmptyNote")} />
+            <p className="mt-1.5 text-right text-xs text-faint">
+              {bodyDisplay.length} / {AUTO_BEWERB_EMAIL_TEMPLATE_MAX}
+            </p>
+            {templateTooLong && (
+              <div className="mt-2">
+                <Note kind="error">{t("autoBewerb.templateTooLong")}</Note>
+              </div>
+            )}
+            <p className="mt-2 text-xs leading-5 text-muted">{t("autoBewerb.templateHint")}</p>
+          </div>
+
+          {/* Live preview (sanitized + personalized HTML) */}
+          <div>
+            <span className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold text-ink-soft">
+              <Eye size={14} /> {t("autoBewerb.previewTitle")}
+            </span>
+            <div className="rounded-2xl border border-line bg-surface-2/30 p-4">
+              <div className="space-y-1 border-b border-line pb-2 text-xs text-muted">
+                <p>
+                  <span className="font-semibold text-ink-soft">{t("autoBewerb.previewSubject")}:</span>{" "}
+                  <span className="text-ink-soft">{previewSubject || "—"}</span>
+                </p>
+                <p>
+                  <span className="font-semibold text-ink-soft">{t("autoBewerb.previewAccount")}:</span>{" "}
+                  {account ? account.email : t("autoBewerb.missingAccount")}
+                </p>
+              </div>
+              <div className="email-editor mt-3 text-sm text-ink-soft" dangerouslySetInnerHTML={{ __html: previewHtml || `<p>${t("autoBewerb.templateEmptyNote")}</p>` }} />
+            </div>
+            <p className="mt-2 text-xs text-muted">{t("autoBewerb.previewCount", { count: ws.companies.length })}</p>
+          </div>
+        </div>
 
         {draftResult && (
           <div className="mt-4 rounded-2xl border border-accent/30 bg-accent-soft/30 p-4">
@@ -191,14 +260,12 @@ export function Step6Email() {
 
       {supported ? (
         <GlobalEmailSettings
-          templateText={templateText}
-          dirty={settingsDirty || templateDirty}
+          dirty={globalDirty}
           saving={saving}
           onSave={() => void saveSettings()}
+          bodyEmpty={!bodyDisplay.trim()}
           recipient={recipient}
           onRecipientChange={setRecipient}
-          subject={subject}
-          onSubjectChange={setSubject}
           accountId={accountId}
           onAccountIdChange={setAccountId}
           attachCv={attachCv}
@@ -209,23 +276,25 @@ export function Step6Email() {
       ) : (
         <LegacyCompanyList />
       )}
+
+      {/* The exact per-company documents (read-only, mirrors the send engine) */}
+      <AttachmentManifest />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Supported mode — ONE global configuration + global preview + delivery list
+// Supported mode — ONE global configuration (recipient / account / flags) +
+// the single Save. The subject + body live in the editor card above.
 // ---------------------------------------------------------------------------
 
 function GlobalEmailSettings(props: {
-  templateText: string;
   dirty: boolean;
   saving: boolean;
   onSave: () => void;
+  bodyEmpty: boolean;
   recipient: string;
   onRecipientChange: (v: string) => void;
-  subject: string;
-  onSubjectChange: (v: string) => void;
   accountId: string;
   onAccountIdChange: (v: string) => void;
   attachCv: boolean;
@@ -236,14 +305,12 @@ function GlobalEmailSettings(props: {
   const { ws } = useAutoBewerb();
   const { t } = useI18n();
   const {
-    templateText,
     dirty,
     saving,
     onSave,
+    bodyEmpty,
     recipient,
     onRecipientChange,
-    subject,
-    onSubjectChange,
     accountId,
     onAccountIdChange,
     attachCv,
@@ -253,136 +320,77 @@ function GlobalEmailSettings(props: {
   } = props;
 
   const issues: string[] = [];
-  if (!templateText.trim()) issues.push(t("autoBewerb.templateEmptyNote"));
-  if (!subject.trim()) issues.push(t("autoBewerb.missingSubject"));
+  if (bodyEmpty) issues.push(t("autoBewerb.templateEmptyNote"));
   if (!accountId) issues.push(t("autoBewerb.missingAccount"));
   if (recipient.trim() && !isValidEmail(recipient)) issues.push(t("autoBewerb.invalidRecipient"));
   const missingDest = ws.companies.filter(
     (c) => !resolveAutoBewerbRecipient(recipient, c.company.recipient_email, c.company.ad_extracted),
   );
   if (missingDest.length > 0) issues.push(t("autoBewerb.missingRecipient"));
-
-  const account = ws.emailAccounts.find((a) => a.id === accountId);
-  const specificAttachments = [attachCv ? t("autoBewerb.attachCvPdf") : null, attachLetter ? t("autoBewerb.attachLetterPdf") : null].filter(
-    Boolean,
-  ) as string[];
-  const sharedAttachments = ws.attachments.map((a) => a.display_name);
+  const missingCv = ws.companies.filter((c) => attachCv && !c.cv);
+  if (missingCv.length > 0) issues.push(t("autoBewerb.missingCv"));
+  const missingLetter = ws.companies.filter((c) => attachLetter && !c.letter);
+  if (missingLetter.length > 0) issues.push(t("autoBewerb.missingLetter"));
 
   return (
-    <div className="space-y-5">
-      <div className="grid gap-5 lg:grid-cols-2">
-        {/* ONE shared configuration — one Save for everything */}
-        <SectionCard title={t("autoBewerb.emailSettingsTitle")} aside={dirty ? <span className="text-xs font-semibold text-warning">{t("autoBewerb.unsavedChanges")}</span> : undefined}>
-          <div className="space-y-3">
-            <Input
-              label={t("autoBewerb.globalRecipientLabel")}
-              type="email"
-              value={recipient}
-              onChange={(e) => onRecipientChange(e.target.value)}
-              error={recipient && !isValidEmail(recipient) ? t("autoBewerb.invalidEmail") : undefined}
-              hint={t("autoBewerb.globalRecipientHint")}
-            />
-            <Input label={t("autoBewerb.globalSubjectLabel")} value={subject} onChange={(e) => onSubjectChange(e.target.value)} />
-            <div className="flex flex-wrap gap-4">
-              <label className="flex items-center gap-2 text-sm font-medium text-ink-soft">
-                <input type="checkbox" checked={attachCv} onChange={(e) => onAttachCvChange(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
-                {t("autoBewerb.attachCvLabel")}
-              </label>
-              <label className="flex items-center gap-2 text-sm font-medium text-ink-soft">
-                <input type="checkbox" checked={attachLetter} onChange={(e) => onAttachLetterChange(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
-                {t("autoBewerb.attachLetterLabel")}
-              </label>
-            </div>
-            {ws.emailAccounts.length > 0 && (
-              <div>
-                <span className="mb-1.5 block text-xs font-semibold text-ink-soft">{t("autoBewerb.emailAccountLabel")}</span>
-                <select
-                  value={accountId}
-                  onChange={(e) => onAccountIdChange(e.target.value)}
-                  className="h-11 w-full max-w-sm rounded-xl border border-line-strong bg-surface px-3 text-sm font-medium text-ink outline-none focus:border-accent"
-                >
-                  <option value="">{t("autoBewerb.selectAccount")}</option>
-                  {ws.emailAccounts.map((a) => (
-                    <option key={a.id} value={a.id} disabled={a.requires_reconnect}>
-                      {a.email} ({a.provider})
-                      {a.requires_reconnect ? ` — ${t("autoBewerb.accountReconnect")}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {issues.length > 0 && (
-              <div className="rounded-2xl border border-warning/30 bg-warning-soft/50 p-3">
-                <p className="mb-1 flex items-center gap-1.5 text-xs font-bold text-warning">
-                  <AlertTriangle size={13} /> {t("autoBewerb.checkListTitle")}
-                </p>
-                <ul className="list-inside list-disc space-y-0.5 text-xs text-ink-soft">
-                  {issues.map((it, i) => (
-                    <li key={i}>{it}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            <div className="flex justify-end">
-              <Button variant="primary" size="sm" onClick={onSave} disabled={saving || !dirty || templateText.length > AUTO_BEWERB_EMAIL_TEMPLATE_MAX}>
-                <Save size={14} />
-                {t("autoBewerb.globalSaveButton")}
-              </Button>
-            </div>
+    <SectionCard title={t("autoBewerb.emailSettingsTitle")} aside={dirty ? <span className="text-xs font-semibold text-warning">{t("autoBewerb.unsavedChanges")}</span> : undefined}>
+      <div className="space-y-3">
+        <Input
+          label={t("autoBewerb.globalRecipientLabel")}
+          type="email"
+          value={recipient}
+          onChange={(e) => onRecipientChange(e.target.value)}
+          error={recipient && !isValidEmail(recipient) ? t("autoBewerb.invalidEmail") : undefined}
+          hint={t("autoBewerb.globalRecipientHint")}
+        />
+        <div className="flex flex-wrap gap-4">
+          <label className="flex items-center gap-2 text-sm font-medium text-ink-soft">
+            <input type="checkbox" checked={attachCv} onChange={(e) => onAttachCvChange(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
+            {t("autoBewerb.attachCvLabel")}
+          </label>
+          <label className="flex items-center gap-2 text-sm font-medium text-ink-soft">
+            <input type="checkbox" checked={attachLetter} onChange={(e) => onAttachLetterChange(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
+            {t("autoBewerb.attachLetterLabel")}
+          </label>
+        </div>
+        {ws.emailAccounts.length > 0 && (
+          <div>
+            <span className="mb-1.5 block text-xs font-semibold text-ink-soft">{t("autoBewerb.emailAccountLabel")}</span>
+            <select
+              value={accountId}
+              onChange={(e) => onAccountIdChange(e.target.value)}
+              className="h-11 w-full max-w-sm rounded-xl border border-line-strong bg-surface px-3 text-sm font-medium text-ink outline-none focus:border-accent"
+            >
+              <option value="">{t("autoBewerb.selectAccount")}</option>
+              {ws.emailAccounts.map((a) => (
+                <option key={a.id} value={a.id} disabled={a.requires_reconnect}>
+                  {a.email} ({a.provider})
+                  {a.requires_reconnect ? ` — ${t("autoBewerb.accountReconnect")}` : ""}
+                </option>
+              ))}
+            </select>
           </div>
-        </SectionCard>
-
-        {/* Global preview — the EXACT e-mail every company receives */}
-        <SectionCard title={t("autoBewerb.globalPreviewTitle")}>
-          <div className="rounded-2xl border border-line bg-surface-2/30 p-4">
-            <div className="space-y-1 border-b border-line pb-3 text-xs text-muted">
-              <p>
-                <span className="font-semibold text-ink-soft">{t("autoBewerb.previewTo")}:</span>{" "}
-                {recipient.trim() || t("autoBewerb.deliveryListHint")}
-              </p>
-              <p>
-                <span className="font-semibold text-ink-soft">{t("autoBewerb.previewSubject")}:</span> {subject || "—"}
-              </p>
-              <p>
-                <span className="font-semibold text-ink-soft">{t("autoBewerb.previewAccount")}:</span> {account ? account.email : t("autoBewerb.missingAccount")}
-              </p>
-              <p>
-                <span className="font-semibold text-ink-soft">{t("autoBewerb.previewAttachments")}:</span>{" "}
-                {specificAttachments.length > 0 ? specificAttachments.join(", ") : t("autoBewerb.noAttachments")}
-              </p>
-              {sharedAttachments.length > 0 && (
-                <p>
-                  <span className="font-semibold text-ink-soft">{t("autoBewerb.attachSharedDocs")}:</span> {sharedAttachments.join(", ")}
-                </p>
-              )}
-            </div>
-            <pre className="mt-3 whitespace-pre-wrap text-sm leading-6 text-ink-soft">{templateText || t("autoBewerb.templateEmptyNote")}</pre>
+        )}
+        {issues.length > 0 && (
+          <div className="rounded-2xl border border-warning/30 bg-warning-soft/50 p-3">
+            <p className="mb-1 flex items-center gap-1.5 text-xs font-bold text-warning">
+              <AlertTriangle size={13} /> {t("autoBewerb.checkListTitle")}
+            </p>
+            <ul className="list-inside list-disc space-y-0.5 text-xs text-ink-soft">
+              {issues.map((it, i) => (
+                <li key={i}>{it}</li>
+              ))}
+            </ul>
           </div>
-          <p className="mt-2 text-xs text-muted">{t("autoBewerb.previewCount", { count: ws.companies.length })}</p>
-        </SectionCard>
+        )}
+        <div className="flex justify-end">
+          <Button variant="primary" size="sm" onClick={onSave} disabled={saving || !dirty}>
+            <Save size={14} />
+            {t("autoBewerb.globalSaveButton")}
+          </Button>
+        </div>
       </div>
-
-      {/* Read-only delivery list — each company keeps its verified address */}
-      <SectionCard title={t("autoBewerb.deliveryListTitle")}>
-        <p className="mb-3 text-xs text-muted">{t("autoBewerb.deliveryListHint")}</p>
-        <ul className="divide-y divide-line">
-          {ws.companies.map((c) => {
-            const { name, job } = companyLabel(c.company);
-            const dest = resolveAutoBewerbRecipient(recipient, c.company.recipient_email, c.company.ad_extracted);
-            return (
-              <li key={c.company.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-2 text-sm">
-                <span className="font-semibold text-ink">
-                  {name} {job ? <span className="font-normal text-ink-soft">— {job}</span> : null}
-                </span>
-                <span className={dest ? "font-mono text-xs text-ink-soft" : "text-xs font-semibold text-warning"}>
-                  {dest || t("autoBewerb.deliveryNoDest")}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      </SectionCard>
-    </div>
+    </SectionCard>
   );
 }
 

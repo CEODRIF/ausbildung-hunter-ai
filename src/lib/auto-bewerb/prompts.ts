@@ -300,23 +300,28 @@ export function buildAutoBewerbEmailTemplatePrompt(input: {
 
   const task = [
     "AUFGABE: Schreibe EINE wiederverwendbare, professionelle deutsche BEWERBUNGS-E-MAIL (eine Vorlage für ALLE Unternehmen).",
-    "WICHTIG: Diese E-Mail wird WÖRTLICH und UNVERÄNDERT an alle Unternehmen des Benutzerkontos gesendet — jede Firma erhält EXAKT denselben Text. Deshalb muss die E-Mail komplett unternehmensneutral sein:",
-    "- KEIN Firmenname, KEINE konkrete Stellenbezeichnung, KEIN Ansprechpartner, KEIN Platzhalter — der Text bleibt für jeden Empfänger identisch.",
+    "PERSÖNLICHKEIT: Die Vorlage ist GLEICH für alle Unternehmen, wird aber pro Empfänger mit den PLATZHALTERN personalisiert. Verwende NUR diese Platzhalter (exakt so, in Doppel-geschweiften Klammern):",
+    "- {{company_name}} → Name des Unternehmens (aus dem jeweiligen Stellenangebot)",
+    "- {{position}} → konkrete Stellen-/Ausbildungsbezeichnung",
+    "- {{contact_person}} → Ansprechpartner:in, wenn das Angebot eine Person nennt",
+    "- {{greeting}} → passende Anrede (z. B. 'Sehr geehrte/r <Name>,' bzw. 'Sehr geehrte Damen und Herren,')",
+    "- {{candidate_name}} → Name des/der Bewerbers/in",
+    "Regeln zu Platzhaltern: Nichts erfinden. Fehlende Werte werden beim Versand leer ersetzt — schreibe die Vorlage so, dass sie auch ohne bestimmten Wert noch sinnvoll bleibt (z. B. '{{greeting}}' statt eines hartkodierten Namens).",
     "Inhalt:",
-    "- Anrede: 'Sehr geehrte Damen und Herren,'.",
-    "- Kurzer Einstieg: Bewerbung um eine Ausbildungsstelle (allgemein formuliert).",
+    "- Anrede: '{{greeting}}' (oder 'Sehr geehrte Damen und Herren,').",
+    "- Kurzer Einstieg: Bewerbung um die Ausbildungsstelle '{{position}}' bei '{{company_name}}' (oder allgemein formuliert, falls Platzhalter nicht sinnvoll).",
     "- 1–2 Sätze Motivation (NUR aus dem KANDIDATENPROFIL ableiten — keine Qualifikationen erfinden).",
     "- Klarer Hinweis, dass Lebenslauf und Anschreiben als PDF-Anhänge beigefügt sind.",
-    "- Höflicher Abschluss mit Bitte um ein Gespräch/Rückmeldung und Grußformel.",
+    "- Höflicher Abschluss mit Bitte um ein Gespräch/Rückmeldung und Grußformel, danach '{{candidate_name}}'.",
     "Regeln:",
     "- Länge: max. 120 Wörter. Professionell, natürlich, menschlich — kein Fülltext, keine leeren Floskeln, kein Kopieren des Anschreibens.",
-    "- Betreff: kurz und allgemein gültig (ohne Firmennamen), z. B. 'Bewerbung um eine Ausbildungsstelle'.",
+    "- Betreff: kurz, darf '{{position}}' enthalten, z. B. 'Bewerbung um einen Ausbildungsplatz – {{position}}'.",
     "- Gib NUR ein JSON-Objekt zurück: { \"subject\": string, \"body\": string } (body als Fließtext, Absätze durch genau eine Leerzeile getrennt).",
   ].join("\n");
 
   return [
     "DU BIST EIN BEWERBUNGS-ASSISTENT FÜR DEUTSCHLAND.",
-    "STRICT RULES:\n- Erfinde NIEMALS: Qualifikationen, Erfahrungen, Arbeitgeber, Zertifikate, Noten, Sprachniveaus, Daten, Unternehmen.\n- NUR Fakten aus dem Block KANDIDATENPROFIL; fehlt etwas → weglassen.\n- Die E-Mail bleibt komplett unternehmensneutral (sie wird unverändert an alle Unternehmen gesendet).",
+    "STRICT RULES:\n- Erfinde NIEMALS: Qualifikationen, Erfahrungen, Arbeitgeber, Zertifikate, Noten, Sprachniveaus, Daten, Unternehmen.\n- NUR Fakten aus dem Block KANDIDATENPROFIL; fehlt etwas → weglassen.\n- Personalisiere NUR über die erlaubten Platzhalter ({{company_name}}, {{position}}, {{contact_person}}, {{greeting}}, {{candidate_name}}) — keine hartkodierten Firmennamen.",
     task,
     `Beigefügte Anhänge (in der E-Mail auf diese verweisen): ${attachments}`,
   ].join("\n\n");

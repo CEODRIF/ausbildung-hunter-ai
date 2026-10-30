@@ -29,6 +29,7 @@ import {
   type AutoBewerbCompanyRow,
   type AutoBewerbEmailSettings,
 } from "@/lib/auto-bewerb/schema";
+import { sanitizeEmailHtml } from "@/lib/application-drafts";
 
 /**
  * AUTO BEWERB — server actions.
@@ -215,7 +216,9 @@ export async function markDocumentReviewedAction(
 export async function saveEmailTemplateAction(body: string): Promise<ActionResult<{ ok: true }>> {
   const { user } = await getCurrentUserAndProfile();
   if (!user) return unauthorized();
-  return toResult(await saveAutoBewerbEmailTemplate(user.id, body)) as ActionResult<{ ok: true }>;
+  // Sanitize the rich-text HTML before persisting (the engine re-sanitizes at
+  // send time as defense in depth).
+  return toResult(await saveAutoBewerbEmailTemplate(user.id, sanitizeEmailHtml(body))) as ActionResult<{ ok: true }>;
 }
 
 /** Persist the ONE global e-mail configuration (Step 6): body + recipient +
@@ -229,7 +232,11 @@ export async function saveEmailSettingsAction(
   const parsed = autoBewerbEmailSettingsSchema.safeParse(input);
   if (!parsed.success) return { ok: false, code: "invalid_document", message: parsed.error.issues[0]?.message ?? "invalid" };
   const settings = parsed.data as AutoBewerbEmailSettings;
-  return toResult(await saveAutoBewerbEmailSettings(user.id, settings)) as ActionResult<{ ok: true }>;
+  // Sanitize the rich-text body HTML before persisting (defense in depth: the
+  // engine sanitizes again at send time).
+  return toResult(
+    await saveAutoBewerbEmailSettings(user.id, { ...settings, body: sanitizeEmailHtml(settings.body) }),
+  ) as ActionResult<{ ok: true }>;
 }
 
 // ---------------------------------------------------------------------------

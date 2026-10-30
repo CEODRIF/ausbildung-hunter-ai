@@ -1,6 +1,9 @@
 import "server-only";
 
-import sanitizeHtml from "sanitize-html";
+// E-mail HTML sanitization lives in the isomorphic @/lib/email-sanitize so the
+// Step 6 client preview and the server send path share ONE allowlist.
+import { sanitizeEmailHtml, htmlToText } from "./email-sanitize";
+export { sanitizeEmailHtml, htmlToText };
 import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -87,52 +90,6 @@ export class DraftQuotaError extends Error {
     this.name = "DraftQuotaError";
     this.code = code;
   }
-}
-
-export function sanitizeEmailHtml(html: string) {
-  return sanitizeHtml(html, {
-    allowedTags: [
-      "p",
-      "br",
-      "strong",
-      "b",
-      "em",
-      "i",
-      "u",
-      "ul",
-      "ol",
-      "li",
-      "a",
-      "div",
-      "span",
-      "font",
-    ],
-    allowedAttributes: {
-      a: ["href", "target", "rel"],
-      span: ["style"],
-      font: ["color", "size"],
-    },
-    allowedStyles: {
-      span: {
-        color: [/^#[0-9a-f]{3,8}$/i, /^rgb\(/i],
-        "background-color": [/^#[0-9a-f]{3,8}$/i, /^rgb\(/i],
-        "text-align": [/^(left|center|right|justify)$/],
-      },
-    },
-    allowedSchemes: ["http", "https", "mailto"],
-    transformTags: {
-      a: (_tag, attribs) => ({
-        tagName: "a",
-        attribs: { ...attribs, target: "_blank", rel: "noopener noreferrer" },
-      }),
-    },
-  });
-}
-
-export function htmlToText(html: string) {
-  return sanitizeHtml(html, { allowedTags: [], allowedAttributes: {} })
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 export async function getApplicationComposerData() {
