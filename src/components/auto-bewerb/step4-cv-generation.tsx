@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { AlertTriangle, Check, CheckCircle2, Download, Eye, FileText, Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { Button, Input, Modal, Textarea } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
@@ -364,15 +364,16 @@ export function Step4CvGeneration() {
             </div>
 
             {/* A4 document view — the ACTUAL PDF (same bytes as the export),
-                white page on the dark app, native zoom + scroll + pages. */}
+                white page on the dark app, native zoom + scroll + pages.
+                Rendered via CvPdfPreview: the bytes are fetched through the
+                SAME session, verified, and shown inline — never downloaded. */}
             {previewView.cv && viewMode === "doc" && !previewDraft ? (
               <div className="space-y-2">
                 <div className="overflow-hidden rounded-xl bg-ink/70 p-2 sm:p-3">
-                  <iframe
-                    key={`${previewView.company.id}:${previewView.cvVersion ?? 0}`}
-                    src={`/api/auto-bewerb/export-pdf?companyId=${encodeURIComponent(previewView.company.id)}&doc=cv`}
-                    title={`${companyLabel(previewView.company).name} — Lebenslauf`}
-                    className="h-[75vh] min-h-[480px] w-full rounded-md bg-white"
+                  <CvPdfPreview
+                    companyId={previewView.company.id}
+                    version={previewView.cvVersion ?? 0}
+                    name={companyLabel(previewView.company).name}
                   />
                 </div>
                 <p className="text-xs text-faint">{t("autoBewerb.cvDocViewHint")}</p>
@@ -393,6 +394,112 @@ export function Step4CvGeneration() {
 }
 
 // ---------------------------------------------------------------------------
+
+/** Last COMPLETED preview load, keyed by company:version:attempt. While
+ *  `done.key` differs from the current key, the viewer is "loading". */
+type CvPreviewDone =
+  | { key: string; ok: true; url: string }
+  | { key: string; ok: false; message: string }
+  | null;
+
+/**
+ * Inline CV PDF preview — NEVER downloads.
+ *
+ * The SAME endpoint the Export button uses is fetched through the current
+ * session (`&preview=1` → `Content-Disposition: inline`), the response is
+ * VERIFIED before rendering (HTTP status + `application/pdf` + the `%PDF-`
+ * file signature — so an HTML error page, a JSON error or a redirect can
+ * never be mistaken for the document), and only then is it shown in the
+ * native PDF viewer via a blob URL (zoom + scroll + all pages work).
+ *
+ * States: loading (spinner, bounded by the fetch), error (clear message +
+ * Retry — incl. an expired-session variant for 401/403), ready (iframe).
+ * A stale in-flight request is aborted and its blob URL revoked when the
+ * company/version changes — one company's preview can never render
+ * another company's document.
+ */
+function CvPdfPreview({ companyId, version, name }: { companyId: string; version: number; name: string }) {
+  const { t } = useI18n();
+  const [done, setDone] = useState<CvPreviewDone>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  // No synchronous setState in the effect (React Compiler rule): loading is
+  // DERIVED — while no load completed for the current key, we are loading.
+  const key = `${companyId}:${version}:${attempt}`;
+  const current = done && done.key === key ? done : null;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    let httpStatus: number | null = null;
+    const k = `${companyId}:${version}:${attempt}`;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/auto-bewerb/export-pdf?companyId=${encodeURIComponent(companyId)}&doc=cv&preview=1`,
+          { cache: "no-store", signal: controller.signal },
+        );
+        if (!res.ok) {
+          httpStatus = res.status;
+          throw new Error(`status ${res.status}`);
+        }
+        const contentType = res.headers.get("content-type") ?? "";
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        // "%PDF" (0x25 0x50 0x44 0x46) at byte 0 — the IETF file signature.
+        const isPdf =
+          bytes.length > 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
+        if (!contentType.startsWith("application/pdf") || !isPdf) {
+          throw new Error("response is not a PDF document");
+        }
+        objectUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+        setDone({ key: k, ok: true, url: objectUrl });
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setDone({
+          key: k,
+          ok: false,
+          message:
+            httpStatus === 401 || httpStatus === 403
+              ? t("autoBewerb.previewSessionError")
+              : t("autoBewerb.cvPreviewError"),
+        });
+      }
+    })();
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+    }, [companyId, version, attempt, t]);
+
+  if (!current) {
+    return (
+      <div className="flex h-[75vh] min-h-[480px] w-full flex-col items-center justify-center gap-3 rounded-md bg-white">
+        <Loader2 size={22} className="animate-spin text-muted" />
+        <p className="text-xs font-semibold text-muted">{t("autoBewerb.cvPreviewLoading")}</p>
+      </div>
+    );
+  }
+
+  if (!current.ok) {
+    return (
+      <div className="flex h-[75vh] min-h-[480px] w-full flex-col items-center justify-center gap-3 rounded-md bg-white p-6 text-center">
+        <AlertTriangle size={22} className="text-danger" />
+        <p className="max-w-sm text-xs font-semibold leading-5 text-danger">{current.message}</p>
+        <Button variant="secondary" size="sm" onClick={() => setAttempt((a) => a + 1)}>
+          <RefreshCw size={13} /> {t("autoBewerb.retry")}
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <iframe
+      src={current.url}
+      title={`${name} — Lebenslauf`}
+      className="h-[75vh] min-h-[480px] w-full rounded-md bg-white"
+    />
+  );
+}
 
 function CvPreview({
   doc,
