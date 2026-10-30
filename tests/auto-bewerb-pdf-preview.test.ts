@@ -251,16 +251,44 @@ describe("export-pdf route — failures are JSON errors the UI can surface", () 
   });
 });
 
-describe("Step 4 viewer — preview never downloads; errors are explicit", () => {
+describe("Step 4 viewer — pdf.js canvas rendering; preview never downloads", () => {
   const step4 = read("src/components/auto-bewerb/step4-cv-generation.tsx");
 
-  it("the preview fetches the INLINE variant through the session and verifies %PDF- before rendering", () => {
+  it("the preview fetches the INLINE variant through the session and verifies %PDF- + completeness before rendering", () => {
     expect(step4).toContain("&doc=cv&preview=1");
     expect(step4).toContain('startsWith("application/pdf")');
     // The %PDF- signature check (bytes 0x25 0x50 0x44 0x46).
     expect(step4).toContain("bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46");
-    expect(step4).toContain("URL.createObjectURL");
-    expect(step4).toContain('new Blob([bytes], { type: "application/pdf" })');
+    // Truncation guard: Content-Length vs. actually received byte count.
+    expect(step4).toContain("bytes.byteLength !== Number(contentLength)");
+  });
+
+  it("renders the bytes itself with pdf.js onto canvases (no native-viewer blob URL, no iframe)", () => {
+    // Main-thread worker module (registers globalThis.pdfjsWorker) + the
+    // pdf.js API + canvas rendering of the verified bytes.
+    expect(step4).toContain('import("pdfjs-dist/build/pdf.worker.min.mjs")');
+    expect(step4).toContain('import("pdfjs-dist")');
+    expect(step4).toContain("getDocument({ data: bytes, isEvalSupported: false })");
+    expect(step4).toContain("page.render({");
+    expect(step4).toContain("canvas,");
+    // The broken-iframe class of failure is gone by construction: no
+    // iframe, no blob URL, no object-URL lifecycle to race the viewer.
+    expect(step4).not.toContain("<iframe");
+    expect(step4).not.toContain("URL.createObjectURL");
+    expect(step4).not.toContain("URL.revokeObjectURL");
+  });
+
+  it("supports all pages, vertical scroll, zoom, loading, error and retry", () => {
+    expect(step4).toContain("doc.numPages"); // every page, not just the first
+    expect(step4).toContain("overflow-auto"); // vertical page scroll
+    expect(step4).toContain("cvPreviewZoomIn");
+    expect(step4).toContain("cvPreviewZoomOut");
+    expect(step4).toContain("cvPreviewFit");
+    expect(step4).toContain("cvPreviewLoading");
+    expect(step4).toContain("cvPreviewError");
+    expect(step4).toContain("previewSessionError");
+    expect(step4).toContain("cvPreviewParseError");
+    expect(step4).toContain("setAttempt((a) => a + 1)");
   });
 
   it("the preview does NOT use window.open or a download anchor (export only does)", () => {
@@ -274,19 +302,27 @@ describe("Step 4 viewer — preview never downloads; errors are explicit", () =>
     expect(step4).not.toContain('download=');
   });
 
-  it("has explicit loading / error / retry states (no indefinite blank document)", () => {
+  it("isolates per company: aborts the stale request + destroys the stale document on change", () => {
+    expect(step4).toContain("new AbortController()");
+    expect(step4).toContain("controller.abort()");
+    expect(step4).toContain("pdf.destroy()");
+    // The load effect re-runs per company + version + attempt; the canvas
+    // view remounts per key; in-flight page renders are cancelled.
+    expect(step4).toContain("[companyId, version, attempt, t]");
+    expect(step4).toContain("<CvPdfCanvasView key={key}");
+    expect(step4).toContain("task?.cancel()");
+  });
+
+  it("keeps the derived-loading pattern (no synchronous setState before the first await)", () => {
     // Loading is derived (no completed load for the current key yet);
     // success and failure are explicit terminal states of the load.
     expect(step4).toContain("const current = done && done.key === key ? done : null");
     expect(step4).toContain("if (!current) {"); // loading branch
     expect(step4).toContain("if (!current.ok) {"); // error branch
-    expect(step4).toContain("ok: true, url: objectUrl");
+    expect(step4).toContain("ok: true, pdf");
     expect(step4).toContain("ok: false,");
-    expect(step4).toContain("cvPreviewLoading");
-    expect(step4).toContain("cvPreviewError");
-    expect(step4).toContain("previewSessionError");
-    expect(step4).toContain("setAttempt((a) => a + 1)");
-    // No synchronous setState at the top of the effect (React Compiler rule).
+    // No synchronous setState at the top of the load effect (React
+    // Compiler rule): the first setDone must come after an await.
     const effectStart = step4.indexOf("useEffect(() => {");
     const firstSetDone = step4.indexOf("setDone", effectStart);
     const firstAwait = step4.indexOf("await", effectStart);
@@ -295,17 +331,19 @@ describe("Step 4 viewer — preview never downloads; errors are explicit", () =>
     expect(firstSetDone).toBeGreaterThan(firstAwait);
   });
 
-  it("isolates per company: aborts the stale request + revokes the blob URL on change", () => {
-    expect(step4).toContain("new AbortController()");
-    expect(step4).toContain("controller.abort()");
-    expect(step4).toContain("URL.revokeObjectURL(objectUrl)");
-    // The effect re-runs per company + version + attempt.
-    expect(step4).toContain("[companyId, version, attempt, t]");
-  });
-
-  it("new i18n keys exist in all four languages", () => {
+  it("i18n keys exist in all four languages", () => {
     const dict = read("src/lib/i18n/dictionaries.ts");
-    for (const key of ["cvPreviewLoading:", "cvPreviewError:", "previewSessionError:"]) {
+    for (const key of [
+      "cvPreviewLoading:",
+      "cvPreviewError:",
+      "previewSessionError:",
+      "cvPreviewParseError:",
+      "cvPreviewPageLabel:",
+      "cvPreviewPages:",
+      "cvPreviewZoomIn:",
+      "cvPreviewZoomOut:",
+      "cvPreviewFit:",
+    ]) {
       const count = dict.split(key).length - 1;
       expect(count, `i18n key "${key}" must exist in de+en+fr+ar (found ${count})`).toBeGreaterThanOrEqual(4);
     }

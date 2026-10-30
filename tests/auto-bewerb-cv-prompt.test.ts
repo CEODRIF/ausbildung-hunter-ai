@@ -271,10 +271,15 @@ describe("export-pdf route — ownership-scoped photo resolution (preview == exp
   });
 });
 
-describe("A4 document view — the preview iframe IS the exported PDF", () => {
-  it("renders the document view as the exact export bytes (iframe) + the frozen photo in edit view", () => {
+describe("A4 document view — the preview shows the exported PDF", () => {
+  it("renders the document view from the exact export bytes (pdf.js canvases, no iframe) + the frozen photo in edit view", () => {
     const step4 = read("src/components/auto-bewerb/step4-cv-generation.tsx");
-    expect(step4).toContain("<iframe");
+    // Document view = the export endpoint's bytes rendered by pdf.js onto
+    // canvases — the native-iframe blob path (and its broken-document
+    // failure mode) is gone by construction.
+    expect(step4).not.toContain("<iframe");
+    expect(step4).toContain('import("pdfjs-dist")');
+    // The Export buttons still hit the export endpoint directly (download).
     expect(step4).toContain('/api/auto-bewerb/export-pdf?companyId=${encodeURIComponent(previewView.company.id)}&doc=cv');
     // The edit view shows the document's FROZEN photo through the
     // ownership-checked route — never a client-supplied URL.

@@ -122,4 +122,27 @@ describe("AUTO BEWERB — A4 CV document renderer", () => {
     expect(cvPdfFilename("Mustapha Drif")).toBe("Lebenslauf_Mustapha_Drif.pdf");
     expect(cvPdfFilename("Größe Müller")).toBe("Lebenslauf_Grosse_Muller.pdf");
   });
+
+  it("emits a COMPLETE document: %PDF- head, xref + startxref + %%EOF tail (no truncation)", async () => {
+    // Regression guard for the "broken document" preview symptom: a PDF
+    // whose tail is missing (no %%EOF / no valid startxref) parses as
+    // corrupted in strict viewers even though the %PDF- signature check
+    // passes. Verified here on the REAL renderer output, with and without
+    // an embedded photograph.
+    for (const withPhoto of [false, true]) {
+      const cv = baseCv();
+      if (withPhoto) cv.personal.photo = TINY_PNG;
+      const bytes = await generateCvPdf(cv);
+      const text = new TextDecoder("latin1").decode(bytes);
+      expect(text.startsWith("%PDF-")).toBe(true);
+      expect(text).toContain("xref");
+      expect(text).toContain("startxref");
+      // %%EOF is the LAST marker of the file (trailer present, not cut off).
+      expect(text.trimEnd().endsWith("%%EOF")).toBe(true);
+      // Re-parsable by pdf-lib (a second, independent parse of the same
+      // bytes that the preview and the export serve).
+      const pdf = await PDFDocument.load(bytes);
+      expect(pdf.getPageCount()).toBeGreaterThanOrEqual(1);
+    }
+  });
 });
