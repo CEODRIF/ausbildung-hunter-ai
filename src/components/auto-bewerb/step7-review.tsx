@@ -7,7 +7,7 @@ import { Button, Modal } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
 import { ScheduleForm } from "@/components/schedule-form";
 import { useI18n } from "@/lib/i18n";
-import { isValidEmail, type AutoBewerbCompanyView } from "@/lib/auto-bewerb/schema";
+import { isValidEmail, renderAutoBewerbEmailBody, type AutoBewerbCompanyView } from "@/lib/auto-bewerb/schema";
 import {
   cancelSendAction,
   scheduleCompaniesAction,
@@ -80,7 +80,6 @@ export function Step7Review() {
       recipientEmail: v.company.recipient_email!,
       emailAccountId: v.company.email_account_id!,
       subject: v.company.email_subject!,
-      bodyOverride: v.company.email_body,
       attachCv: v.company.email_attach_cv,
       attachLetter: v.company.email_attach_letter,
       confirmed: true,
@@ -287,12 +286,17 @@ export function Step7Review() {
         </div>
       )}
 
-      {/* Explicit confirmation — exact recipients + attachments */}
+      {/* Explicit confirmation — exact recipients, resolved e-mail content
+          + attachments for EVERY recipient */}
       <Modal open={confirmOpen} onClose={() => !sending && setConfirmOpen(false)} title={t("autoBewerb.confirmTitle")}>
         <p className="text-sm leading-6 text-muted">{t("autoBewerb.confirmIntro")}</p>
+        <p className="mt-2 text-xs text-muted">{t("autoBewerb.confirmBodySharedNote")}</p>
         <div className="mt-3 max-h-64 space-y-2 overflow-auto">
           {selectedViews.map((v) => {
             const { name, job } = companyLabel(v.company);
+            // The EXACT body this recipient gets: the one shared template
+            // resolved with THIS company's verified tokens (nothing else).
+            const resolvedBody = renderAutoBewerbEmailBody(ws.emailTemplate, v.company.ad_extracted).trim();
             return (
               <div key={v.company.id} className="rounded-2xl border border-line bg-surface-2/40 p-3 text-xs">
                 <p className="font-bold text-ink">
@@ -304,6 +308,10 @@ export function Step7Review() {
                 <p className="text-ink-soft">
                   {t("autoBewerb.subjectLabel")}: <b>{v.company.email_subject}</b>
                 </p>
+                <p className="mt-1 text-faint">{t("autoBewerb.confirmBodyLabel")}:</p>
+                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-2 text-[11px] leading-4 text-ink-soft">
+                  {resolvedBody ? `${resolvedBody.slice(0, 300)}${resolvedBody.length > 300 ? "…" : ""}` : t("autoBewerb.templateEmptyNote")}
+                </pre>
                 <p className="mt-1 flex items-center gap-1 text-muted">
                   <Paperclip size={11} />
                   {[

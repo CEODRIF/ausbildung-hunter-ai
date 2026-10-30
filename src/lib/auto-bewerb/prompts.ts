@@ -274,5 +274,55 @@ export function buildAutoBewerbCvPrompt(input: {
   ].join("\n\n");
 }
 
+// ---------------------------------------------------------------------------
+// Step 6 — shared application e-mail template (global, tokenized)
+// ---------------------------------------------------------------------------
+
+/**
+ * The SHARED e-mail template prompt (one per user, applied to EVERY company).
+ *
+ * Unlike the Studio's buildEmailDraftPrompt (a one-shot e-mail for ONE
+ * specific company), this template must stay company-NEUTRAL: the
+ * company-specific facts go ONLY into the three tokens
+ * {company} / {position} / {contactName} — the send engine substitutes them
+ * from each company's verified extraction at send time (missing values stay
+ * empty, so the template must read well even with an empty {contactName}).
+ *
+ * The model still receives the verified candidate profile (KANDIDATENPROFIL)
+ * so the motivation stays grounded — but it may never invent qualifications.
+ */
+export function buildAutoBewerbEmailTemplatePrompt(input: {
+  /** Display names of the GLOBAL shared documents attached to every mail. */
+  sharedAttachmentNames: string[];
+}): string {
+  const attachments = [
+    "Lebenslauf als PDF",
+    "Anschreiben als PDF",
+    ...input.sharedAttachmentNames.slice(0, 8),
+  ].join(", ");
+
+  const task = [
+    "AUFGABE: Schreibe EINE wiederverwendbare, professionelle deutsche BEWERBUNGS-E-MAIL-VORLAGE (Template) für Bewerbungen um eine Ausbildungsstelle.",
+    "Die Vorlage wird GLOBAL gespeichert und automatisch für ALLE Unternehmen verwendet. Unternehmensspezifische Angaben dürfen daher NUR über genau diese Platzhalter (Tokens) erfolgen:",
+    "- {company} → Name des Unternehmens (wird pro Unternehmen ersetzt)",
+    "- {position} → Stellen-/Ausbildungstitel aus der jeweiligen Anzeige (wird pro Unternehmen ersetzt)",
+    "- {contactName} → namentlich genannter Ansprechpartner der Anzeige, ggf. mit Anrede (kann pro Unternehmen LEER sein)",
+    "Regeln:",
+    "- Anrede: immer 'Sehr geehrte Damen und Herren,' — korrekt, auch wenn die Anzeige keinen Ansprechpartner nennt. {contactName} DARF NICHT in der Anrede stehen (der Wert kann leer sein).",
+    "- Verwende {company} und {position} im Textkörper (z. B. 'bei {company}', 'als {position}'). {contactName} im Textkörper nur, wenn der Satz auch mit leerem Wert lesbar bleibt — sonst weglassen.",
+    "- Inhalt: kurzer Einstieg mit der Stelle, 1–2 Sätze Motivation (NUR aus dem KANDIDATENPROFIL ableiten — keine Qualifikationen erfinden), klarer Hinweis, dass Lebenslauf und Anschreiben als PDF-Anhänge beigefügt sind, höflicher Abschluss mit Bitte um ein Gespräch/Rückmeldung.",
+    "- Länge: max. 120 Wörter im Textkörper. Professionell, natürlich, kein Fülltext, keine leeren Floskeln, kein Kopieren des Anschreibens.",
+    "- Betreff: kurz und ALLGEMEINGÜLTIG — ohne Firmennamen und OHNE Tokens (der Betreff wird pro Unternehmen separat gepflegt), z. B. 'Bewerbung um die Ausbildungsstelle'.",
+    "- Gib NUR ein JSON-Objekt zurück: { \"subject\": string, \"body\": string } (body als Fließtext, Absätze durch genau eine Leerzeile getrennt).",
+  ].join("\n");
+
+  return [
+    "DU BIST EIN BEWERBUNGS-ASSISTENT FÜR DEUTSCHLAND.",
+    "STRICT RULES:\n- Erfinde NIEMALS: Qualifikationen, Erfahrungen, Arbeitgeber, Zertifikate, Noten, Sprachniveaus, Daten, Unternehmen.\n- NUR Fakten aus dem Block KANDIDATENPROFIL; fehlt etwas → weglassen.\n- Die Vorlage bleibt unternehmensneutral: keine konkreten Firmennamen oder Stellenbezeichnungen außerhalb der Tokens.",
+    task,
+    `Beigefügte Anhänge (in der E-Mail auf diese verweisen): ${attachments}`,
+  ].join("\n\n");
+}
+
 // Re-export for the letter route (keeps one import surface per feature).
 export { fenceAdText };
