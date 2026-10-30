@@ -101,6 +101,12 @@ export type AutoBewerbErrorCode =
   | "not_deletable"
   | "no_template"
   | "no_subject"
+  | "missing_cv"
+  | "missing_letter"
+  | "cv_render_failed"
+  | "cv_upload_failed"
+  | "letter_render_failed"
+  | "letter_upload_failed"
   | "invalid_document"
   | "storage_error"
   | "dispatch_error";
@@ -1409,77 +1415,95 @@ export async function prepareAutoBewerbSend(
     payloadAttachments.push({ filename: a.display_name, mimeType: a.mime_type, storagePath: a.storage_path });
   }
 
-  // The tailored CV PDF — rendered locally from the REVIEWED stored CV
-  // (deterministic pdf-lib pipeline, zero cost). Missing/unrenderable CV →
-  // the attachment is dropped and logged (the review UI flags it before the
-  // user confirms; the send is never faked).
+  // The tailored CV PDF — resolved STRICTLY from THIS company's own stored CV
+  // (getLatestAutoBewerbCv(userId, app.id)), rendered locally and written to a
+  // company-scoped storage path (auto-bewerb/cv/{userId}/{companyId}.pdf).
+  // When the (global) "attach CV" flag is ON, a missing or unrenderable CV
+  // BLOCKS this company's send preparation — the e-mail is never sent without
+  // the document it promised, and another company's CV is never substituted.
   if (attachCv) {
     const cv = await getLatestAutoBewerbCv(userId, app.id);
-    if (cv) {
-      try {
-        // The sent PDF carries the SAME frozen photo the preview shows
-        // (reference resolved ownership-scoped; missing → no photo).
-        const photoDataUrl = await resolveAutoBewerbPhotoDataUrl(userId, cv.personal.photo);
-        const bytes = await generateCvPdf(cv, { photoDataUrl });
-        const path = autoBewerbCvPdfStoragePath(userId, app.id);
-        const { error: cvUploadError } = await admin
-          .storage.from(ATTACHMENT_BUCKET)
-          .upload(path, Buffer.from(bytes), { contentType: BEW_LETTER_PDF_MIME, upsert: true });
-        if (cvUploadError) {
-          console.error(`[auto-bewerb] CV PDF upload failed for company ${app.id}: ${cvUploadError.message}`);
-        } else {
-          payloadAttachments.push({
-            filename: cvPdfFilename(cv.personal.fullName),
-            mimeType: BEW_LETTER_PDF_MIME,
-            storagePath: path,
-          });
-        }
-      } catch (error) {
-        console.error("[auto-bewerb] CV PDF rendering failed:", error instanceof Error ? error.message : error);
-      }
+    if (!cv)
+      return {
+        ok: false,
+        code: "missing_cv",
+        message: "Für dieses Unternehmen fehlt das maßgeschneiderte CV — bitte zuerst im Schritt 4 erstellen.",
+      };
+    let cvBytes: Uint8Array;
+    try {
+      // The sent PDF carries the SAME frozen photo the preview shows
+      // (reference resolved ownership-scoped; missing → no photo).
+      const photoDataUrl = await resolveAutoBewerbPhotoDataUrl(userId, cv.personal.photo);
+      cvBytes = await generateCvPdf(cv, { photoDataUrl });
+    } catch (error) {
+      console.error("[auto-bewerb] CV PDF rendering failed:", error instanceof Error ? error.message : error);
+      return { ok: false, code: "cv_render_failed", message: "Das CV-PDF für dieses Unternehmen konnte nicht erstellt werden." };
     }
+    const cvPath = autoBewerbCvPdfStoragePath(userId, app.id);
+    const { error: cvUploadError } = await admin
+      .storage.from(ATTACHMENT_BUCKET)
+      .upload(cvPath, Buffer.from(cvBytes), { contentType: BEW_LETTER_PDF_MIME, upsert: true });
+    if (cvUploadError) {
+      console.error(`[auto-bewerb] CV PDF upload failed for company ${app.id}: ${cvUploadError.message}`);
+      return { ok: false, code: "cv_upload_failed", message: "Das CV-PDF für dieses Unternehmen konnte nicht gespeichert werden." };
+    }
+    payloadAttachments.push({
+      filename: cvPdfFilename(cv.personal.fullName),
+      mimeType: BEW_LETTER_PDF_MIME,
+      storagePath: cvPath,
+    });
   }
 
-  // The Anschreiben PDF — rendered from the REVIEWED stored letter with the
-  // user's letterhead facts (missing fields omitted, never invented).
+  // The Anschreiben PDF — resolved STRICTLY from THIS company's own stored
+  // letter (getLatestAutoBewerbDocument(userId, app.id, "cover_letter")),
+  // rendered with the user's letterhead and written to a company-scoped
+  // storage path (auto-bewerb/letter/{userId}/{companyId}.pdf). When the
+  // (global) "attach cover letter" flag is ON, a missing or unrenderable
+  // letter BLOCKS this company's send preparation.
   if (attachLetter) {
     const letterDoc = await getLatestAutoBewerbDocument(userId, app.id, "cover_letter");
     const letterParse = letterDoc ? autoBewerbLetterSchema.safeParse(letterDoc.content) : null;
-    if (letterParse?.success && letterParse.data.text.trim()) {
+    if (!letterParse?.success || !letterParse.data.text.trim())
+      return {
+        ok: false,
+        code: "missing_letter",
+        message: "Für dieses Unternehmen fehlt das individualisierte Anschreiben — bitte zuerst im Schritt 5 erstellen.",
+      };
+    let letterBytes: Uint8Array;
+    try {
       const pr = await fetchProfileLetterhead(userId);
-      try {
-        const folio = buildLetterFolio({
-          applicantName: pr.full_name ?? null,
-          applicantEmail: pr.email ?? null,
-          applicantStreet: pr.street ?? null,
-          applicantPostalCode: pr.postal_code ?? null,
-          applicantCity: pr.city ?? null,
-          applicantCountry: pr.country ?? null,
-          applicantPhone: pr.phone ?? null,
-          companyName: app.ad_extracted?.company ?? app.company,
-          companyContactName: app.ad_extracted?.contactPerson || null,
-          companyAddress: app.ad_extracted?.companyAddress || null,
-          subject: subject,
-          bodyHtml: emailBodyToHtml(letterParse.data.text),
-        });
-        const bytes = await generateLetterPdf(folio);
-        const path = autoBewerbLetterPdfStoragePath(userId, app.id);
-        const { error: letterUploadError } = await admin
-          .storage.from(ATTACHMENT_BUCKET)
-          .upload(path, Buffer.from(bytes), { contentType: BEW_LETTER_PDF_MIME, upsert: true });
-        if (letterUploadError) {
-          console.error(`[auto-bewerb] letter PDF upload failed for company ${app.id}: ${letterUploadError.message}`);
-        } else {
-          payloadAttachments.push({
-            filename: letterPdfFilename(app.ad_extracted?.company || app.company),
-            mimeType: BEW_LETTER_PDF_MIME,
-            storagePath: path,
-          });
-        }
-      } catch (error) {
-        console.error("[auto-bewerb] letter PDF rendering failed:", error instanceof Error ? error.message : error);
-      }
+      const folio = buildLetterFolio({
+        applicantName: pr.full_name ?? null,
+        applicantEmail: pr.email ?? null,
+        applicantStreet: pr.street ?? null,
+        applicantPostalCode: pr.postal_code ?? null,
+        applicantCity: pr.city ?? null,
+        applicantCountry: pr.country ?? null,
+        applicantPhone: pr.phone ?? null,
+        companyName: app.ad_extracted?.company ?? app.company,
+        companyContactName: app.ad_extracted?.contactPerson || null,
+        companyAddress: app.ad_extracted?.companyAddress || null,
+        subject: subject,
+        bodyHtml: emailBodyToHtml(letterParse.data.text),
+      });
+      letterBytes = await generateLetterPdf(folio);
+    } catch (error) {
+      console.error("[auto-bewerb] letter PDF rendering failed:", error instanceof Error ? error.message : error);
+      return { ok: false, code: "letter_render_failed", message: "Das Anschreiben-PDF für dieses Unternehmen konnte nicht erstellt werden." };
     }
+    const letterPath = autoBewerbLetterPdfStoragePath(userId, app.id);
+    const { error: letterUploadError } = await admin
+      .storage.from(ATTACHMENT_BUCKET)
+      .upload(letterPath, Buffer.from(letterBytes), { contentType: BEW_LETTER_PDF_MIME, upsert: true });
+    if (letterUploadError) {
+      console.error(`[auto-bewerb] letter PDF upload failed for company ${app.id}: ${letterUploadError.message}`);
+      return { ok: false, code: "letter_upload_failed", message: "Das Anschreiben-PDF für dieses Unternehmen konnte nicht gespeichert werden." };
+    }
+    payloadAttachments.push({
+      filename: letterPdfFilename(app.ad_extracted?.company || app.company),
+      mimeType: BEW_LETTER_PDF_MIME,
+      storagePath: letterPath,
+    });
   }
 
   // Schedule validation (explicit timezone; future; before the ad deadline).
@@ -1977,10 +2001,15 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
       company,
       cv,
       cvVersion: cvDoc ? cvDoc.version : null,
+      // Exact per-company PDF filenames (the review UI shows these verbatim).
+      // The FILENAME is the same applicant across companies; the CONTENT and
+      // the company-scoped storage path differ per company.
+      cvPdfName: cv ? cvPdfFilename(cv.personal.fullName) : null,
       letter: parsedLetter?.success
         ? { text: parsedLetter.data.text, tone: parsedLetter.data.tone }
         : null,
       letterVersion: letterDoc ? letterDoc.version : null,
+      letterPdfName: parsedLetter?.success ? letterPdfFilename(company.ad_extracted?.company || company.company) : null,
       latestAttempt: attempts[0] ?? null,
     };
   });

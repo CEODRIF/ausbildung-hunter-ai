@@ -259,7 +259,7 @@ export function Step7Review() {
                     <div className="flex items-center gap-1 sm:col-span-2">
                       <Paperclip size={12} />
                       <span className="font-medium text-ink-soft">
-                        {[cfg.attachCv ? t("autoBewerb.attachCvPdf") : null, cfg.attachLetter ? t("autoBewerb.attachLetterPdf") : null]
+                        {[cfg.attachCv && v.cv ? v.cvPdfName : null, cfg.attachLetter && v.letter ? v.letterPdfName : null]
                           .filter(Boolean)
                           .join(", ") || t("autoBewerb.noAttachments")}
                       </span>
@@ -344,8 +344,9 @@ export function Step7Review() {
           </div>
         )}
 
-        {/* Per-company delivery destinations (verified, read-only) */}
-        <div className="mt-3 max-h-40 space-y-2 overflow-auto">
+        {/* Per-company breakdown (verified, read-only): each company's own
+            recipient + its OWN CV/letter filenames, plus the shared subject/docs. */}
+        <div className="mt-3 max-h-64 space-y-2 overflow-auto">
           {selectedViews.map((v) => {
             const { name, job } = companyLabel(v.company);
             const cfg = emailCfg(v);
@@ -357,6 +358,22 @@ export function Step7Review() {
                 <p className="mt-1 text-ink-soft">
                   {t("autoBewerb.recipientLabel")}: <b>{cfg.dest || t("autoBewerb.deliveryNoDest")}</b>
                 </p>
+                <p className="text-ink-soft">
+                  {t("autoBewerb.subjectLabel")}: <b>{cfg.subject || t("autoBewerb.unavailable")}</b>
+                </p>
+                {/* This company's OWN application documents (exact filenames). */}
+                <p className="mt-0.5 flex items-center gap-1 text-muted">
+                  <Paperclip size={11} />
+                  {[cfg.attachCv && v.cv ? v.cvPdfName : null, cfg.attachLetter && v.letter ? v.letterPdfName : null]
+                    .filter(Boolean)
+                    .join(", ") || t("autoBewerb.noAttachments")}
+                </p>
+                {ws.attachments.length > 0 && (
+                  <p className="text-muted">
+                    <span className="text-faint">{t("autoBewerb.attachSharedDocs")} </span>
+                    {ws.attachments.map((a) => a.display_name).join(", ")}
+                  </p>
+                )}
               </div>
             );
           })}

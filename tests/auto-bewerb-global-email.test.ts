@@ -59,6 +59,7 @@ const { POST } = await import("@/app/api/auto-bewerb/generate-email/route");
 const { createStudioDb } = await import("./helpers-studio");
 const { buildAutoBewerbEmailTemplatePrompt } = await import("@/lib/auto-bewerb/prompts");
 const { resolveAutoBewerbRecipient } = await import("@/lib/auto-bewerb/schema");
+const { cvEmpty } = await import("@/lib/templates/cv");
 
 const read = (p: string) => readFileSync(p, "utf8");
 const STEP6 = read("src/components/auto-bewerb/step6-email.tsx");
@@ -304,6 +305,211 @@ describe("one global configuration — functional (engine, fake DB, scheduled)",
 });
 
 // ---------------------------------------------------------------------------
+// Per-company CV + cover-letter attachments (global FLAGS, OWN documents)
+//
+// The global attach_cv / attach_letter flags decide WHETHER those document
+// categories are attached, but the actual files are always resolved from the
+// company's OWN stored documents + a company-scoped storage path. A company
+// without the document is BLOCKED (never silently sent without it, never fed
+// another company's document).
+// ---------------------------------------------------------------------------
+
+const CV_FULL_NAME = "Mustapha Drif";
+const CV_PDF_NAME = "Lebenslauf_Mustapha_Drif.pdf";
+const BUCKET = "application-attachments";
+
+/** A valid, company-tailored CV document (renders deterministically). */
+function cvDocFor(company: string, marker: string) {
+  const cv = cvEmpty();
+  cv.personal = {
+    ...cv.personal,
+    fullName: CV_FULL_NAME,
+    professionalTitle: `Auszubildende:r — ${company}`,
+    email: "mustapha.drif@example.de",
+    phone: "+49 151 23456789",
+    location: "Hamburg, Deutschland",
+  };
+  cv.summary = `Maßgeschneiderte Zusammenfassung für ${company} (${marker}).`;
+  cv.skills = ["Schaltpläne lesen", "Montage", marker];
+  cv.languages = [{ id: "l1", language: "Deutsch", level: "C1" }];
+  return cv;
+}
+
+/** A valid, company-tailored cover letter (autoBewerbLetterSchema-compliant). */
+function letterDocFor(company: string, marker: string) {
+  return {
+    text:
+      `Sehr geehrte Damen und Herren, hiermit bewerbe ich mich bei ${company} (${marker}). ` +
+      "Ich freue mich auf Ihre Rückmeldung und stehe einem persönlichen Gespräch jederzeit gerne zur Verfügung. Mit freundlichen Grüßen Mustapha Drif",
+    tone: "professional" as const,
+  };
+}
+
+/** Seed one CV + one cover-letter document for a company (version 1). */
+function seedCompanyDocs(companyId: string, company: string, marker: string) {
+  const ts = "2026-12-01T00:00:00.000Z";
+  db.tables.auto_bewerb_documents.push(
+    { id: `cv-${companyId}`, user_id: USER, company_id: companyId, doc_type: "cv", version: 1, content: cvDocFor(company, marker), created_at: ts, updated_at: ts },
+    { id: `letter-${companyId}`, user_id: USER, company_id: companyId, doc_type: "cover_letter", version: 1, content: letterDocFor(company, marker), created_at: ts, updated_at: ts },
+  );
+}
+
+const ATTACH_ON = globalTemplate({ attach_cv: true, attach_letter: true });
+
+function fullAttempt(companyId: string) {
+  const a = db.tables.auto_bewerb_send_attempts.find((r) => r.company_id === companyId) as
+    | { payload: { text: string; html: string; attachments: Array<{ filename: string; mimeType: string; storagePath: string }> }; recipient_email: string; subject: string; scheduled_at: string | null }
+    | undefined;
+  expect(a, `attempt for ${companyId}`).toBeTruthy();
+  return a!;
+}
+
+async function storageBytes(path: string): Promise<Uint8Array> {
+  const { data } = (await db.admin.storage.from(BUCKET).download(path)) as { data: Blob | null };
+  expect(data, `stored object at ${path}`).toBeTruthy();
+  return new Uint8Array(await (data as Blob).arrayBuffer());
+}
+const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64");
+
+describe("per-company CV + cover-letter attachments (global flags, own documents)", () => {
+  it("3 companies → 3 OWN CVs + 3 OWN letters; identical subject/body; shared doc in all; no cross-company leakage", async () => {
+    seed(ATTACH_ON);
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    seedCompanyDocs(CO2, "Tech Süd AG", "techsued");
+    seedCompanyDocs(CO3, "Heizungsbau Ost GmbH", "heizung");
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null; // verified ad address
+    for (const id of [CO1, CO2, CO3]) {
+      const res = await prepareAutoBewerbSend(USER, { companyId: id, schedule: FUTURE });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+    }
+    const a1 = fullAttempt(CO1);
+    const a2 = fullAttempt(CO2);
+    const a3 = fullAttempt(CO3);
+
+    // (3) Identical shared content for everyone:
+    for (const a of [a1, a2, a3]) {
+      expect(a.payload.text).toBe(GLOBAL_BODY);
+      expect(a.subject).toBe(GLOBAL_SUBJECT);
+    }
+
+    const cvOf = (a: typeof a1) => a.payload.attachments.find((x) => x.filename === CV_PDF_NAME);
+    const letterOf = (a: typeof a1) => a.payload.attachments.find((x) => x.filename.startsWith("Anschreiben_"));
+
+    // (1) Each company's OWN CV at its OWN company-scoped path:
+    expect(cvOf(a1)!.storagePath).toBe(`auto-bewerb/cv/${USER}/${CO1}.pdf`);
+    expect(cvOf(a2)!.storagePath).toBe(`auto-bewerb/cv/${USER}/${CO2}.pdf`);
+    expect(cvOf(a3)!.storagePath).toBe(`auto-bewerb/cv/${USER}/${CO3}.pdf`);
+
+    // (2) Each company's OWN letter at its OWN company-scoped path, all distinct:
+    expect(letterOf(a1)!.storagePath).toBe(`auto-bewerb/letter/${USER}/${CO1}.pdf`);
+    expect(letterOf(a2)!.storagePath).toBe(`auto-bewerb/letter/${USER}/${CO2}.pdf`);
+    expect(letterOf(a3)!.storagePath).toBe(`auto-bewerb/letter/${USER}/${CO3}.pdf`);
+    expect(new Set([letterOf(a1)!.filename, letterOf(a2)!.filename, letterOf(a3)!.filename]).size).toBe(3);
+
+    // (1b) The three tailored CVs are genuinely DIFFERENT files (distinct bytes):
+    const b1 = b64(await storageBytes(`auto-bewerb/cv/${USER}/${CO1}.pdf`));
+    const b2 = b64(await storageBytes(`auto-bewerb/cv/${USER}/${CO2}.pdf`));
+    const b3 = b64(await storageBytes(`auto-bewerb/cv/${USER}/${CO3}.pdf`));
+    expect(new Set([b1, b2, b3]).size).toBe(3);
+
+    // (4) The shared supporting document is attached to EVERY attempt:
+    for (const a of [a1, a2, a3]) {
+      expect(a.payload.attachments.map((x) => x.filename)).toContain("Abiturzeugnis.pdf");
+    }
+
+    // (5) NO cross-company leakage: every company-specific attachment references
+    //     ONLY its own company id in the storage path.
+    for (const [a, id] of [
+      [a1, CO1],
+      [a2, CO2],
+      [a3, CO3],
+    ] as const) {
+      for (const att of a.payload.attachments) {
+        if (att.storagePath.startsWith("auto-bewerb/cv/") || att.storagePath.startsWith("auto-bewerb/letter/")) {
+          expect(att.storagePath.endsWith(`/${id}.pdf`)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("missing CV blocks ONLY that company (missing_cv); the others still attach their own CV", async () => {
+    seed(ATTACH_ON);
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    seedCompanyDocs(CO2, "Tech Süd AG", "techsued");
+    const ts = "2026-12-01T00:00:00.000Z";
+    // CO3 has a cover letter but NO CV:
+    db.tables.auto_bewerb_documents.push({
+      id: `letter-${CO3}`, user_id: USER, company_id: CO3, doc_type: "cover_letter", version: 1,
+      content: letterDocFor("Heizungsbau Ost GmbH", "heizung"), created_at: ts, updated_at: ts,
+    });
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    const res3 = await prepareAutoBewerbSend(USER, { companyId: CO3, schedule: FUTURE });
+    expect(res3.ok).toBe(false);
+    expect((res3 as { code?: string }).code).toBe("missing_cv");
+    // No attempt was created for the blocked company:
+    expect(db.tables.auto_bewerb_send_attempts.find((r) => r.company_id === CO3)).toBeUndefined();
+    // The other two are unaffected and attach their own CVs:
+    expect((await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE })).ok).toBe(true);
+    expect((await prepareAutoBewerbSend(USER, { companyId: CO2, schedule: FUTURE })).ok).toBe(true);
+    expect(fullAttempt(CO1).payload.attachments.map((x) => x.filename)).toContain(CV_PDF_NAME);
+    expect(fullAttempt(CO2).payload.attachments.map((x) => x.filename)).toContain(CV_PDF_NAME);
+  });
+
+  it("missing cover letter blocks ONLY that company (missing_letter)", async () => {
+    seed(ATTACH_ON);
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    const ts = "2026-12-01T00:00:00.000Z";
+    // CO2 has a CV but NO cover letter:
+    db.tables.auto_bewerb_documents.push({
+      id: `cv-${CO2}`, user_id: USER, company_id: CO2, doc_type: "cv", version: 1,
+      content: cvDocFor("Tech Süd AG", "techsued"), created_at: ts, updated_at: ts,
+    });
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    const res2 = await prepareAutoBewerbSend(USER, { companyId: CO2, schedule: FUTURE });
+    expect(res2.ok).toBe(false);
+    expect((res2 as { code?: string }).code).toBe("missing_letter");
+    expect(db.tables.auto_bewerb_send_attempts.find((r) => r.company_id === CO2)).toBeUndefined();
+    // CO1 (has both) is unaffected:
+    expect((await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE })).ok).toBe(true);
+  });
+
+  it("SCHEDULED attempts preserve company-specific attachments (no separate path)", async () => {
+    seed(ATTACH_ON);
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    seedCompanyDocs(CO2, "Tech Süd AG", "techsued");
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE });
+    await prepareAutoBewerbSend(USER, { companyId: CO2, schedule: FUTURE });
+    const a1 = fullAttempt(CO1);
+    const a2 = fullAttempt(CO2);
+    expect(a1.scheduled_at).toBeTruthy();
+    expect(a2.scheduled_at).toBeTruthy();
+    // The frozen scheduled payload carries each company's OWN scoped paths:
+    expect(a1.payload.attachments.find((x) => x.filename === CV_PDF_NAME)!.storagePath).toBe(`auto-bewerb/cv/${USER}/${CO1}.pdf`);
+    expect(a2.payload.attachments.find((x) => x.filename === CV_PDF_NAME)!.storagePath).toBe(`auto-bewerb/cv/${USER}/${CO2}.pdf`);
+    expect(a1.payload.attachments.find((x) => x.filename.startsWith("Anschreiben_"))!.storagePath).toBe(`auto-bewerb/letter/${USER}/${CO1}.pdf`);
+    expect(a2.payload.attachments.find((x) => x.filename.startsWith("Anschreiben_"))!.storagePath).toBe(`auto-bewerb/letter/${USER}/${CO2}.pdf`);
+    // ...with the SAME global subject/body:
+    expect(a1.subject).toBe(GLOBAL_SUBJECT);
+    expect(a2.subject).toBe(GLOBAL_SUBJECT);
+    expect(a1.payload.text).toBe(a2.payload.text);
+  });
+
+  it("toggling attach flags OFF removes CV/letter without changing document ownership", async () => {
+    seed(globalTemplate({ attach_cv: false, attach_letter: false }));
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    const res = await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE });
+    expect(res.ok).toBe(true);
+    const a = fullAttempt(CO1);
+    // Only the shared supporting document — no CV, no letter:
+    expect(a.payload.attachments.map((x) => x.filename)).toEqual(["Abiturzeugnis.pdf"]);
+    // The company's documents remain stored, ownership unchanged:
+    expect(db.tables.auto_bewerb_documents.filter((d) => d.company_id === CO1).length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Pure recipient resolution — one global setting, N companies
 // ---------------------------------------------------------------------------
 
@@ -346,6 +552,19 @@ describe("single global configuration (source contracts)", () => {
     expect(ENGINE).not.toContain("bodyOverride");
     // No token substitution anywhere in the send path:
     expect(ENGINE).not.toContain("renderAutoBewerbEmailBody");
+  });
+
+  it("CV/letter attachments resolve PER COMPANY and BLOCK the send when missing (never silent)", () => {
+    // Resolution is strictly company-scoped — never a global document reference:
+    expect(ENGINE).toContain("getLatestAutoBewerbCv(userId, app.id)");
+    expect(ENGINE).toContain("getLatestAutoBewerbDocument(userId, app.id, \"cover_letter\")");
+    expect(ENGINE).toContain("autoBewerbCvPdfStoragePath(userId, app.id)");
+    expect(ENGINE).toContain("autoBewerbLetterPdfStoragePath(userId, app.id)");
+    // A missing/unrenderable document blocks this company (no silent drop, no substitution):
+    expect(ENGINE).toContain("code: \"missing_cv\"");
+    expect(ENGINE).toContain("code: \"missing_letter\"");
+    expect(ENGINE).toContain("code: \"cv_render_failed\"");
+    expect(ENGINE).toContain("code: \"letter_render_failed\"");
   });
 
   it("the schema no longer offers a token renderer or token list", () => {

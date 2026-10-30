@@ -301,13 +301,17 @@ export interface AutoBewerbEmailAccount {
 
 export interface AutoBewerbCompanyView {
   company: AutoBewerbCompanyRow;
-  /** Latest parsed CV document (null = not generated). */
-  cv: CvDocument | null;
-  cvVersion: number | null;
-  /** Latest parsed Anschreiben (null = not generated). */
-  letter: { text: string; tone: "professional" | "formal" | "engaged" } | null;
-  letterVersion: number | null;
-  latestAttempt: AutoBewerbSendAttemptRow | null;
+   /** Latest parsed CV document (null = not generated). */
+   cv: CvDocument | null;
+   cvVersion: number | null;
+   /** Exact filename of THIS company's tailored CV PDF (null = no CV). */
+   cvPdfName: string | null;
+   /** Latest parsed Anschreiben (null = not generated). */
+   letter: { text: string; tone: "professional" | "formal" | "engaged" } | null;
+   letterVersion: number | null;
+   /** Exact filename of THIS company's individualized cover-letter PDF (null = no letter). */
+   letterPdfName: string | null;
+   latestAttempt: AutoBewerbSendAttemptRow | null;
 }
 
 export interface AutoBewerbWorkspace {
