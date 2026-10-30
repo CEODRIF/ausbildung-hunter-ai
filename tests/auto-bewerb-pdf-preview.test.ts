@@ -328,9 +328,9 @@ describe("Step 4 viewer — pdf.js canvas rendering; preview never downloads", (
 
   it("the document view opens in the wide workspace modal (≈80vw × 90vh, max 1200px)", () => {
     const ui = read("src/components/ui.tsx");
-    // Only the saved-CV document view uses the wide size; edit/draft stay
-    // in the compact popup (existing behavior preserved).
-    expect(step4).toContain('size={showDocWorkspace ? "wide" : "md"}');
+    // The saved-CV document view uses the wide workspace; the EDIT view
+    // uses the centered scrollable "form" dialog.
+    expect(step4).toContain('size={showDocWorkspace ? "wide" : "form"}');
     expect(step4).toContain('const showDocWorkspace = Boolean(previewView?.cv && previewDoc && viewMode === "doc" && !previewDraft)');
     // Wide modal: 96vw on mobile (near full-screen), 82vw on desktop with
     // a 1200px cap and ~90vh max height; the viewer fills the remaining
@@ -340,6 +340,32 @@ describe("Step 4 viewer — pdf.js canvas rendering; preview never downloads", (
     expect(ui).toContain("max-w-[1200px]");
     expect(ui).toContain("sm:max-h-[90vh]");
     expect(step4).toContain("flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-ink/70 p-2 sm:p-3");
+  });
+
+  it("the edit modal is a centered dialog capped at 90dvh with an internally scrolling body", () => {
+    const ui = read("src/components/ui.tsx");
+    // Form size: 94vw on mobile (near full-screen) / 90vw with a 768px cap
+    // on desktop; height capped at 90vh with the 90dvh value applied via
+    // @supports where the dynamic viewport unit is available — the modal
+    // can never extend beyond the visible viewport.
+    expect(ui).toContain("w-[94vw]");
+    expect(ui).toContain("sm:w-[90vw]");
+    expect(ui).toContain("sm:max-w-3xl");
+    expect(ui).toContain("max-h-[90vh]");
+    expect(ui).toContain("supports-[height:100dvh]:max-h-[90dvh]");
+    // Centered by flex (fixed inset-0 + items/justify-center) — no
+    // absolute top/left positioning to drift.
+    expect(ui).toContain("fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5");
+    // Panel is a flex column with a STABLE header row (never scrolls
+    // away); children build the fill chain.
+    expect(ui).toContain("flex-col overflow-hidden rounded-2xl border border-line bg-surface p-4 shadow-2xl");
+    expect(ui).toContain("mb-3 flex shrink-0 items-center justify-between gap-4");
+    // The CV form scrolls INSIDE the dialog; the toolbar row (Document /
+    // Edit / Export / Save / Mark as reviewed) stays fixed above it.
+    expect(step4).toContain("min-h-0 flex-1 overflow-y-auto overscroll-contain");
+    expect(step4).toContain("flex shrink-0 flex-wrap items-center gap-2");
+    // The background page never scrolls while the modal is open.
+    expect(ui).toContain('document.body.style.overflow = "hidden"');
   });
 
   it("the preview does NOT use window.open or a download anchor (export only does)", () => {

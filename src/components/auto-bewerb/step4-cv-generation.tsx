@@ -312,11 +312,13 @@ export function Step4CvGeneration() {
         open={Boolean(previewView && previewDoc)}
         onClose={() => setPreviewId(null)}
         title={previewView ? companyLabel(previewView.company).name : ""}
-        size={showDocWorkspace ? "wide" : "md"}
+        size={showDocWorkspace ? "wide" : "form"}
       >
         {previewView && previewDoc && (
-          <div className={showDocWorkspace ? "flex min-h-0 flex-1 flex-col gap-3" : "space-y-4"}>
-            <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-h-0 flex-1 flex-col gap-3">
+            {/* Stable toolbar — never scrolls away: document state + the
+                Document/Edit switch, Export PDF, Save, Mark as reviewed. */}
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
               {previewDraft && <Note kind="info">{t("autoBewerb.cvUnsavedNote")}</Note>}
               {!previewDraft && (
                 <span className="text-xs font-semibold text-muted">{t("autoBewerb.cvVersion", { version: previewView.cvVersion ?? 1 })}</span>
@@ -387,12 +389,15 @@ export function Step4CvGeneration() {
                 <p className="shrink-0 text-xs text-faint">{t("autoBewerb.cvDocViewHint")}</p>
               </div>
             ) : (
-              <>
+              /* Edit view: the form scrolls INSIDE the capped dialog —
+                 the header + toolbar above stay visible at all times and
+                 no field or action is ever clipped. */
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                 {previewDraft && previewView.cv && viewMode === "doc" && (
                   <Note kind="info">{t("autoBewerb.cvDocDraftNote")}</Note>
                 )}
                 <CvPreview doc={previewDoc} editable={Boolean(previewDraft)} onChange={previewDraft ? (patch) => setDraft("cv", previewView.company.id, patch) : undefined} />
-              </>
+              </div>
             )}
           </div>
         )}
