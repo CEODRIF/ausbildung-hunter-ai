@@ -5,9 +5,8 @@ import { FilePlus2, Paperclip, Pencil, Trash2 } from "lucide-react";
 import { Button, Input, Modal } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
-import { selectDocumentAction } from "@/app/auto-bewerb/actions";
 import type { AutoBewerbAttachmentRow } from "@/lib/auto-bewerb/schema";
-import { CompanyPicker, Note, SectionCard, useAutoBewerb } from "./shared";
+import { Note, SectionCard, useAutoBewerb } from "./shared";
 
 const CATEGORY_KEYS: Record<string, string> = {
   school_certificate: "autoBewerb.catSchool",
@@ -25,13 +24,15 @@ function fmtSize(bytes: number): string {
 }
 
 /**
- * Step 3 — OPTIONAL supporting-document library (user-level, reusable across
- * companies) + per-company selection. Uploads go through
+ * Step 3 — the GLOBAL supporting-document library (user-level). Every
+ * document uploaded here is automatically attached to EVERY application in
+ * the workflow — the library is the single source of truth, there is no
+ * per-company selection. Uploads go through
  * POST /api/auto-bewerb/upload-document (sha256 dedupe: identical bytes reuse
  * the stored row — surfaced as "already in your library", never a duplicate).
  */
 export function Step3Documents() {
-  const { ws, refresh, notify, companyId, selectCompany, goToStep } = useAutoBewerb();
+  const { ws, refresh, notify } = useAutoBewerb();
   const { t, lang } = useI18n();
   const locale = { de: "de-DE", en: "en-GB", fr: "fr-FR", ar: "ar-EG" }[lang] ?? "de-DE";
   const fileInput = useRef<HTMLInputElement>(null);
@@ -42,28 +43,42 @@ export function Step3Documents() {
   const [renameValue, setRenameValue] = useState("");
   const [deleting, setDeleting] = useState<AutoBewerbAttachmentRow | null>(null);
   const [busy, setBusy] = useState(false);
-  const [toggling, setToggling] = useState<string | null>(null);
 
-  const upload = async (file: File | undefined | null) => {
-    if (!file) return;
-    setUploading(true);
-    setUploadError(null);
+  const uploadOne = async (file: File, categoryValue: string) => {
     const fd = new FormData();
     fd.append("file", file);
-    fd.append("category", category);
-    try {
-      const res = await fetch("/api/auto-bewerb/upload-document", { method: "POST", body: fd });
-      const data = (await res.json().catch(() => ({}))) as { error?: string; reused?: boolean };
-      if (!res.ok) setUploadError(data.error ?? t("autoBewerb.uploadError"));
-      else {
-        await refresh();
-        notify("success", data.reused ? t("autoBewerb.docReusedNote") : t("autoBewerb.saved"));
+    fd.append("category", categoryValue);
+    const res = await fetch("/api/auto-bewerb/upload-document", { method: "POST", body: fd });
+    const data = (await res.json().catch(() => ({}))) as { error?: string; reused?: boolean };
+    if (!res.ok) throw new Error(data.error ?? t("autoBewerb.uploadError"));
+    return data;
+  };
+
+  /** Multiple files are uploaded SEQUENTIALLY (one storage object + row each,
+   *  sha256-deduped server-side); a single failure does not abort the rest. */
+  const upload = async (files: FileList | null | undefined) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setUploadError(null);
+    let firstError: string | null = null;
+    let anyOk = false;
+    for (const file of Array.from(files)) {
+      try {
+        const data = await uploadOne(file, category);
+        anyOk = true;
+        if (data.reused && !firstError) firstError = t("autoBewerb.docReusedNote");
+      } catch (error) {
+        if (!firstError) firstError = error instanceof Error ? error.message : t("autoBewerb.uploadError");
       }
-    } catch {
-      setUploadError(t("autoBewerb.uploadError"));
-    } finally {
-      setUploading(false);
-      if (fileInput.current) fileInput.current.value = "";
+    }
+    if (anyOk) await refresh();
+    setUploading(false);
+    if (fileInput.current) fileInput.current.value = "";
+    if (firstError) {
+      setUploadError(firstError);
+      if (anyOk) notify("success", t("autoBewerb.saved"));
+    } else if (anyOk) {
+      notify("success", t("autoBewerb.saved"));
     }
   };
 
@@ -101,28 +116,14 @@ export function Step3Documents() {
     }
   };
 
-  const toggle = async (att: AutoBewerbAttachmentRow, selected: boolean) => {
-    if (!companyId) return;
-    setToggling(att.id);
-    const res = await selectDocumentAction(companyId, att.id, selected);
-    setToggling(null);
-    if (res.ok) {
-      await refresh();
-      notify("success", t("autoBewerb.saved"));
-    } else {
-      notify("error", t("autoBewerb.saveError"));
-    }
-  };
-
-  const active = ws.companies.find((c) => c.company.id === companyId);
-
   return (
     <div className="space-y-5">
       <Note kind="info">{t("autoBewerb.docsOptionalNote")}</Note>
+      <Note kind="success">{t("autoBewerb.docsGlobalNote")}</Note>
 
-      {/* Library */}
+      {/* Global library — single source of truth for every application */}
       <SectionCard title={t("autoBewerb.docsUploadTitle")}>
-        <input ref={fileInput} type="file" accept={DOC_ACCEPT} className="hidden" onChange={(e) => void upload(e.target.files?.[0])} />
+        <input ref={fileInput} type="file" accept={DOC_ACCEPT} multiple className="hidden" onChange={(e) => void upload(e.target.files)} />
         <div className="flex flex-wrap items-center gap-3">
           <div className="w-56">
             <select
@@ -185,54 +186,6 @@ export function Step3Documents() {
           </ul>
         )}
       </SectionCard>
-
-      {/* Per-company selection */}
-      {ws.companies.length === 0 ? (
-        <SectionCard title={t("autoBewerb.docSelectHeading")}>
-          <Note kind="info">
-            {t("autoBewerb.noCompanyYet")}{" "}
-            <button type="button" className="font-semibold text-accent underline underline-offset-2" onClick={() => goToStep(2)}>
-              {t("autoBewerb.goToCompanies")}
-            </button>
-          </Note>
-        </SectionCard>
-      ) : (
-        <SectionCard
-          title={t("autoBewerb.docSelectHeading")}
-          aside={active && (
-            <span className="text-xs font-semibold text-muted">
-              {active.company.company || active.company.ad_extracted?.company || "—"}
-            </span>
-          )}
-        >
-          <CompanyPicker value={companyId} onChange={selectCompany} />
-          {active &&
-            (ws.attachments.length === 0 ? (
-              <p className="text-sm text-muted">{t("autoBewerb.docNoSelection")}</p>
-            ) : (
-              <ul className="space-y-2">
-                {ws.attachments.map((a) => {
-                  const selected = active.selectedAttachmentIds.includes(a.id);
-                  return (
-                    <li key={a.id}>
-                      <label className={`flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 transition-colors ${selected ? "border-accent bg-accent-soft/30" : "border-line bg-surface hover:border-line-strong"}`}>
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          disabled={toggling === a.id}
-                          onChange={(e) => void toggle(a, e.target.checked)}
-                          className="h-4 w-4 accent-[var(--color-accent)]"
-                        />
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{a.display_name}</span>
-                        <span className="text-xs text-muted">{t(CATEGORY_KEYS[a.doc_category] ?? "autoBewerb.catOther")}</span>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
-            ))}
-        </SectionCard>
-      )}
 
       {/* Rename modal */}
       <Modal open={Boolean(renaming)} onClose={() => !busy && setRenaming(null)} title={t("autoBewerb.docRenameTitle")}>

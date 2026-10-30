@@ -81,7 +81,6 @@ export function Step7Review() {
       emailAccountId: v.company.email_account_id!,
       subject: v.company.email_subject!,
       bodyOverride: v.company.email_body,
-      attachmentIds: v.selectedAttachmentIds,
       attachCv: v.company.email_attach_cv,
       attachLetter: v.company.email_attach_letter,
       confirmed: true,
@@ -236,12 +235,17 @@ export function Step7Review() {
                         {[
                           v.company.email_attach_cv ? t("autoBewerb.attachCvPdf") : null,
                           v.company.email_attach_letter ? t("autoBewerb.attachLetterPdf") : null,
-                          ...ws.attachments.filter((a) => v.selectedAttachmentIds.includes(a.id)).map((a) => a.display_name),
                         ]
                           .filter(Boolean)
                           .join(", ") || t("autoBewerb.noAttachments")}
                       </span>
                     </div>
+                    {ws.attachments.length > 0 && (
+                      <div className="sm:col-span-2">
+                        <span className="text-faint">{t("autoBewerb.attachSharedDocs")} </span>
+                        <span className="font-medium text-ink-soft">{ws.attachments.map((a) => a.display_name).join(", ")}</span>
+                      </div>
+                    )}
                   </dl>
                   {gaps.length > 0 && (
                     <p className="mt-1 text-xs text-warning">
@@ -305,11 +309,15 @@ export function Step7Review() {
                   {[
                     v.company.email_attach_cv ? t("autoBewerb.attachCvPdf") : null,
                     v.company.email_attach_letter ? t("autoBewerb.attachLetterPdf") : null,
-                    ...ws.attachments.filter((a) => v.selectedAttachmentIds.includes(a.id)).map((a) => a.display_name),
                   ]
                     .filter(Boolean)
                     .join(", ") || t("autoBewerb.noAttachments")}
                 </p>
+                {ws.attachments.length > 0 && (
+                  <p className="text-muted">
+                    {t("autoBewerb.attachSharedDocs")} {ws.attachments.map((a) => a.display_name).join(", ")}
+                  </p>
+                )}
               </div>
             );
           })}

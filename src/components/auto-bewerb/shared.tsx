@@ -133,8 +133,8 @@ export function computeStepState(ws: AutoBewerbWorkspace): {
       done: companies.length > 0 && companies.every((c) => Boolean(c.company.ad_extracted)),
       ready: companies.length > 0,
     },
-    // 3 documents (optional — never blocks)
-    { done: companies.some((c) => c.selectedAttachmentIds.length > 0), ready: true },
+    // 3 documents (GLOBAL library, optional — never blocks)
+    { done: ws.attachments.length > 0, ready: true },
     // 4 tailored CV
     {
       done: companies.length > 0 && companies.every((c) => Boolean(c.cv)),
