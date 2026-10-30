@@ -181,6 +181,10 @@ export interface AutoBewerbCompanyRow {
   status: AutoBewerbAppStatus;
   recipient_email: string | null;
   email_subject: string | null;
+  /** @deprecated LEGACY per-company body override — no longer read anywhere
+   *  in the UI or the sending pipeline (single source of truth = the global
+   *  template); the send preparation clears it on write. Kept on the row
+   *  type only because the DB column still exists (no destructive change). */
   email_body: string | null;
   email_attach_cv: boolean;
   email_attach_letter: boolean;

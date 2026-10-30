@@ -7,27 +7,29 @@ import {
   reserveFeatureOp,
 } from "@/lib/billing/entitlement-service";
 import { checkRateLimit, rateLimitHeaders, tooManyRequests } from "@/lib/rate-limit";
-import { buildEmailDraftPrompt, parseJsonObject } from "@/lib/studio/prompts";
+import { parseJsonObject } from "@/lib/studio/prompts";
 import { studioEmailDraftSchema } from "@/lib/studio/schema";
 import { formatProfileForPrompt } from "@/lib/templates/cover-letter";
+import { buildAutoBewerbEmailTemplatePrompt } from "@/lib/auto-bewerb/prompts";
 import { createClient } from "@/lib/supabase/server";
-import { getAutoBewerbCompany, getLatestAutoBewerbDocument, getAutoBewerbProfile } from "@/lib/auto-bewerb/engine";
-import { autoBewerbLetterSchema } from "@/lib/auto-bewerb/schema";
+import { getAutoBewerbProfile } from "@/lib/auto-bewerb/engine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * AUTO BEWERB — Step 6: AI draft for the application email (subject + body).
+ * AUTO BEWERB — Step 6: AI draft for the SHARED application e-mail template.
  *
- * The draft is a SUGGESTION for one of two places, chosen by the user in the
- * UI:
- *  - the SHARED email-body template (one row per user, tokenized), or
- *  - the per-company subject + body override.
- * This route never persists — the server actions do — so "keep the shared
- * body consistent unless deliberately changed" holds by construction.
+ * ONE reusable, tokenized ({company} / {position} / {contactName}) German
+ * e-mail template per user — the result is a SUGGESTION for the global
+ * template, applied to EVERY company (incl. newly added ones). This route
+ * therefore takes NO company input: the template must stay company-neutral,
+ * and the per-company facts are substituted by the send engine at send time
+ * (missing values stay empty — nothing is invented).
  *
- * Metered on the existing `email_drafts` quota.
+ * The server never persists — the UI puts the draft into the template
+ * editor and the user saves it explicitly. Metered on the existing
+ * `email_drafts` quota.
  */
 
 const attachmentNamesSchema = z.array(z.string().trim().max(255)).max(10);
@@ -42,32 +44,10 @@ export async function POST(request: Request) {
   if (!limited.allowed) return tooManyRequests(limited);
 
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-  const companyId = typeof body.companyId === "string" ? body.companyId : "";
-  const attachmentNames = attachmentNamesSchema.safeParse(body.attachmentNames ?? []).success
-    ? (attachmentNamesSchema.parse(body.attachmentNames) as string[])
-    : [];
-
-  const bundle = companyId ? await getAutoBewerbCompany(user.id, companyId) : null;
-  if (!bundle) {
-    return NextResponse.json(
-      { error: "Bitte zuerst ein Unternehmen mit analysierter Anzeige hinzufügen.", code: "no_company" },
-      { status: 400 },
-    );
-  }
-  const extract = bundle.company.ad_extracted;
-  if (!extract) {
-    return NextResponse.json(
-      { error: "Keine Analyse der Anzeige vorhanden — erst die Anzeige analysieren.", code: "no_extract" },
-      { status: 400 },
-    );
-  }
-
-  // Motivation excerpt from the REVIEWED letter (when present) — the email
-  // must not copy the letter, only reflect its motivation.
-  let letterExcerpt = "";
-  const letterDoc = await getLatestAutoBewerbDocument(user.id, bundle.company.id, "cover_letter");
-  const letter = letterDoc ? autoBewerbLetterSchema.safeParse(letterDoc.content) : null;
-  if (letter?.success) letterExcerpt = letter.data.text.slice(0, 400);
+  // One parse, fallback [] — a missing/invalid field is simply "no shared
+  // documents", never a crash (the template prompt degrades gracefully).
+  const parsedNames = attachmentNamesSchema.safeParse(body.attachmentNames ?? []);
+  const sharedAttachmentNames = parsedNames.success ? parsedNames.data : [];
 
   const runId = crypto.randomUUID();
   const reserved = await reserveFeatureOp(user.id, "email_drafts", runId);
@@ -90,18 +70,13 @@ export async function POST(request: Request) {
     );
   }
 
-  // The candidate context keeps the email consistent with the real profile
-  // (the closing name is conventional — the model must not invent a name).
+  // The verified candidate profile grounds the motivation — never invented
+  // facts (a missing profile yields an explicit "no data" marker).
   const profile = await getAutoBewerbProfile(user.id);
 
-  const prompt = buildEmailDraftPrompt({
-    company: extract.company,
-    jobTitle: extract.jobTitle || extract.occupation,
-    contactPerson: extract.contactPerson,
-    applicationMethod: extract.applicationMethod,
-    letterExcerpt,
-    attachmentNames,
-  }) + `\n\n${formatProfileForPrompt(profile?.extracted ?? null)}`;
+  const prompt =
+    buildAutoBewerbEmailTemplatePrompt({ sharedAttachmentNames }) +
+    `\n\n${formatProfileForPrompt(profile?.extracted ?? null)}`;
 
   try {
     const raw = await provider().generateText([{ role: "user", content: prompt }], 90_000);
@@ -109,7 +84,7 @@ export async function POST(request: Request) {
     if (!parsed.success) {
       await releaseFeatureOp(user.id, "email_drafts", runId);
       return NextResponse.json(
-        { error: "E-Mail-Entwurf konnte nicht ausgewertet werden. Bitte erneut versuchen.", code: "invalid_ai_output" },
+        { error: "E-Mail-Vorlage konnte nicht ausgewertet werden. Bitte erneut versuchen.", code: "invalid_ai_output" },
         { status: 502 },
       );
     }

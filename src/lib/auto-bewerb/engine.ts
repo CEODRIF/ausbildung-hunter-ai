@@ -753,7 +753,6 @@ export type AutoBewerbCompanyPatch = Partial<
     | "status"
     | "recipient_email"
     | "email_subject"
-    | "email_body"
     | "email_attach_cv"
     | "email_attach_letter"
     | "email_account_id"
@@ -1212,8 +1211,6 @@ export interface AutoBewerbSendInput {
   recipientEmail: string;
   emailAccountId: string;
   subject: string;
-  /** Per-company body override; empty = use the SHARED template. */
-  bodyOverride?: string | null;
   /** Attach the server-rendered tailored-CV PDF (default true). */
   attachCv?: boolean;
   /** Attach the server-rendered Anschreiben PDF (default true). */
@@ -1270,21 +1267,17 @@ export async function prepareAutoBewerbSend(
   if (!subject)
     return { ok: false, code: "invalid_recipient", message: "Der E-Mail-Betreff ist erforderlich." };
 
-  // Body: per-company override wins; otherwise the SHARED template, rendered
-  // from THIS company's stored extraction (tokens never invented).
-  const bodyOverride = (input.bodyOverride ?? "").trim();
-  let bodyText: string;
-  if (bodyOverride) {
-    bodyText = bodyOverride.slice(0, 6_000);
-  } else {
-    const template = await getAutoBewerbEmailTemplate(userId);
-    if (!template.trim()) {
-      return { ok: false, code: "no_template", message: "Es fehlt die gemeinsame E-Mail-Vorlage. Bitte zuerst eine Vorlage speichern." };
-    }
-    bodyText = renderAutoBewerbEmailBody(template, app.ad_extracted).trim();
-    if (!bodyText) {
-      return { ok: false, code: "no_template", message: "Die E-Mail-Vorlage ist leer." };
-    }
+  // Body: ALWAYS the SHARED global template, rendered from THIS company's
+  // stored extraction (tokens never invented; missing values stay empty).
+  // Legacy per-company overrides (auto_bewerb_companies.email_body) are no
+  // longer READ anywhere — a single source of truth by construction.
+  const template = await getAutoBewerbEmailTemplate(userId);
+  if (!template.trim()) {
+    return { ok: false, code: "no_template", message: "Es fehlt die gemeinsame E-Mail-Vorlage. Bitte zuerst eine Vorlage speichern." };
+  }
+  const bodyText = renderAutoBewerbEmailBody(template, app.ad_extracted).trim();
+  if (!bodyText) {
+    return { ok: false, code: "no_template", message: "Die E-Mail-Vorlage ist leer." };
   }
 
   // Email account: owned + active (createEmailProvider re-checks at send time).
@@ -1425,10 +1418,10 @@ export async function prepareAutoBewerbSend(
       recipient_email: input.recipientEmail.trim().toLowerCase(),
       email_account_id: input.emailAccountId,
       idempotency_key: idempotencyKey,
-      // Store the RAW override (null = shared template) — never the rendered
-      // text, so editing the shared template keeps working for future sends.
       email_subject: subject,
-      email_body: bodyOverride ? bodyOverride.slice(0, 6_000) : null,
+      // Legacy column: cleared on every send preparation — per-company body
+      // overrides no longer exist (single source of truth = global template).
+      email_body: null,
       email_attach_cv: attachCv,
       email_attach_letter: attachLetter,
       status: scheduledAt ? "scheduled" : "sending",

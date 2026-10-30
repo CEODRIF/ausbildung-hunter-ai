@@ -149,7 +149,6 @@ export async function updateCompanyAction(
     analysis?: AdAnalysis | null;
     recipientEmail?: string | null;
     emailSubject?: string | null;
-    emailBody?: string | null;
     emailAttachCv?: boolean;
     emailAttachLetter?: boolean;
     emailAccountId?: string | null;
@@ -164,7 +163,6 @@ export async function updateCompanyAction(
   if (patch.analysis !== undefined) dbPatch.ad_analysis = patch.analysis;
   if (patch.recipientEmail !== undefined) dbPatch.recipient_email = patch.recipientEmail;
   if (patch.emailSubject !== undefined) dbPatch.email_subject = patch.emailSubject;
-  if (patch.emailBody !== undefined) dbPatch.email_body = patch.emailBody;
   if (patch.emailAttachCv !== undefined) dbPatch.email_attach_cv = patch.emailAttachCv;
   if (patch.emailAttachLetter !== undefined) dbPatch.email_attach_letter = patch.emailAttachLetter;
   if (patch.emailAccountId !== undefined) dbPatch.email_account_id = patch.emailAccountId;
@@ -232,8 +230,6 @@ export interface SendCompanyInput {
   recipientEmail: string;
   emailAccountId: string;
   subject: string;
-  /** Per-company override; empty = the shared template. */
-  bodyOverride?: string | null;
   attachCv?: boolean;
   attachLetter?: boolean;
   schedule?: AutoBewerbScheduleInput | null;
@@ -273,7 +269,6 @@ export async function sendCompaniesAction(
       recipientEmail: input.recipientEmail,
       emailAccountId: input.emailAccountId,
       subject: input.subject,
-      bodyOverride: input.bodyOverride ?? null,
       attachCv: input.attachCv ?? true,
       attachLetter: input.attachLetter ?? true,
       schedule: input.schedule ?? null,
@@ -333,7 +328,6 @@ export async function scheduleCompaniesAction(
       recipientEmail: r.recipient_email ?? "",
       emailAccountId: r.email_account_id ?? "",
       subject: r.email_subject ?? "",
-      bodyOverride: r.email_body,
       attachCv: r.email_attach_cv,
       attachLetter: r.email_attach_letter,
       schedule,

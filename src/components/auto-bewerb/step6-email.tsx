@@ -23,10 +23,15 @@ const TOKEN_KEYS: Record<string, string> = {
 };
 
 /**
- * Step 6 — shared email template (one row per user) + per-company email
- * preparation (recipient, subject, body override, account).
- * The shared body stays consistent UNLESS the user deliberately sets a
- * per-company override (stored null = "use template").
+ * Step 6 — ONE shared email template (one row per user) + per-company email
+ * preparation (recipient, subject, attachments, account).
+ *
+ * Single source of truth for the e-mail body: there is NO per-company body
+ * override anymore. The shared template (tokens {company} / {position} /
+ * {contactName}) is substituted per company at preview AND send time from
+ * each company's verified extraction — so it applies to every saved and
+ * every newly added company automatically. The AI draft generates one
+ * global, tokenized template (never a company-specific e-mail).
  * Supporting documents are GLOBAL: the whole user library (ws.attachments)
  * is attached to every application — there is no per-company selection.
  */
@@ -69,13 +74,12 @@ export function Step6Email() {
     setDrafting(true);
     setDraftResult(null);
     try {
+      // GLOBAL template draft — no company input (the template must stay
+      // company-neutral; only the shared document library is contextual).
       const res = await fetch("/api/auto-bewerb/generate-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          companyId: activeId,
-          attachmentNames: [...(active.company.email_attach_cv ? [t("autoBewerb.attachCvPdf")] : []), ...(active.company.email_attach_letter ? [t("autoBewerb.attachLetterPdf")] : []), ...sharedDocNames].slice(0, 10),
-        }),
+        body: JSON.stringify({ attachmentNames: sharedDocNames.slice(0, 10) }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string; subject?: string; body?: string };
       if (!res.ok || !data.subject || !data.body) notify("error", data.error ?? t("autoBewerb.generateError"));
@@ -85,19 +89,6 @@ export function Step6Email() {
     } finally {
       setDrafting(false);
     }
-  };
-
-  const applyDraftToCompany = async () => {
-    if (!draftResult) return;
-    const res = await updateCompanyAction(activeId, {
-      emailSubject: draftResult.subject,
-      emailBody: draftResult.body,
-    });
-    if (res.ok) {
-      setDraftResult(null);
-      await refresh();
-      notify("success", t("autoBewerb.saved"));
-    } else notify("error", t("autoBewerb.saveError"));
   };
 
   return (
@@ -150,13 +141,11 @@ export function Step6Email() {
           <div className="mt-4 rounded-2xl border border-accent/30 bg-accent-soft/30 p-4">
             <p className="mb-1 text-xs font-bold text-ink">{t("autoBewerb.emailDraftTitle")}</p>
             <p className="text-xs font-semibold text-ink-soft">{t("autoBewerb.subjectLabel")}: {draftResult.subject}</p>
+            <p className="mt-0.5 text-[11px] text-muted">{t("autoBewerb.emailDraftSubjectHint")}</p>
             <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-xl bg-surface p-3 text-xs leading-5 text-ink-soft">{draftResult.body}</pre>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="secondary" size="sm" onClick={() => setTemplateDraft(draftResult.body)}>
+              <Button variant="primary" size="sm" onClick={() => setTemplateDraft(draftResult.body)}>
                 {t("autoBewerb.applyDraftToTemplate")}
-              </Button>
-              <Button variant="primary" size="sm" onClick={() => void applyDraftToCompany()}>
-                {t("autoBewerb.applyDraftToCompany")}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setDraftResult(null)}>
                 {t("common.close")}
@@ -193,7 +182,6 @@ function CompanyEmailEditor({ view, template }: { view: AutoBewerbCompanyView; t
   const row = view.company;
   const [recipient, setRecipient] = useState(row.recipient_email ?? "");
   const [subject, setSubject] = useState(row.email_subject ?? "");
-  const [bodyOverride, setBodyOverride] = useState(row.email_body ?? "");
   const [attachCv, setAttachCv] = useState(row.email_attach_cv);
   const [attachLetter, setAttachLetter] = useState(row.email_attach_letter);
   const [accountId, setAccountId] = useState(row.email_account_id ?? "");
@@ -202,7 +190,6 @@ function CompanyEmailEditor({ view, template }: { view: AutoBewerbCompanyView; t
   const dirty =
     recipient !== (row.recipient_email ?? "") ||
     subject !== (row.email_subject ?? "") ||
-    bodyOverride !== (row.email_body ?? "") ||
     attachCv !== row.email_attach_cv ||
     attachLetter !== row.email_attach_letter ||
     accountId !== (row.email_account_id ?? "");
@@ -212,7 +199,6 @@ function CompanyEmailEditor({ view, template }: { view: AutoBewerbCompanyView; t
     const res = await updateCompanyAction(row.id, {
       recipientEmail: recipient || null,
       emailSubject: subject || null,
-      emailBody: bodyOverride || null,
       emailAttachCv: attachCv,
       emailAttachLetter: attachLetter,
       emailAccountId: accountId || null,
@@ -232,7 +218,9 @@ function CompanyEmailEditor({ view, template }: { view: AutoBewerbCompanyView; t
   if (attachLetter && !view.letter) issues.push(t("autoBewerb.missingLetter"));
   if (!accountId) issues.push(t("autoBewerb.missingAccount"));
 
-  const renderedBody = renderAutoBewerbEmailBody(bodyOverride || template, row.ad_extracted);
+  // The SHARED template (incl. unsaved edits) rendered with THIS company's
+  // verified extraction — one body source, per-company substitution only.
+  const renderedBody = renderAutoBewerbEmailBody(template, row.ad_extracted);
   const { name } = companyLabel(row);
   // Company-SPECIFIC documents (rendered per application) vs the GLOBAL
   // shared library — the two groups are shown distinctly.
@@ -255,18 +243,6 @@ function CompanyEmailEditor({ view, template }: { view: AutoBewerbCompanyView; t
             hint={row.ad_extracted?.applicationEmail ? `${t("autoBewerb.fromAd")}: ${row.ad_extracted.applicationEmail}` : undefined}
           />
           <Input label={t("autoBewerb.subjectLabel")} value={subject} onChange={(e) => setSubject(e.target.value)} />
-          <Textarea
-            label={t("autoBewerb.bodyOverrideLabel")}
-            hint={t("autoBewerb.bodyOverrideHint")}
-            rows={6}
-            value={bodyOverride}
-            onChange={(e) => setBodyOverride(e.target.value)}
-          />
-          {bodyOverride && (
-            <button type="button" onClick={() => setBodyOverride("")} className="text-xs font-semibold text-accent underline underline-offset-2">
-              {t("autoBewerb.bodyOverrideReset")}
-            </button>
-          )}
           <div className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 text-sm font-medium text-ink-soft">
               <input type="checkbox" checked={attachCv} onChange={(e) => setAttachCv(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
@@ -338,9 +314,7 @@ function CompanyEmailEditor({ view, template }: { view: AutoBewerbCompanyView; t
           </div>
           <pre className="mt-3 whitespace-pre-wrap text-sm leading-6 text-ink-soft">{renderedBody || t("autoBewerb.templateEmptyNote")}</pre>
         </div>
-        <p className="mt-2 text-xs text-muted">
-          {bodyOverride ? t("autoBewerb.previewOverrideNote") : t("autoBewerb.previewSharedNote", { company: name })}
-        </p>
+        <p className="mt-2 text-xs text-muted">{t("autoBewerb.previewSharedNote", { company: name })}</p>
       </SectionCard>
     </div>
   );
