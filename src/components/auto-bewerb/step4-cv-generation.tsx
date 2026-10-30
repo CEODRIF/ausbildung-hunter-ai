@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, Check, CheckCircle2, Download, Eye, FileText, Loader2, Maximize, RefreshCw, Sparkles, ZoomIn, ZoomOut } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, Download, Eye, FileText, Fullscreen, Loader2, Maximize, Minimize, RefreshCw, Sparkles, ZoomIn, ZoomOut } from "lucide-react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import { Button, Input, Modal, Textarea } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
@@ -125,6 +125,9 @@ export function Step4CvGeneration() {
   const previewDraft = previewView ? (drafts.cv[previewView.company.id] ?? null) : null;
   const previewDoc: CvDocument | null = previewView ? (previewDraft ?? previewView.cv) : null;
   const previewReviewed = Boolean(previewView?.company.cv_reviewed_at);
+  // The saved-CV document view is the wide "document workspace" modal;
+  // edit view and the unsaved-draft variant stay in the compact popup.
+  const showDocWorkspace = Boolean(previewView?.cv && previewDoc && viewMode === "doc" && !previewDraft);
 
   const savePreview = async () => {
     if (!previewView || !previewDraft) return;
@@ -309,9 +312,10 @@ export function Step4CvGeneration() {
         open={Boolean(previewView && previewDoc)}
         onClose={() => setPreviewId(null)}
         title={previewView ? companyLabel(previewView.company).name : ""}
+        size={showDocWorkspace ? "wide" : "md"}
       >
         {previewView && previewDoc && (
-          <div className="space-y-4">
+          <div className={showDocWorkspace ? "flex min-h-0 flex-1 flex-col gap-3" : "space-y-4"}>
             <div className="flex flex-wrap items-center gap-2">
               {previewDraft && <Note kind="info">{t("autoBewerb.cvUnsavedNote")}</Note>}
               {!previewDraft && (
@@ -370,15 +374,17 @@ export function Step4CvGeneration() {
                 the SAME session, verifies the bytes, draws them itself —
                 never downloaded, never dependent on the native viewer. */}
             {previewView.cv && viewMode === "doc" && !previewDraft ? (
-              <div className="space-y-2">
-                <div className="overflow-hidden rounded-xl bg-ink/70 p-2 sm:p-3">
+              <div className="flex min-h-0 flex-1 flex-col gap-2">
+                {/* The dark stage fills the modal height — the CV is the
+                    main visual focus, not a small inset. */}
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-ink/70 p-2 sm:p-3">
                   <CvPdfPreview
                     companyId={previewView.company.id}
                     version={previewView.cvVersion ?? 0}
                     name={companyLabel(previewView.company).name}
                   />
                 </div>
-                <p className="text-xs text-faint">{t("autoBewerb.cvDocViewHint")}</p>
+                <p className="shrink-0 text-xs text-faint">{t("autoBewerb.cvDocViewHint")}</p>
               </div>
             ) : (
               <>
@@ -532,7 +538,7 @@ export function CvPdfPreview({ companyId, version, name }: { companyId: string; 
 
   if (!current) {
     return (
-      <div className="flex h-[75vh] min-h-[480px] w-full flex-col items-center justify-center gap-3 rounded-md bg-white">
+      <div className="flex h-full min-h-[420px] w-full flex-col items-center justify-center gap-3 rounded-md bg-white">
         <Loader2 size={22} className="animate-spin text-muted" />
         <p className="text-xs font-semibold text-muted">{t("autoBewerb.cvPreviewLoading")}</p>
       </div>
@@ -541,7 +547,7 @@ export function CvPdfPreview({ companyId, version, name }: { companyId: string; 
 
   if (!current.ok) {
     return (
-      <div className="flex h-[75vh] min-h-[480px] w-full flex-col items-center justify-center gap-3 rounded-md bg-white p-6 text-center">
+      <div className="flex h-full min-h-[420px] w-full flex-col items-center justify-center gap-3 rounded-md bg-white p-6 text-center">
         <AlertTriangle size={22} className="text-danger" />
         <p className="max-w-sm text-xs font-semibold leading-5 text-danger">{current.message}</p>
         <Button variant="secondary" size="sm" onClick={() => setAttempt((a) => a + 1)}>
@@ -557,22 +563,38 @@ export function CvPdfPreview({ companyId, version, name }: { companyId: string; 
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 3;
 const ZOOM_STEP = 0.25;
+/** Horizontal padding of the page row (`p-3` = 12px per side) — subtracted
+ *  from the measured stage width so fit-to-width (100%) NEVER produces a
+ *  horizontal scrollbar. */
+const STAGE_PAD_X = 24;
 
 /**
  * The parsed document as white A4 sheets on the dark stage: vertical
  * scroll, zoom (50%–300%, fit-to-width = 100%), one page per canvas.
- * `scale` = fit-to-width base (stage width / widest page width in pt)
- * × the user zoom — each page renders itself at that scale.
+ * `scale` = fit-to-width base ((stage width − row padding) / widest page
+ * width in pt) × the user zoom — each page renders itself at that scale,
+ * so the first page is immediately readable at the default zoom.
+ *
+ * The toolbar (page position, zoom, fit, fullscreen) is INTEGRATED into
+ * the top of the document stage and stays visible while scrolling
+ * (sticky). The whole viewer can enter the browser fullscreen — the CV
+ * then becomes the full screen's document.
  */
 function CvPdfCanvasView({ doc, name }: { doc: PDFDocumentProxy; name: string }) {
   const { t } = useI18n();
   const [zoom, setZoom] = useState(1);
   const [containerWidth, setContainerWidth] = useState(0);
   const [pageSizes, setPageSizes] = useState<{ width: number; height: number }[] | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const stageRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<HTMLDivElement>(null);
+  const pageEls = useRef<Array<HTMLDivElement | null>>([]);
+  const rafPending = useRef(false);
 
   // Measure the live stage width (no hard-coded modal width) — the fit
-  // base scale follows window/modal resizing.
+  // base scale follows window/modal resizing (recalculated on every
+  // resize, as required).
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
@@ -605,74 +627,143 @@ function CvPdfCanvasView({ doc, name }: { doc: PDFDocumentProxy; name: string })
     };
   }, [doc]);
 
+  // Fullscreen state (browser Fullscreen API, no extra dependency).
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    const el = viewRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    } else {
+      void el.requestFullscreen?.().catch(() => undefined);
+    }
+  };
+
+  // Current page = the page whose top is nearest at/above the stage's
+  // vertical middle. rAF-throttled scroll handler (event, not effect —
+  // setState here is safe).
+  const handleStageScroll = () => {
+    if (rafPending.current) return;
+    rafPending.current = true;
+    requestAnimationFrame(() => {
+      rafPending.current = false;
+      const stage = stageRef.current;
+      if (!stage) return;
+      const stageTop = stage.getBoundingClientRect().top;
+      const mid = stage.clientHeight * 0.5;
+      let page = 1;
+      pageEls.current.forEach((el, i) => {
+        if (!el) return;
+        if (el.getBoundingClientRect().top - stageTop <= mid) page = i + 1;
+      });
+      setCurrentPage((prev) => (prev === page ? prev : page));
+    });
+  };
+
   const widest = pageSizes?.reduce((m, s) => Math.max(m, s.width), 0) ?? 0;
-  const baseScale = containerWidth > 0 && widest > 0 ? containerWidth / widest : 0;
+  const fitWidth = Math.max(0, containerWidth - STAGE_PAD_X);
+  const baseScale = fitWidth > 0 && widest > 0 ? fitWidth / widest : 0;
   const scale = baseScale * zoom;
 
   return (
-    <div className="flex h-[75vh] min-h-[480px] w-full flex-col overflow-hidden rounded-md bg-white">
-      {/* Toolbar: page count + zoom controls */}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line/60 px-2 py-1.5">
-        <span className="text-[11px] font-semibold text-muted">
-          {t("autoBewerb.cvPreviewPages", { count: doc.numPages })}
-        </span>
-        <div className="flex items-center gap-0.5" role="group" aria-label={`${name} — Zoom`}>
-          <button
-            type="button"
-            aria-label={t("autoBewerb.cvPreviewZoomOut")}
-            disabled={zoom <= ZOOM_MIN}
-            onClick={() => setZoom((z) => Math.max(ZOOM_MIN, Number((z - ZOOM_STEP).toFixed(3))))}
-            className="rounded-md p-1.5 text-ink-soft transition-colors hover:bg-surface-2 disabled:opacity-40"
-          >
-            <ZoomOut size={14} />
-          </button>
-          <span className="w-10 text-center text-[11px] font-semibold tabular-nums text-ink">
-            {Math.round(zoom * 100)}%
-          </span>
-          <button
-            type="button"
-            aria-label={t("autoBewerb.cvPreviewZoomIn")}
-            disabled={zoom >= ZOOM_MAX}
-            onClick={() => setZoom((z) => Math.min(ZOOM_MAX, Number((z + ZOOM_STEP).toFixed(3))))}
-            className="rounded-md p-1.5 text-ink-soft transition-colors hover:bg-surface-2 disabled:opacity-40"
-          >
-            <ZoomIn size={14} />
-          </button>
-          <button
-            type="button"
-            aria-label={t("autoBewerb.cvPreviewFit")}
-            disabled={zoom === 1}
-            onClick={() => setZoom(1)}
-            className="rounded-md p-1.5 text-ink-soft transition-colors hover:bg-surface-2 disabled:opacity-40"
-          >
-            <Maximize size={14} />
-          </button>
-        </div>
-      </div>
-
-      {/* Pages — vertical scroll (horizontal only when zoomed past width) */}
+    <div
+      ref={viewRef}
+      className="flex h-full min-h-[420px] w-full flex-col overflow-hidden rounded-md bg-white [&:fullscreen]:min-h-0 [&:fullscreen]:rounded-none [&:fullscreen]:shadow-none"
+    >
+      {/* Document stage — vertical scroll (horizontal only when zoomed
+          past the width). The toolbar is sticky INSIDE the stage, so it
+          stays visible above the document while scrolling. */}
       <div
         ref={stageRef}
-        className="flex-1 overflow-auto bg-surface-2/40"
+        onScroll={handleStageScroll}
+        className="relative flex-1 overflow-auto bg-surface-2/40 [scrollbar-gutter:stable]"
         role="region"
         aria-label={`${name} — Lebenslauf`}
       >
+        {/* Integrated toolbar: page position + zoom controls */}
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-line/60 bg-white/95 px-2 py-1.5 backdrop-blur">
+          <span
+            className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold tabular-nums text-muted"
+            aria-label={t("autoBewerb.cvPreviewPageLabel", { page: currentPage, count: doc.numPages })}
+          >
+            <FileText size={13} />
+            {currentPage} / {doc.numPages}
+          </span>
+          <div className="flex items-center gap-0.5" role="group" aria-label={`${name} — Zoom`}>
+            <button
+              type="button"
+              title={t("autoBewerb.cvPreviewZoomOut")}
+              aria-label={t("autoBewerb.cvPreviewZoomOut")}
+              disabled={zoom <= ZOOM_MIN}
+              onClick={() => setZoom((z) => Math.max(ZOOM_MIN, Number((z - ZOOM_STEP).toFixed(3))))}
+              className="rounded-md p-1.5 text-ink-soft transition-colors hover:bg-surface-2 disabled:opacity-40"
+            >
+              <ZoomOut size={14} />
+            </button>
+            <span className="w-10 text-center text-[11px] font-semibold tabular-nums text-ink">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button
+              type="button"
+              title={t("autoBewerb.cvPreviewZoomIn")}
+              aria-label={t("autoBewerb.cvPreviewZoomIn")}
+              disabled={zoom >= ZOOM_MAX}
+              onClick={() => setZoom((z) => Math.min(ZOOM_MAX, Number((z + ZOOM_STEP).toFixed(3))))}
+              className="rounded-md p-1.5 text-ink-soft transition-colors hover:bg-surface-2 disabled:opacity-40"
+            >
+              <ZoomIn size={14} />
+            </button>
+            <button
+              type="button"
+              title={t("autoBewerb.cvPreviewFit")}
+              aria-label={t("autoBewerb.cvPreviewFit")}
+              disabled={zoom === 1}
+              onClick={() => setZoom(1)}
+              className="rounded-md p-1.5 text-ink-soft transition-colors hover:bg-surface-2 disabled:opacity-40"
+            >
+              <Maximize size={14} />
+            </button>
+            <button
+              type="button"
+              title={isFullscreen ? t("autoBewerb.cvPreviewExitFullscreen") : t("autoBewerb.cvPreviewFullscreen")}
+              aria-label={isFullscreen ? t("autoBewerb.cvPreviewExitFullscreen") : t("autoBewerb.cvPreviewFullscreen")}
+              onClick={toggleFullscreen}
+              className="rounded-md p-1.5 text-ink-soft transition-colors hover:bg-surface-2"
+            >
+              {isFullscreen ? <Minimize size={14} /> : <Fullscreen size={14} />}
+            </button>
+          </div>
+        </div>
+
+        {/* Pages — centered, A4 aspect preserved, fit-to-width initial */}
         {scale > 0 && pageSizes ? (
           <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4 p-3">
             {pageSizes.map((size, i) => (
-              <CvPdfPage
+              <div
                 key={i + 1}
-                doc={doc}
-                pageNumber={i + 1}
-                pageCount={doc.numPages}
-                width={size.width * scale}
-                height={size.height * scale}
-                scale={scale}
-              />
+                ref={(el) => {
+                  pageEls.current[i] = el;
+                }}
+                className="shrink-0"
+              >
+                <CvPdfPage
+                  doc={doc}
+                  pageNumber={i + 1}
+                  pageCount={doc.numPages}
+                  width={size.width * scale}
+                  height={size.height * scale}
+                  scale={scale}
+                />
+              </div>
             ))}
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center">
+          <div className="flex h-full min-h-[320px] items-center justify-center">
             <Loader2 size={20} className="animate-spin text-muted" />
           </div>
         )}

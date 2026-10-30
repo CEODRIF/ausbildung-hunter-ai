@@ -284,11 +284,62 @@ describe("Step 4 viewer — pdf.js canvas rendering; preview never downloads", (
     expect(step4).toContain("cvPreviewZoomIn");
     expect(step4).toContain("cvPreviewZoomOut");
     expect(step4).toContain("cvPreviewFit");
+    expect(step4).toContain("cvPreviewFullscreen");
     expect(step4).toContain("cvPreviewLoading");
     expect(step4).toContain("cvPreviewError");
     expect(step4).toContain("previewSessionError");
     expect(step4).toContain("cvPreviewParseError");
     expect(step4).toContain("setAttempt((a) => a + 1)");
+  });
+
+  it("integrated sticky toolbar INSIDE the viewer: page position, zoom, fit, fullscreen", () => {
+    // The toolbar is the first child of the scroll stage and sticks to its
+    // top — it stays visible while the document scrolls beneath it.
+    expect(step4).toContain("sticky top-0 z-10");
+    expect(step4).toContain("backdrop-blur");
+    // Page position in "current / total" form (e.g. 1 / 3), derived from
+    // the scroll position (rAF-throttled stage scroll handler).
+    expect(step4).toContain("{currentPage} / {doc.numPages}");
+    expect(step4).toContain("onScroll={handleStageScroll}");
+    expect(step4).toContain("requestAnimationFrame(() => {");
+    // Browser fullscreen toggle (no extra dependency) on the viewer box.
+    expect(step4).toContain("el.requestFullscreen?.()");
+    expect(step4).toContain("document.exitFullscreen()");
+    expect(step4).toContain("fullscreenchange");
+    // Toolbar buttons carry tooltips (title) + accessible names.
+    expect(step4).toContain("title={t(\"autoBewerb.cvPreviewZoomIn\")}");
+  });
+
+  it("fit-to-width is computed from the measured stage width and never overflows horizontally at 100%", () => {
+    // Fit base = (measured stage width − page-row horizontal padding) /
+    // widest page width in pt — subtracting the padding is what keeps the
+    // default zoom inside the stage (no horizontal scrollbar).
+    expect(step4).toContain("const STAGE_PAD_X = 24;");
+    expect(step4).toContain("Math.max(0, containerWidth - STAGE_PAD_X)");
+    // The stage reserves scrollbar space so the measured width — and thus
+    // the fit scale — is stable while the document scrolls.
+    expect(step4).toContain("[scrollbar-gutter:stable]");
+    // Pages stay centered, A4 aspect preserved (each canvas keeps the
+    // page's exact width:height ratio from getViewport).
+    expect(step4).toContain("mx-auto flex w-max min-w-full flex-col items-center gap-4 p-3");
+    // Fit recalculates live on resize (ResizeObserver on the stage).
+    expect(step4).toContain("new ResizeObserver(");
+  });
+
+  it("the document view opens in the wide workspace modal (≈80vw × 90vh, max 1200px)", () => {
+    const ui = read("src/components/ui.tsx");
+    // Only the saved-CV document view uses the wide size; edit/draft stay
+    // in the compact popup (existing behavior preserved).
+    expect(step4).toContain('size={showDocWorkspace ? "wide" : "md"}');
+    expect(step4).toContain('const showDocWorkspace = Boolean(previewView?.cv && previewDoc && viewMode === "doc" && !previewDraft)');
+    // Wide modal: 96vw on mobile (near full-screen), 82vw on desktop with
+    // a 1200px cap and ~90vh max height; the viewer fills the remaining
+    // panel height (flex column chain).
+    expect(ui).toContain("w-[96vw]");
+    expect(ui).toContain("sm:w-[82vw]");
+    expect(ui).toContain("max-w-[1200px]");
+    expect(ui).toContain("sm:max-h-[90vh]");
+    expect(step4).toContain("flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-ink/70 p-2 sm:p-3");
   });
 
   it("the preview does NOT use window.open or a download anchor (export only does)", () => {
@@ -339,10 +390,11 @@ describe("Step 4 viewer — pdf.js canvas rendering; preview never downloads", (
       "previewSessionError:",
       "cvPreviewParseError:",
       "cvPreviewPageLabel:",
-      "cvPreviewPages:",
       "cvPreviewZoomIn:",
       "cvPreviewZoomOut:",
       "cvPreviewFit:",
+      "cvPreviewFullscreen:",
+      "cvPreviewExitFullscreen:",
     ]) {
       const count = dict.split(key).length - 1;
       expect(count, `i18n key "${key}" must exist in de+en+fr+ar (found ${count})`).toBeGreaterThanOrEqual(4);
