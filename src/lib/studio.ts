@@ -133,13 +133,19 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-/** Plain-text email body → minimal HTML (paragraphs only, fully escaped). */
+/** Plain-text email body → minimal HTML (paragraphs only, fully escaped).
+ *  Escape BEFORE inserting the structural <br> — escaping after turns the
+ *  line break into literal "&lt;br&gt;" text, which (1) renders as visible
+ *  garbage in the e-mail and (2) collapses the letter's closing+signature
+ *  into one paragraph for the PDF folio (splitLetterParagraphs is
+ *  positional). */
 export function emailBodyToHtml(body: string): string {
   return body
     .split(/\n{2,}/)
+    .map((p) => escapeHtml(p).trim())
+    .filter((p) => p)
     .map((p) => p.replace(/\n/g, "<br>"))
-    .filter((p) => p.trim())
-    .map((p) => `<p>${escapeHtml(p).trim()}</p>`)
+    .map((p) => `<p>${p}</p>`)
     .join("\n");
 }
 

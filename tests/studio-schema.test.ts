@@ -393,4 +393,13 @@ describe("escapeHtml / emailBodyToHtml", () => {
     expect(html).toContain("&lt;b script&gt;");
     expect(html).not.toContain("<b script>");
   });
+
+  it("single line breaks become STRUCTURAL <br> (never escaped &lt;br&gt; text)", () => {
+    // The letter's closing + signature are two consecutive lines (single
+    // newline): the folio pipeline (htmlToParagraphs → splitLetterParagraphs)
+    // relies on the <br> being a real break that splits the paragraph.
+    const html = emailBodyToHtml("Mit freundlichen Grüßen\nMustapha Drif");
+    expect(html).toBe("<p>Mit freundlichen Grüßen<br>Mustapha Drif</p>");
+    expect(html).not.toContain("&lt;br&gt;");
+  });
 });
