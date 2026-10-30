@@ -670,6 +670,11 @@ export async function createAutoBewerbCompany(
       ad_analysis: input.analysis ?? null,
       profile_snapshot: input.profileSnapshot ?? null,
       status: "draft",
+      // AUTO-CONFIRMATION: the ad text was pasted + analyzed by the user and
+      // is persisted by this very write — the server stamps the confirmation
+      // inside the successful insert. A failed insert creates no row, so a
+      // company can never be "confirmed" without existing.
+      ad_confirmed_at: new Date().toISOString(),
     })
     .select("*")
     .single();
@@ -774,11 +779,16 @@ async function patchCompany(
   id: string,
   patch: AutoBewerbCompanyPatch,
 ): Promise<AutoBewerbCompanyRow | null> {
-  // Invalidation: editing the extraction re-opens its confirmation; renaming
-  // the company re-derives the dedupe key (a rename into an existing name is
-  // a unique violation → company_duplicate at the caller).
+  // Auto-confirmation: every successful save of the ad content IS the
+  // confirmation (the manual "Anzeige bestätigen" step was removed). Editing
+  // the extraction or the raw ad text re-stamps the confirmation server-side;
+  // unrelated patches (email fields, review marks) leave the timestamp alone.
+  // Renaming the company re-derives the dedupe key (a rename into an existing
+  // name is a unique violation → company_duplicate at the caller).
   const extended: AutoBewerbCompanyPatch = { ...patch };
-  if ("ad_extracted" in patch) extended.ad_confirmed_at = null;
+  if ("ad_extracted" in patch || "ad_raw" in patch) {
+    extended.ad_confirmed_at = new Date().toISOString();
+  }
   if ("company" in patch && typeof patch.company === "string") {
     extended.company_key = normalizeCompanyKey(patch.company);
   }
@@ -823,16 +833,6 @@ export async function updateAutoBewerbCompany(
     if (!probe.data) return fail("not_found", "Unternehmen nicht gefunden.");
     return fail("company_duplicate", "Dieses Unternehmen wurde bereits hinzugefügt.");
   }
-  return { ok: true, value: app };
-}
-
-/** Explicit "Anzeige geprüft" confirmation (server-owned timestamp). */
-export async function markAutoBewerbAdConfirmed(
-  userId: string,
-  companyId: string,
-): Promise<AutoBewerbOpResult<AutoBewerbCompanyRow>> {
-  const app = await patchCompany(userId, companyId, { ad_confirmed_at: new Date().toISOString() });
-  if (!app) return fail("not_found", "Unternehmen nicht gefunden.");
   return { ok: true, value: app };
 }
 

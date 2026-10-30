@@ -9,7 +9,6 @@ import {
   deleteAutoBewerbCompany,
   deleteAutoBewerbProfile,
   getAutoBewerbWorkspace,
-  markAutoBewerbAdConfirmed,
   prepareAutoBewerbSend,
   processDueAutoBewerbAttemptsForUser,
   saveAutoBewerbDocument,
@@ -176,12 +175,6 @@ export async function deleteCompanyAction(companyId: string): Promise<ActionResu
   const { user } = await getCurrentUserAndProfile();
   if (!user) return unauthorized();
   return toResult(await deleteAutoBewerbCompany(user.id, companyId)) as ActionResult<{ ok: true }>;
-}
-
-export async function confirmAdAction(companyId: string): Promise<ActionResult<AutoBewerbCompanyRow>> {
-  const { user } = await getCurrentUserAndProfile();
-  if (!user) return unauthorized();
-  return toResult(await markAutoBewerbAdConfirmed(user.id, companyId)) as ActionResult<AutoBewerbCompanyRow>;
 }
 
 export async function approveCompanyAction(companyId: string): Promise<ActionResult<AutoBewerbCompanyRow>> {

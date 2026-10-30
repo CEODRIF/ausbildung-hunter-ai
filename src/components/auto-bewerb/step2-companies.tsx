@@ -1,13 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Building2, CheckCheck, Pencil, RefreshCw, Search, Trash2 } from "lucide-react";
+import { Building2, CheckCheck, ChevronRight, Pencil, RefreshCw, Search, Trash2 } from "lucide-react";
 import { Button, Input, Modal, Textarea } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
 import {
   addCompanyAction,
-  confirmAdAction,
   deleteCompanyAction,
   updateCompanyAction,
 } from "@/app/auto-bewerb/actions";
@@ -34,6 +33,12 @@ interface PendingAnalysis {
  *  "Add company" (server action; the company is shown as saved ONLY after the
  *  server confirms). A failed add never clears the text or the preview
  *  (nothing is silently discarded).
+ *
+ * Companies render as COMPACT, collapsed cards (name / job / status /
+ * actions) — the full analysis details are revealed on demand per card
+ * (independent expand state). Every successfully saved company is
+ * AUTO-CONFIRMED server-side (ad_confirmed_at stamped inside the insert),
+ * so there is no manual "Ad confirmed" step.
  */
 export function Step2Companies() {
   const { ws, refresh, notify, companyId, selectCompany, goToStep } = useAutoBewerb();
@@ -200,7 +205,7 @@ export function Step2Companies() {
       {ws.companies.length === 0 ? (
         <EmptyState title={t("autoBewerb.noCompaniesTitle")} body={t("autoBewerb.noCompaniesBody")} illustration={<Building2 size={34} strokeWidth={1.6} />} />
       ) : (
-        <div className="grid gap-5 lg:grid-cols-2">
+        <div className="flex flex-col gap-4">
           {ws.companies.map((c) => (
             <CompanyCard
               key={c.company.id}
@@ -209,13 +214,6 @@ export function Step2Companies() {
               onSelect={() => selectCompany(c.company.id)}
               onEdit={() => setEditing(c.company)}
               onDelete={() => setDeleting(c.company)}
-              onConfirmAd={async () => {
-                const res = await confirmAdAction(c.company.id);
-                if (res.ok) {
-                  await refresh();
-                  notify("success", t("autoBewerb.adConfirmedNote"));
-                } else notify("error", t("autoBewerb.saveError"));
-              }}
               onGoToReview={() => goToStep(7)}
             />
           ))}
@@ -253,13 +251,23 @@ export function Step2Companies() {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Compact company card — COLLAPSED by default (the essential row: expand
+ * arrow, name, job title, status, edit, delete). The full stored analysis
+ * is revealed inside the same card via `expanded` — a per-card local state,
+ * so expanding one company never touches another card.
+ *
+ * Status chip: a server-confirmed company (ad_confirmed_at — stamped inside
+ * the successful insert, re-stamped on content edits) shows the green
+ * "Confirmed" indicator; legacy rows saved before auto-confirmation show
+ * their workflow status instead.
+ */
 function CompanyCard({
   view,
   selected,
   onSelect,
   onEdit,
   onDelete,
-  onConfirmAd,
   onGoToReview,
 }: {
   view: { company: AutoBewerbCompanyRow };
@@ -267,7 +275,6 @@ function CompanyCard({
   onSelect: () => void;
   onEdit: () => void;
   onDelete: () => void;
-  onConfirmAd: () => void;
   onGoToReview: () => void;
 }) {
   const { t } = useI18n();
@@ -276,114 +283,125 @@ function CompanyCard({
   const an = c.ad_analysis;
   const { name, job } = companyLabel(c);
   const locked = c.status === "sent" || c.status === "sending";
+  const [expanded, setExpanded] = useState(false);
 
   return (
     <div
-      className={`flex flex-col rounded-3xl border p-5 transition-colors ${
+      className={`rounded-3xl border transition-colors ${
         selected ? "border-accent bg-accent-soft/20" : "border-line bg-surface"
       }`}
     >
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <button type="button" onClick={onSelect} className="block max-w-full truncate text-left text-base font-bold text-ink hover:text-accent">
+      {/* Collapsed header — the only thing visible by default */}
+      <div className="flex items-center gap-2 p-3 sm:p-4">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          title={expanded ? t("autoBewerb.detailsHide") : t("autoBewerb.detailsToggle")}
+          className="shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-surface-2 hover:text-ink"
+        >
+          <ChevronRight size={16} className={`transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <button type="button" onClick={onSelect} className="block max-w-full truncate text-left text-sm font-bold text-ink hover:text-accent">
             {name}
           </button>
-          {job && <p className="truncate text-sm text-muted">{job}</p>}
+          {job && <p className="truncate text-xs text-muted">{job}</p>}
         </div>
-        <div className="flex items-center gap-2">
-          {statusPill(c.status, t)}
-          <Button variant="ghost" size="sm" onClick={onEdit} disabled={locked} title={t("autoBewerb.editButton")}>
+        {c.ad_confirmed_at ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success-soft px-2.5 py-1 text-[11px] font-semibold text-success">
+            <CheckCheck size={12} /> {t("autoBewerb.confirmedLabel")}
+          </span>
+        ) : (
+          <span className="shrink-0">{statusPill(c.status, t)}</span>
+        )}
+        <div className="flex shrink-0 items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={onEdit} disabled={locked} title={t("autoBewerb.editCompany")}>
             <Pencil size={14} />
           </Button>
-          <Button variant="ghost" size="sm" onClick={onDelete} disabled={locked} title={t("autoBewerb.deleteButton")}>
+          <Button variant="ghost" size="sm" onClick={onDelete} disabled={locked} title={t("autoBewerb.deleteCompany")}>
             <Trash2 size={14} />
           </Button>
         </div>
       </div>
 
-      {ex ? (
-        <div className="grid gap-x-4 gap-y-1.5 text-xs text-ink-soft sm:grid-cols-2">
-          <Field label={t("autoBewerb.fAddress")} value={ex.companyAddress} />
-          <Field label={t("autoBewerb.fLocation")} value={ex.location} />
-          <Field label={t("autoBewerb.fContact")} value={ex.contactPerson} />
-          <Field label={t("autoBewerb.fEmail")} value={ex.applicationEmail || undefined} ok={ex.applicationEmail ? isValidEmail(ex.applicationEmail) : undefined} />
-          <Field label={t("autoBewerb.fStartDate")} value={ex.startDate} />
-          <Field label={t("autoBewerb.fDeadline")} value={ex.applicationDeadline} />
-          <Field label={t("autoBewerb.fEducation")} value={ex.educationRequirement} />
-          <Field label={t("autoBewerb.fMethod")} value={ex.applicationMethod} />
+      {/* Expanded details — stored analysis only, never invented values */}
+      {expanded && (
+        <div className="space-y-4 border-t border-line p-4 sm:px-5">
+          {ex ? (
+            <div className="grid gap-x-6 gap-y-1.5 text-xs text-ink-soft sm:grid-cols-2">
+              <DetailField label={t("autoBewerb.fCompany")} value={ex.company} />
+              <DetailField label={t("autoBewerb.fJobTitle")} value={ex.jobTitle || ex.occupation} />
+              <DetailField label={t("autoBewerb.fAddress")} value={ex.companyAddress} />
+              <DetailField label={t("autoBewerb.fLocation")} value={ex.location} />
+              <DetailField label={t("autoBewerb.fContact")} value={ex.contactPerson} />
+              <DetailField label={t("autoBewerb.fEmail")} value={ex.applicationEmail || undefined} ok={ex.applicationEmail ? isValidEmail(ex.applicationEmail) : undefined} />
+              <DetailField label={t("autoBewerb.fDeadline")} value={ex.applicationDeadline} />
+              <DetailField label={t("autoBewerb.fStartDate")} value={ex.startDate} />
+              <DetailField label={t("autoBewerb.fEducation")} value={ex.educationRequirement} />
+              <DetailField label={t("autoBewerb.fMethod")} value={ex.applicationMethod} />
+            </div>
+          ) : (
+            <Note kind="info">{t("autoBewerb.noExtract")}</Note>
+          )}
+
+          {ex && (
+            <div className="space-y-2 text-xs text-ink-soft">
+              <ChipList label={t("autoBewerb.fRequired")} items={ex.requiredQualifications} />
+              <ChipList label={t("autoBewerb.fPreferred")} items={ex.preferredQualifications} />
+              <ChipList label={t("autoBewerb.fTechnical")} items={ex.technicalSkills} />
+              <ChipList label={t("autoBewerb.fSoft")} items={ex.softSkills} />
+              <ChipList label={t("autoBewerb.fLanguages")} items={ex.languageRequirements} />
+              <ChipList label={t("autoBewerb.fRequestedDocs")} items={ex.requestedDocuments} />
+              <ChipList label={t("autoBewerb.fMissing")} items={ex.missingOrAmbiguous} warn />
+            </div>
+          )}
+
+          {an && (
+            <div className="space-y-2 rounded-2xl bg-surface-2/40 p-3 text-xs">
+              <p className="font-semibold text-ink">
+                {t("autoBewerb.matchScore")}: <span className="text-accent">{an.matchScore}/100</span>
+              </p>
+              <ChipList label={t("autoBewerb.matchedLabel")} items={an.matched.map((m) => m.requirement)} />
+              <ChipList label={t("autoBewerb.missingLabel")} items={an.missing.map((m) => m.requirement)} warn />
+              {an.questions.length > 0 && (
+                <div className="rounded-xl bg-warning-soft/60 p-3">
+                  <p className="mb-1 font-semibold text-warning">{t("autoBewerb.questionsLabel")}</p>
+                  <ul className="list-inside list-disc space-y-0.5 text-ink-soft">
+                    {an.questions.map((q, i) => (
+                      <li key={i}>{q}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div>
+            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-faint">{t("autoBewerb.originalAdTitle")}</p>
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-surface-2/60 p-3 text-[11px] leading-4 text-muted">{c.ad_raw}</pre>
+          </div>
+
+          <div className="flex justify-end border-t border-line pt-3">
+            <Button variant="ghost" size="sm" onClick={onGoToReview}>
+              {t("autoBewerb.reviewStep")}
+            </Button>
+          </div>
         </div>
-      ) : (
-        <Note kind="info">{t("autoBewerb.noExtract")}</Note>
       )}
-
-      {ex && (
-        <details className="mt-3">
-          <summary className="cursor-pointer text-xs font-semibold text-accent">{t("autoBewerb.detailsToggle")}</summary>
-          <div className="mt-2 space-y-2 text-xs text-ink-soft">
-            <ChipList label={t("autoBewerb.fRequired")} items={ex.requiredQualifications} />
-            <ChipList label={t("autoBewerb.fPreferred")} items={ex.preferredQualifications} />
-            <ChipList label={t("autoBewerb.fTechnical")} items={ex.technicalSkills} />
-            <ChipList label={t("autoBewerb.fSoft")} items={ex.softSkills} />
-            <ChipList label={t("autoBewerb.fLanguages")} items={ex.languageRequirements} />
-            <ChipList label={t("autoBewerb.fRequestedDocs")} items={ex.requestedDocuments} />
-            <ChipList label={t("autoBewerb.fMissing")} items={ex.missingOrAmbiguous} warn />
-          </div>
-        </details>
-      )}
-
-      {an && (
-        <details className="mt-2" open={an.questions.length > 0}>
-          <summary className="cursor-pointer text-xs font-semibold text-accent">
-            {t("autoBewerb.matchScore")}: {an.matchScore}/100
-          </summary>
-          <div className="mt-2 space-y-2 text-xs">
-            <ChipList label={t("autoBewerb.matchedLabel")} items={an.matched.map((m) => m.requirement)} />
-            <ChipList label={t("autoBewerb.missingLabel")} items={an.missing.map((m) => m.requirement)} warn />
-            {an.questions.length > 0 && (
-              <div className="rounded-xl bg-warning-soft/60 p-3">
-                <p className="mb-1 font-semibold text-warning">{t("autoBewerb.questionsLabel")}</p>
-                <ul className="list-inside list-disc space-y-0.5 text-ink-soft">
-                  {an.questions.map((q, i) => (
-                    <li key={i}>{q}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        </details>
-      )}
-
-      <details className="mt-2">
-        <summary className="cursor-pointer text-xs font-semibold text-muted">{t("autoBewerb.originalAdTitle")}</summary>
-        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-xl bg-surface-2/60 p-3 text-[11px] leading-4 text-muted">{c.ad_raw}</pre>
-      </details>
-
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-3">
-        {c.ad_confirmed_at ? (
-          <span className="inline-flex items-center gap-1 text-xs font-semibold text-success">
-            <CheckCheck size={13} /> {t("autoBewerb.adConfirmedNote")}
-          </span>
-        ) : (
-          <Button variant="secondary" size="sm" onClick={() => void onConfirmAd()}>
-            <CheckCheck size={14} />
-            {t("autoBewerb.confirmAdButton")}
-          </Button>
-        )}
-        <Button variant="ghost" size="sm" className="ml-auto" onClick={onGoToReview}>
-          {t("autoBewerb.reviewStep")}
-        </Button>
-      </div>
     </div>
   );
 }
 
-function Field({ label, value, ok }: { label: string; value: string | null | undefined; ok?: boolean | null }) {
+/** Label + value that WRAPS (long emails / company names) instead of
+ *  truncating; empty values render the translated "not specified". */
+function DetailField({ label, value, ok }: { label: string; value: string | null | undefined; ok?: boolean | null }) {
   const { t } = useI18n();
   return (
-    <span className="min-w-0 truncate">
+    <p className="min-w-0 break-words text-xs text-ink-soft">
       <span className="text-faint">{label}:</span>{" "}
       <b className={ok === false ? "text-warning" : "font-semibold"}>{value || t("autoBewerb.unavailable")}</b>
-    </span>
+    </p>
   );
 }
 
