@@ -24,9 +24,11 @@ const TOKEN_KEYS: Record<string, string> = {
 
 /**
  * Step 6 — shared email template (one row per user) + per-company email
- * preparation (recipient, subject, body override, attachments, account).
+ * preparation (recipient, subject, body override, account).
  * The shared body stays consistent UNLESS the user deliberately sets a
  * per-company override (stored null = "use template").
+ * Supporting documents are GLOBAL: the whole user library (ws.attachments)
+ * is attached to every application — there is no per-company selection.
  */
 export function Step6Email() {
   const { ws, refresh, notify, companyId, selectCompany, goToStep } = useAutoBewerb();
@@ -60,8 +62,8 @@ export function Step6Email() {
   const active = ws.companies.find((c) => c.company.id === companyId) ?? ws.companies[0];
   const activeId = active.company.id;
 
-  const docNames = (view: AutoBewerbCompanyView): string[] =>
-    ws.attachments.filter((a) => view.selectedAttachmentIds.includes(a.id)).map((a) => a.display_name);
+  /** GLOBAL library — every application carries all of these documents. */
+  const sharedDocNames = ws.attachments.map((a) => a.display_name);
 
   const generateDraft = async () => {
     setDrafting(true);
@@ -72,7 +74,7 @@ export function Step6Email() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           companyId: activeId,
-          attachmentNames: [...(active.company.email_attach_cv ? [t("autoBewerb.attachCvPdf")] : []), ...(active.company.email_attach_letter ? [t("autoBewerb.attachLetterPdf")] : []), ...docNames(active)].slice(0, 10),
+          attachmentNames: [...(active.company.email_attach_cv ? [t("autoBewerb.attachCvPdf")] : []), ...(active.company.email_attach_letter ? [t("autoBewerb.attachLetterPdf")] : []), ...sharedDocNames].slice(0, 10),
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string; subject?: string; body?: string };
@@ -232,11 +234,13 @@ function CompanyEmailEditor({ view, template }: { view: AutoBewerbCompanyView; t
 
   const renderedBody = renderAutoBewerbEmailBody(bodyOverride || template, row.ad_extracted);
   const { name } = companyLabel(row);
-  const attachmentList = [
+  // Company-SPECIFIC documents (rendered per application) vs the GLOBAL
+  // shared library — the two groups are shown distinctly.
+  const specificAttachments = [
     attachCv ? t("autoBewerb.attachCvPdf") : null,
     attachLetter ? t("autoBewerb.attachLetterPdf") : null,
-    ...ws.attachments.filter((a) => view.selectedAttachmentIds.includes(a.id)).map((a) => a.display_name),
   ].filter(Boolean) as string[];
+  const sharedAttachments = ws.attachments.map((a) => a.display_name);
 
   return (
     <div className="grid gap-5 lg:grid-cols-2">
@@ -323,8 +327,14 @@ function CompanyEmailEditor({ view, template }: { view: AutoBewerbCompanyView; t
             </p>
             <p>
               <span className="font-semibold text-ink-soft">{t("autoBewerb.previewAttachments")}:</span>{" "}
-              {attachmentList.length > 0 ? attachmentList.join(", ") : t("autoBewerb.noAttachments")}
+              {specificAttachments.length > 0 ? specificAttachments.join(", ") : t("autoBewerb.noAttachments")}
             </p>
+            {sharedAttachments.length > 0 && (
+              <p>
+                <span className="font-semibold text-ink-soft">{t("autoBewerb.attachSharedDocs")}:</span>{" "}
+                {sharedAttachments.join(", ")}
+              </p>
+            )}
           </div>
           <pre className="mt-3 whitespace-pre-wrap text-sm leading-6 text-ink-soft">{renderedBody || t("autoBewerb.templateEmptyNote")}</pre>
         </div>

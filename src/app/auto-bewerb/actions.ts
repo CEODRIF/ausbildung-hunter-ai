@@ -8,7 +8,6 @@ import {
   createAutoBewerbCompany,
   deleteAutoBewerbCompany,
   deleteAutoBewerbProfile,
-  deselectAutoBewerbAttachment,
   getAutoBewerbWorkspace,
   markAutoBewerbAdConfirmed,
   prepareAutoBewerbSend,
@@ -16,7 +15,6 @@ import {
   saveAutoBewerbDocument,
   saveAutoBewerbEmailTemplate,
   saveAutoBewerbProfile,
-  selectAutoBewerbAttachment,
   updateAutoBewerbCompany,
   updateAutoBewerbProfileExtract,
   type AutoBewerbCompanyPatch,
@@ -33,7 +31,7 @@ import type { AdAnalysis, AdExtract, AutoBewerbCompanyRow } from "@/lib/auto-bew
  * from arguments) and works through the ownership-checked engine. Paid AI
  * operations live in the /api/auto-bewerb/* routes (client fetch + quota /
  * rate-limit responses); these actions cover the durable state transitions:
- * profile, companies, documents, document selection, template, approve,
+ * profile, companies, documents, template, approve,
  * send, cancel — plus the page-load catch-up for due scheduled sends.
  */
 
@@ -223,23 +221,6 @@ export async function markDocumentReviewedAction(
 }
 
 // ---------------------------------------------------------------------------
-// Step 3 — supporting-document selection (per company)
-// ---------------------------------------------------------------------------
-
-export async function selectDocumentAction(
-  companyId: string,
-  attachmentId: string,
-  selected: boolean,
-): Promise<ActionResult<{ ok: true }>> {
-  const { user } = await getCurrentUserAndProfile();
-  if (!user) return unauthorized();
-  const res = selected
-    ? await selectAutoBewerbAttachment(user.id, companyId, attachmentId)
-    : await deselectAutoBewerbAttachment(user.id, companyId, attachmentId);
-  return toResult(res) as ActionResult<{ ok: true }>;
-}
-
-// ---------------------------------------------------------------------------
 // Step 6 — shared email template
 // ---------------------------------------------------------------------------
 
@@ -260,7 +241,6 @@ export interface SendCompanyInput {
   subject: string;
   /** Per-company override; empty = the shared template. */
   bodyOverride?: string | null;
-  attachmentIds?: string[];
   attachCv?: boolean;
   attachLetter?: boolean;
   schedule?: AutoBewerbScheduleInput | null;
@@ -301,7 +281,6 @@ export async function sendCompaniesAction(
       emailAccountId: input.emailAccountId,
       subject: input.subject,
       bodyOverride: input.bodyOverride ?? null,
-      attachmentIds: input.attachmentIds ?? [],
       attachCv: input.attachCv ?? true,
       attachLetter: input.attachLetter ?? true,
       schedule: input.schedule ?? null,
@@ -362,7 +341,6 @@ export async function scheduleCompaniesAction(
       emailAccountId: r.email_account_id ?? "",
       subject: r.email_subject ?? "",
       bodyOverride: r.email_body,
-      attachmentIds: view.selectedAttachmentIds,
       attachCv: r.email_attach_cv,
       attachLetter: r.email_attach_letter,
       schedule,

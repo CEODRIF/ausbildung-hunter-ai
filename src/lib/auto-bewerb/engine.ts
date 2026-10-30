@@ -501,8 +501,6 @@ function revalidateCompanies(rows: unknown[]): AutoBewerbCompanyRow[] {
 export interface AutoBewerbCompanyBundle {
   company: AutoBewerbCompanyRow;
   documents: AutoBewerbDocumentRow[];
-  /** Selected library attachment ids (ordered). */
-  selectedAttachmentIds: string[];
   attempts: AutoBewerbSendAttemptRow[];
 }
 
@@ -519,19 +517,13 @@ export async function getAutoBewerbCompany(
     .maybeSingle();
   if (error || !data) return null;
   const company = revalidateCompanies([data as unknown])[0];
-  const [docsRes, selRes, attsRes] = await Promise.all([
+  const [docsRes, attsRes] = await Promise.all([
     admin.from("auto_bewerb_documents").select("*").eq("company_id", id).order("version", { ascending: false }),
-    admin
-      .from("auto_bewerb_company_attachments")
-      .select("attachment_id")
-      .eq("company_id", id)
-      .order("attachment_id", { ascending: true }),
     admin.from("auto_bewerb_send_attempts").select("*").eq("company_id", id).order("created_at", { ascending: false }),
   ]);
   return {
     company,
     documents: (docsRes.data ?? []) as unknown as AutoBewerbDocumentRow[],
-    selectedAttachmentIds: ((selRes.data ?? []) as Array<{ attachment_id: string }>).map((r) => r.attachment_id),
     attempts: (attsRes.data ?? []) as unknown as AutoBewerbSendAttemptRow[],
   };
 }
@@ -966,66 +958,6 @@ export async function deleteAutoBewerbAttachment(
   return { ok: true };
 }
 
-/** Explicit per-company selection (Step 3/6): which library documents are
- *  attached to which application. Idempotent. */
-export async function selectAutoBewerbAttachment(
-  userId: string,
-  companyId: string,
-  attachmentId: string,
-): Promise<AutoBewerbOpResult> {
-  const admin = createAdminClient();
-  const { data: app } = await admin
-    .from("auto_bewerb_companies")
-    .select("id")
-    .eq("id", companyId)
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (!app) return fail("not_found", "Unternehmen nicht gefunden.");
-  const att = await fetchOwnedAttachment(userId, attachmentId);
-  if (!att) return fail("not_found", "Dokument nicht gefunden.");
-  const { error } = await admin
-    .from("auto_bewerb_company_attachments")
-    .upsert(
-      { company_id: companyId, attachment_id: attachmentId, user_id: userId },
-      { onConflict: "company_id,attachment_id" },
-    );
-  if (error) return fail("storage_error", "Auswahl konnte nicht gespeichert werden.");
-  return { ok: true };
-}
-
-export async function deselectAutoBewerbAttachment(
-  userId: string,
-  companyId: string,
-  attachmentId: string,
-): Promise<AutoBewerbOpResult> {
-  const admin = createAdminClient();
-  const { data: app } = await admin
-    .from("auto_bewerb_companies")
-    .select("id")
-    .eq("id", companyId)
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (!app) return fail("not_found", "Unternehmen nicht gefunden.");
-  const { error } = await admin
-    .from("auto_bewerb_company_attachments")
-    .delete()
-    .eq("company_id", companyId)
-    .eq("attachment_id", attachmentId)
-    .eq("user_id", userId);
-  if (error) return fail("storage_error", "Auswahl konnte nicht entfernt werden.");
-  return { ok: true };
-}
-
-export async function listCompanyAttachmentIds(userId: string, companyId: string): Promise<string[]> {
-  const { data, error } = await createAdminClient()
-    .from("auto_bewerb_company_attachments")
-    .select("attachment_id")
-    .eq("company_id", companyId)
-    .eq("user_id", userId);
-  if (error) return [];
-  return ((data ?? []) as Array<{ attachment_id: string }>).map((r) => r.attachment_id);
-}
-
 // ---------------------------------------------------------------------------
 // Step 6 — the SHARED email-body template (one row per user)
 // ---------------------------------------------------------------------------
@@ -1073,8 +1005,6 @@ export interface AutoBewerbSendInput {
   subject: string;
   /** Per-company body override; empty = use the SHARED template. */
   bodyOverride?: string | null;
-  /** User-library attachment ids to include (max 10). */
-  attachmentIds?: string[];
   /** Attach the server-rendered tailored-CV PDF (default true). */
   attachCv?: boolean;
   /** Attach the server-rendered Anschreiben PDF (default true). */
@@ -1159,24 +1089,20 @@ export async function prepareAutoBewerbSend(
   if (!account)
     return { ok: false, code: "no_email_account", message: "Kein aktives E-Mail-Konto verbunden." };
 
-  // Attachments: owned library documents first (ownership + cap checked).
+  // Attachments: the GLOBAL document library. Every owned document in the
+  // user's library is attached to every application — the library is the
+  // single source of truth, so no per-company selection exists (and no
+  // client-supplied document ids are ever trusted). Ownership is re-scoped
+  // server-side by user_id at send preparation time; the library's sha256
+  // dedupe guarantees each document appears exactly once.
   const payloadAttachments: AutoBewerbSendPayload["attachments"] = [];
-  const wantIds = (input.attachmentIds ?? []).slice(0, 10);
-  if (wantIds.length > 0) {
-    const { data: atts } = await admin
-      .from("auto_bewerb_attachments")
-      .select("*")
-      .eq("user_id", userId)
-      .in("id", wantIds);
-    // Preserve the user's selection order.
-    const byId = new Map(((atts ?? []) as unknown as AutoBewerbAttachmentRow[]).map((a) => [a.id, a]));
-    for (const id of wantIds) {
-      const a = byId.get(id);
-      if (a) payloadAttachments.push({ filename: a.display_name, mimeType: a.mime_type, storagePath: a.storage_path });
-    }
-    if (payloadAttachments.length !== wantIds.filter(Boolean).length) {
-      return { ok: false, code: "not_found", message: "Ein ausgewähltes Dokument konnte nicht zugeordnet werden." };
-    }
+  const { data: libraryAtts } = await admin
+    .from("auto_bewerb_attachments")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+  for (const a of (libraryAtts ?? []) as unknown as AutoBewerbAttachmentRow[]) {
+    payloadAttachments.push({ filename: a.display_name, mimeType: a.mime_type, storagePath: a.storage_path });
   }
 
   // The tailored CV PDF — rendered locally from the REVIEWED stored CV
@@ -1672,14 +1598,12 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     listUserEmailAccounts(userId),
   ]);
   const ids = companies.map((c) => c.id);
-  const [docsRes, selRes, attemptsRes] = ids.length
+  const [docsRes, attemptsRes] = ids.length
     ? await Promise.all([
         admin.from("auto_bewerb_documents").select("*").in("company_id", ids),
-        admin.from("auto_bewerb_company_attachments").select("company_id, attachment_id").in("company_id", ids),
         admin.from("auto_bewerb_send_attempts").select("*").in("company_id", ids),
       ])
     : ([
-        { data: null, error: null },
         { data: null, error: null },
         { data: null, error: null },
       ] as const);
@@ -1694,7 +1618,6 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     return m;
   };
   const docsByCompany = group((docsRes.data ?? []) as unknown as AutoBewerbDocumentRow[]);
-  const selByCompany = group((selRes.data ?? []) as unknown as Array<{ company_id: string; attachment_id: string }>);
   const attemptsByCompany = group((attemptsRes.data ?? []) as unknown as AutoBewerbSendAttemptRow[]);
 
   const views: AutoBewerbCompanyView[] = companies.map((company) => {
@@ -1712,7 +1635,6 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
         ? { text: parsedLetter.data.text, tone: parsedLetter.data.tone }
         : null,
       letterVersion: letterDoc ? letterDoc.version : null,
-      selectedAttachmentIds: (selByCompany.get(company.id) ?? []).map((s) => s.attachment_id),
       latestAttempt: attempts[0] ?? null,
     };
   });

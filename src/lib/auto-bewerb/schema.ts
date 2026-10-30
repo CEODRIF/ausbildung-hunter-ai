@@ -260,7 +260,6 @@ export interface AutoBewerbCompanyView {
   /** Latest parsed Anschreiben (null = not generated). */
   letter: { text: string; tone: "professional" | "formal" | "engaged" } | null;
   letterVersion: number | null;
-  selectedAttachmentIds: string[];
   latestAttempt: AutoBewerbSendAttemptRow | null;
 }
 
