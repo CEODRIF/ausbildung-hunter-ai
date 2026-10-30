@@ -10,7 +10,12 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { autoBewerbLetterSchema } from "@/lib/auto-bewerb/schema";
 import { generateCvPdf, cvPdfFilename } from "@/lib/auto-bewerb/cv-pdf";
-import { getAutoBewerbCompany, getLatestAutoBewerbCv, getLatestAutoBewerbDocument } from "@/lib/auto-bewerb/engine";
+import {
+  getAutoBewerbCompany,
+  getLatestAutoBewerbCv,
+  getLatestAutoBewerbDocument,
+  resolveAutoBewerbPhotoDataUrl,
+} from "@/lib/auto-bewerb/engine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,7 +57,14 @@ export async function GET(request: Request) {
           { status: 404 },
         );
       }
-      const bytes = await generateCvPdf(cv);
+      // The stored photo reference is resolved ownership-scoped HERE (the
+      // renderer only ever receives verified bytes; a missing object simply
+      // means "no photo"). Preview and export use the SAME resolution —
+      // the document is byte-identical by construction.
+      const photoDataUrl = await resolveAutoBewerbPhotoDataUrl(user.id, cv.personal.photo).catch(
+        () => null,
+      );
+      const bytes = await generateCvPdf(cv, { photoDataUrl });
       return new NextResponse(Buffer.from(bytes), {
         status: 200,
         headers: {

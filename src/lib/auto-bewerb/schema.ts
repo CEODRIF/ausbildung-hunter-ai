@@ -153,6 +153,21 @@ export interface AutoBewerbProfileRow {
   updated_at: string;
 }
 
+/** One row per user — the current professional profile photo (Step 1).
+ *  The object itself lives in the private bucket under
+ *  `${user_id}/auto-bewerb/photo/${photo_hash}.<ext>`; the frozen CV
+ *  reference is `abphoto:v1:<photo_hash>:<ext>`. */
+export interface AutoBewerbProfilePhotoRow {
+  user_id: string;
+  photo_mime_type: string;
+  photo_size_bytes: number;
+  photo_hash: string;
+  photo_storage_path: string;
+  uploaded_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AutoBewerbCompanyRow {
   id: string;
   user_id: string;
@@ -278,6 +293,19 @@ export interface AutoBewerbWorkspace {
     cvHash: string;
     analyzedAt: string;
     extracted: CandidateProfile | null;
+  } | null;
+  /** False = the profile-photo migration is not applied yet (the UI hides
+   *  the photo card — the REST of the workflow is unaffected). */
+  photoSupported: boolean;
+  /** The current profile photo (null = none uploaded or feature not
+   *  supported). `ref` is the frozen CV reference token; the preview is
+   *  streamed by the ownership-checked /api/auto-bewerb/profile-photo
+   *  route (never a storage URL). */
+  photo: {
+    ref: string;
+    mime: string;
+    sizeBytes: number;
+    uploadedAt: string;
   } | null;
   companies: AutoBewerbCompanyView[];
   attachments: AutoBewerbAttachmentRow[];

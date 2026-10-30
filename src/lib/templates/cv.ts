@@ -16,6 +16,7 @@
  */
 
 import type { CandidateProfile } from "@/lib/bewerbung-schema";
+import { isPhotoRef } from "@/lib/auto-bewerb/profile-photo";
 import {
   defaultCvCustomization,
   sanitizeCvCustomization,
@@ -33,7 +34,15 @@ export interface CvPersonal {
   nationality: string;
   dateOfBirth: string;
   availability: string;
-  /** Photo as a data URL (kept small by the uploader) or null. */
+  /**
+   * The candidate's photograph, as ONE of:
+   *  - a small inline data URL (legacy CV Builder documents), or
+   *  - the opaque, server-owned AUTO BEWERB reference `abphoto:v1:<sha256>:<ext>`
+   *    (the uploaded profile photo, frozen per generated CV — resolved to
+   *    bytes server-side at render time, ownership-checked; never a URL
+   *    supplied by the client), or
+   *  - null (no photo).
+   */
   photo: string | null;
 }
 
@@ -325,6 +334,20 @@ function objList(value: unknown, revive: (item: UnknownRecord) => unknown): unkn
 }
 
 /**
+ * The only two legal values of personal.photo — everything else (client
+ * URLs, paths, tokens with a bad shape) is dropped to null:
+ *  - a legacy inline data URL (the CV Builder keeps its own small photos),
+ *  - the AUTO BEWERB `abphoto:v1:<sha256>:<ext>` reference (server-owned,
+ *    resolved against the OWNER's private folder at render time).
+ */
+export function normalizeCvPhotoValue(value: unknown): string | null {
+  if (typeof value !== "string" || !value) return null;
+  if (value.startsWith("data:image/")) return value;
+  if (isPhotoRef(value)) return value;
+  return null;
+}
+
+/**
  * Parse a persisted (untrusted-shape) document into a valid CvDocument,
  * filling missing fields with defaults. Returns null when the input is not
  * an object at all (corrupt storage).
@@ -403,10 +426,7 @@ export function sanitizeCvDocument(raw: unknown): CvDocument | null {
       nationality: str(personal.nationality),
       dateOfBirth: str(personal.dateOfBirth),
       availability: str(personal.availability),
-      photo:
-        typeof personal.photo === "string" && personal.photo.startsWith("data:image/")
-          ? personal.photo
-          : null,
+      photo: normalizeCvPhotoValue(personal.photo),
     },
     summary: str(data.summary),
     education,
