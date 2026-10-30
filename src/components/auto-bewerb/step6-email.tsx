@@ -343,6 +343,13 @@ function GlobalEmailSettings(props: {
           error={recipient && !isValidEmail(recipient) ? t("autoBewerb.invalidEmail") : undefined}
           hint={t("autoBewerb.globalRecipientHint")}
         />
+        {/* The override is never silent: while a shared recipient is set, a
+            prominent warning states that ALL companies route to one address. */}
+        {recipient.trim() !== "" && (
+          <div className="rounded-2xl border border-warning/40 bg-warning-soft/60 p-3 text-xs font-semibold leading-5 text-warning">
+            {t("autoBewerb.globalRecipientOverrideWarning", { count: ws.companies.length })}
+          </div>
+        )}
         <div className="flex flex-wrap gap-4">
           <label className="flex items-center gap-2 text-sm font-medium text-ink-soft">
             <input type="checkbox" checked={attachCv} onChange={(e) => onAttachCvChange(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />

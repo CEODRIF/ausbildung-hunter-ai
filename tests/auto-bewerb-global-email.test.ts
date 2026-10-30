@@ -237,12 +237,16 @@ describe("one global configuration — functional (engine, fake DB, scheduled)",
     expect(a1.subject).toBe(GLOBAL_SUBJECT);
     expect(a2.subject).toBe(GLOBAL_SUBJECT);
     expect(a3.subject).toBe(GLOBAL_SUBJECT);
-    // The VERIFIED per-company delivery destination (from each ad):
+    // The VERIFIED per-company delivery destination (from each ad) — each
+    // company receives its application at ITS OWN address:
     expect(a1.recipient_email).toBe("jobs@kaltbau-nord.de");
     expect(a2.recipient_email).toBe("bewerbung@tech-sued.de");
     expect(a3.recipient_email).toBe("hr@heizung-ost.de");
-    // NEVER to one company's address:
+    // NEVER to one company's address — all three pairwise distinct:
     expect(a2.recipient_email).not.toBe(a1.recipient_email);
+    expect(a3.recipient_email).not.toBe(a1.recipient_email);
+    expect(a3.recipient_email).not.toBe(a2.recipient_email);
+    expect(new Set([a1, a2, a3].map((a) => a.recipient_email)).size).toBe(3);
     // Shared attachment settings (global flags off → only the library doc):
     for (const a of [a1, a2, a3]) {
       expect(a.payload.attachments.map((x) => x.filename)).toEqual(["Abiturzeugnis.pdf"]);
@@ -754,6 +758,25 @@ describe("single global configuration (source contracts)", () => {
     expect(STEP6).toContain("AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT");
     expect(STEP6).not.toContain("renderAutoBewerbEmailBody");
     expect(STEP6).not.toContain("updateCompanyAction"); // no per-company email save path
+  });
+
+  it("the global-recipient override is EXPLICIT everywhere (Step 6 warning + Step 7 banner/modal) — never silent", () => {
+    // The field itself announces the override semantics:
+    expect(STEP6).toContain('label={t("autoBewerb.globalRecipientLabel")}');
+    // Step 6: a prominent warning renders ONLY while a recipient is set:
+    expect(STEP6).toContain("globalRecipientOverrideWarning");
+    expect(STEP6).toMatch(/recipient\.trim\(\)\s*!==\s*""/);
+    // Step 7: the override is named in the review AND the confirmation modal:
+    expect(STEP7).toContain("globalRecipientStep7Note");
+    expect(STEP7).toMatch(/s\.recipient\.trim\(\)\s*!==\s*""/);
+    expect(STEP7.match(/globalRecipientStep7Note/g)!.length).toBe(2);
+    // The disclosure texts exist in all four languages:
+    for (const key of ["globalRecipientOverrideWarning", "globalRecipientStep7Note"]) {
+      expect(DICT.match(new RegExp(key + ":", "g"))!.length).toBe(4);
+    }
+    // Default routing (empty field) stays per-company verified:
+    expect(SCHEMA).toContain("if (legacy) return legacy;");
+    expect(SCHEMA).toContain("applicationEmail");
   });
 
   it("Step 7: inputs are company ids + confirmation only; the modal shows the exact shared config + per-company destination", () => {
