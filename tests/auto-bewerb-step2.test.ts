@@ -113,7 +113,7 @@ describe("engine — automatic confirmation on company save", () => {
     const id = (created as { ok: true; value: { id: string } }).value.id;
     const before = db.tables.auto_bewerb_companies[0].ad_confirmed_at as string;
 
-    const patched = await updateAutoBewerbCompany(USER, id, { recipient_email: "bewerbung@thermotech-sued.example" });
+    const patched = await updateAutoBewerbCompany(USER, id, { company: "ThermoTech Süd GmbH" });
     expect(patched.ok).toBe(true);
     expect(db.tables.auto_bewerb_companies[0].ad_confirmed_at).toBe(before);
   });

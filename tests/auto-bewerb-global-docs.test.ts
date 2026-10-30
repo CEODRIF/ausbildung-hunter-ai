@@ -128,6 +128,8 @@ function seed() {
     // Legacy per-company selection rows from BEFORE the global model —
     // inert now: the engine must not read or honor them.
     auto_bewerb_company_attachments: [{ company_id: CO1, attachment_id: D1, user_id: USER_A }],
+    // LEGACY shape: no recipient/subject/account_id/attach_* columns →
+    // the settings probe must classify the DB as unsupported (below).
     auto_bewerb_email_templates: [{ user_id: USER_A, body: "Sehr geehrte Damen und Herren," }],
     auto_bewerb_send_attempts: [],
     email_accounts: [
@@ -137,6 +139,9 @@ function seed() {
     profiles: [],
   });
   (createAdminClient as ReturnType<typeof vi.fn>).mockReturnValue(db.admin);
+  // LEGACY DB: the email-settings columns do not exist yet → the probe must
+  // fall back to the per-company resolution (exactly like pre-migration).
+  db.failSelect("auto_bewerb_email_templates", "recipient", '42703: column "recipient" does not exist');
 }
 
 function preparedPayload(companyId: string) {
@@ -144,14 +149,13 @@ function preparedPayload(companyId: string) {
   return (attempt?.payload as AutoBewerbSendPayload | undefined)?.attachments ?? [];
 }
 
+/** This file simulates a LEGACY database (no email-settings migration):
+ *  the settings column probe reports "column missing" → the send engine
+ *  resolves everything from the stored per-company rows. The client passes
+ *  ONLY the company id — no e-mail settings at all. */
 async function prepare(companyId: string) {
   const res = await prepareAutoBewerbSend(USER_A, {
     companyId,
-    recipientEmail: "jobs@tech-gmbh.de",
-    emailAccountId: ACCT_ID,
-    subject: "Bewerbung als Fachinformatiker",
-    attachCv: false,
-    attachLetter: false,
     schedule: FUTURE,
   });
   expect(res.ok).toBe(true);

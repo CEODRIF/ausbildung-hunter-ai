@@ -28,7 +28,8 @@ import {
   classifyProbeError,
   isValidEmail,
   normalizeCompanyKey,
-  renderAutoBewerbEmailBody,
+  resolveAutoBewerbRecipient,
+  type AutoBewerbEmailSettings,
   adExtractSchema,
   adAnalysisSchema,
   type AdAnalysis,
@@ -99,6 +100,13 @@ export type AutoBewerbErrorCode =
   | "company_duplicate"
   | "not_deletable"
   | "no_template"
+  | "no_subject"
+  | "missing_cv"
+  | "missing_letter"
+  | "cv_render_failed"
+  | "cv_upload_failed"
+  | "letter_render_failed"
+  | "letter_upload_failed"
   | "invalid_document"
   | "storage_error"
   | "dispatch_error";
@@ -751,11 +759,6 @@ export type AutoBewerbCompanyPatch = Partial<
     | "ad_analysis"
     | "profile_snapshot"
     | "status"
-    | "recipient_email"
-    | "email_subject"
-    | "email_attach_cv"
-    | "email_attach_letter"
-    | "email_account_id"
     | "idempotency_key"
     | "approved"
     | "approved_at"
@@ -810,10 +813,6 @@ export async function updateAutoBewerbCompany(
   if ("company" in patch) {
     const name = (patch.company ?? "").trim().slice(0, 200);
     if (name.length < 1) return fail("company_duplicate", "Der Unternehmensname darf nicht leer sein.");
-  }
-  if ("recipient_email" in patch && patch.recipient_email !== null) {
-    const r = (patch.recipient_email ?? "").trim();
-    if (r.length > 0 && !isValidEmail(r)) return fail("invalid_recipient", "Ungültige Empfänger-E-Mail.");
   }
   if ("ad_raw" in patch) {
     const ad = (patch.ad_raw ?? "").trim();
@@ -1194,6 +1193,95 @@ export async function saveAutoBewerbEmailTemplate(
 }
 
 // ---------------------------------------------------------------------------
+// Step 6 — the ONE GLOBAL e-mail configuration (one row per user, extended
+// template row: recipient / subject / account / attachment flags)
+// ---------------------------------------------------------------------------
+
+/** Column probe for the email-settings migration (same idiom as the photo
+ *  probe). Negative results are cached 60 s so a just-applied migration is
+ *  not pinned as "unsupported" by the schema cache. */
+const EMAIL_SETTINGS_PROBE_NEGATIVE_TTL_MS = 60_000;
+let emailSettingsProbeCache: { at: number; available: boolean } | null = null;
+
+export async function getAutoBewerbEmailSettingsProbe(): Promise<{ available: boolean }> {
+  if (emailSettingsProbeCache) {
+    if (emailSettingsProbeCache.available || Date.now() - emailSettingsProbeCache.at < EMAIL_SETTINGS_PROBE_NEGATIVE_TTL_MS) {
+      return { available: emailSettingsProbeCache.available };
+    }
+  }
+  let available = true;
+  try {
+    const { error } = await createAdminClient()
+      .from("auto_bewerb_email_templates")
+      .select("recipient")
+      .limit(1);
+    if (error) {
+      const msg = error.message ?? String(error);
+      // Missing column (42703) or missing table = migration not applied yet:
+      // an expected, silent state (legacy per-company fallback).
+      const expected =
+        classifyProbeError({ message: msg }) === "missing" ||
+        /42703|column .* does not exist|could not find a column/i.test(msg);
+      if (!expected) console.error(`[auto-bewerb] email-settings schema probe blocked: ${error}`);
+      available = false;
+    }
+  } catch (e) {
+    available = false;
+    console.error(`[auto-bewerb] email-settings schema probe error: ${e instanceof Error ? e.message : e}`);
+  }
+  emailSettingsProbeCache = { at: Date.now(), available };
+  return { available };
+}
+
+/** The user's global e-mail configuration (null = migration not applied). */
+export async function getAutoBewerbEmailSettings(userId: string): Promise<AutoBewerbEmailSettings | null> {
+  const probe = await getAutoBewerbEmailSettingsProbe();
+  if (!probe.available) return null;
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_email_templates")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const r = data as Record<string, unknown>;
+  return {
+    body: String(r.body ?? ""),
+    recipient: String(r.recipient ?? ""),
+    subject: String(r.subject ?? ""),
+    accountId: String(r.account_id ?? ""),
+    attachCv: Boolean(r.attach_cv),
+    attachLetter: Boolean(r.attach_letter),
+  };
+}
+
+/** Persist the ONE global configuration (single upsert — one row per user). */
+export async function saveAutoBewerbEmailSettings(
+  userId: string,
+  s: AutoBewerbEmailSettings,
+): Promise<AutoBewerbOpResult> {
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  const probe = await getAutoBewerbEmailSettingsProbe();
+  if (!probe.available)
+    return fail("storage_error", "E-Mail-Einstellungen: Datenbank-Migration ausstehend (20261217000000_auto_bewerb_email_settings.sql).");
+  const { error } = await createAdminClient()
+    .from("auto_bewerb_email_templates")
+    .upsert(
+      {
+        user_id: userId,
+        body: s.body.slice(0, 6_000),
+        recipient: s.recipient.slice(0, 320),
+        subject: s.subject.slice(0, 200),
+        account_id: s.accountId || null,
+        attach_cv: s.attachCv,
+        attach_letter: s.attachLetter,
+      },
+      { onConflict: "user_id" },
+    );
+  if (error) return fail("storage_error", "E-Mail-Einstellungen konnten nicht gespeichert werden.");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // Step 7 — send preparation (immediate or scheduled)
 // ---------------------------------------------------------------------------
 
@@ -1208,14 +1296,15 @@ export interface AutoBewerbScheduleInput {
 
 export interface AutoBewerbSendInput {
   companyId: string;
-  recipientEmail: string;
-  emailAccountId: string;
-  subject: string;
-  /** Attach the server-rendered tailored-CV PDF (default true). */
-  attachCv?: boolean;
-  /** Attach the server-rendered Anschreiben PDF (default true). */
-  attachLetter?: boolean;
   schedule?: AutoBewerbScheduleInput | null;
+  /**
+   * Everything else (recipient, subject, account, attachments, body) comes
+   * from the ONE global e-mail configuration (Step 6) or, on databases
+   * without the settings migration, from the legacy per-company values —
+   * never from the client. The per-company DELIVERY destination is resolved
+   * server-side from the verified data (global explicit recipient → legacy
+   * manual recipient → the ad's extracted applicationEmail).
+   */
 }
 
 export interface AutoBewerbSendResult {
@@ -1261,30 +1350,49 @@ export async function prepareAutoBewerbSend(
     return { ok: false, code: "not_approved", message: "Bitte genehmigen Sie die Bewerbung zuerst." };
   if (app.status === "sent")
     return { ok: false, code: "already_sent", message: "Diese Bewerbung wurde bereits versendet." };
-  if (!isValidEmail(input.recipientEmail))
-    return { ok: false, code: "invalid_recipient", message: "Ungültige Empfänger-E-Mail." };
-  const subject = input.subject.trim().slice(0, 200);
-  if (!subject)
-    return { ok: false, code: "invalid_recipient", message: "Der E-Mail-Betreff ist erforderlich." };
-
-  // Body: ALWAYS the SHARED global template, rendered from THIS company's
-  // stored extraction (tokens never invented; missing values stay empty).
-  // Legacy per-company overrides (auto_bewerb_companies.email_body) are no
-  // longer READ anywhere — a single source of truth by construction.
-  const template = await getAutoBewerbEmailTemplate(userId);
-  if (!template.trim()) {
+  // ONE global e-mail configuration for the whole batch (Step 6): subject,
+  // body, sending account and attachment flags come EXCLUSIVELY from the
+  // global settings — no company (and no client input) can override them.
+  // The body is sent VERBATIM: every company receives the identical text.
+  // The only per-company value is the DELIVERY destination, resolved from
+  // verified data (explicit global recipient → legacy manual value → the
+  // ad's extracted applicationEmail). Databases without the settings
+  // migration keep the legacy per-company values (fallback).
+  const settings = await getAutoBewerbEmailSettings(userId);
+  let subject: string;
+  let accountId: string;
+  let attachCv: boolean;
+  let attachLetter: boolean;
+  let bodyText: string;
+  const recipient = settings
+    ? resolveAutoBewerbRecipient(settings.recipient, app.recipient_email, app.ad_extracted)
+    : resolveAutoBewerbRecipient("", app.recipient_email, app.ad_extracted);
+  if (settings) {
+    bodyText = settings.body.trim();
+    subject = settings.subject.trim().slice(0, 200);
+    accountId = settings.accountId;
+    attachCv = settings.attachCv;
+    attachLetter = settings.attachLetter;
+  } else {
+    const template = await getAutoBewerbEmailTemplate(userId);
+    bodyText = template.trim();
+    subject = (app.email_subject ?? "").trim().slice(0, 200);
+    accountId = app.email_account_id ?? "";
+    attachCv = app.email_attach_cv;
+    attachLetter = app.email_attach_letter;
+  }
+  if (!bodyText)
     return { ok: false, code: "no_template", message: "Es fehlt die gemeinsame E-Mail-Vorlage. Bitte zuerst eine Vorlage speichern." };
-  }
-  const bodyText = renderAutoBewerbEmailBody(template, app.ad_extracted).trim();
-  if (!bodyText) {
-    return { ok: false, code: "no_template", message: "Die E-Mail-Vorlage ist leer." };
-  }
+  if (!subject)
+    return { ok: false, code: "no_subject", message: "Es fehlt der gemeinsame E-Mail-Betreff." };
+  if (!isValidEmail(recipient))
+    return { ok: false, code: "invalid_recipient", message: "Keine verifizierte Empfänger-Adresse für dieses Unternehmen gefunden." };
 
   // Email account: owned + active (createEmailProvider re-checks at send time).
   const { data: account } = await admin
     .from("email_accounts")
     .select("id")
-    .eq("id", input.emailAccountId)
+    .eq("id", accountId)
     .eq("user_id", userId)
     .eq("is_active", true)
     .maybeSingle();
@@ -1307,79 +1415,95 @@ export async function prepareAutoBewerbSend(
     payloadAttachments.push({ filename: a.display_name, mimeType: a.mime_type, storagePath: a.storage_path });
   }
 
-  // The tailored CV PDF — rendered locally from the REVIEWED stored CV
-  // (deterministic pdf-lib pipeline, zero cost). Missing/unrenderable CV →
-  // the attachment is dropped and logged (the review UI flags it before the
-  // user confirms; the send is never faked).
-  const attachCv = input.attachCv ?? true;
+  // The tailored CV PDF — resolved STRICTLY from THIS company's own stored CV
+  // (getLatestAutoBewerbCv(userId, app.id)), rendered locally and written to a
+  // company-scoped storage path (auto-bewerb/cv/{userId}/{companyId}.pdf).
+  // When the (global) "attach CV" flag is ON, a missing or unrenderable CV
+  // BLOCKS this company's send preparation — the e-mail is never sent without
+  // the document it promised, and another company's CV is never substituted.
   if (attachCv) {
     const cv = await getLatestAutoBewerbCv(userId, app.id);
-    if (cv) {
-      try {
-        // The sent PDF carries the SAME frozen photo the preview shows
-        // (reference resolved ownership-scoped; missing → no photo).
-        const photoDataUrl = await resolveAutoBewerbPhotoDataUrl(userId, cv.personal.photo);
-        const bytes = await generateCvPdf(cv, { photoDataUrl });
-        const path = autoBewerbCvPdfStoragePath(userId, app.id);
-        const { error: cvUploadError } = await admin
-          .storage.from(ATTACHMENT_BUCKET)
-          .upload(path, Buffer.from(bytes), { contentType: BEW_LETTER_PDF_MIME, upsert: true });
-        if (cvUploadError) {
-          console.error(`[auto-bewerb] CV PDF upload failed for company ${app.id}: ${cvUploadError.message}`);
-        } else {
-          payloadAttachments.push({
-            filename: cvPdfFilename(cv.personal.fullName),
-            mimeType: BEW_LETTER_PDF_MIME,
-            storagePath: path,
-          });
-        }
-      } catch (error) {
-        console.error("[auto-bewerb] CV PDF rendering failed:", error instanceof Error ? error.message : error);
-      }
+    if (!cv)
+      return {
+        ok: false,
+        code: "missing_cv",
+        message: "Für dieses Unternehmen fehlt das maßgeschneiderte CV — bitte zuerst im Schritt 4 erstellen.",
+      };
+    let cvBytes: Uint8Array;
+    try {
+      // The sent PDF carries the SAME frozen photo the preview shows
+      // (reference resolved ownership-scoped; missing → no photo).
+      const photoDataUrl = await resolveAutoBewerbPhotoDataUrl(userId, cv.personal.photo);
+      cvBytes = await generateCvPdf(cv, { photoDataUrl });
+    } catch (error) {
+      console.error("[auto-bewerb] CV PDF rendering failed:", error instanceof Error ? error.message : error);
+      return { ok: false, code: "cv_render_failed", message: "Das CV-PDF für dieses Unternehmen konnte nicht erstellt werden." };
     }
+    const cvPath = autoBewerbCvPdfStoragePath(userId, app.id);
+    const { error: cvUploadError } = await admin
+      .storage.from(ATTACHMENT_BUCKET)
+      .upload(cvPath, Buffer.from(cvBytes), { contentType: BEW_LETTER_PDF_MIME, upsert: true });
+    if (cvUploadError) {
+      console.error(`[auto-bewerb] CV PDF upload failed for company ${app.id}: ${cvUploadError.message}`);
+      return { ok: false, code: "cv_upload_failed", message: "Das CV-PDF für dieses Unternehmen konnte nicht gespeichert werden." };
+    }
+    payloadAttachments.push({
+      filename: cvPdfFilename(cv.personal.fullName),
+      mimeType: BEW_LETTER_PDF_MIME,
+      storagePath: cvPath,
+    });
   }
 
-  // The Anschreiben PDF — rendered from the REVIEWED stored letter with the
-  // user's letterhead facts (missing fields omitted, never invented).
-  const attachLetter = input.attachLetter ?? true;
+  // The Anschreiben PDF — resolved STRICTLY from THIS company's own stored
+  // letter (getLatestAutoBewerbDocument(userId, app.id, "cover_letter")),
+  // rendered with the user's letterhead and written to a company-scoped
+  // storage path (auto-bewerb/letter/{userId}/{companyId}.pdf). When the
+  // (global) "attach cover letter" flag is ON, a missing or unrenderable
+  // letter BLOCKS this company's send preparation.
   if (attachLetter) {
     const letterDoc = await getLatestAutoBewerbDocument(userId, app.id, "cover_letter");
     const letterParse = letterDoc ? autoBewerbLetterSchema.safeParse(letterDoc.content) : null;
-    if (letterParse?.success && letterParse.data.text.trim()) {
+    if (!letterParse?.success || !letterParse.data.text.trim())
+      return {
+        ok: false,
+        code: "missing_letter",
+        message: "Für dieses Unternehmen fehlt das individualisierte Anschreiben — bitte zuerst im Schritt 5 erstellen.",
+      };
+    let letterBytes: Uint8Array;
+    try {
       const pr = await fetchProfileLetterhead(userId);
-      try {
-        const folio = buildLetterFolio({
-          applicantName: pr.full_name ?? null,
-          applicantEmail: pr.email ?? null,
-          applicantStreet: pr.street ?? null,
-          applicantPostalCode: pr.postal_code ?? null,
-          applicantCity: pr.city ?? null,
-          applicantCountry: pr.country ?? null,
-          applicantPhone: pr.phone ?? null,
-          companyName: app.ad_extracted?.company ?? app.company,
-          companyContactName: app.ad_extracted?.contactPerson || null,
-          companyAddress: app.ad_extracted?.companyAddress || null,
-          subject: subject,
-          bodyHtml: emailBodyToHtml(letterParse.data.text),
-        });
-        const bytes = await generateLetterPdf(folio);
-        const path = autoBewerbLetterPdfStoragePath(userId, app.id);
-        const { error: letterUploadError } = await admin
-          .storage.from(ATTACHMENT_BUCKET)
-          .upload(path, Buffer.from(bytes), { contentType: BEW_LETTER_PDF_MIME, upsert: true });
-        if (letterUploadError) {
-          console.error(`[auto-bewerb] letter PDF upload failed for company ${app.id}: ${letterUploadError.message}`);
-        } else {
-          payloadAttachments.push({
-            filename: letterPdfFilename(app.ad_extracted?.company || app.company),
-            mimeType: BEW_LETTER_PDF_MIME,
-            storagePath: path,
-          });
-        }
-      } catch (error) {
-        console.error("[auto-bewerb] letter PDF rendering failed:", error instanceof Error ? error.message : error);
-      }
+      const folio = buildLetterFolio({
+        applicantName: pr.full_name ?? null,
+        applicantEmail: pr.email ?? null,
+        applicantStreet: pr.street ?? null,
+        applicantPostalCode: pr.postal_code ?? null,
+        applicantCity: pr.city ?? null,
+        applicantCountry: pr.country ?? null,
+        applicantPhone: pr.phone ?? null,
+        companyName: app.ad_extracted?.company ?? app.company,
+        companyContactName: app.ad_extracted?.contactPerson || null,
+        companyAddress: app.ad_extracted?.companyAddress || null,
+        subject: subject,
+        bodyHtml: emailBodyToHtml(letterParse.data.text),
+      });
+      letterBytes = await generateLetterPdf(folio);
+    } catch (error) {
+      console.error("[auto-bewerb] letter PDF rendering failed:", error instanceof Error ? error.message : error);
+      return { ok: false, code: "letter_render_failed", message: "Das Anschreiben-PDF für dieses Unternehmen konnte nicht erstellt werden." };
     }
+    const letterPath = autoBewerbLetterPdfStoragePath(userId, app.id);
+    const { error: letterUploadError } = await admin
+      .storage.from(ATTACHMENT_BUCKET)
+      .upload(letterPath, Buffer.from(letterBytes), { contentType: BEW_LETTER_PDF_MIME, upsert: true });
+    if (letterUploadError) {
+      console.error(`[auto-bewerb] letter PDF upload failed for company ${app.id}: ${letterUploadError.message}`);
+      return { ok: false, code: "letter_upload_failed", message: "Das Anschreiben-PDF für dieses Unternehmen konnte nicht gespeichert werden." };
+    }
+    payloadAttachments.push({
+      filename: letterPdfFilename(app.ad_extracted?.company || app.company),
+      mimeType: BEW_LETTER_PDF_MIME,
+      storagePath: letterPath,
+    });
   }
 
   // Schedule validation (explicit timezone; future; before the ad deadline).
@@ -1415,8 +1539,11 @@ export async function prepareAutoBewerbSend(
   const { data: claimedRows } = await admin
     .from("auto_bewerb_companies")
     .update({
-      recipient_email: input.recipientEmail.trim().toLowerCase(),
-      email_account_id: input.emailAccountId,
+      // The RESOLVED per-company delivery destination (verified data only) —
+      // the global subject/account/attachment flags document the ONE shared
+      // configuration that produced this attempt.
+      recipient_email: recipient,
+      email_account_id: accountId,
       idempotency_key: idempotencyKey,
       email_subject: subject,
       // Legacy column: cleared on every send preparation — per-company body
@@ -1443,7 +1570,7 @@ export async function prepareAutoBewerbSend(
       company_id: app.id,
       user_id: userId,
       idempotency_key: idempotencyKey,
-      recipient_email: input.recipientEmail.trim().toLowerCase(),
+      recipient_email: recipient,
       subject,
       payload,
       status: "queued",
@@ -1464,7 +1591,7 @@ export async function prepareAutoBewerbSend(
     scheduledAt ? "auto_bewerb_send_scheduled" : "auto_bewerb_send_requested",
     scheduledAt ? "AUTO BEWERB: Versand geplant" : "AUTO BEWERB: Versand gestartet",
     undefined,
-    { companyId: app.id, recipient: input.recipientEmail, company: app.company },
+    { companyId: app.id, recipient, company: app.company },
   );
 
   // Immediate dispatch happens inline (server action context — same trust
@@ -1792,22 +1919,40 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     companies: [],
     attachments: [],
     emailTemplate: "",
+    emailSettings: null,
+    emailSettingsSupported: false,
     emailAccounts: [],
   };
   if (!ready) return empty;
 
   const admin = createAdminClient();
-  const [profileRow, templateRes, companies, attachments, emailAccounts, photoProbe, photoRow] =
+  const [profileRow, templateRes, companies, attachments, emailAccounts, photoProbe, photoRow, settingsProbe] =
     await Promise.all([
       getAutoBewerbProfile(userId),
-      admin.from("auto_bewerb_email_templates").select("body").eq("user_id", userId).maybeSingle(),
+      admin.from("auto_bewerb_email_templates").select("*").eq("user_id", userId).maybeSingle(),
       listAutoBewerbCompanies(userId),
       listAutoBewerbAttachments(userId),
       listUserEmailAccounts(userId),
       getAutoBewerbPhotoProbe(),
       getAutoBewerbProfilePhoto(userId),
+      getAutoBewerbEmailSettingsProbe(),
     ]);
   const photoSupported = photoProbe.available;
+  const emailSettingsSupported = settingsProbe.available;
+  const templateRow = (templateRes.data ?? null) as Record<string, unknown> | null;
+  const emailTemplate = String(templateRow?.body ?? "");
+  /** The ONE global e-mail configuration (supported → always an object;
+   *  missing row = an empty configuration to fill in). */
+  const emailSettings: AutoBewerbEmailSettings | null = emailSettingsSupported
+    ? {
+        body: emailTemplate,
+        recipient: String(templateRow?.recipient ?? ""),
+        subject: String(templateRow?.subject ?? ""),
+        accountId: String(templateRow?.account_id ?? ""),
+        attachCv: templateRow?.attach_cv === null || templateRow?.attach_cv === undefined ? true : Boolean(templateRow.attach_cv),
+        attachLetter: templateRow?.attach_letter === null || templateRow?.attach_letter === undefined ? true : Boolean(templateRow.attach_letter),
+      }
+    : null;
   const photoExtByMime: Record<string, "jpg" | "png" | "webp"> = {
     "image/jpeg": "jpg",
     "image/png": "png",
@@ -1856,10 +2001,15 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
       company,
       cv,
       cvVersion: cvDoc ? cvDoc.version : null,
+      // Exact per-company PDF filenames (the review UI shows these verbatim).
+      // The FILENAME is the same applicant across companies; the CONTENT and
+      // the company-scoped storage path differ per company.
+      cvPdfName: cv ? cvPdfFilename(cv.personal.fullName) : null,
       letter: parsedLetter?.success
         ? { text: parsedLetter.data.text, tone: parsedLetter.data.tone }
         : null,
       letterVersion: letterDoc ? letterDoc.version : null,
+      letterPdfName: parsedLetter?.success ? letterPdfFilename(company.ad_extracted?.company || company.company) : null,
       latestAttempt: attempts[0] ?? null,
     };
   });
@@ -1881,7 +2031,9 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     photo,
     companies: views,
     attachments,
-    emailTemplate: String((templateRes.data as { body?: string } | null)?.body ?? ""),
+    emailTemplate,
+    emailSettings,
+    emailSettingsSupported,
     emailAccounts,
   };
 }

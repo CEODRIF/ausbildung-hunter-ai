@@ -1,19 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   AUTO_BEWERB_COMPANY_LIMIT,
-  AUTO_BEWERB_EMAIL_TOKENS,
   AUTO_BEWERB_TABLES,
   adExtractSchema,
   classifyProbeError,
   isValidEmail,
   normalizeCompanyKey,
-  renderAutoBewerbEmailBody,
+  resolveAutoBewerbRecipient,
   type AdExtract,
 } from "@/lib/auto-bewerb/schema";
 
 /**
  * Focused AUTO BEWERB tests — the pure contract functions the workflow and
- * the send path rely on (no-invention token rendering, dedupe keys,
+ * the send path rely on (verified recipient resolution, dedupe keys,
  * recipient validation, company cap).
  */
 
@@ -38,28 +37,30 @@ describe("normalizeCompanyKey (dedupe)", () => {
   });
 });
 
-describe("renderAutoBewerbEmailBody (no-invention token substitution)", () => {
-  it("substitutes all three tokens from the stored extraction", () => {
-    const ex = extract({ company: "Firma AG", jobTitle: "Auszubildende:r", contactPerson: "Max Mustermann" });
-    expect(renderAutoBewerbEmailBody("Sehr geehrte:r {contactName}, Firma: {company}, Stelle: {position}", ex)).toBe(
-      "Sehr geehrte:r Max Mustermann, Firma: Firma AG, Stelle: Auszubildende:r",
+describe("resolveAutoBewerbRecipient (verified delivery destination)", () => {
+  it("an explicit GLOBAL recipient applies to every company (identical)", () => {
+    const exs = [
+      extract({ applicationEmail: "a@firma-a.de" }),
+      extract({ applicationEmail: "b@firma-b.de" }),
+      extract({ applicationEmail: "c@firma-c.de" }),
+    ];
+    for (const ex of exs) {
+      expect(resolveAutoBewerbRecipient("zentral@postbox.de", "legacy@row.de", ex)).toBe("zentral@postbox.de");
+    }
+  });
+  it("without a global recipient: the legacy per-company value wins", () => {
+    expect(resolveAutoBewerbRecipient("", " Legacy@Row.de ", extract({ applicationEmail: "a@firma-a.de" }))).toBe(
+      "legacy@row.de",
     );
   });
-  it("falls back to occupation when jobTitle is empty", () => {
-    const ex = extract({ company: "X", occupation: "Kaufmann" });
-    expect(renderAutoBewerbEmailBody("{position}", ex)).toBe("Kaufmann");
+  it("without global or legacy: the VERIFIED application email from the ad", () => {
+    const ex = extract({ company: "Firma AG", applicationEmail: "  bewerbung@firma-ag.de " });
+    expect(resolveAutoBewerbRecipient("", null, ex)).toBe("bewerbung@firma-ag.de");
+    expect(resolveAutoBewerbRecipient("  ", "", null)).toBe(""); // nothing invented
   });
-  it("replaces missing values with an empty string — never invents", () => {
-    expect(renderAutoBewerbEmailBody("Hallo {company}, {contactName}!", extract({}))).toBe("Hallo , !");
-  });
-  it("is case-insensitive on the token name", () => {
-    expect(renderAutoBewerbEmailBody("{COMPANY}", extract({ company: "Y" }))).toBe("Y");
-  });
-});
-
-describe("AUTO_BEWERB_EMAIL_TOKENS", () => {
-  it("documents exactly the tokens the renderer substitutes", () => {
-    expect(AUTO_BEWERB_EMAIL_TOKENS).toEqual(["{company}", "{position}", "{contactName}"]);
+  it("null/undefined inputs are safe (never crash, never invent)", () => {
+    expect(resolveAutoBewerbRecipient(null, null, null)).toBe("");
+    expect(resolveAutoBewerbRecipient(undefined, undefined, extract({}))).toBe("");
   });
 });
 

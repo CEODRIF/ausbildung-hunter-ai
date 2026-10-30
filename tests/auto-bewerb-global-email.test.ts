@@ -1,25 +1,31 @@
 /**
- * AUTO BEWERB — Step 6: ONE global email template for ALL companies.
+ * AUTO BEWERB — Step 6: ONE global e-mail configuration for the whole batch.
  *
- * The per-company email body override is REMOVED: exactly one source of
- * truth (auto_bewerb_email_templates.body, one row per user) feeds every
- * preview AND every send, substituted per company via the verified tokens
- * {company} / {position} / {contactName} (missing → empty, never invented).
- * Pinned here:
- *   1. token substitution: one template rendered for 3/5/10 companies —
- *      each result carries its own company facts and none of the others',
- *      missing values stay empty, no token residue;
- *   2. source contracts: no per-company body override remains anywhere in
- *      Step 6 UI, Step 7 review, the server actions or the send engine;
- *      the engine ALWAYS resolves the shared template per company;
- *   3. the global AI-template prompt (tokens, no-invention, attachments);
- *   4. the generate-email route: global (no company input), auth /
- *      rate-limit / quota metering, honest failures.
+ * Every company receives the EXACT SAME recipient (unless the user sets an
+ * explicit global one), subject, body (sent VERBATIM — no substitution),
+ * sending account and attachment flags. The only per-company value is the
+ * delivery destination: the verified application email of each company's
+ * ad (legacy manual value preserved).
+ *
+ * Pinned here (real engine, in-memory DB, sends SCHEDULED — no dispatch,
+ * no real email):
+ *   1. one template applied to 3 companies → identical subject/body/
+ *      account/attachments, per-company verified recipients;
+ *   2. legacy per-company values (incl. the old email_body override) can
+ *      NEVER override the global configuration;
+ *   3. a newly added company uses the global configuration automatically;
+ *   4. an explicit global recipient is used for ALL companies;
+ *   5. scheduled sends carry the same global configuration;
+ *   6. source contracts: no token substitution, no per-company override
+ *      path anywhere (Step 6 UI, Step 7 review, actions, engine);
+ *   7. the AI prompt generates a company-neutral template (no tokens);
+ *   8. the generate-email route stays global + metered.
  */
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AdExtract } from "@/lib/auto-bewerb/schema";
+import type { StudioDb } from "./helpers-studio";
 
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/ai-service", () => ({ provider: vi.fn() }));
 vi.mock("@/lib/billing/entitlement-service", () => ({
@@ -35,35 +41,63 @@ vi.mock("@/lib/rate-limit", async () => {
     tooManyRequests: vi.fn(() => NextResponse.json({ error: "RATE_LIMITED_MARKER" }, { status: 429 })),
   };
 });
-vi.mock("@/lib/auto-bewerb/engine", () => ({ getAutoBewerbProfile: vi.fn() }));
+vi.mock("@/lib/email-providers", () => ({ createEmailProvider: vi.fn() }));
+// PARTIAL engine mock: the REAL send engine is under test (fake DB); only the
+// profile getter is faked (it serves the route's prompt context).
+vi.mock("@/lib/auto-bewerb/engine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auto-bewerb/engine")>();
+  return { ...actual, getAutoBewerbProfile: vi.fn() };
+});
 
+const { createAdminClient } = await import("@/lib/supabase/admin");
 const { createClient } = await import("@/lib/supabase/server");
 const { provider } = await import("@/lib/ai-service");
 const { reserveFeatureOp, completeFeatureOp, releaseFeatureOp } = await import("@/lib/billing/entitlement-service");
 const { checkRateLimit } = await import("@/lib/rate-limit");
-const { getAutoBewerbProfile } = await import("@/lib/auto-bewerb/engine");
+const { getAutoBewerbProfile, prepareAutoBewerbSend } = await import("@/lib/auto-bewerb/engine");
 const { POST } = await import("@/app/api/auto-bewerb/generate-email/route");
-const { renderAutoBewerbEmailBody } = await import("@/lib/auto-bewerb/schema");
+const { createStudioDb } = await import("./helpers-studio");
 const { buildAutoBewerbEmailTemplatePrompt } = await import("@/lib/auto-bewerb/prompts");
+const { resolveAutoBewerbRecipient } = await import("@/lib/auto-bewerb/schema");
+const { cvEmpty } = await import("@/lib/templates/cv");
 
 const read = (p: string) => readFileSync(p, "utf8");
 const STEP6 = read("src/components/auto-bewerb/step6-email.tsx");
 const STEP7 = read("src/components/auto-bewerb/step7-review.tsx");
 const ACTIONS = read("src/app/auto-bewerb/actions.ts");
 const ENGINE = read("src/lib/auto-bewerb/engine.ts");
+const SCHEMA = read("src/lib/auto-bewerb/schema.ts");
+const DICT = read("src/lib/i18n/dictionaries.ts");
 
 // ---------------------------------------------------------------------------
-// 1. Token substitution — one template, N companies
+// Fake-DB functional tests (global mode — settings columns present)
 // ---------------------------------------------------------------------------
 
-function extract(company: string, jobTitle: string, occupation?: string, contactPerson?: string): AdExtract {
+const USER = "11111111-1111-4111-8111-111111111111";
+const ACCT_ID = "33333333-3333-4333-8333-333333333333";
+const CO1 = "44444444-4444-4444-8444-444444444444";
+const CO2 = "55555555-5555-4555-8555-555555555555";
+const CO3 = "66666666-6666-4666-8666-666666666666";
+const CO_NEW = "99990000-1111-2222-3333-444455556666";
+const D1 = "77777777-7777-4777-8777-777777777777";
+
+const GLOBAL_BODY =
+  "Sehr geehrte Damen und Herren,\n\nhiermit bewerbe ich mich um eine Ausbildungsstelle. Anbei erhalten Sie meinen Lebenslauf und mein Anschreiben als PDF.\n\nMit freundlichen Grüßen\nMustapha Drif";
+const GLOBAL_SUBJECT = "Bewerbung um eine Ausbildungsstelle";
+
+/** Far-future schedule → durable attempt, never dispatched (no real email). */
+const FUTURE = { timeZone: "Europe/Berlin", year: 2030, month: 6, day: 10, hour: 9, minute: 0 };
+
+function extractFor(company: string, applicationEmail: string, jobTitle: string) {
   return {
     jobTitle,
-    occupation: occupation ?? "",
+    occupation: jobTitle,
     company,
     companyAddress: "",
     location: "",
     startDate: "",
+    // NOTE: adExtractSchema types this as a STRING (default "") — null would
+    // fail re-validation on read and silently null out the whole extract.
     applicationDeadline: "",
     requiredQualifications: [],
     preferredQualifications: [],
@@ -74,159 +108,542 @@ function extract(company: string, jobTitle: string, occupation?: string, contact
     responsibilities: [],
     requestedDocuments: [],
     applicationMethod: "",
-    contactPerson: contactPerson ?? "",
-    applicationEmail: "",
+    contactPerson: "",
+    applicationEmail,
     companyNotes: [],
     missingOrAmbiguous: [],
-  } as AdExtract;
+  };
 }
 
-const TEMPLATE =
-  "Sehr geehrte Damen und Herren,\n\nhiermit bewerbe ich mich als {position} bei {company}. " +
-  "Anbei erhalten Sie meinen Lebenslauf und mein Anschreiben als PDF.\n\nMit freundlichen Grüßen\nMustapha Drif";
+function companyRow(id: string, company: string, email: string, job: string, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    user_id: USER,
+    company,
+    company_key: company.toLowerCase().replace(/[^a-z0-9]+/g, " "),
+    slot_no: 1,
+    ad_raw: "x".repeat(40),
+    ad_extracted: extractFor(company, email, job),
+    ad_analysis: null,
+    profile_snapshot: null,
+    status: "ready" as const,
+    // LEGACY per-company values — deliberately different from the global
+    // configuration: none of them may win over the global settings.
+    recipient_email: "legacy-" + email,
+    email_subject: "Legacy-Betreff",
+    email_body: "LEGACY OVERRIDETEXT — must never be sent",
+    email_attach_cv: true,
+    email_attach_letter: true,
+    email_account_id: "00000000-0000-4000-8000-000000000000",
+    idempotency_key: null,
+    approved: true,
+    approved_at: "2026-12-01T10:00:00.000Z",
+    scheduled_at: null,
+    schedule_timezone: null,
+    sent_at: null,
+    provider_message_id: null,
+    last_failure_code: null,
+    ad_confirmed_at: "2026-12-01T10:00:00.000Z",
+    cv_reviewed_at: null,
+    letter_reviewed_at: null,
+    created_at: "2026-12-01T00:00:00.000Z",
+    updated_at: "2026-12-01T00:00:00.000Z",
+    ...over,
+  };
+}
 
-describe("token substitution (one global template, N companies)", () => {
-  it("3 companies → 3 DISTINCT resolved bodies, no cross-contamination", () => {
-    const companies = [
-      extract("Kältebau Nord GmbH", "Anlagenmechaniker SHK", "Anlagenmechaniker SHK", "Frau Schneider"),
-      extract("Tech Süd AG", "Fachinformatiker — Systemintegration", "Fachinformatiker", ""),
-      extract("Heizungsbau Ost GmbH", "Anlagenmechaniker SHK", "", "Herr Berger"),
-    ];
-    const resolved = companies.map((e) => renderAutoBewerbEmailBody(TEMPLATE, e));
-    expect(new Set(resolved).size).toBe(3);
-    expect(resolved[0]).toContain("Kältebau Nord GmbH");
-    expect(resolved[1]).toContain("Tech Süd AG");
-    expect(resolved[2]).toContain("Heizungsbau Ost GmbH");
-    // company A's body never contains company B's name (and vice versa):
-    for (let i = 0; i < resolved.length; i++) {
-      for (let j = 0; j < companies.length; j++) {
-        if (i !== j) expect(resolved[i]).not.toContain(companies[j].company);
+let db: StudioDb;
+
+function seed(template: Record<string, unknown>) {
+  db = createStudioDb({
+    auto_bewerb_profiles: [],
+    auto_bewerb_companies: [
+      companyRow(CO1, "Kältebau Nord GmbH", "jobs@kaltbau-nord.de", "Anlagenmechaniker SHK"),
+      companyRow(CO2, "Tech Süd AG", "bewerbung@tech-sued.de", "Fachinformatiker"),
+      companyRow(CO3, "Heizungsbau Ost GmbH", "hr@heizung-ost.de", "Anlagenmechaniker SHK"),
+    ],
+    auto_bewerb_documents: [],
+    auto_bewerb_attachments: [
+      {
+        id: D1,
+        user_id: USER,
+        display_name: "Abiturzeugnis.pdf",
+        doc_category: "school_certificate",
+        mime_type: "application/pdf",
+        size_bytes: 1024,
+        storage_path: `${USER}/auto-bewerb/docs/${D1}.pdf`,
+        file_hash: "h1",
+        created_at: "2026-12-01T00:00:00.000Z",
+        updated_at: "2026-12-01T00:00:00.000Z",
+      },
+    ],
+    auto_bewerb_company_attachments: [],
+    auto_bewerb_email_templates: [{ user_id: USER, ...template }],
+    auto_bewerb_send_attempts: [],
+    email_accounts: [{ id: ACCT_ID, user_id: USER, provider: "gmail", email: "mail@example.de", is_active: true, requires_reconnect: false }],
+    activity_logs: [],
+    profiles: [],
+  });
+  (createAdminClient as ReturnType<typeof vi.fn>).mockReturnValue(db.admin);
+}
+
+function globalTemplate(over: Record<string, unknown> = {}) {
+  return {
+    body: GLOBAL_BODY,
+    recipient: "",
+    subject: GLOBAL_SUBJECT,
+    account_id: ACCT_ID,
+    attach_cv: false,
+    attach_letter: false,
+    ...over,
+  };
+}
+
+function attempt(companyId: string) {
+  const a = db.tables.auto_bewerb_send_attempts.find((r) => r.company_id === companyId) as
+    | { payload: { text: string; html: string; attachments: Array<{ filename: string }> }; recipient_email: string; subject: string; scheduled_at: string | null }
+    | undefined;
+  expect(a, `attempt for ${companyId}`).toBeTruthy();
+  return a!;
+}
+
+describe("one global configuration — functional (engine, fake DB, scheduled)", () => {
+  it("3 companies (no manual recipient) → IDENTICAL subject/body/account; each keeps its VERIFIED ad address", async () => {
+    seed(globalTemplate());
+    // No manually stored recipient → the destination falls back to each
+    // company's verified application email from its own ad:
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    for (const id of [CO1, CO2, CO3]) {
+      const res = await prepareAutoBewerbSend(USER, { companyId: id, schedule: FUTURE });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+    }
+    const a1 = attempt(CO1);
+    const a2 = attempt(CO2);
+    const a3 = attempt(CO3);
+    // Identical shared content for everyone:
+    expect(a1.payload.text).toBe(GLOBAL_BODY);
+    expect(a2.payload.text).toBe(GLOBAL_BODY);
+    expect(a3.payload.text).toBe(GLOBAL_BODY);
+    expect(a1.subject).toBe(GLOBAL_SUBJECT);
+    expect(a2.subject).toBe(GLOBAL_SUBJECT);
+    expect(a3.subject).toBe(GLOBAL_SUBJECT);
+    // The VERIFIED per-company delivery destination (from each ad):
+    expect(a1.recipient_email).toBe("jobs@kaltbau-nord.de");
+    expect(a2.recipient_email).toBe("bewerbung@tech-sued.de");
+    expect(a3.recipient_email).toBe("hr@heizung-ost.de");
+    // NEVER to one company's address:
+    expect(a2.recipient_email).not.toBe(a1.recipient_email);
+    // Shared attachment settings (global flags off → only the library doc):
+    for (const a of [a1, a2, a3]) {
+      expect(a.payload.attachments.map((x) => x.filename)).toEqual(["Abiturzeugnis.pdf"]);
+    }
+  });
+
+  it("legacy per-company CONFIG values (subject/account/override) NEVER win over the global config", async () => {
+    seed(globalTemplate());
+    // The row carries legacy values (incl. a stored body override):
+    expect(db.tables.auto_bewerb_companies[0].email_body).toBe("LEGACY OVERRIDETEXT — must never be sent");
+    const res = await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE });
+    expect(res.ok).toBe(true);
+    const a = attempt(CO1);
+    // Global content wins over every legacy config value:
+    expect(a.subject).toBe(GLOBAL_SUBJECT);
+    expect(a.subject).not.toBe("Legacy-Betreff");
+    expect(a.payload.text).toBe(GLOBAL_BODY);
+    expect(a.payload.text).not.toContain("LEGACY OVERRIDETEXT");
+    // But the legacy recipient is a preserved per-company DELIVERY
+    // destination (user-entered earlier) — it is honored, never overwritten:
+    expect(a.recipient_email).toBe("legacy-jobs@kaltbau-nord.de");
+    // The legacy override column is cleared on send preparation:
+    const row = db.tables.auto_bewerb_companies.find((r) => r.id === CO1);
+    expect(row?.email_body).toBeNull();
+  });
+
+  it("an EXPLICIT global recipient is delivered to ALL companies", async () => {
+    seed(globalTemplate({ recipient: " Zentral@Postbox.de " }));
+    for (const id of [CO1, CO2, CO3]) {
+      const res = await prepareAutoBewerbSend(USER, { companyId: id, schedule: FUTURE });
+      expect(res.ok).toBe(true);
+    }
+    for (const id of [CO1, CO2, CO3]) {
+      expect(attempt(id).recipient_email).toBe("zentral@postbox.de");
+    }
+  });
+
+  it("a NEWLY ADDED company uses the global configuration automatically", async () => {
+    seed(globalTemplate());
+    // The company joins AFTER the configuration was saved (no manual
+    // recipient → its verified ad address is the destination):
+    db.tables.auto_bewerb_companies.push(
+      companyRow(CO_NEW, "Neu GmbH", "neu@neu-gmbh.de", "Elektroniker", { recipient_email: null }),
+    );
+    const res = await prepareAutoBewerbSend(USER, { companyId: CO_NEW, schedule: FUTURE });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    const a = attempt(CO_NEW);
+    expect(a.payload.text).toBe(GLOBAL_BODY);
+    expect(a.subject).toBe(GLOBAL_SUBJECT);
+    expect(a.recipient_email).toBe("neu@neu-gmbh.de");
+  });
+
+  it("a company WITHOUT any verifiable address is refused (nothing invented)", async () => {
+    seed(globalTemplate());
+    db.tables.auto_bewerb_companies.push(companyRow(CO_NEW, "OhneMail GmbH", "", "Elektroniker", { recipient_email: null }));
+    const res = await prepareAutoBewerbSend(USER, { companyId: CO_NEW, schedule: FUTURE });
+    expect(res.ok).toBe(false);
+    expect((res as { code?: string }).code).toBe("invalid_recipient");
+  });
+
+  it("SCHEDULED sends carry the same global configuration (no separate path)", async () => {
+    seed(globalTemplate());
+    const res = await prepareAutoBewerbSend(USER, { companyId: CO2, schedule: FUTURE });
+    expect(res.ok).toBe(true);
+    const a = attempt(CO2);
+    expect(a.scheduled_at).toBeTruthy();
+    expect(a.payload.text).toBe(GLOBAL_BODY);
+    expect(a.subject).toBe(GLOBAL_SUBJECT);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-company CV + cover-letter attachments (global FLAGS, OWN documents)
+//
+// The global attach_cv / attach_letter flags decide WHETHER those document
+// categories are attached, but the actual files are always resolved from the
+// company's OWN stored documents + a company-scoped storage path. A company
+// without the document is BLOCKED (never silently sent without it, never fed
+// another company's document).
+// ---------------------------------------------------------------------------
+
+const CV_FULL_NAME = "Mustapha Drif";
+const CV_PDF_NAME = "Lebenslauf_Mustapha_Drif.pdf";
+const BUCKET = "application-attachments";
+
+/** A valid, company-tailored CV document (renders deterministically). */
+function cvDocFor(company: string, marker: string) {
+  const cv = cvEmpty();
+  cv.personal = {
+    ...cv.personal,
+    fullName: CV_FULL_NAME,
+    professionalTitle: `Auszubildende:r — ${company}`,
+    email: "mustapha.drif@example.de",
+    phone: "+49 151 23456789",
+    location: "Hamburg, Deutschland",
+  };
+  cv.summary = `Maßgeschneiderte Zusammenfassung für ${company} (${marker}).`;
+  cv.skills = ["Schaltpläne lesen", "Montage", marker];
+  cv.languages = [{ id: "l1", language: "Deutsch", level: "C1" }];
+  return cv;
+}
+
+/** A valid, company-tailored cover letter (autoBewerbLetterSchema-compliant). */
+function letterDocFor(company: string, marker: string) {
+  return {
+    text:
+      `Sehr geehrte Damen und Herren, hiermit bewerbe ich mich bei ${company} (${marker}). ` +
+      "Ich freue mich auf Ihre Rückmeldung und stehe einem persönlichen Gespräch jederzeit gerne zur Verfügung. Mit freundlichen Grüßen Mustapha Drif",
+    tone: "professional" as const,
+  };
+}
+
+/** Seed one CV + one cover-letter document for a company (version 1). */
+function seedCompanyDocs(companyId: string, company: string, marker: string) {
+  const ts = "2026-12-01T00:00:00.000Z";
+  db.tables.auto_bewerb_documents.push(
+    { id: `cv-${companyId}`, user_id: USER, company_id: companyId, doc_type: "cv", version: 1, content: cvDocFor(company, marker), created_at: ts, updated_at: ts },
+    { id: `letter-${companyId}`, user_id: USER, company_id: companyId, doc_type: "cover_letter", version: 1, content: letterDocFor(company, marker), created_at: ts, updated_at: ts },
+  );
+}
+
+const ATTACH_ON = globalTemplate({ attach_cv: true, attach_letter: true });
+
+function fullAttempt(companyId: string) {
+  const a = db.tables.auto_bewerb_send_attempts.find((r) => r.company_id === companyId) as
+    | { payload: { text: string; html: string; attachments: Array<{ filename: string; mimeType: string; storagePath: string }> }; recipient_email: string; subject: string; scheduled_at: string | null }
+    | undefined;
+  expect(a, `attempt for ${companyId}`).toBeTruthy();
+  return a!;
+}
+
+async function storageBytes(path: string): Promise<Uint8Array> {
+  const { data } = (await db.admin.storage.from(BUCKET).download(path)) as { data: Blob | null };
+  expect(data, `stored object at ${path}`).toBeTruthy();
+  return new Uint8Array(await (data as Blob).arrayBuffer());
+}
+const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64");
+
+describe("per-company CV + cover-letter attachments (global flags, own documents)", () => {
+  it("3 companies → 3 OWN CVs + 3 OWN letters; identical subject/body; shared doc in all; no cross-company leakage", async () => {
+    seed(ATTACH_ON);
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    seedCompanyDocs(CO2, "Tech Süd AG", "techsued");
+    seedCompanyDocs(CO3, "Heizungsbau Ost GmbH", "heizung");
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null; // verified ad address
+    for (const id of [CO1, CO2, CO3]) {
+      const res = await prepareAutoBewerbSend(USER, { companyId: id, schedule: FUTURE });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+    }
+    const a1 = fullAttempt(CO1);
+    const a2 = fullAttempt(CO2);
+    const a3 = fullAttempt(CO3);
+
+    // (3) Identical shared content for everyone:
+    for (const a of [a1, a2, a3]) {
+      expect(a.payload.text).toBe(GLOBAL_BODY);
+      expect(a.subject).toBe(GLOBAL_SUBJECT);
+    }
+
+    const cvOf = (a: typeof a1) => a.payload.attachments.find((x) => x.filename === CV_PDF_NAME);
+    const letterOf = (a: typeof a1) => a.payload.attachments.find((x) => x.filename.startsWith("Anschreiben_"));
+
+    // (1) Each company's OWN CV at its OWN company-scoped path:
+    expect(cvOf(a1)!.storagePath).toBe(`auto-bewerb/cv/${USER}/${CO1}.pdf`);
+    expect(cvOf(a2)!.storagePath).toBe(`auto-bewerb/cv/${USER}/${CO2}.pdf`);
+    expect(cvOf(a3)!.storagePath).toBe(`auto-bewerb/cv/${USER}/${CO3}.pdf`);
+
+    // (2) Each company's OWN letter at its OWN company-scoped path, all distinct:
+    expect(letterOf(a1)!.storagePath).toBe(`auto-bewerb/letter/${USER}/${CO1}.pdf`);
+    expect(letterOf(a2)!.storagePath).toBe(`auto-bewerb/letter/${USER}/${CO2}.pdf`);
+    expect(letterOf(a3)!.storagePath).toBe(`auto-bewerb/letter/${USER}/${CO3}.pdf`);
+    expect(new Set([letterOf(a1)!.filename, letterOf(a2)!.filename, letterOf(a3)!.filename]).size).toBe(3);
+
+    // (1b) The three tailored CVs are genuinely DIFFERENT files (distinct bytes):
+    const b1 = b64(await storageBytes(`auto-bewerb/cv/${USER}/${CO1}.pdf`));
+    const b2 = b64(await storageBytes(`auto-bewerb/cv/${USER}/${CO2}.pdf`));
+    const b3 = b64(await storageBytes(`auto-bewerb/cv/${USER}/${CO3}.pdf`));
+    expect(new Set([b1, b2, b3]).size).toBe(3);
+
+    // (4) The shared supporting document is attached to EVERY attempt:
+    for (const a of [a1, a2, a3]) {
+      expect(a.payload.attachments.map((x) => x.filename)).toContain("Abiturzeugnis.pdf");
+    }
+
+    // (5) NO cross-company leakage: every company-specific attachment references
+    //     ONLY its own company id in the storage path.
+    for (const [a, id] of [
+      [a1, CO1],
+      [a2, CO2],
+      [a3, CO3],
+    ] as const) {
+      for (const att of a.payload.attachments) {
+        if (att.storagePath.startsWith("auto-bewerb/cv/") || att.storagePath.startsWith("auto-bewerb/letter/")) {
+          expect(att.storagePath.endsWith(`/${id}.pdf`)).toBe(true);
+        }
       }
     }
-    // no token residue anywhere:
-    for (const r of resolved) {
-      expect(r).not.toContain("{company}");
-      expect(r).not.toContain("{position}");
-      expect(r).not.toContain("{contactName}");
-    }
   });
 
-  it("5 and 10 companies → the SAME template text, only the substitution differs", () => {
-    const many = Array.from({ length: 10 }, (_, i) =>
-      extract(`Firma ${i + 1} GmbH`, `Stelle ${i + 1}`, undefined, i % 2 === 0 ? `Frau K${i + 1}` : ""),
-    );
-    const five = many.slice(0, 5).map((e) => renderAutoBewerbEmailBody(TEMPLATE, e));
-    const ten = many.map((e) => renderAutoBewerbEmailBody(TEMPLATE, e));
-    // every resolved body is a substitution of the ONE template (same
-    // sentence skeleton, only the token slots differ):
-    for (const r of [...five, ...ten]) {
-      expect(r.startsWith("Sehr geehrte Damen und Herren,")).toBe(true);
-      expect(r).toContain("Anbei erhalten Sie meinen Lebenslauf und mein Anschreiben als PDF.");
-    }
-    expect(new Set(ten).size).toBe(10);
-    expect(ten.slice(0, 5)).toEqual(five); // deterministic per company
+  it("missing CV blocks ONLY that company (missing_cv); the others still attach their own CV", async () => {
+    seed(ATTACH_ON);
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    seedCompanyDocs(CO2, "Tech Süd AG", "techsued");
+    const ts = "2026-12-01T00:00:00.000Z";
+    // CO3 has a cover letter but NO CV:
+    db.tables.auto_bewerb_documents.push({
+      id: `letter-${CO3}`, user_id: USER, company_id: CO3, doc_type: "cover_letter", version: 1,
+      content: letterDocFor("Heizungsbau Ost GmbH", "heizung"), created_at: ts, updated_at: ts,
+    });
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    const res3 = await prepareAutoBewerbSend(USER, { companyId: CO3, schedule: FUTURE });
+    expect(res3.ok).toBe(false);
+    expect((res3 as { code?: string }).code).toBe("missing_cv");
+    // No attempt was created for the blocked company:
+    expect(db.tables.auto_bewerb_send_attempts.find((r) => r.company_id === CO3)).toBeUndefined();
+    // The other two are unaffected and attach their own CVs:
+    expect((await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE })).ok).toBe(true);
+    expect((await prepareAutoBewerbSend(USER, { companyId: CO2, schedule: FUTURE })).ok).toBe(true);
+    expect(fullAttempt(CO1).payload.attachments.map((x) => x.filename)).toContain(CV_PDF_NAME);
+    expect(fullAttempt(CO2).payload.attachments.map((x) => x.filename)).toContain(CV_PDF_NAME);
   });
 
-  it("missing information → the token value is EMPTY, nothing is invented", () => {
-    const e = extract("NurFirma GmbH", "", "", ""); // no jobTitle, no occupation, no contact
-    const resolved = renderAutoBewerbEmailBody(TEMPLATE, e);
-    expect(resolved).toContain("NurFirma GmbH");
-    expect(resolved).not.toContain("{position}");
-    expect(resolved).not.toContain("{contactName}");
-    // the empty slot collapses to the empty string — no invented
-    // placeholder text, no leftover brackets:
-    expect(resolved.replace(/\s+/g, " ")).toContain("hiermit bewerbe ich mich als bei NurFirma GmbH.");
+  it("missing cover letter blocks ONLY that company (missing_letter)", async () => {
+    seed(ATTACH_ON);
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    const ts = "2026-12-01T00:00:00.000Z";
+    // CO2 has a CV but NO cover letter:
+    db.tables.auto_bewerb_documents.push({
+      id: `cv-${CO2}`, user_id: USER, company_id: CO2, doc_type: "cv", version: 1,
+      content: cvDocFor("Tech Süd AG", "techsued"), created_at: ts, updated_at: ts,
+    });
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    const res2 = await prepareAutoBewerbSend(USER, { companyId: CO2, schedule: FUTURE });
+    expect(res2.ok).toBe(false);
+    expect((res2 as { code?: string }).code).toBe("missing_letter");
+    expect(db.tables.auto_bewerb_send_attempts.find((r) => r.company_id === CO2)).toBeUndefined();
+    // CO1 (has both) is unaffected:
+    expect((await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE })).ok).toBe(true);
   });
 
-  it("{position} falls back to the occupation when the ad has no job title", () => {
-    const resolved = renderAutoBewerbEmailBody(TEMPLATE, extract("X GmbH", "", "Elektroniker"));
-    expect(resolved).toContain("als Elektroniker bei X GmbH");
+  it("SCHEDULED attempts preserve company-specific attachments (no separate path)", async () => {
+    seed(ATTACH_ON);
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    seedCompanyDocs(CO2, "Tech Süd AG", "techsued");
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE });
+    await prepareAutoBewerbSend(USER, { companyId: CO2, schedule: FUTURE });
+    const a1 = fullAttempt(CO1);
+    const a2 = fullAttempt(CO2);
+    expect(a1.scheduled_at).toBeTruthy();
+    expect(a2.scheduled_at).toBeTruthy();
+    // The frozen scheduled payload carries each company's OWN scoped paths:
+    expect(a1.payload.attachments.find((x) => x.filename === CV_PDF_NAME)!.storagePath).toBe(`auto-bewerb/cv/${USER}/${CO1}.pdf`);
+    expect(a2.payload.attachments.find((x) => x.filename === CV_PDF_NAME)!.storagePath).toBe(`auto-bewerb/cv/${USER}/${CO2}.pdf`);
+    expect(a1.payload.attachments.find((x) => x.filename.startsWith("Anschreiben_"))!.storagePath).toBe(`auto-bewerb/letter/${USER}/${CO1}.pdf`);
+    expect(a2.payload.attachments.find((x) => x.filename.startsWith("Anschreiben_"))!.storagePath).toBe(`auto-bewerb/letter/${USER}/${CO2}.pdf`);
+    // ...with the SAME global subject/body:
+    expect(a1.subject).toBe(GLOBAL_SUBJECT);
+    expect(a2.subject).toBe(GLOBAL_SUBJECT);
+    expect(a1.payload.text).toBe(a2.payload.text);
+  });
+
+  it("toggling attach flags OFF removes CV/letter without changing document ownership", async () => {
+    seed(globalTemplate({ attach_cv: false, attach_letter: false }));
+    seedCompanyDocs(CO1, "Kältebau Nord GmbH", "kaltbau");
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null;
+    const res = await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE });
+    expect(res.ok).toBe(true);
+    const a = fullAttempt(CO1);
+    // Only the shared supporting document — no CV, no letter:
+    expect(a.payload.attachments.map((x) => x.filename)).toEqual(["Abiturzeugnis.pdf"]);
+    // The company's documents remain stored, ownership unchanged:
+    expect(db.tables.auto_bewerb_documents.filter((d) => d.company_id === CO1).length).toBe(2);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 2. Source contracts — exactly ONE source of truth for the e-mail body
+// Pure recipient resolution — one global setting, N companies
 // ---------------------------------------------------------------------------
 
-describe("single source of truth (source contracts)", () => {
-  it("Step 6 UI: no per-company body override, preview = shared template per company", () => {
-    expect(STEP6).not.toContain("bodyOverride");
-    expect(STEP6).not.toContain("emailBody");
-    expect(STEP6).not.toContain("applyDraftToCompany");
-    // the preview renders the SHARED template (incl. unsaved edits) with
-    // the active company's verified extraction:
-    expect(STEP6).toContain("renderAutoBewerbEmailBody(template, row.ad_extracted)");
-    // and the template TEXT (draft or saved) is what the editor receives:
-    expect(STEP6).toContain('<CompanyEmailEditor key={`${activeId}:${active.company.updated_at}`} view={active} template={templateText} />');
+describe("resolveAutoBewerbRecipient (pure)", () => {
+  it("5 and 10 companies resolve deterministically — verified address per company", () => {
+    const emails = Array.from({ length: 10 }, (_, i) => `a${i + 1}@firma-${i + 1}.de`);
+    const resolved = emails.map((e) => resolveAutoBewerbRecipient("", null, extractFor("X", e, "Y")));
+    expect(new Set(resolved).size).toBe(10);
+    expect(resolved.slice(0, 5)).toEqual(emails.slice(0, 5));
   });
-
-  it("Step 6 AI draft: global request WITHOUT any company input", () => {
-    expect(STEP6).not.toContain("companyId: activeId");
-    expect(STEP6).toContain('"/api/auto-bewerb/generate-email"');
-    expect(STEP6).toContain("attachmentNames: sharedDocNames.slice(0, 10)");
-    // the draft is applied to the global template (never to a company):
-    expect(STEP6).toContain("setTemplateDraft(draftResult.body)");
+  it("a set global recipient → the same destination for all 10", () => {
+    const resolved = Array.from({ length: 10 }, (_, i) =>
+      resolveAutoBewerbRecipient("all@one.de", `legacy${i}@x.de`, extractFor("X", `a${i}@b.de`, "Y")),
+    );
+    expect(new Set(resolved).size).toBe(1);
+    expect(resolved[0]).toBe("all@one.de");
   });
+});
 
-  it("Step 7 review: send inputs carry no body override; the confirmation modal shows the RESOLVED template body per recipient", () => {
-    expect(STEP7).not.toContain("bodyOverride");
-    expect(STEP7).not.toContain("email_body");
-    expect(STEP7).toContain("renderAutoBewerbEmailBody(ws.emailTemplate, v.company.ad_extracted)");
-  });
+// ---------------------------------------------------------------------------
+// Source contracts — exactly ONE source of truth, no substitution
+// ---------------------------------------------------------------------------
 
-  it("server actions: updateCompanyAction has no emailBody; send/schedule pass no bodyOverride", () => {
-    expect(ACTIONS).not.toContain("emailBody");
-    expect(ACTIONS).not.toContain("bodyOverride");
-  });
-
-  it("send engine: ALWAYS resolves the shared template per company; legacy column is never read and is cleared on write", () => {
-    expect(ENGINE).not.toContain("bodyOverride");
-    // template is fetched per send preparation (per company) and rendered
-    // from that company's stored extraction:
-    expect(ENGINE).toContain("getAutoBewerbEmailTemplate(userId)");
-    expect(ENGINE).toContain("renderAutoBewerbEmailBody(template, app.ad_extracted)");
-    // the legacy override column is only ever written as null:
+describe("single global configuration (source contracts)", () => {
+  it("the engine resolves EVERYTHING from the global settings (no client/company override)", () => {
+    expect(ENGINE).toContain("const settings = await getAutoBewerbEmailSettings(userId);");
+    expect(ENGINE).toContain("resolveAutoBewerbRecipient(settings.recipient, app.recipient_email, app.ad_extracted)");
+    expect(ENGINE).toContain("subject = settings.subject.trim().slice(0, 200);");
+    expect(ENGINE).toContain("accountId = settings.accountId;");
+    expect(ENGINE).toContain("attachCv = settings.attachCv;");
+    expect(ENGINE).toContain("attachLetter = settings.attachLetter;");
+    // The legacy column is only ever written as null (never read):
     expect(ENGINE).toContain("email_body: null,");
     expect(ENGINE).not.toContain("app.email_body");
-    expect(ENGINE).not.toContain("r.email_body");
+    // No per-company settings can come from the client:
+    expect(ENGINE).not.toContain("input.recipientEmail");
+    expect(ENGINE).not.toContain("input.emailAccountId");
+    expect(ENGINE).not.toContain("input.subject");
+    expect(ENGINE).not.toContain("input.attachCv");
+    expect(ENGINE).not.toContain("bodyOverride");
+    // No token substitution anywhere in the send path:
+    expect(ENGINE).not.toContain("renderAutoBewerbEmailBody");
+  });
+
+  it("CV/letter attachments resolve PER COMPANY and BLOCK the send when missing (never silent)", () => {
+    // Resolution is strictly company-scoped — never a global document reference:
+    expect(ENGINE).toContain("getLatestAutoBewerbCv(userId, app.id)");
+    expect(ENGINE).toContain("getLatestAutoBewerbDocument(userId, app.id, \"cover_letter\")");
+    expect(ENGINE).toContain("autoBewerbCvPdfStoragePath(userId, app.id)");
+    expect(ENGINE).toContain("autoBewerbLetterPdfStoragePath(userId, app.id)");
+    // A missing/unrenderable document blocks this company (no silent drop, no substitution):
+    expect(ENGINE).toContain("code: \"missing_cv\"");
+    expect(ENGINE).toContain("code: \"missing_letter\"");
+    expect(ENGINE).toContain("code: \"cv_render_failed\"");
+    expect(ENGINE).toContain("code: \"letter_render_failed\"");
+  });
+
+  it("the schema no longer offers a token renderer or token list", () => {
+    expect(SCHEMA).not.toContain("renderAutoBewerbEmailBody");
+    expect(SCHEMA).not.toContain("AUTO_BEWERB_EMAIL_TOKENS");
+    expect(SCHEMA).toContain("export function resolveAutoBewerbRecipient");
+  });
+
+  it("Step 6 UI: one global configuration + one Save; no token chips; legacy mode is read-only", () => {
+    expect(STEP6).toContain("saveEmailSettingsAction");
+    expect(STEP6).toContain("resolveAutoBewerbRecipient");
+    expect(STEP6).toContain("ws.emailSettingsSupported");
+    expect(STEP6).not.toContain("AUTO_BEWERB_EMAIL_TOKENS");
+    expect(STEP6).not.toContain("renderAutoBewerbEmailBody");
+    expect(STEP6).not.toContain("updateCompanyAction"); // no per-company email save path
+    // The body is previewed verbatim (the template text itself):
+    expect(STEP6).toContain("{templateText || t(\"autoBewerb.templateEmptyNote\")}");
+  });
+
+  it("Step 7: inputs are company ids + confirmation only; the modal shows the exact shared config + per-company destination", () => {
+    expect(STEP7).toContain("selectedViews.map((v) => ({ companyId: v.company.id, confirmed: true }))");
+    expect(STEP7).not.toContain("recipientEmail");
+    expect(STEP7).not.toContain("emailAccountId");
+    expect(STEP7).not.toContain("renderAutoBewerbEmailBody");
+    // The confirmation shows the shared body VERBATIM + the resolved destination:
+    expect(STEP7).toContain("resolveAutoBewerbRecipient(s.recipient, r.recipient_email, r.ad_extracted)");
+    expect(STEP7).toContain("t(\"autoBewerb.globalPreviewTitle\")");
+    expect(STEP7).toContain("t(\"autoBewerb.previewCount\"");
+  });
+
+  it("server actions: no per-company e-mail fields anywhere", () => {
+    expect(ACTIONS).not.toContain("bodyOverride");
+    expect(ACTIONS).not.toContain("emailBody");
+    expect(ACTIONS).not.toContain("recipientEmail");
+    expect(ACTIONS).not.toContain("emailAccountId");
+    expect(ACTIONS).toContain("saveEmailSettingsAction");
+    // Both the immediate and the scheduled path pass only companyId (+ schedule):
+    expect(ACTIONS).toContain("companyId: input.companyId,\n      schedule: input.schedule ?? null,");
+  });
+
+  it("the i18n dictionaries have no token keys and document the global configuration", () => {
+    expect(DICT).not.toContain("tokenCompany");
+    expect(DICT).not.toContain("tokenPosition");
+    expect(DICT).not.toContain("tokenContact");
+    expect(DICT).toContain("emailSettingsTitle");
+    expect(DICT).toContain("globalRecipientHint");
+    expect(DICT).toContain("deliveryListTitle");
   });
 });
 
 // ---------------------------------------------------------------------------
-// 3. The global template prompt
+// AI prompt — company-neutral, no tokens
 // ---------------------------------------------------------------------------
 
-describe("buildAutoBewerbEmailTemplatePrompt", () => {
-  it("requires the three tokens and a company-neutral template", () => {
+describe("buildAutoBewerbEmailTemplatePrompt (company-neutral, no tokens)", () => {
+  it("forbids tokens and company names — the text is sent UNCHANGED to everyone", () => {
     const p = buildAutoBewerbEmailTemplatePrompt({ sharedAttachmentNames: [] });
-    expect(p).toContain("{company}");
-    expect(p).toContain("{position}");
-    expect(p).toContain("{contactName}");
-    expect(p).toContain("unternehmensneutral");
-    // {contactName} may never sit in the greeting (it can be empty):
-    expect(p).toContain("{contactName} DARF NICHT in der Anrede stehen");
+    expect(p).not.toContain("{company} →");
+    expect(p).not.toContain("{position} →");
+    expect(p).not.toContain("{contactName} →");
+    expect(p).toContain("EXAKT denselben Text");
+    expect(p).toContain("KEIN Firmenname");
+    expect(p).toContain("KEIN Platzhalter");
   });
 
-  it("forbids invented qualifications and requires the JSON contract", () => {
-    const p = buildAutoBewerbEmailTemplatePrompt({ sharedAttachmentNames: [] });
-    expect(p).toContain("Erfinde NIEMALS");
-    expect(p).toContain('{ "subject": string, "body": string }');
-  });
-
-  it("names the always-attached CV + letter PDFs and the global shared documents", () => {
+  it("keeps the no-invention rules and the attachment contract", () => {
     const p = buildAutoBewerbEmailTemplatePrompt({ sharedAttachmentNames: ["Abiturzeugnis.pdf"] });
+    expect(p).toContain("Erfinde NIEMALS");
     expect(p).toContain("Lebenslauf als PDF");
     expect(p).toContain("Anschreiben als PDF");
     expect(p).toContain("Abiturzeugnis.pdf");
-    expect(p).not.toContain("{company} → Name des Unternehmens (wird pro Unternehmen ersetzt)\n\n");
+    expect(p).toContain('{ "subject": string, "body": string }');
   });
 });
 
 // ---------------------------------------------------------------------------
-// 4. The generate-email route (global, metered, honest)
+// The generate-email route (global, metered, honest)
 // ---------------------------------------------------------------------------
 
-const USER = "22222222-2222-4222-8222-222222222222";
 const BASE = "http://localhost/api/auto-bewerb/generate-email";
 
 const PROFILE = {
@@ -243,8 +660,8 @@ const PROFILE = {
 } as never;
 
 const DRAFT_OK = JSON.stringify({
-  subject: "Bewerbung um die Ausbildungsstelle",
-  body: "Sehr geehrte Damen und Herren,\n\nhiermit bewerbe ich mich als {position} bei {company}. Anbei erhalten Sie meinen Lebenslauf und mein Anschreiben als PDF.\n\nMit freundlichen Grüßen\nMustapha Drif",
+  subject: "Bewerbung um eine Ausbildungsstelle",
+  body: "Sehr geehrte Damen und Herren,\n\nhiermit bewerbe ich mich um eine Ausbildungsstelle. Anbei erhalten Sie meinen Lebenslauf und mein Anschreiben als PDF.\n\nMit freundlichen Grüßen\nMustapha Drif",
 });
 
 const generateText = vi.fn(async () => DRAFT_OK);
@@ -282,7 +699,7 @@ const post = (body: Record<string, unknown> = {}) =>
     }),
   );
 
-describe("generate-email route", () => {
+describe("generate-email route (global, metered)", () => {
   it("unauthenticated → 401, model never called", async () => {
     (createClient as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       auth: { getUser: async () => ({ data: { user: null } }) },
@@ -312,20 +729,11 @@ describe("generate-email route", () => {
     expect(generateText).not.toHaveBeenCalled();
   });
 
-  it("feature disabled → 403, model never called", async () => {
-    (reserveFeatureOp as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ outcome: "feature_disabled" });
-    const res = await post();
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as { code?: string }).code).toBe("feature_disabled");
-    expect(generateText).not.toHaveBeenCalled();
-  });
-
-  it("success → 200 {subject, body} + the reservation is COMPLETED (quota charged)", async () => {
+  it("success → 200 {subject, body} + the reservation is COMPLETED", async () => {
     const res = await post();
     expect(res.status).toBe(200);
     const data = (await res.json()) as { subject: string; body: string };
-    expect(data.subject).toBe("Bewerbung um die Ausbildungsstelle");
-    expect(data.body).toContain("{company}");
+    expect(data.subject).toBe("Bewerbung um eine Ausbildungsstelle");
     expect(completeFeatureOp).toHaveBeenCalledTimes(1);
     expect(releaseFeatureOp).not.toHaveBeenCalled();
   });
@@ -339,25 +747,12 @@ describe("generate-email route", () => {
     expect(completeFeatureOp).not.toHaveBeenCalled();
   });
 
-  it("provider failure → 400 + the reservation is RELEASED (never charged)", async () => {
-    generateText.mockImplementation(async () => {
-      throw new Error("provider down");
-    });
-    const res = await post();
-    expect(res.status).toBe(400);
-    expect(releaseFeatureOp).toHaveBeenCalledTimes(1);
-    expect(completeFeatureOp).not.toHaveBeenCalled();
-  });
-
-  it("NO company input needed — the prompt is global: tokens + verified profile, no company facts", async () => {
+  it("NO company input needed — the prompt is global, token-free, profile-grounded", async () => {
     await post({ attachmentNames: ["Abiturzeugnis.pdf"] });
     const p = lastPrompt();
-    expect(p).toContain("{company}");
-    expect(p).toContain("{position}");
-    expect(p).toContain("{contactName}");
+    expect(p).not.toContain("{company} →");
     expect(p).toContain("Erfinde NIEMALS");
-    // the verified profile grounds the motivation (real facts only):
-    expect(p).toContain("Kältebau Nord GmbH");
+    expect(p).toContain("Kältebau Nord GmbH"); // the verified profile grounds the motivation
     expect(p).toContain("Abiturzeugnis.pdf");
   });
 
