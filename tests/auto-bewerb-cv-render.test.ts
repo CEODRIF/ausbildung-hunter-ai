@@ -147,8 +147,9 @@ describe("tailored CV renderer — multi-page continuation", () => {
     const pages = pdf.getPageCount();
     expect(pages).toBeGreaterThanOrEqual(2);
     // Page 1: the header block + sections, NO running header line.
+    // (The redesign renders the name in normal case, per the reference.)
     const page1 = pageText(pdf, 0);
-    expect(page1).toContain("MUSTAPHA DRIF");
+    expect(page1).toContain("Mustapha Drif");
     expect(page1).not.toMatch(/^Mustapha Drif.*Lebenslauf$/m);
     // Every continuation page: the name + "Lebenslauf" running header.
     for (let i = 1; i < pages; i += 1) {

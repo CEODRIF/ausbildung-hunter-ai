@@ -210,7 +210,8 @@ describe("export-pdf route — real renderer output is a valid, NON-BLANK PDF", 
     const all = Array.from({ length: pdf.getPageCount() }, (_, i) => pageText(pdf, i)).join("\n")
       .replace(/[\s\u00ad]+/g, " ");
     // The document is NOT blank: name, title, sections and content render.
-    expect(all).toContain("MUSTAPHA DRIF");
+    // (The redesign renders the name in normal case, per the reference.)
+    expect(all).toContain("Mustapha Drif");
     expect(all).toContain("Auszubildende:r Anlagenmechaniker SHK");
     expect(all).toContain("PROFIL");
     expect(all).toContain("KENNTNISSE");
