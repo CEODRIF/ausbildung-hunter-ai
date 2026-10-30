@@ -6,15 +6,19 @@ import {
   reserveFeatureOp,
 } from "@/lib/billing/entitlement-service";
 import { checkRateLimit, rateLimitHeaders, tooManyRequests } from "@/lib/rate-limit";
-import {
-  buildCvGenerationPrompt,
-  extractSummaryText,
-  parseJsonObject,
-} from "@/lib/studio/prompts";
-import { formatCvForPrompt, formatProfileForPrompt } from "@/lib/templates/cover-letter";
+import { parseJsonObject } from "@/lib/studio/prompts";
+import { formatProfileForPrompt } from "@/lib/templates/cover-letter";
 import { createClient } from "@/lib/supabase/server";
 import { resolveCvTemplateId, sanitizeCvDocument } from "@/lib/templates/cv";
-import { getAutoBewerbCompany, getAutoBewerbProfile } from "@/lib/auto-bewerb/engine";
+import {
+  AUTO_BEWERB_CV_SYSTEM_PROMPT,
+  buildAutoBewerbCvPrompt,
+} from "@/lib/auto-bewerb/prompts";
+import {
+  getAutoBewerbCompany,
+  getAutoBewerbProfile,
+  getAutoBewerbProfilePhotoRef,
+} from "@/lib/auto-bewerb/engine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,20 +26,36 @@ export const dynamic = "force-dynamic";
 /**
  * AUTO BEWERB — Step 4: the tailored German CV (Lebenslauf) for ONE company.
  *
- * Inputs: the analyzed CV profile (Step 1, user-corrected) and the company's
- * stored ad extraction (Step 2). Defense in depth:
- *  1. prompt contract (only verified facts, empty when unknown);
+ * Company-specific generation (the quality fix): the prompt is built from
+ * the company's STORED, zod-validated ad context — full extraction +
+ * profile match analysis + the complete (fenced) advertisement text — so
+ * every employer gets a distinct, genuinely tailored document grounded in
+ * the verified candidate profile (never a generic CV with the name swapped).
+ *
+ * Defense in depth:
+ *  1. prompt contract (only verified facts; dates verbatim; photo always
+ *     null — the PLATFORM freezes the uploaded profile-photo reference
+ *     into the document after generation, the model never sees an image);
  *  2. `sanitizeCvDocument` — the output must parse into a valid CvDocument
  *     (schema validation + input sanitization stay mandatory).
  * The strict fact-validation guard (`validateGeneratedCv`) was removed:
  * generated CVs are saved and shown as-is; provider/quota/network failures
  * still surface their real error.
  *
+ * SINGLE-FLIGHT per (user, company): identical concurrent requests
+ * (double click, two tabs) share ONE paid provider call (same pattern as
+ * analyze-ad) — duplicate concurrent generation is prevented.
+ *
  * Metered on the existing `resume_ai` quota (per cycle). The route only
  * RETURNS the document — persistence (per-company versioned row) happens in
  * the saveDocument server action, so regenerating company A never touches
  * company B.
  */
+
+// In-flight single-flight table: one provider call per (user, company).
+// Keyed per user+company — results embed user-specific profile context and
+// company-specific ad context (never shared across either axis).
+const inFlight = new Map<string, Promise<string>>();
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -74,6 +94,10 @@ export async function POST(request: Request) {
     );
   }
 
+  // The uploaded profile photo (frozen into the document BELOW, never seen
+  // by the model). Missing/unsupported → null: generation always works.
+  const photoRef = await getAutoBewerbProfilePhotoRef(user.id);
+
   const runId = crypto.randomUUID();
   const reserved = await reserveFeatureOp(user.id, "resume_ai", runId);
   if (reserved.outcome === "quota_exhausted") {
@@ -95,17 +119,34 @@ export async function POST(request: Request) {
     );
   }
 
-  const prompt = buildCvGenerationPrompt({
-    extractText: extractSummaryText(extract),
+  const prompt = buildAutoBewerbCvPrompt({
+    extract,
+    analysis: bundle.company.ad_analysis,
+    adRaw: bundle.company.ad_raw,
     profileText: formatProfileForPrompt(profile.extracted),
-    cvText: formatCvForPrompt(null),
     templateId,
   });
 
+  const sfKey = `${user.id}\u0000${companyId}`;
+  let work = inFlight.get(sfKey);
+  if (!work) {
+    work = (async () => {
+      try {
+        return await provider().generateText([{ role: "user", content: prompt }], 120_000, {
+          temperature: 0,
+          systemPrompt: AUTO_BEWERB_CV_SYSTEM_PROMPT,
+        });
+      } finally {
+        // Drop the entry once the work has settled (identity check: a later
+        // identical request may have registered a NEW promise).
+        if (inFlight.get(sfKey) === work) inFlight.delete(sfKey);
+      }
+    })();
+    inFlight.set(sfKey, work);
+  }
+
   try {
-    const raw = await provider().generateText([{ role: "user", content: prompt }], 120_000, {
-      temperature: 0,
-    });
+    const raw = await work;
     const doc = sanitizeCvDocument(parseJsonObject(raw));
     if (!doc) {
       await releaseFeatureOp(user.id, "resume_ai", runId);
@@ -116,8 +157,12 @@ export async function POST(request: Request) {
     }
     // Keep the user's chosen template; the model may not re-style it.
     doc.templateId = templateId;
+    // The uploaded profile photo is frozen into the document by the
+    // PLATFORM (server-owned reference, ownership-resolved at render time) —
+    // the model's answer for personal.photo is never trusted.
+    doc.personal.photo = photoRef;
     await completeFeatureOp(user.id, "resume_ai", runId);
-    return NextResponse.json({ cv: doc }, { headers: rateLimitHeaders(limited) });
+    return NextResponse.json({ cv: doc, photo: photoRef }, { headers: rateLimitHeaders(limited) });
   } catch (error) {
     await releaseFeatureOp(user.id, "resume_ai", runId);
     return NextResponse.json(

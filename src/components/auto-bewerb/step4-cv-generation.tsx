@@ -6,6 +6,7 @@ import { Button, Input, Modal, Textarea } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
 import type { CvDocument } from "@/lib/templates/cv";
+import { isPhotoRef } from "@/lib/auto-bewerb/profile-photo";
 import type { AutoBewerbCompanyView } from "@/lib/auto-bewerb/schema";
 import {
   markDocumentReviewedAction,
@@ -406,18 +407,35 @@ function CvPreview({
   const p = doc.personal;
   const setPersonal = (patch: Partial<typeof p>) => onChange?.({ ...doc, personal: { ...p, ...patch } });
   const setSkills = (v: string) => onChange?.({ ...doc, skills: s2a(v) });
+  // The document's FROZEN photo (server-owned reference or legacy data URL):
+  // the ownership-checked preview route resolves it — same image the PDF
+  // export renders (never a client-supplied URL).
+  const photoSrc = p.photo
+    ? isPhotoRef(p.photo)
+      ? `/api/auto-bewerb/profile-photo?ref=${encodeURIComponent(p.photo)}`
+      : p.photo
+    : null;
 
   return (
     <div className="space-y-4">
       {/* Personal */}
       <div className="rounded-2xl border border-line bg-surface-2/40 p-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Input label={t("autoBewerb.fullName")} value={p.fullName} disabled={!editable} onChange={(e) => setPersonal({ fullName: e.target.value })} />
-          <Input label={t("autoBewerb.professionalTitle")} value={p.professionalTitle} disabled={!editable} onChange={(e) => setPersonal({ professionalTitle: e.target.value })} />
-          <Input label={t("autoBewerb.email")} value={p.email} disabled={!editable} onChange={(e) => setPersonal({ email: e.target.value })} />
-          <Input label={t("autoBewerb.phone")} value={p.phone} disabled={!editable} onChange={(e) => setPersonal({ phone: e.target.value })} />
-          <Input label={t("autoBewerb.currentLocation")} value={p.location} disabled={!editable} onChange={(e) => setPersonal({ location: e.target.value })} />
-          <Input label="LinkedIn" value={p.linkedin} disabled={!editable} onChange={(e) => setPersonal({ linkedin: e.target.value })} />
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="grid flex-1 gap-3 sm:grid-cols-2">
+            <Input label={t("autoBewerb.fullName")} value={p.fullName} disabled={!editable} onChange={(e) => setPersonal({ fullName: e.target.value })} />
+            <Input label={t("autoBewerb.professionalTitle")} value={p.professionalTitle} disabled={!editable} onChange={(e) => setPersonal({ professionalTitle: e.target.value })} />
+            <Input label={t("autoBewerb.email")} value={p.email} disabled={!editable} onChange={(e) => setPersonal({ email: e.target.value })} />
+            <Input label={t("autoBewerb.phone")} value={p.phone} disabled={!editable} onChange={(e) => setPersonal({ phone: e.target.value })} />
+            <Input label={t("autoBewerb.currentLocation")} value={p.location} disabled={!editable} onChange={(e) => setPersonal({ location: e.target.value })} />
+            <Input label="LinkedIn" value={p.linkedin} disabled={!editable} onChange={(e) => setPersonal({ linkedin: e.target.value })} />
+          </div>
+          {photoSrc && (
+            <img
+              src={photoSrc}
+              alt=""
+              className="h-28 w-20 shrink-0 rounded-xl border border-line bg-surface object-cover"
+            />
+          )}
         </div>
       </div>
 

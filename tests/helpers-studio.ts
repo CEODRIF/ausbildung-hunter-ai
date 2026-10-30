@@ -32,6 +32,7 @@ interface ChainState {
     | { op: "select" }
     | { op: "insert"; vals: Record<string, unknown> }
     | { op: "update"; vals: Record<string, unknown> }
+    | { op: "upsert"; vals: Record<string, unknown>; onConflict: string | null }
     | { op: "delete" }
     | null;
   shape: "rows" | "single" | "maybeSingle";
@@ -123,6 +124,9 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
       limit: (n: number) => ((st.limit = n), chain),
       insert: (vals: Record<string, unknown>) => ((st.pending = { op: "insert", vals }), chain),
       update: (vals: Record<string, unknown>) => ((st.pending = { op: "update", vals }), chain),
+      upsert: (vals: Record<string, unknown>, opts: { onConflict?: string } | null = null) => (
+        (st.pending = { op: "upsert", vals, onConflict: opts?.onConflict ?? null }), chain
+      ),
       delete: () => ((st.pending = { op: "delete" }), chain),
       maybeSingle: () => ((st.shape = "maybeSingle"), chain),
       single: () => ((st.shape = "single"), chain),
@@ -172,6 +176,34 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
           ...st.pending.vals,
         };
         ts.push(row);
+        const out = st.shape === "single" || st.selectAfter ? row : null;
+        return { data: out, error: null };
+      }
+      if (st.pending?.op === "upsert") {
+        // Capture before the find() closure: TS resets property narrowing
+        // after a function boundary (the closure could run later).
+        const pending = st.pending;
+        calls.push({ table, op: "insert", filters: filterMap(st), args: [pending.vals] });
+        if (insertErrors[table]) {
+          return { data: null, error: { message: insertErrors[table] } };
+        }
+        const key = pending.onConflict;
+        const existing = key
+          ? ts.find((r) => r[key] !== undefined && r[key] === pending.vals[key])
+          : null;
+        let row: Record<string, unknown>;
+        if (existing) {
+          Object.assign(existing, pending.vals, { updated_at: new Date().toISOString() });
+          row = existing;
+        } else {
+          row = {
+            id: randomUUID(),
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            ...pending.vals,
+          };
+          ts.push(row);
+        }
         const out = st.shape === "single" || st.selectAfter ? row : null;
         return { data: out, error: null };
       }

@@ -48,6 +48,16 @@ import {
   emailBodyToHtml,
   listUserEmailAccounts,
 } from "../studio";
+import {
+  PROFILE_PHOTO_EXT,
+  PROFILE_PHOTO_MAX_BYTES,
+  PROFILE_PHOTO_MIME,
+  buildPhotoRef,
+  profilePhotoStoragePath,
+  validateProfilePhoto,
+} from "./profile-photo";
+import { processProfilePhoto, resolvePhotoDataUrl } from "./profile-photo-process";
+import type { AutoBewerbProfilePhotoRow } from "./schema";
 
 /**
  * AUTO BEWERB — server-side data + dispatch engine (the /auto-bewerb workflow).
@@ -390,6 +400,205 @@ export async function deleteAutoBewerbProfile(userId: string): Promise<AutoBewer
   if (error) return fail("storage_error", "Löschen fehlgeschlagen.");
   void logAutoBewerbActivity(userId, "auto_bewerb_profile_deleted", "AUTO BEWERB: Lebenslauf gelöscht");
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Step 1 — professional profile photo (independent of the CV file)
+// ---------------------------------------------------------------------------
+
+/**
+ * The photo feature has its OWN schema probe (migration
+ * 20261216000000_auto_bewerb_profile_photo.sql): a deployment of this code
+ * BEFORE the migration is applied must degrade ONLY the photo card, never
+ * the whole 7-table workflow (AUTO_BEWERB_TABLES stays untouched).
+ *
+ * Negative results are cached 60 s (same TTL as the table probe): a
+ * schema-cache refresh after a just-applied migration must not pin the
+ * "photo unavailable" state for the whole serverless instance.
+ */
+const PHOTO_PROBE_NEGATIVE_TTL_MS = 60_000;
+let photoProbeCache: { at: number; available: boolean } | null = null;
+
+export async function getAutoBewerbPhotoProbe(): Promise<{ available: boolean }> {
+  if (photoProbeCache) {
+    if (photoProbeCache.available || Date.now() - photoProbeCache.at < PHOTO_PROBE_NEGATIVE_TTL_MS) {
+      return { available: photoProbeCache.available };
+    }
+  }
+  let available = true;
+  try {
+    const { error } = await createAdminClient()
+      .from("auto_bewerb_profile_photos")
+      .select("*")
+      .limit(1);
+    if (error) {
+      available = classifyProbeError({ message: error.message ?? String(error) }) !== "missing";
+      if (!available) {
+        // Missing table = migration not applied yet: an expected, silent state.
+      } else {
+        console.error(`[auto-bewerb] photo schema probe blocked: ${error}`);
+      }
+    }
+  } catch (e) {
+    available = false;
+    console.error(`[auto-bewerb] photo schema probe error: ${e instanceof Error ? e.message : e}`);
+  }
+  photoProbeCache = { at: Date.now(), available };
+  return { available };
+}
+
+/** Boolean probe (true = the profile-photo table is reachable). */
+export function hasAutoBewerbPhotoSchema(): Promise<boolean> {
+  return getAutoBewerbPhotoProbe().then((p) => p.available);
+}
+
+export async function getAutoBewerbProfilePhoto(userId: string): Promise<AutoBewerbProfilePhotoRow | null> {
+  const { data, error } = await createAdminClient()
+    .from("auto_bewerb_profile_photos")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return data as unknown as AutoBewerbProfilePhotoRow;
+}
+
+const PHOTO_EXT_BY_MIME: Record<string, "jpg" | "png" | "webp"> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+/** The current photo's frozen CV reference (null = no photo / unsupported /
+ *  unknown mime — the workflow simply continues without a photograph). */
+export async function getAutoBewerbProfilePhotoRef(userId: string): Promise<string | null> {
+  const row = await getAutoBewerbProfilePhoto(userId).catch(() => null);
+  const ext = row ? PHOTO_EXT_BY_MIME[row.photo_mime_type] : undefined;
+  return row && ext ? buildPhotoRef(row.photo_hash, ext) : null;
+}
+
+/**
+ * Upload / REPLACE the candidate's professional photo.
+ *
+ * Pipeline: magic-byte validation (the bytes are the source of truth) →
+ * size + dimension caps → best-effort optimization (aspect preserved; a
+ * failed optimization keeps the original validated bytes) → sha256 of the
+ * STORED bytes → private bucket under `${userId}/auto-bewerb/photo/`
+ * (owner-scoped, unguessable, content-deduplicated) → upsert of the single
+ * owner row (the ONLY "current photo" source of truth).
+ *
+ * Replaced objects are deliberately KEPT in storage: previously generated
+ * CVs freeze the photo by hash reference and must never silently change.
+ */
+export async function uploadAutoBewerbProfilePhoto(
+  userId: string,
+  buffer: Buffer,
+): Promise<AutoBewerbOpResult<{ ref: string; hash: string; mime: string; sizeBytes: number }>> {
+  if (!(await hasAutoBewerbPhotoSchema())) {
+    return fail("schema_pending", "Die Foto-Funktion wird vorbereitet. Bitte die Migration anwenden und erneut laden.");
+  }
+  const validation = validateProfilePhoto(buffer);
+  if (!validation.ok) {
+    const message =
+      validation.code === "too_large"
+        ? `Das Foto ist zu groß (max. ${Math.floor(PROFILE_PHOTO_MAX_BYTES / 1024 / 1024)} MB).`
+        : validation.code === "too_small"
+          ? "Das Foto ist zu klein (mind. 300 px pro Seite)."
+          : validation.code === "too_high_resolution"
+            ? "Das Foto hat eine unzulässig hohe Auflösung (max. 8000 px pro Seite)."
+            : "Nur JPG, JPEG, PNG oder WEBP werden akzeptiert.";
+    return fail(validation.code === "too_large" ? "file_too_large" : "invalid_file_type", message);
+  }
+
+  const processed =
+    (await processProfilePhoto(buffer, validation.type)) ?? {
+      buffer,
+      ext: PROFILE_PHOTO_EXT[validation.type],
+      mime: PROFILE_PHOTO_MIME[validation.type],
+      width: 0,
+      height: 0,
+      optimized: false,
+    };
+  if (processed.buffer.length > PROFILE_PHOTO_MAX_BYTES) {
+    return fail("file_too_large", `Das Foto ist zu groß (max. ${Math.floor(PROFILE_PHOTO_MAX_BYTES / 1024 / 1024)} MB).`);
+  }
+
+  const admin = createAdminClient();
+  const fileHash = createHash("sha256").update(processed.buffer).digest("hex");
+  const path = profilePhotoStoragePath(userId, fileHash, processed.ext);
+  const { error: uploadError } = await admin
+    .storage.from(ATTACHMENT_BUCKET)
+    .upload(path, processed.buffer, { contentType: processed.mime, upsert: true });
+  if (uploadError) return fail("storage_error", "Foto-Upload fehlgeschlagen. Bitte erneut versuchen.");
+
+  const now = new Date().toISOString();
+  const { error } = await admin
+    .from("auto_bewerb_profile_photos")
+    .upsert(
+      {
+        user_id: userId,
+        photo_mime_type: processed.mime,
+        photo_size_bytes: processed.buffer.length,
+        photo_hash: fileHash,
+        photo_storage_path: path,
+        uploaded_at: now,
+      },
+      { onConflict: "user_id" },
+    );
+  if (error) {
+    // Roll the object back so no orphan private file remains.
+    await admin.storage.from(ATTACHMENT_BUCKET).remove([path]).catch(() => undefined);
+    console.error(`[auto-bewerb] photo upsert failed: ${error.message}`);
+    return fail("storage_error", "Foto konnte nicht gespeichert werden. Bitte erneut versuchen.");
+  }
+  void logAutoBewerbActivity(userId, "auto_bewerb_profile_photo_uploaded", "AUTO BEWERB: Bewerbungsfoto hochgeladen");
+  return {
+    ok: true,
+    value: { ref: buildPhotoRef(fileHash, processed.ext), hash: fileHash, mime: processed.mime, sizeBytes: processed.buffer.length },
+  };
+}
+
+/** Remove the current photo (user request). The storage object is KEPT —
+ *  previously saved CVs hold the frozen hash reference (see upload). */
+export async function deleteAutoBewerbProfilePhoto(userId: string): Promise<AutoBewerbOpResult> {
+  if (!(await hasAutoBewerbPhotoSchema())) return fail("schema_pending", "Die Foto-Funktion wird vorbereitet.");
+  const { error } = await createAdminClient()
+    .from("auto_bewerb_profile_photos")
+    .delete()
+    .eq("user_id", userId);
+  if (error) return fail("storage_error", "Das Foto konnte nicht entfernt werden. Bitte erneut versuchen.");
+  void logAutoBewerbActivity(userId, "auto_bewerb_profile_photo_removed", "AUTO BEWERB: Bewerbungsfoto entfernt");
+  return { ok: true };
+}
+
+/**
+ * Resolve a CV photo reference to renderable bytes for the VERIFIED owner.
+ * The storage path is constructed from the session-verified userId — the
+ * reference itself carries only the content hash (no path, no URL).
+ * A missing object (photo removed) resolves to null: the renderer then
+ * simply omits the photo, it never fails the document.
+ */
+export async function resolveAutoBewerbPhotoDataUrl(
+  userId: string,
+  ref: string | null,
+): Promise<string | null> {
+  if (!ref) return null;
+  if (ref.startsWith("data:image/")) {
+    // Legacy inline data URL (CV Builder documents) — no storage access.
+    return ref.length <= 8 * 1024 * 1024 ? ref : null;
+  }
+  try {
+    return await resolvePhotoDataUrl(userId, ref, async (uid, hash, ext) => {
+      const path = profilePhotoStoragePath(uid, hash, ext);
+      const storage = createAdminClient().storage.from(ATTACHMENT_BUCKET) as {
+        download: (p: string) => Promise<{ data: Blob | null; error: { message?: string } | null }>;
+      };
+      const { data, error } = await storage.download(path);
+      if (error || !data) return null;
+      return Buffer.from(await data.arrayBuffer());
+    });
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1114,7 +1323,10 @@ export async function prepareAutoBewerbSend(
     const cv = await getLatestAutoBewerbCv(userId, app.id);
     if (cv) {
       try {
-        const bytes = await generateCvPdf(cv);
+        // The sent PDF carries the SAME frozen photo the preview shows
+        // (reference resolved ownership-scoped; missing → no photo).
+        const photoDataUrl = await resolveAutoBewerbPhotoDataUrl(userId, cv.personal.photo);
+        const bytes = await generateCvPdf(cv, { photoDataUrl });
         const path = autoBewerbCvPdfStoragePath(userId, app.id);
         const { error: cvUploadError } = await admin
           .storage.from(ATTACHMENT_BUCKET)
@@ -1582,6 +1794,8 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     ready,
     setupIssue,
     profile: null,
+    photoSupported: false,
+    photo: null,
     companies: [],
     attachments: [],
     emailTemplate: "",
@@ -1590,13 +1804,31 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
   if (!ready) return empty;
 
   const admin = createAdminClient();
-  const [profileRow, templateRes, companies, attachments, emailAccounts] = await Promise.all([
-    getAutoBewerbProfile(userId),
-    admin.from("auto_bewerb_email_templates").select("body").eq("user_id", userId).maybeSingle(),
-    listAutoBewerbCompanies(userId),
-    listAutoBewerbAttachments(userId),
-    listUserEmailAccounts(userId),
-  ]);
+  const [profileRow, templateRes, companies, attachments, emailAccounts, photoProbe, photoRow] =
+    await Promise.all([
+      getAutoBewerbProfile(userId),
+      admin.from("auto_bewerb_email_templates").select("body").eq("user_id", userId).maybeSingle(),
+      listAutoBewerbCompanies(userId),
+      listAutoBewerbAttachments(userId),
+      listUserEmailAccounts(userId),
+      getAutoBewerbPhotoProbe(),
+      getAutoBewerbProfilePhoto(userId),
+    ]);
+  const photoSupported = photoProbe.available;
+  const photoExtByMime: Record<string, "jpg" | "png" | "webp"> = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+  };
+  const photo =
+    photoSupported && photoRow && photoExtByMime[photoRow.photo_mime_type]
+      ? {
+          ref: buildPhotoRef(photoRow.photo_hash, photoExtByMime[photoRow.photo_mime_type]),
+          mime: photoRow.photo_mime_type,
+          sizeBytes: photoRow.photo_size_bytes,
+          uploadedAt: photoRow.uploaded_at,
+        }
+      : null;
   const ids = companies.map((c) => c.id);
   const [docsRes, attemptsRes] = ids.length
     ? await Promise.all([
@@ -1652,6 +1884,8 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
           extracted: profileRow.extracted,
         }
       : null,
+    photoSupported,
+    photo,
     companies: views,
     attachments,
     emailTemplate: String((templateRes.data as { body?: string } | null)?.body ?? ""),

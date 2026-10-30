@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { FileText, RefreshCw, Trash2, UploadCloud } from "lucide-react";
+import { FileText, Image as ImageIcon, RefreshCw, Trash2, UploadCloud } from "lucide-react";
 import { Button, Input, Modal, Textarea } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
@@ -13,6 +13,12 @@ import {
 import { Note, SectionCard, useAutoBewerb, useSaveFlash } from "./shared";
 
 const ACCEPT = ".pdf,.doc,.docx,.png,.jpg,.jpeg";
+const PHOTO_ACCEPT = ".jpg,.jpeg,.png,.webp";
+const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+/** Client pre-check only — the server re-validates from magic bytes. */
+const PHOTO_CLIENT_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
+/** Same-origin, cookie-authenticated preview (private bucket, no public URL). */
+const photoPreviewUrl = (uploadedAt: string) => `/api/auto-bewerb/profile-photo?ts=${encodeURIComponent(uploadedAt)}`;
 
 /** Compact byte size (de-style). */
 function fmtSize(bytes: number): string {
@@ -46,6 +52,12 @@ export function Step1Cv() {
   const locale = { de: "de-DE", en: "en-GB", fr: "fr-FR", ar: "ar-EG" }[lang] ?? "de-DE";
   const fileInput = useRef<HTMLInputElement>(null);
   const replaceInput = useRef<HTMLInputElement>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
+  const photoReplaceInput = useRef<HTMLInputElement>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [confirmPhotoRemove, setConfirmPhotoRemove] = useState(false);
+  const [removingPhoto, setRemovingPhoto] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [reused, setReused] = useState(false);
@@ -125,6 +137,60 @@ export function Step1Cv() {
     }
   };
 
+  // --- profile photo (optional — the workflow continues without one) ------
+  const photo = ws.photo;
+
+  const onPhotoFile = async (file: File | undefined | null) => {
+    if (!file) return;
+    setPhotoError(null);
+    if (!PHOTO_CLIENT_MIME.has(file.type)) {
+      setPhotoError(t("autoBewerb.photoErrorType"));
+      return;
+    }
+    if (file.size > PHOTO_MAX_BYTES) {
+      setPhotoError(t("autoBewerb.photoErrorSize"));
+      return;
+    }
+    setPhotoBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/auto-bewerb/profile-photo", { method: "POST", body: fd });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        setPhotoError(data.error ?? t("autoBewerb.photoErrorUpload"));
+      } else {
+        await refresh();
+        notify("success", t("autoBewerb.saved"));
+      }
+    } catch {
+      setPhotoError(t("autoBewerb.photoErrorUpload"));
+    } finally {
+      setPhotoBusy(false);
+      if (photoInput.current) photoInput.current.value = "";
+      if (photoReplaceInput.current) photoReplaceInput.current.value = "";
+    }
+  };
+
+  const onPhotoRemove = async () => {
+    setRemovingPhoto(true);
+    try {
+      const res = await fetch("/api/auto-bewerb/profile-photo", { method: "DELETE" });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        notify("error", data.error ?? t("autoBewerb.photoErrorRemove"));
+        return;
+      }
+      setConfirmPhotoRemove(false);
+      await refresh();
+      notify("success", t("autoBewerb.saved"));
+    } catch {
+      notify("error", t("autoBewerb.photoErrorRemove"));
+    } finally {
+      setRemovingPhoto(false);
+    }
+  };
+
   const editing = draft !== null;
   const d = draft;
 
@@ -132,6 +198,8 @@ export function Step1Cv() {
     <div className="space-y-5">
       <input ref={fileInput} type="file" accept={ACCEPT} className="hidden" onChange={(e) => void onFile(e.target.files?.[0])} />
       <input ref={replaceInput} type="file" accept={ACCEPT} className="hidden" onChange={(e) => void onFile(e.target.files?.[0])} />
+      <input ref={photoInput} type="file" accept={PHOTO_ACCEPT} className="hidden" onChange={(e) => void onPhotoFile(e.target.files?.[0])} />
+      <input ref={photoReplaceInput} type="file" accept={PHOTO_ACCEPT} className="hidden" onChange={(e) => void onPhotoFile(e.target.files?.[0])} />
 
       {/* Upload / file meta */}
       <SectionCard
@@ -194,6 +262,58 @@ export function Step1Cv() {
         {profile && !profile.extracted && (
           <div className="mt-3">
             <Note kind="error">{t("autoBewerb.cvNoExtract")}</Note>
+          </div>
+        )}
+      </SectionCard>
+
+      {/* Profile photo — optional, automatically used in every generated CV */}
+      <SectionCard title={`${t("autoBewerb.photoTitle")} (${t("autoBewerb.photoOptional")})`}>
+        {!ws.photoSupported ? (
+          <Note kind="info">{t("autoBewerb.photoSetupPending")}</Note>
+        ) : photo ? (
+          <div className="flex flex-wrap items-start gap-5">
+            <img
+              src={photoPreviewUrl(photo.uploadedAt)}
+              alt={t("autoBewerb.photoTitle")}
+              className="h-36 w-28 rounded-2xl border border-line bg-surface-2 object-cover"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm leading-6 text-muted">{t("autoBewerb.photoDesc")}</p>
+              <p className="mt-1 text-xs text-faint">
+                {fmtSize(photo.sizeBytes)} · {t("autoBewerb.photoUploadedAt")}: {fmtDate(photo.uploadedAt, locale)}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="secondary" size="sm" onClick={() => photoReplaceInput.current?.click()} disabled={photoBusy}>
+                  <RefreshCw size={14} className={photoBusy ? "animate-spin" : undefined} />
+                  {photoBusy ? t("autoBewerb.photoUploading") : t("autoBewerb.photoReplace")}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setConfirmPhotoRemove(true)} disabled={photoBusy || removingPhoto}>
+                  <Trash2 size={14} />
+                  {t("autoBewerb.photoRemove")}
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <p className="mb-4 text-sm leading-6 text-muted">{t("autoBewerb.photoDesc")}</p>
+            <button
+              type="button"
+              onClick={() => photoInput.current?.click()}
+              disabled={photoBusy}
+              className="flex w-full flex-col items-center gap-3 rounded-3xl border-2 border-dashed border-line-strong bg-surface-2/50 px-6 py-10 text-center transition-colors hover:border-accent hover:bg-accent-soft/30 disabled:opacity-60"
+            >
+              <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+                {photoBusy ? <RefreshCw size={22} className="animate-spin" /> : <ImageIcon size={22} strokeWidth={1.6} />}
+              </span>
+              <span className="text-sm font-bold text-ink">{photoBusy ? t("autoBewerb.photoUploading") : t("autoBewerb.photoUploadButton")}</span>
+              <span className="text-xs text-muted">{t("autoBewerb.photoFormats")}</span>
+            </button>
+            {photoError && (
+              <div className="mt-4">
+                <Note kind="error">{photoError}</Note>
+              </div>
+            )}
           </div>
         )}
       </SectionCard>
@@ -411,6 +531,18 @@ export function Step1Cv() {
           </Button>
           <Button variant="secondary" className="border-danger/40 text-danger hover:bg-danger-soft" onClick={() => void onDelete()} disabled={deleting}>
             {t("autoBewerb.deleteButton")}
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal open={confirmPhotoRemove} onClose={() => !removingPhoto && setConfirmPhotoRemove(false)} title={t("autoBewerb.photoRemoveTitle")}>
+        <p className="text-sm leading-6 text-muted">{t("autoBewerb.photoRemoveBody")}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setConfirmPhotoRemove(false)} disabled={removingPhoto}>
+            {t("common.cancel")}
+          </Button>
+          <Button variant="secondary" className="border-danger/40 text-danger hover:bg-danger-soft" onClick={() => void onPhotoRemove()} disabled={removingPhoto}>
+            {t("autoBewerb.photoRemove")}
           </Button>
         </div>
       </Modal>
