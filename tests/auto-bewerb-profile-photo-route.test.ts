@@ -15,6 +15,7 @@ import {
 } from "@/lib/rate-limit";
 import {
   deleteAutoBewerbProfilePhoto,
+  getAutoBewerbProfilePhotoRef,
   resolveAutoBewerbPhotoDataUrl,
   uploadAutoBewerbProfilePhoto,
 } from "@/lib/auto-bewerb/engine";
@@ -24,6 +25,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/auto-bewerb/engine", () => ({
   uploadAutoBewerbProfilePhoto: vi.fn(),
   deleteAutoBewerbProfilePhoto: vi.fn(),
+  getAutoBewerbProfilePhotoRef: vi.fn(),
   resolveAutoBewerbPhotoDataUrl: vi.fn(),
 }));
 vi.mock("@/lib/rate-limit", () => ({
@@ -137,26 +139,45 @@ describe("POST — upload", () => {
 });
 
 describe("GET — owner-scoped download (current photo or frozen ref)", () => {
-  it("returns 404 no_photo when the candidate has no photo", async () => {
-    (resolveAutoBewerbPhotoDataUrl as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    const res = await GET(new Request(BASE));
-    expect(res.status).toBe(404);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body.code).toBe("no_photo");
-  });
+  const CURRENT_REF = `abphoto:v1:${"a".repeat(64)}:png`;
 
-  it("streams the OWNER's bytes with the real image content type + no-store", async () => {
+  it("CURRENT photo (no ?ref): resolves the session user's DB row to a token, then streams the OWNER's bytes", async () => {
+    // THE regression: without this wiring the route resolved a null ref
+    // and answered 404 no_photo for every uploaded photo (broken <img> in
+    // Step 1).
+    (getAutoBewerbProfilePhotoRef as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(CURRENT_REF);
     (resolveAutoBewerbPhotoDataUrl as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(TINY_PNG_URL);
     const res = await GET(new Request(BASE));
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(Buffer.from(await res.arrayBuffer()).equals(TINY_PNG_BYTES)).toBe(true);
-    // Resolved against the SESSION user id.
+    // The row lookup is scoped to the SESSION user id, and the resolver
+    // receives the CURRENT token (never a client-supplied one).
+    expect(getAutoBewerbProfilePhotoRef).toHaveBeenCalledWith(USER.id);
+    expect(resolveAutoBewerbPhotoDataUrl).toHaveBeenCalledWith(USER.id, CURRENT_REF);
+  });
+
+  it("returns 404 no_photo when the candidate has no current photo (no ?ref)", async () => {
+    (getAutoBewerbProfilePhotoRef as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (resolveAutoBewerbPhotoDataUrl as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const res = await GET(new Request(BASE));
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.code).toBe("no_photo");
+    // A missing row degrades to a null ref — never an error.
     expect(resolveAutoBewerbPhotoDataUrl).toHaveBeenCalledWith(USER.id, null);
   });
 
-  it("resolves a FROZEN reference (?ref=) against the owner for the Step 4 preview", async () => {
+  it("a storage miss for the current token (object gone) also degrades to 404 no_photo", async () => {
+    (getAutoBewerbProfilePhotoRef as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(CURRENT_REF);
+    (resolveAutoBewerbPhotoDataUrl as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const res = await GET(new Request(BASE));
+    expect(res.status).toBe(404);
+    expect((await res.json() as Record<string, unknown>).code).toBe("no_photo");
+  });
+
+  it("resolves a FROZEN reference (?ref=) directly — the current row is never consulted (Step 4 preview)", async () => {
     const ref = `abphoto:v1:${"b".repeat(64)}:jpg`;
     (resolveAutoBewerbPhotoDataUrl as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
       `data:image/jpeg;base64,${Buffer.from("jpeg-bytes").toString("base64")}`,
@@ -164,7 +185,30 @@ describe("GET — owner-scoped download (current photo or frozen ref)", () => {
     const res = await GET(new Request(`${BASE}?ref=${encodeURIComponent(ref)}`));
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/jpeg");
+    // Frozen semantics: replaced/removed photos must not leak into saved
+    // documents — so the current-photo row lookup is skipped entirely.
     expect(resolveAutoBewerbPhotoDataUrl).toHaveBeenCalledWith(USER.id, ref);
+    expect(getAutoBewerbProfilePhotoRef).not.toHaveBeenCalled();
+  });
+
+  it("a frozen token whose storage object is gone degrades to 404 (old documents keep working)", async () => {
+    const ref = `abphoto:v1:${"c".repeat(64)}:png`;
+    (resolveAutoBewerbPhotoDataUrl as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const res = await GET(new Request(`${BASE}?ref=${encodeURIComponent(ref)}`));
+    expect(res.status).toBe(404);
+    expect((await res.json() as Record<string, unknown>).code).toBe("no_photo");
+  });
+
+  it("another user's photo cannot be requested: only the SESSION user id reaches the engine", async () => {
+    const otherUser = `abphoto:v1:${"d".repeat(64)}:png`;
+    (getAutoBewerbProfilePhotoRef as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(otherUser);
+    (resolveAutoBewerbPhotoDataUrl as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(TINY_PNG_URL);
+    await GET(new Request(BASE));
+    // No user-id parameter exists in this API surface at all — the engine
+    // is always called with the session-verified id (ownership + the
+    // owner-scoped storage path are enforced inside the resolver).
+    expect(getAutoBewerbProfilePhotoRef).toHaveBeenCalledWith(USER.id);
+    expect(resolveAutoBewerbPhotoDataUrl).toHaveBeenCalledWith(USER.id, otherUser);
   });
 
   it("rejects an explicitly empty ref parameter", async () => {

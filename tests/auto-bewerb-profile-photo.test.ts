@@ -437,6 +437,42 @@ describe("engine — photo upload, ownership and persistence", () => {
     expect(await resolveAutoBewerbPhotoDataUrl(USER_A, "abphoto:v1:zz")).toBeNull();
   });
 
+  it("resolves a FROZEN token to the stored bytes with the correct MIME (owner-scoped download)", async () => {
+    const buffer = fakePng(400, 500);
+    await uploadAutoBewerbProfilePhoto(USER_A, buffer);
+    const hash = sha256(buffer);
+    const dataUrl = await resolveAutoBewerbPhotoDataUrl(USER_A, buildPhotoRef(hash, "png"));
+    expect(dataUrl).toBe(`data:image/png;base64,${buffer.toString("base64")}`);
+    // The storage path is built from the VERIFIED owner's id + the token's
+    // content hash — the token itself carries no path to follow.
+    const downloads = db.calls.filter((c) => c.op === "storage" && "download" in c.filters);
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0].filters.download).toBe(`${USER_A}/auto-bewerb/photo/${hash}.png`);
+  });
+
+  it("user B can NOT resolve user A's frozen token (the path follows the SESSION owner)", async () => {
+    const buffer = fakePng(400, 500);
+    await uploadAutoBewerbProfilePhoto(USER_A, buffer);
+    const ref = buildPhotoRef(sha256(buffer), "png");
+    // Identical token, different verified owner → B's (empty) folder →
+    // null. Cross-user access is impossible by construction.
+    expect(await resolveAutoBewerbPhotoDataUrl(USER_B, ref)).toBeNull();
+    const downloads = db.calls.filter((c) => c.op === "storage" && "download" in c.filters);
+    expect(downloads.at(-1)?.filters.download).toBe(`${USER_B}/auto-bewerb/photo/${sha256(buffer)}.png`);
+  });
+
+  it("a document frozen WITHOUT a photo never picks up a later upload (null ref stays null)", async () => {
+    await uploadAutoBewerbProfilePhoto(USER_A, fakePng(400, 500));
+    // A CV saved before the upload holds photo: null — re-exporting it
+    // must still render without a photograph (frozen semantics).
+    expect(await resolveAutoBewerbPhotoDataUrl(USER_A, null)).toBeNull();
+    // ...while the CURRENT-photo path (DB row → token, what the GET route
+    // now uses for Step 1) resolves the new photo.
+    const ref = await getAutoBewerbProfilePhotoRef(USER_A);
+    expect(ref).not.toBeNull();
+    expect(await resolveAutoBewerbPhotoDataUrl(USER_A, ref)).not.toBeNull();
+  });
+
   it("degrades to schema_pending before the migration (own probe — workflow tables stay untouched)", async () => {
     // Fresh module instance (fresh probe caches) + a database where the
     // photo table does not exist yet.
