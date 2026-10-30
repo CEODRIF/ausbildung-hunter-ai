@@ -40,6 +40,7 @@ export function Step4CvGeneration() {
   /** Bulk run progress (null = never started / finished and summarized). */
   const [bulk, setBulk] = useState<{ total: number; done: number; failed: number; currentId: string | null; finished: boolean } | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"doc" | "edit">("doc");
   const [saving, setSaving] = useState(false);
   const [reviewing, setReviewing] = useState(false);
 
@@ -273,7 +274,10 @@ export function Step4CvGeneration() {
                   <Button
                     variant={st === "ready" ? "secondary" : "ghost"}
                     size="sm"
-                    onClick={() => setPreviewId(c.company.id)}
+                    onClick={() => {
+                      setPreviewId(c.company.id);
+                      setViewMode(c.cv ? "doc" : "edit");
+                    }}
                     disabled={st !== "ready"}
                     title={st !== "ready" ? t("autoBewerb.cvPreviewDisabledHint") : undefined}
                   >
@@ -318,13 +322,32 @@ export function Step4CvGeneration() {
               )}
               <div className="ml-auto flex items-center gap-2">
                 {previewView.cv && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => window.open(`/api/auto-bewerb/export-pdf?companyId=${encodeURIComponent(previewView.company.id)}&doc=cv`, "_blank")}
-                  >
-                    <Download size={13} /> {t("autoBewerb.exportPdfButton")}
-                  </Button>
+                  <>
+                    {/* Document / Edit toggle */}
+                    <div className="flex items-center gap-1 rounded-xl bg-surface-2 p-1">
+                      <button
+                        type="button"
+                        onClick={() => setViewMode("doc")}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${viewMode === "doc" ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink-soft"}`}
+                      >
+                        {t("autoBewerb.cvDocView")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setViewMode("edit")}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${viewMode === "edit" ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink-soft"}`}
+                      >
+                        {t("autoBewerb.cvEditView")}
+                      </button>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => window.open(`/api/auto-bewerb/export-pdf?companyId=${encodeURIComponent(previewView.company.id)}&doc=cv`, "_blank")}
+                    >
+                      <Download size={13} /> {t("autoBewerb.exportPdfButton")}
+                    </Button>
+                  </>
                 )}
                 {previewDraft && (
                   <Button variant="primary" size="sm" onClick={() => void savePreview()} disabled={saving}>
@@ -338,7 +361,29 @@ export function Step4CvGeneration() {
                 )}
               </div>
             </div>
-            <CvPreview doc={previewDoc} editable={Boolean(previewDraft)} onChange={previewDraft ? (patch) => setDraft("cv", previewView.company.id, patch) : undefined} />
+
+            {/* A4 document view — the ACTUAL PDF (same bytes as the export),
+                white page on the dark app, native zoom + scroll + pages. */}
+            {previewView.cv && viewMode === "doc" && !previewDraft ? (
+              <div className="space-y-2">
+                <div className="overflow-hidden rounded-xl bg-ink/70 p-2 sm:p-3">
+                  <iframe
+                    key={`${previewView.company.id}:${previewView.cvVersion ?? 0}`}
+                    src={`/api/auto-bewerb/export-pdf?companyId=${encodeURIComponent(previewView.company.id)}&doc=cv`}
+                    title={`${companyLabel(previewView.company).name} — Lebenslauf`}
+                    className="h-[75vh] min-h-[480px] w-full rounded-md bg-white"
+                  />
+                </div>
+                <p className="text-xs text-faint">{t("autoBewerb.cvDocViewHint")}</p>
+              </div>
+            ) : (
+              <>
+                {previewDraft && previewView.cv && viewMode === "doc" && (
+                  <Note kind="info">{t("autoBewerb.cvDocDraftNote")}</Note>
+                )}
+                <CvPreview doc={previewDoc} editable={Boolean(previewDraft)} onChange={previewDraft ? (patch) => setDraft("cv", previewView.company.id, patch) : undefined} />
+              </>
+            )}
           </div>
         )}
       </Modal>
