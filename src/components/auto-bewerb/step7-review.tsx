@@ -7,7 +7,7 @@ import { Button, Modal } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
 import { ScheduleForm } from "@/components/schedule-form";
 import { useI18n } from "@/lib/i18n";
-import { isValidEmail, renderAutoBewerbEmailBody, type AutoBewerbCompanyView } from "@/lib/auto-bewerb/schema";
+import { isValidEmail, resolveAutoBewerbRecipient, type AutoBewerbCompanyView } from "@/lib/auto-bewerb/schema";
 import {
   cancelSendAction,
   scheduleCompaniesAction,
@@ -20,11 +20,15 @@ import { Note, SectionCard, companyLabel, statusPill, useAutoBewerb } from "./sh
  * Step 7 — final review, explicit confirmation, send / schedule.
  *
  * Safety contract (mirrors the engine):
+ *  - the ONE global e-mail configuration (Step 6) is the exact content for
+ *    EVERY selected company — the client passes only company ids;
  *  - a send only happens after a confirmation modal that lists the EXACT
- *    recipients + attachments per company;
+ *    shared subject/body/account/attachments + the per-company delivery
+ *    destination (each company's verified address);
  *  - statuses are honest: "sent" only when the provider confirmed, "queued"
  *    when dispatched to the scheduler, failures stay per-company (isolation);
- *  - scheduling reuses the existing cron pipeline (the tick endpoint).
+ *  - scheduling reuses the existing cron pipeline (the tick endpoint) and
+ *    resolves the SAME global configuration at schedule time.
  */
 export function Step7Review() {
   const { ws, refresh, notify, goToStep } = useAutoBewerb();
@@ -36,34 +40,63 @@ export function Step7Review() {
   const [scheduling, setScheduling] = useState(false);
   const [results, setResults] = useState<SendCompanyResult[] | null>(null);
 
+  const s = ws.emailSettings; // null = legacy database (per-company rows)
+  const globalComplete = Boolean(s && s.body.trim() && s.subject.trim() && s.accountId);
+
+  /** The e-mail configuration that will actually be sent for this company —
+   *  global settings (supported) or the legacy stored row values. */
+  const emailCfg = (v: AutoBewerbCompanyView) => {
+    const r = v.company;
+    if (s) {
+      return {
+        dest: resolveAutoBewerbRecipient(s.recipient, r.recipient_email, r.ad_extracted),
+        subject: s.subject.trim(),
+        body: s.body.trim(),
+        attachCv: s.attachCv,
+        attachLetter: s.attachLetter,
+        account: ws.emailAccounts.find((a) => a.id === s.accountId) ?? null,
+      };
+    }
+    return {
+      dest: (r.recipient_email ?? "").trim(),
+      subject: (r.email_subject ?? "").trim(),
+      body: ws.emailTemplate.trim(),
+      attachCv: r.email_attach_cv,
+      attachLetter: r.email_attach_letter,
+      account: ws.emailAccounts.find((a) => a.id === (r.email_account_id ?? "")) ?? null,
+    };
+  };
+
   const sendable = (v: AutoBewerbCompanyView): boolean => {
     const r = v.company;
-    return (
-      (r.status === "draft" || r.status === "ready" || r.status === "failed" || r.status === "cancelled") &&
-      Boolean(r.recipient_email) &&
-      isValidEmail(r.recipient_email ?? "") &&
-      Boolean(r.email_subject) &&
-      Boolean(v.cv) &&
-      Boolean(v.letter) &&
-      Boolean(r.email_account_id)
-    );
+    const base = r.status === "draft" || r.status === "ready" || r.status === "failed" || r.status === "cancelled";
+    if (!base) return false;
+    const cfg = emailCfg(v);
+    if (s) {
+      // Global configuration: complete settings + a resolvable verified
+      // destination + the documents the global attachment flags demand.
+      return globalComplete && Boolean(cfg.dest) && isValidEmail(cfg.dest) && (!cfg.attachCv || Boolean(v.cv)) && (!cfg.attachLetter || Boolean(v.letter));
+    }
+    // Legacy (settings migration not applied): stored per-company values.
+    return Boolean(cfg.dest) && isValidEmail(cfg.dest) && Boolean(cfg.subject) && Boolean(v.cv) && Boolean(v.letter) && Boolean(cfg.account);
   };
 
   const missing = (v: AutoBewerbCompanyView): string[] => {
-    const r = v.company;
     const out: string[] = [];
-    if (!r.recipient_email) out.push(t("autoBewerb.missingRecipient"));
-    else if (!isValidEmail(r.recipient_email)) out.push(t("autoBewerb.invalidRecipient"));
-    if (!r.email_subject) out.push(t("autoBewerb.missingSubject"));
-    if (r.email_attach_cv && !v.cv) out.push(t("autoBewerb.missingCv"));
-    if (r.email_attach_letter && !v.letter) out.push(t("autoBewerb.missingLetter"));
-    if (!r.email_account_id) out.push(t("autoBewerb.missingAccount"));
+    const cfg = emailCfg(v);
+    if (!cfg.body) out.push(t("autoBewerb.templateEmptyNote"));
+    if (!cfg.subject) out.push(t("autoBewerb.missingSubject"));
+    if (!cfg.dest) out.push(t("autoBewerb.missingRecipient"));
+    else if (!isValidEmail(cfg.dest)) out.push(t("autoBewerb.invalidRecipient"));
+    if (cfg.attachCv && !v.cv) out.push(t("autoBewerb.missingCv"));
+    if (cfg.attachLetter && !v.letter) out.push(t("autoBewerb.missingLetter"));
+    if (!cfg.account) out.push(t("autoBewerb.missingAccount"));
     return out;
   };
 
   const toggle = (id: string) => {
-    setSelected((s) => {
-      const next = new Set(s);
+    setSelected((prev) => {
+      const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
@@ -75,15 +108,9 @@ export function Step7Review() {
   const doSend = async () => {
     setSending(true);
     setConfirmOpen(false);
-    const inputs = selectedViews.map((v) => ({
-      companyId: v.company.id,
-      recipientEmail: v.company.recipient_email!,
-      emailAccountId: v.company.email_account_id!,
-      subject: v.company.email_subject!,
-      attachCv: v.company.email_attach_cv,
-      attachLetter: v.company.email_attach_letter,
-      confirmed: true,
-    }));
+    // ONLY company ids + the explicit confirmation — every e-mail setting is
+    // resolved server-side from the ONE global configuration (no override).
+    const inputs = selectedViews.map((v) => ({ companyId: v.company.id, confirmed: true }));
     const res = await sendCompaniesAction(inputs);
     setSending(false);
     if (res.ok) {
@@ -191,6 +218,7 @@ export function Step7Review() {
             const { name, job } = companyLabel(v.company);
             const canSelect = sendable(v);
             const gaps = missing(v);
+            const cfg = emailCfg(v);
             const res = resultFor(r.id);
             return (
               <li key={r.id} className="flex flex-wrap items-start gap-3 py-4">
@@ -220,21 +248,18 @@ export function Step7Review() {
                   <dl className="mt-1.5 grid gap-x-4 gap-y-0.5 text-xs text-muted sm:grid-cols-2">
                     <div>
                       <dt className="inline text-faint">{t("autoBewerb.recipientLabel")}: </dt>
-                      <dd className={`inline font-medium ${r.recipient_email && isValidEmail(r.recipient_email) ? "text-ink-soft" : "text-warning"}`}>
-                        {r.recipient_email || t("autoBewerb.unavailable")}
+                      <dd className={`inline font-medium ${cfg.dest && isValidEmail(cfg.dest) ? "text-ink-soft" : "text-warning"}`}>
+                        {cfg.dest || t("autoBewerb.unavailable")}
                       </dd>
                     </div>
                     <div>
                       <dt className="inline text-faint">{t("autoBewerb.subjectLabel")}: </dt>
-                      <dd className={`inline font-medium ${r.email_subject ? "text-ink-soft" : "text-warning"}`}>{r.email_subject || t("autoBewerb.unavailable")}</dd>
+                      <dd className={`inline font-medium ${cfg.subject ? "text-ink-soft" : "text-warning"}`}>{cfg.subject || t("autoBewerb.unavailable")}</dd>
                     </div>
                     <div className="flex items-center gap-1 sm:col-span-2">
                       <Paperclip size={12} />
                       <span className="font-medium text-ink-soft">
-                        {[
-                          v.company.email_attach_cv ? t("autoBewerb.attachCvPdf") : null,
-                          v.company.email_attach_letter ? t("autoBewerb.attachLetterPdf") : null,
-                        ]
+                        {[cfg.attachCv ? t("autoBewerb.attachCvPdf") : null, cfg.attachLetter ? t("autoBewerb.attachLetterPdf") : null]
                           .filter(Boolean)
                           .join(", ") || t("autoBewerb.noAttachments")}
                       </span>
@@ -286,46 +311,52 @@ export function Step7Review() {
         </div>
       )}
 
-      {/* Explicit confirmation — exact recipients, resolved e-mail content
-          + attachments for EVERY recipient */}
+      {/* Explicit confirmation — the EXACT shared e-mail configuration +
+          the verified delivery destination for EVERY recipient */}
       <Modal open={confirmOpen} onClose={() => !sending && setConfirmOpen(false)} title={t("autoBewerb.confirmTitle")}>
         <p className="text-sm leading-6 text-muted">{t("autoBewerb.confirmIntro")}</p>
         <p className="mt-2 text-xs text-muted">{t("autoBewerb.confirmBodySharedNote")}</p>
-        <div className="mt-3 max-h-64 space-y-2 overflow-auto">
+
+        {/* The ONE shared e-mail (identical for every recipient) */}
+        {selectedViews.length > 0 && (
+          <div className="mt-3 rounded-2xl border border-accent/30 bg-accent-soft/20 p-3 text-xs">
+            <p className="font-bold text-ink">{t("autoBewerb.globalPreviewTitle")}</p>
+            <p className="mt-1 text-ink-soft">
+              {t("autoBewerb.previewSubject")}: <b>{emailCfg(selectedViews[0]).subject || "—"}</b>
+            </p>
+            <p className="text-ink-soft">
+              {t("autoBewerb.previewAccount")}: <b>{emailCfg(selectedViews[0]).account?.email ?? t("autoBewerb.missingAccount")}</b>
+            </p>
+            <p className="mt-1 flex items-center gap-1 text-muted">
+              <Paperclip size={11} />
+              {[emailCfg(selectedViews[0]).attachCv ? t("autoBewerb.attachCvPdf") : null, emailCfg(selectedViews[0]).attachLetter ? t("autoBewerb.attachLetterPdf") : null]
+                .filter(Boolean)
+                .join(", ") || t("autoBewerb.noAttachments")}
+              {ws.attachments.length > 0 && ` · ${t("autoBewerb.attachSharedDocs")} ${ws.attachments.map((a) => a.display_name).join(", ")}`}
+            </p>
+            <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-2 text-[11px] leading-4 text-ink-soft">
+              {(() => {
+                const body = emailCfg(selectedViews[0]).body;
+                return body ? `${body.slice(0, 400)}${body.length > 400 ? "…" : ""}` : t("autoBewerb.templateEmptyNote");
+              })()}
+            </pre>
+            <p className="mt-1.5 text-faint">{t("autoBewerb.previewCount", { count: selectedViews.length })}</p>
+          </div>
+        )}
+
+        {/* Per-company delivery destinations (verified, read-only) */}
+        <div className="mt-3 max-h-40 space-y-2 overflow-auto">
           {selectedViews.map((v) => {
             const { name, job } = companyLabel(v.company);
-            // The EXACT body this recipient gets: the one shared template
-            // resolved with THIS company's verified tokens (nothing else).
-            const resolvedBody = renderAutoBewerbEmailBody(ws.emailTemplate, v.company.ad_extracted).trim();
+            const cfg = emailCfg(v);
             return (
               <div key={v.company.id} className="rounded-2xl border border-line bg-surface-2/40 p-3 text-xs">
                 <p className="font-bold text-ink">
                   {name} {job ? `— ${job}` : ""}
                 </p>
                 <p className="mt-1 text-ink-soft">
-                  {t("autoBewerb.recipientLabel")}: <b>{v.company.recipient_email}</b>
+                  {t("autoBewerb.recipientLabel")}: <b>{cfg.dest || t("autoBewerb.deliveryNoDest")}</b>
                 </p>
-                <p className="text-ink-soft">
-                  {t("autoBewerb.subjectLabel")}: <b>{v.company.email_subject}</b>
-                </p>
-                <p className="mt-1 text-faint">{t("autoBewerb.confirmBodyLabel")}:</p>
-                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-2 text-[11px] leading-4 text-ink-soft">
-                  {resolvedBody ? `${resolvedBody.slice(0, 300)}${resolvedBody.length > 300 ? "…" : ""}` : t("autoBewerb.templateEmptyNote")}
-                </pre>
-                <p className="mt-1 flex items-center gap-1 text-muted">
-                  <Paperclip size={11} />
-                  {[
-                    v.company.email_attach_cv ? t("autoBewerb.attachCvPdf") : null,
-                    v.company.email_attach_letter ? t("autoBewerb.attachLetterPdf") : null,
-                  ]
-                    .filter(Boolean)
-                    .join(", ") || t("autoBewerb.noAttachments")}
-                </p>
-                {ws.attachments.length > 0 && (
-                  <p className="text-muted">
-                    {t("autoBewerb.attachSharedDocs")} {ws.attachments.map((a) => a.display_name).join(", ")}
-                  </p>
-                )}
               </div>
             );
           })}

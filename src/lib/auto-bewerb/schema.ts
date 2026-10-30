@@ -74,42 +74,70 @@ export const autoBewerbLetterSchema = z.object({
 export type AutoBewerbLetter = z.infer<typeof autoBewerbLetterSchema>;
 
 // ---------------------------------------------------------------------------
-// Step 6 — shared email template + per-company email
+// Step 6 — ONE global e-mail configuration for the whole batch
 // ---------------------------------------------------------------------------
 
-/** Shared email-body template (auto_bewerb_email_templates.body). Plain
- *  text; tokens {company}, {position}, {contactName} are substituted from
- *  each company's stored extraction at send-preparation time. */
+/** Shared email body (auto_bewerb_email_templates.body). Plain text, sent
+ *  VERBATIM to every company — the batch deliberately uses ONE identical
+ *  e-mail (no per-company substitution). */
 export const autoBewerbEmailTemplateSchema = z
   .string()
   .trim()
   .max(6_000);
 export const AUTO_BEWERB_EMAIL_TEMPLATE_MAX = 6_000;
 
-/** Per-company email subject (required before send). */
+/** Shared e-mail subject (one for every application). */
 export const autoBewerbEmailSubjectSchema = z.string().trim().min(1).max(200);
+export const AUTO_BEWERB_EMAIL_SUBJECT_MAX = 200;
 
-/** Optional per-company body override (NULL = shared template). */
-export const autoBewerbEmailBodyOverrideSchema = z.string().trim().max(6_000);
-
-/** Substitute the shared-template tokens from a stored extraction.
- *  Pure and deterministic — never invents: a token without a stored value
- *  is replaced by "" (the sender sees the result in the review step). */
-export function renderAutoBewerbEmailBody(
-  template: string,
-  extract: AdExtract | null,
-): string {
-  const company = (extract?.company ?? "").trim();
-  const position = ((extract?.jobTitle ?? "").trim() || (extract?.occupation ?? "").trim());
-  const contactName = (extract?.contactPerson ?? "").trim();
-  return template
-    .replace(/\{company\}/gi, company)
-    .replace(/\{position\}/gi, position)
-    .replace(/\{contactName\}/gi, contactName);
+/** The ONE global e-mail configuration (Step 6). Identical for every
+ *  company in the batch; the only per-company difference is the delivery
+ *  destination, which stays that company's verified address. */
+export interface AutoBewerbEmailSettings {
+  /** Shared body — sent verbatim to every company. */
+  body: string;
+  /** Optional explicit GLOBAL recipient. "" = deliver to each company's
+   *  verified application email (never to one company's address). */
+  recipient: string;
+  /** The one shared subject for every application. */
+  subject: string;
+  /** The one shared sending account (email_accounts.id; "" = none). */
+  accountId: string;
+  /** Attach the server-rendered tailored-CV PDF (globally). */
+  attachCv: boolean;
+  /** Attach the server-rendered Anschreiben PDF (globally). */
+  attachLetter: boolean;
 }
 
-/** The three tokens the shared template supports (documented in the UI). */
-export const AUTO_BEWERB_EMAIL_TOKENS = ["{company}", "{position}", "{contactName}"] as const;
+/** Action input — zod-validated before it reaches the engine. */
+export const autoBewerbEmailSettingsSchema = z.object({
+  body: autoBewerbEmailTemplateSchema,
+  recipient: z.string().trim().max(320),
+  subject: z.string().trim().max(200),
+  accountId: z.string().trim().max(64),
+  attachCv: z.boolean(),
+  attachLetter: z.boolean(),
+});
+export type AutoBewerbEmailSettingsInput = z.infer<typeof autoBewerbEmailSettingsSchema>;
+
+/** Resolve the DELIVERY destination for one company, in priority order:
+ *  1. the explicit GLOBAL recipient (a deliberate user choice → the whole
+ *     batch is delivered there),
+ *  2. the legacy per-company manual value (preserved — never overwritten),
+ *  3. the VERIFIED application email extracted from that company's ad.
+ *  Returns "" when nothing is available — the caller must then refuse to
+ *  send. Pure and deterministic; never invents an address. */
+export function resolveAutoBewerbRecipient(
+  globalRecipient: string | null | undefined,
+  legacyRecipient: string | null | undefined,
+  extract: AdExtract | null | undefined,
+): string {
+  const global = (globalRecipient ?? "").trim().toLowerCase();
+  if (global) return global;
+  const legacy = (legacyRecipient ?? "").trim().toLowerCase();
+  if (legacy) return legacy;
+  return (extract?.applicationEmail ?? "").trim().toLowerCase();
+}
 
 // ---------------------------------------------------------------------------
 // Supporting documents
@@ -313,7 +341,15 @@ export interface AutoBewerbWorkspace {
   } | null;
   companies: AutoBewerbCompanyView[];
   attachments: AutoBewerbAttachmentRow[];
+  /** The shared e-mail body (always — also the legacy mode's template). */
   emailTemplate: string;
+  /** The ONE global e-mail configuration (null = the email-settings
+   *  migration is not applied yet → the legacy per-company fallback). */
+  emailSettings: AutoBewerbEmailSettings | null;
+  /** False = the email-settings columns do not exist yet (the UI shows the
+   *  legacy per-company editor + a pending-migration notice; the rest of
+   *  the workflow is unaffected). */
+  emailSettingsSupported: boolean;
   emailAccounts: AutoBewerbEmailAccount[];
 }
 

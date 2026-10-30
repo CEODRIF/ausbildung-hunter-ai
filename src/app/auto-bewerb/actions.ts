@@ -12,6 +12,7 @@ import {
   prepareAutoBewerbSend,
   processDueAutoBewerbAttemptsForUser,
   saveAutoBewerbDocument,
+  saveAutoBewerbEmailSettings,
   saveAutoBewerbEmailTemplate,
   saveAutoBewerbProfile,
   updateAutoBewerbCompany,
@@ -21,7 +22,13 @@ import {
   type AutoBewerbScheduleInput,
   type AutoBewerbSendResult,
 } from "@/lib/auto-bewerb/engine";
-import type { AdAnalysis, AdExtract, AutoBewerbCompanyRow } from "@/lib/auto-bewerb/schema";
+import {
+  autoBewerbEmailSettingsSchema,
+  type AdAnalysis,
+  type AdExtract,
+  type AutoBewerbCompanyRow,
+  type AutoBewerbEmailSettings,
+} from "@/lib/auto-bewerb/schema";
 
 /**
  * AUTO BEWERB — server actions.
@@ -147,11 +154,6 @@ export async function updateCompanyAction(
     adRaw?: string;
     extract?: AdExtract | null;
     analysis?: AdAnalysis | null;
-    recipientEmail?: string | null;
-    emailSubject?: string | null;
-    emailAttachCv?: boolean;
-    emailAttachLetter?: boolean;
-    emailAccountId?: string | null;
   },
 ): Promise<ActionResult<AutoBewerbCompanyRow>> {
   const { user } = await getCurrentUserAndProfile();
@@ -161,11 +163,6 @@ export async function updateCompanyAction(
   if (patch.adRaw !== undefined) dbPatch.ad_raw = patch.adRaw;
   if (patch.extract !== undefined) dbPatch.ad_extracted = patch.extract;
   if (patch.analysis !== undefined) dbPatch.ad_analysis = patch.analysis;
-  if (patch.recipientEmail !== undefined) dbPatch.recipient_email = patch.recipientEmail;
-  if (patch.emailSubject !== undefined) dbPatch.email_subject = patch.emailSubject;
-  if (patch.emailAttachCv !== undefined) dbPatch.email_attach_cv = patch.emailAttachCv;
-  if (patch.emailAttachLetter !== undefined) dbPatch.email_attach_letter = patch.emailAttachLetter;
-  if (patch.emailAccountId !== undefined) dbPatch.email_account_id = patch.emailAccountId;
   return toResult(await updateAutoBewerbCompany(user.id, companyId, dbPatch)) as ActionResult<AutoBewerbCompanyRow>;
 }
 
@@ -221,19 +218,35 @@ export async function saveEmailTemplateAction(body: string): Promise<ActionResul
   return toResult(await saveAutoBewerbEmailTemplate(user.id, body)) as ActionResult<{ ok: true }>;
 }
 
+/** Persist the ONE global e-mail configuration (Step 6): body + recipient +
+ *  subject + account + attachment flags in a single upsert. The input is
+ *  zod-validated; the engine re-checks schema support + ownership. */
+export async function saveEmailSettingsAction(
+  input: unknown,
+): Promise<ActionResult<{ ok: true }>> {
+  const { user } = await getCurrentUserAndProfile();
+  if (!user) return unauthorized();
+  const parsed = autoBewerbEmailSettingsSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, code: "invalid_document", message: parsed.error.issues[0]?.message ?? "invalid" };
+  const settings = parsed.data as AutoBewerbEmailSettings;
+  return toResult(await saveAutoBewerbEmailSettings(user.id, settings)) as ActionResult<{ ok: true }>;
+}
+
 // ---------------------------------------------------------------------------
 // Step 7 — sending (explicit confirmation required)
 // ---------------------------------------------------------------------------
 
+/**
+ * The client passes ONLY the company id + explicit confirmation. Every
+ * e-mail setting (recipient, subject, account, attachments, body) is read
+ * server-side from the ONE global configuration (or the legacy per-company
+ * values on databases without the settings migration) — a client-supplied
+ * override is impossible by construction.
+ */
 export interface SendCompanyInput {
   companyId: string;
-  recipientEmail: string;
-  emailAccountId: string;
-  subject: string;
-  attachCv?: boolean;
-  attachLetter?: boolean;
   schedule?: AutoBewerbScheduleInput | null;
-  /** Explicit user confirmation (the UI shows the exact recipients + attachments). */
+  /** Explicit user confirmation (the UI shows the exact config + destinations). */
   confirmed: boolean;
 }
 
@@ -266,11 +279,6 @@ export async function sendCompaniesAction(
     }
     const res = await prepareAutoBewerbSend(user.id, {
       companyId: input.companyId,
-      recipientEmail: input.recipientEmail,
-      emailAccountId: input.emailAccountId,
-      subject: input.subject,
-      attachCv: input.attachCv ?? true,
-      attachLetter: input.attachLetter ?? true,
       schedule: input.schedule ?? null,
     });
     results.push({
@@ -323,13 +331,10 @@ export async function scheduleCompaniesAction(
       continue;
     }
     const r = view.company;
+    // Same global-configuration resolution as the immediate send path —
+    // scheduled sends and retries can never carry different e-mail settings.
     const res = await prepareAutoBewerbSend(user.id, {
       companyId: r.id,
-      recipientEmail: r.recipient_email ?? "",
-      emailAccountId: r.email_account_id ?? "",
-      subject: r.email_subject ?? "",
-      attachCv: r.email_attach_cv,
-      attachLetter: r.email_attach_letter,
       schedule,
     });
     results.push({

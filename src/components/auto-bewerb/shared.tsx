@@ -14,6 +14,7 @@ import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui";
 import { StatusPill, type StatusTone } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
+import { resolveAutoBewerbRecipient } from "@/lib/auto-bewerb/schema";
 import type {
   AutoBewerbCompanyRow,
   AutoBewerbLetter,
@@ -145,14 +146,30 @@ export function computeStepState(ws: AutoBewerbWorkspace): {
       done: companies.length > 0 && companies.every((c) => Boolean(c.letter)),
       ready: companies.length > 0 && Boolean(ws.profile?.extracted),
     },
-    // 6 email
+    // 6 email — the ONE global configuration (supported) or the legacy
+    // per-company values (database without the settings migration)
     {
       done:
-        ws.emailTemplate.trim().length > 0 &&
-        companies.length > 0 &&
-        companies.every(
-          (c) => Boolean(c.company.recipient_email) && Boolean(c.company.email_subject),
-        ),
+        ws.emailSettingsSupported && ws.emailSettings
+          ? ws.emailSettings.body.trim().length > 0 &&
+            ws.emailSettings.subject.trim().length > 0 &&
+            Boolean(ws.emailSettings.accountId) &&
+            companies.length > 0 &&
+            companies.every(
+              (c) =>
+                Boolean(
+                  resolveAutoBewerbRecipient(
+                    ws.emailSettings!.recipient,
+                    c.company.recipient_email,
+                    c.company.ad_extracted,
+                  ),
+                ),
+            )
+          : ws.emailTemplate.trim().length > 0 &&
+            companies.length > 0 &&
+            companies.every(
+              (c) => Boolean(c.company.recipient_email) && Boolean(c.company.email_subject),
+            ),
       ready: companies.length > 0,
     },
     // 7 review
