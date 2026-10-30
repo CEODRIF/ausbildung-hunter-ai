@@ -77,9 +77,10 @@ export type AutoBewerbLetter = z.infer<typeof autoBewerbLetterSchema>;
 // Step 6 — ONE global e-mail configuration for the whole batch
 // ---------------------------------------------------------------------------
 
-/** Shared email body (auto_bewerb_email_templates.body). Plain text, sent
- *  VERBATIM to every company — the batch deliberately uses ONE identical
- *  e-mail (no per-company substitution). */
+/** Shared email body (auto_bewerb_email_templates.body). Sanitized HTML,
+ *  editable in the Step 6 rich-text editor. It is ONE shared template used
+ *  for every company; the supported {{tokens}} are personalized per recipient
+ *  at send time (missing values become empty — never invented). */
 export const autoBewerbEmailTemplateSchema = z
   .string()
   .trim()
@@ -94,7 +95,8 @@ export const AUTO_BEWERB_EMAIL_SUBJECT_MAX = 200;
  *  company in the batch; the only per-company difference is the delivery
  *  destination, which stays that company's verified address. */
 export interface AutoBewerbEmailSettings {
-  /** Shared body — sent verbatim to every company. */
+  /** Shared body (sanitized HTML) — one template for every company; the
+   *  supported {{tokens}} are personalized per recipient at send time. */
   body: string;
   /** Optional explicit GLOBAL recipient. "" = deliver to each company's
    *  verified application email (never to one company's address). */
@@ -138,6 +140,55 @@ export function resolveAutoBewerbRecipient(
   if (legacy) return legacy;
   return (extract?.applicationEmail ?? "").trim().toLowerCase();
 }
+
+// ---------------------------------------------------------------------------
+// Per-recipient personalization (Step 6 e-mail template)
+// ---------------------------------------------------------------------------
+
+/** The personalization tokens the Step 6 editor can insert. The SAME shared
+ *  template is used for every company; these are substituted per recipient at
+ *  send time from VERIFIED data (never invented — missing → empty). */
+export const AUTO_BEWERB_EMAIL_TOKENS = [
+  "candidate_name",
+  "contact_person",
+  "company_name",
+  "greeting",
+  "position",
+] as const;
+export type AutoBewerbEmailToken = (typeof AUTO_BEWERB_EMAIL_TOKENS)[number];
+
+/** Substitute `{{token}}` placeholders with per-recipient values. Unknown or
+ *  missing tokens become an EMPTY string (never a leftover placeholder, never
+ *  an invented value). Works on plain text (subject) and HTML (body — the
+ *  caller must HTML-escape the values first). */
+export function substituteEmailTokens(
+  text: string | null | undefined,
+  values: Partial<Record<AutoBewerbEmailToken, string>>,
+): string {
+  return (text ?? "").replace(/\{\{\s*(\w+)\s*\}\}/g, (match, key: string) => {
+    const v = values[key as AutoBewerbEmailToken];
+    return v === undefined ? "" : v;
+  });
+}
+
+/** The German salutation for a recipient: a verified contact person when the
+ *  ad provides one, otherwise the neutral default. */
+export function buildAutoBewerbGreeting(contactPerson: string | null | undefined): string {
+  const name = (contactPerson ?? "").trim();
+  return name ? `Sehr geehrte/r ${name},` : "Sehr geehrte Damen und Herren,";
+}
+
+/** The concise, professional DEFAULT e-mail template (pre-filled in the
+ *  editor when the user has none yet). The subject/body are editable; the
+ *  Anschreiben PDF is a SEPARATE attachment and is never inserted here. */
+export const AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT = "Bewerbung um einen Ausbildungsplatz – {{position}}";
+export const AUTO_BEWERB_EMAIL_DEFAULT_BODY = [
+  "<p>Sehr geehrte Damen und Herren,</p>",
+  "<p>anbei sende ich Ihnen meine Bewerbungsunterlagen für den ausgeschriebenen Ausbildungsplatz.</p>",
+  "<p>Ich freue mich über Ihre Rückmeldung und die Möglichkeit eines persönlichen Gesprächs.</p>",
+  "<p>Mit freundlichen Grüßen</p>",
+  "<p>{{candidate_name}}</p>",
+].join("\n");
 
 // ---------------------------------------------------------------------------
 // Supporting documents
@@ -355,6 +406,10 @@ export interface AutoBewerbWorkspace {
    *  the workflow is unaffected). */
   emailSettingsSupported: boolean;
   emailAccounts: AutoBewerbEmailAccount[];
+  /** The candidate's full name (profiles.full_name) — powers the
+   *  {{candidate_name}} token in the e-mail template + the manifest preview.
+   *  "" = not set (the token then renders empty, never invented). */
+  candidateName: string;
 }
 
 /** All tables the AUTO BEWERB feature needs (the probe checks all seven). */

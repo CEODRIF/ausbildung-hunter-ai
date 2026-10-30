@@ -29,6 +29,8 @@ import {
   isValidEmail,
   normalizeCompanyKey,
   resolveAutoBewerbRecipient,
+  buildAutoBewerbGreeting,
+  substituteEmailTokens,
   type AutoBewerbEmailSettings,
   adExtractSchema,
   adAnalysisSchema,
@@ -47,8 +49,10 @@ import { parseAdDeadline } from "../studio/quality";
 import { zonedTimeToUtc } from "../studio/timezone";
 import {
   emailBodyToHtml,
+  escapeHtml,
   listUserEmailAccounts,
 } from "../studio";
+import { sanitizeEmailHtml, htmlToText } from "../email-sanitize";
 import {
   PROFILE_PHOTO_EXT,
   PROFILE_PHOTO_MAX_BYTES,
@@ -1350,14 +1354,15 @@ export async function prepareAutoBewerbSend(
     return { ok: false, code: "not_approved", message: "Bitte genehmigen Sie die Bewerbung zuerst." };
   if (app.status === "sent")
     return { ok: false, code: "already_sent", message: "Diese Bewerbung wurde bereits versendet." };
-  // ONE global e-mail configuration for the whole batch (Step 6): subject,
-  // body, sending account and attachment flags come EXCLUSIVELY from the
-  // global settings — no company (and no client input) can override them.
-  // The body is sent VERBATIM: every company receives the identical text.
-  // The only per-company value is the DELIVERY destination, resolved from
-  // verified data (explicit global recipient → legacy manual value → the
-  // ad's extracted applicationEmail). Databases without the settings
-  // migration keep the legacy per-company values (fallback).
+   // ONE global e-mail configuration for the whole batch (Step 6): subject,
+   // body, sending account and attachment flags come EXCLUSIVELY from the
+   // global settings — no company (and no client input) can override them.
+   // The SAME shared template is used for every company; its supported
+   // {{tokens}} are personalized per recipient from verified data (missing →
+   // empty, never invented). Per-company: the DELIVERY destination (explicit
+   // global recipient → legacy manual value → the ad's extracted
+   // applicationEmail) and the CV/Anschreiben PDFs. Databases without the
+   // settings migration keep the legacy per-company values (fallback).
   const settings = await getAutoBewerbEmailSettings(userId);
   let subject: string;
   let accountId: string;
@@ -1399,6 +1404,37 @@ export async function prepareAutoBewerbSend(
   if (!account)
     return { ok: false, code: "no_email_account", message: "Kein aktives E-Mail-Konto verbunden." };
 
+  // Per-recipient personalization (Step 6): the SAME shared template is used
+  // for every company, personalized at send time from VERIFIED data only.
+  // Missing values render EMPTY — never a leftover placeholder, never invented.
+  const pr = await fetchProfileLetterhead(userId);
+  const candidateName = String(pr.full_name ?? "").trim();
+  const contactPerson = String(app.ad_extracted?.contactPerson ?? "").trim();
+  const companyName = String(app.ad_extracted?.company || app.company || "").trim();
+  const position = String(app.ad_extracted?.jobTitle || app.ad_extracted?.occupation || "").trim();
+  const greeting = buildAutoBewerbGreeting(contactPerson);
+  const tokenValues: Record<string, string> = {
+    candidate_name: candidateName,
+    contact_person: contactPerson,
+    company_name: companyName,
+    greeting,
+    position,
+  };
+  // Subject is plain text → substitute as-is.
+  subject = substituteEmailTokens(subject, tokenValues).slice(0, 200);
+  // Body is HTML → substitute HTML-ESCAPED values, then sanitize (defense in
+  // depth: the stored body was already sanitized at save time).
+  const payloadHtml = sanitizeEmailHtml(
+    substituteEmailTokens(bodyText, {
+      candidate_name: escapeHtml(candidateName),
+      contact_person: escapeHtml(contactPerson),
+      company_name: escapeHtml(companyName),
+      greeting: escapeHtml(greeting),
+      position: escapeHtml(position),
+    }),
+  );
+  const payloadText = htmlToText(payloadHtml);
+
   // Attachments: the GLOBAL document library. Every owned document in the
   // user's library is attached to every application — the library is the
   // single source of truth, so no per-company selection exists (and no
@@ -1406,13 +1442,17 @@ export async function prepareAutoBewerbSend(
   // server-side by user_id at send preparation time; the library's sha256
   // dedupe guarantees each document appears exactly once.
   const payloadAttachments: AutoBewerbSendPayload["attachments"] = [];
+  // Never attach the same file twice (dedupe by the real storage path).
+  const pushAttachment = (att: AutoBewerbSendPayload["attachments"][number]) => {
+    if (!payloadAttachments.some((x) => x.storagePath === att.storagePath)) payloadAttachments.push(att);
+  };
   const { data: libraryAtts } = await admin
     .from("auto_bewerb_attachments")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: true });
   for (const a of (libraryAtts ?? []) as unknown as AutoBewerbAttachmentRow[]) {
-    payloadAttachments.push({ filename: a.display_name, mimeType: a.mime_type, storagePath: a.storage_path });
+    pushAttachment({ filename: a.display_name, mimeType: a.mime_type, storagePath: a.storage_path });
   }
 
   // The tailored CV PDF — resolved STRICTLY from THIS company's own stored CV
@@ -1447,7 +1487,7 @@ export async function prepareAutoBewerbSend(
       console.error(`[auto-bewerb] CV PDF upload failed for company ${app.id}: ${cvUploadError.message}`);
       return { ok: false, code: "cv_upload_failed", message: "Das CV-PDF für dieses Unternehmen konnte nicht gespeichert werden." };
     }
-    payloadAttachments.push({
+    pushAttachment({
       filename: cvPdfFilename(cv.personal.fullName),
       mimeType: BEW_LETTER_PDF_MIME,
       storagePath: cvPath,
@@ -1471,7 +1511,6 @@ export async function prepareAutoBewerbSend(
       };
     let letterBytes: Uint8Array;
     try {
-      const pr = await fetchProfileLetterhead(userId);
       const folio = buildLetterFolio({
         applicantName: pr.full_name ?? null,
         applicantEmail: pr.email ?? null,
@@ -1499,7 +1538,7 @@ export async function prepareAutoBewerbSend(
       console.error(`[auto-bewerb] letter PDF upload failed for company ${app.id}: ${letterUploadError.message}`);
       return { ok: false, code: "letter_upload_failed", message: "Das Anschreiben-PDF für dieses Unternehmen konnte nicht gespeichert werden." };
     }
-    payloadAttachments.push({
+    pushAttachment({
       filename: letterPdfFilename(app.ad_extracted?.company || app.company),
       mimeType: BEW_LETTER_PDF_MIME,
       storagePath: letterPath,
@@ -1527,8 +1566,8 @@ export async function prepareAutoBewerbSend(
 
   const idempotencyKey = randomUUID();
   const payload: AutoBewerbSendPayload = {
-    html: emailBodyToHtml(bodyText),
-    text: bodyText,
+    html: payloadHtml,
+    text: payloadText,
     attachments: payloadAttachments,
   };
 
@@ -1922,11 +1961,12 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     emailSettings: null,
     emailSettingsSupported: false,
     emailAccounts: [],
+    candidateName: "",
   };
   if (!ready) return empty;
 
   const admin = createAdminClient();
-  const [profileRow, templateRes, companies, attachments, emailAccounts, photoProbe, photoRow, settingsProbe] =
+  const [profileRow, templateRes, companies, attachments, emailAccounts, photoProbe, photoRow, settingsProbe, letterhead] =
     await Promise.all([
       getAutoBewerbProfile(userId),
       admin.from("auto_bewerb_email_templates").select("*").eq("user_id", userId).maybeSingle(),
@@ -1936,6 +1976,7 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
       getAutoBewerbPhotoProbe(),
       getAutoBewerbProfilePhoto(userId),
       getAutoBewerbEmailSettingsProbe(),
+      fetchProfileLetterhead(userId),
     ]);
   const photoSupported = photoProbe.available;
   const emailSettingsSupported = settingsProbe.available;
@@ -2035,5 +2076,6 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     emailSettings,
     emailSettingsSupported,
     emailAccounts,
+    candidateName: String(letterhead.full_name ?? "").trim(),
   };
 }

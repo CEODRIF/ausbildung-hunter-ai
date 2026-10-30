@@ -9,9 +9,12 @@ import { themePreloadScript } from "@/lib/theme";
 /**
  * XSS contracts.
  *
- * The app has exactly TWO HTML sinks, and both are pinned here:
- *  1. `RichEmailEditor` mounts stored draft HTML with `innerHTML`.
- *  2. `app/layout.tsx` injects two bootstrap scripts via
+ * The app has exactly THREE HTML sinks, and all are pinned here:
+ *  1. `RichEmailEditor` mounts stored draft HTML with `innerHTML` (data is
+ *     sanitized on read/write).
+ *  2. The AUTO BEWERB Step 6 editor mounts `innerHTML` — sanitized at the
+ *     assignment (sanitizeEmailHtml).
+ *  3. `app/layout.tsx` injects two bootstrap scripts via
  *     `dangerouslySetInnerHTML`.
  * Everything else renders through React (auto-escaped) or react-markdown
  * (escapes raw HTML unless a rehype-raw plugin is added — asserted below).
@@ -135,14 +138,23 @@ describe("markdown rendering never permits raw HTML", () => {
 });
 
 describe("innerHTML sinks are fed sanitized data", () => {
-  it("the rich editor is the only innerHTML writer, and the composer data is sanitized on read", () => {
+  it("the rich editors are the only innerHTML writers, and every sink is fed sanitized data", () => {
     const sinks = sourceFiles(join(root, "src")).filter((file) =>
       /\.innerHTML\s*=/.test(readFileSync(file, "utf8")),
     );
-    // Exactly one sink may exist; a new one must be reviewed (and covered).
-    expect(sinks.map((file) => file.replace(`${root}/`, ""))).toEqual([
+    // Exactly these sinks may exist; a new one must be reviewed (and covered):
+    //  1. rich-email-editor (application composer): mounts stored draft HTML;
+    //     the data is sanitized on read (loadOwnedDraft) and on every write.
+    //  2. auto-bewerb Step 6 editor: sanitizes what it mounts (sanitizeEmailHtml
+    //     at the innerHTML assignment — legacy rows included).
+    expect(sinks.map((file) => file.replace(`${root}/`, "")).sort()).toEqual([
+      "src/components/auto-bewerb/email-rich-editor.tsx",
       "src/components/rich-email-editor.tsx",
     ]);
+    // The Step 6 sink only ever mounts sanitized markup:
+    const step6Sink = readFileSync(join(root, "src/components/auto-bewerb/email-rich-editor.tsx"), "utf8");
+    expect(step6Sink).toContain("sanitizeEmailHtml");
+    expect(step6Sink).toMatch(/el\.innerHTML\s*=\s*safe/);
   });
 
   it("loadOwnedDraft sanitizes body_html before it reaches the browser", () => {
