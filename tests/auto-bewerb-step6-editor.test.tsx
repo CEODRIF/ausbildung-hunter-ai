@@ -327,6 +327,37 @@ describe("Step 6 (subject + body rendering, live preview, defaults)", () => {
     expect(screen.getByText("Unternehmen und zu sendende Dokumente")).toBeInTheDocument();
   });
 
+  it("a SET global recipient shows the explicit override warning (never silent)", () => {
+    setWs(
+      makeWs({
+        emailSettings: {
+          body: AUTO_BEWERB_EMAIL_DEFAULT_BODY,
+          recipient: "zentral@postbox.de",
+          subject: AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT,
+          accountId: "acct1",
+          attachCv: true,
+          attachLetter: true,
+        },
+      }),
+    );
+    render(
+      <I18nProvider>
+        <Step6Email />
+      </I18nProvider>,
+    );
+    expect(screen.getByText(/WARNUNG: Der gemeinsame Empfänger ist gesetzt — alle 2 Bewerbungen werden an diese EINE Adresse gesendet/)).toBeInTheDocument();
+  });
+
+  it("an EMPTY global recipient shows no override warning (per-company routing is the default)", () => {
+    setWs(makeWs());
+    render(
+      <I18nProvider>
+        <Step6Email />
+      </I18nProvider>,
+    );
+    expect(screen.queryByText(/WARNUNG: Der gemeinsame Empfänger ist gesetzt/)).not.toBeInTheDocument();
+  });
+
   it("a SAVED subject wins over the default; the editor keeps the saved body", () => {
     setWs(
       makeWs({
