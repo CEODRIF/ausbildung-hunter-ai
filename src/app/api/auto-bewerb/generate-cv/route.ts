@@ -7,17 +7,12 @@ import {
 } from "@/lib/billing/entitlement-service";
 import { checkRateLimit, rateLimitHeaders, tooManyRequests } from "@/lib/rate-limit";
 import {
-  collectVerifiedFacts,
-  validateGeneratedCv,
-} from "@/lib/studio/facts";
-import {
   buildCvGenerationPrompt,
   extractSummaryText,
   parseJsonObject,
 } from "@/lib/studio/prompts";
 import { formatCvForPrompt, formatProfileForPrompt } from "@/lib/templates/cover-letter";
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { resolveCvTemplateId, sanitizeCvDocument } from "@/lib/templates/cv";
 import { getAutoBewerbCompany, getAutoBewerbProfile } from "@/lib/auto-bewerb/engine";
 
@@ -27,13 +22,14 @@ export const dynamic = "force-dynamic";
 /**
  * AUTO BEWERB — Step 4: the tailored German CV (Lebenslauf) for ONE company.
  *
- * Inputs: the analyzed CV profile (Step 1, user-corrected), the company's
- * stored ad extraction (Step 2), and the account facts (letterhead). Triple
- * defense against fabrication (identical to the Studio):
+ * Inputs: the analyzed CV profile (Step 1, user-corrected) and the company's
+ * stored ad extraction (Step 2). Defense in depth:
  *  1. prompt contract (only verified facts, empty when unknown);
- *  2. `sanitizeCvDocument` — the output must parse into a valid CvDocument;
- *  3. `validateGeneratedCv` fact guard — every structured value must be
- *     grounded in the verified input; violations → 422 + quota released.
+ *  2. `sanitizeCvDocument` — the output must parse into a valid CvDocument
+ *     (schema validation + input sanitization stay mandatory).
+ * The strict fact-validation guard (`validateGeneratedCv`) was removed:
+ * generated CVs are saved and shown as-is; provider/quota/network failures
+ * still surface their real error.
  *
  * Metered on the existing `resume_ai` quota (per cycle). The route only
  * RETURNS the document — persistence (per-company versioned row) happens in
@@ -99,21 +95,6 @@ export async function POST(request: Request) {
     );
   }
 
-  // Verified facts: the corrected profile + the account's letterhead data.
-  const { data: prof } = await createAdminClient()
-    .from("profiles")
-    .select("full_name, email, phone, city, country")
-    .eq("id", user.id)
-    .maybeSingle();
-  const pr = (prof ?? {}) as Record<string, string | null | undefined>;
-  const userFacts = {
-    fullName: pr.full_name ?? null,
-    email: pr.email ?? null,
-    phone: pr.phone ?? null,
-    location: pr.city ?? null,
-    linkedin: null, // no linkedin column on profiles — the profile (Step 1) is the source
-  };
-  const facts = collectVerifiedFacts(null, profile.extracted, userFacts);
   const prompt = buildCvGenerationPrompt({
     extractText: extractSummaryText(extract),
     profileText: formatProfileForPrompt(profile.extracted),
@@ -135,18 +116,6 @@ export async function POST(request: Request) {
     }
     // Keep the user's chosen template; the model may not re-style it.
     doc.templateId = templateId;
-    const violations = validateGeneratedCv(facts, doc);
-    if (violations.length > 0) {
-      await releaseFeatureOp(user.id, "resume_ai", runId);
-      return NextResponse.json(
-        {
-          error: "Die generierte Version enthält Angaben, die sich nicht aus Ihren Daten ableiten lassen. Bitte erneut versuchen — andernfalls Ihre Daten prüfen.",
-          code: "fact_violations",
-          violations: violations.slice(0, 10),
-        },
-        { status: 422 },
-      );
-    }
     await completeFeatureOp(user.id, "resume_ai", runId);
     return NextResponse.json({ cv: doc }, { headers: rateLimitHeaders(limited) });
   } catch (error) {

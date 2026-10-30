@@ -34,8 +34,9 @@ export function Step4CvGeneration() {
   const { ws, refresh, notify, drafts, setDraft, goToStep } = useAutoBewerb();
   const { t } = useI18n();
 
-  /** Per-company in-flight / failure state (saved CVs derive from ws). */
-  const [perCompany, setPerCompany] = useState<Record<string, "generating" | "fact" | "error">>({});
+  /** Per-company in-flight / failure state (saved CVs derive from ws).
+   *  A string value is the ACTUAL error message to display. */
+  const [perCompany, setPerCompany] = useState<Record<string, "generating" | string>>({});
   /** Bulk run progress (null = never started / finished and summarized). */
   const [bulk, setBulk] = useState<{ total: number; done: number; failed: number; currentId: string | null; finished: boolean } | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
@@ -49,21 +50,22 @@ export function Step4CvGeneration() {
     return <EmptyState title={t("autoBewerb.cvGenEmpty")} body={t("autoBewerb.cvGenEmptyBody")} illustration={<FileText size={34} strokeWidth={1.6} />} ctaIcon={<Button variant="primary" onClick={() => goToStep(2)}>{t("autoBewerb.goToCompanies")}</Button>} />;
   }
 
-  /** Generate AND persist one company's CV. Resolves to the outcome —
-   *  "ok" only after the server confirmed the save. */
-  const generateOne = async (view: AutoBewerbCompanyView): Promise<"ok" | "fact" | "error"> => {
+  /** Generate AND persist one company's CV. Resolves to `null` on success
+   *  (only after the server confirmed the save) or the ACTUAL error message
+   *  (provider / quota / network / persistence). */
+  const generateOne = async (view: AutoBewerbCompanyView): Promise<string | null> => {
     try {
       const res = await fetch("/api/auto-bewerb/generate-cv", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ companyId: view.company.id }),
       });
-      const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string; cv?: CvDocument };
-      if (!res.ok || !data.cv) return data.code === "fact_violations" ? "fact" : "error";
+      const data = (await res.json().catch(() => ({}))) as { error?: string; cv?: CvDocument };
+      if (!res.ok || !data.cv) return data.error ?? t("autoBewerb.generateError");
       const saveRes = await saveCompanyDocumentAction(view.company.id, "cv", data.cv);
-      return saveRes.ok ? "ok" : "error";
+      return saveRes.ok ? null : t("autoBewerb.saveError");
     } catch {
-      return "error";
+      return t("autoBewerb.generateError");
     }
   };
 
@@ -82,14 +84,14 @@ export function Step4CvGeneration() {
     for (const c of targets) {
       setBulk((b) => (b ? { ...b, currentId: c.company.id } : b));
       setPerCompany((p) => ({ ...p, [c.company.id]: "generating" }));
-      const outcome = await generateOne(c);
-      if (outcome === "ok") {
+      const failure = await generateOne(c);
+      if (failure === null) {
         clearCompanyState(c.company.id);
         await refresh(true); // server is the source of truth — the row now shows "ready"
       } else {
-        setPerCompany((p) => ({ ...p, [c.company.id]: outcome }));
+        setPerCompany((p) => ({ ...p, [c.company.id]: failure }));
       }
-      setBulk((b) => (b ? { ...b, done: b.done + 1, failed: b.failed + (outcome === "ok" ? 0 : 1), currentId: null } : b));
+      setBulk((b) => (b ? { ...b, done: b.done + 1, failed: b.failed + (failure === null ? 0 : 1), currentId: null } : b));
     }
     setBulk((b) => (b ? { ...b, finished: true, currentId: null } : b));
   };
@@ -98,21 +100,20 @@ export function Step4CvGeneration() {
   const retryOne = async (c: AutoBewerbCompanyView) => {
     if (running) return;
     setPerCompany((p) => ({ ...p, [c.company.id]: "generating" }));
-    const outcome = await generateOne(c);
-    if (outcome === "ok") {
+    const failure = await generateOne(c);
+    if (failure === null) {
       clearCompanyState(c.company.id);
       await refresh(true);
       notify("success", t("autoBewerb.generatedNote"));
     } else {
-      setPerCompany((p) => ({ ...p, [c.company.id]: outcome }));
+      setPerCompany((p) => ({ ...p, [c.company.id]: failure }));
     }
   };
 
-  const stateOf = (c: AutoBewerbCompanyView): "none" | "generating" | "fact" | "error" | "ready" => {
+  const stateOf = (c: AutoBewerbCompanyView): "none" | "generating" | "failed" | "ready" => {
     const p = perCompany[c.company.id];
     if (p === "generating") return "generating";
-    if (p === "fact") return "fact";
-    if (p === "error") return "error";
+    if (typeof p === "string") return "failed";
     return c.cv ? "ready" : "none";
   };
 
@@ -252,18 +253,19 @@ export function Step4CvGeneration() {
                       <CheckCircle2 size={13} /> {t("autoBewerb.cvStatusReady")}
                     </span>
                   )}
-                  {(st === "fact" || st === "error") && (
+                  {st === "failed" && (
                     <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-danger">
                       <AlertTriangle size={13} /> {t("autoBewerb.cvStatusFailed")}
                     </span>
                   )}
-                  {st === "fact" && <p className="mt-1 line-clamp-2 text-xs leading-5 text-danger/80 sm:max-w-60">{t("autoBewerb.cvFactGuardError")}</p>}
-                  {st === "error" && <p className="mt-1 text-xs leading-5 text-danger/80 sm:max-w-60">{t("autoBewerb.generateError")}</p>}
+                  {st === "failed" && (
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-danger/80 sm:max-w-60">{perCompany[c.company.id] as string}</p>
+                  )}
                 </div>
 
                 {/* Actions */}
                 <div className="flex items-center gap-2">
-                  {st === "fact" || st === "error" ? (
+                  {st === "failed" ? (
                     <Button variant="secondary" size="sm" onClick={() => void retryOne(c)} disabled={running}>
                       <RefreshCw size={13} /> {t("autoBewerb.cvRetry")}
                     </Button>
