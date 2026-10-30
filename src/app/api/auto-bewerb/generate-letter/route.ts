@@ -34,11 +34,27 @@ export const dynamic = "force-dynamic";
  * signature line) — the shape the deterministic PDF folio renderer and the
  * DIN-5008 preview both expect.
  *
+ * Individualization: the prompt carries the full structured extraction
+ * (every requirement dimension), the stored profile-vs-ad MATCH ANALYSIS
+ * (matched / transferable / missing — the same tailoring engine the Step 4
+ * CV prompt uses), and the complete fenced advertisement, so every employer
+ * gets a genuinely distinct letter grounded in the verified profile — never
+ * a generic template with the name swapped.
+ *
+ * SINGLE-FLIGHT per (user, company): identical concurrent requests
+ * (double click, two tabs) share ONE paid provider call (same pattern as
+ * generate-cv) — duplicate concurrent generation is prevented.
+ *
  * Metered on the existing `cover_letter` quota. The route only RETURNS the
  * letter — persistence (per-company versioned row) happens in the
  * saveDocument server action, so regenerating one company never overwrites
  * another company's letter.
  */
+
+// In-flight single-flight table: one provider call per (user, company).
+// Keyed per user+company — results embed user-specific profile context and
+// company-specific ad context (never shared across either axis).
+const inFlight = new Map<string, Promise<string>>();
 
 /** Plain-text letter output → normalized text (strip fences/quotes the
  *  model sometimes wraps its answer in). */
@@ -131,16 +147,31 @@ export async function POST(request: Request) {
     profileText: formatProfileForPrompt(profile.extracted),
     adFenced: fenceAdText(bundle.company.ad_raw),
     extract,
+    analysis: bundle.company.ad_analysis,
     candidateName,
     currentText: current,
   });
 
+  const sfKey = `${user.id}\u0000${companyId}`;
+  let work = inFlight.get(sfKey);
+  if (!work) {
+    work = (async () => {
+      try {
+        return await provider().generateText([{ role: "user", content: prompt }], 120_000, {
+          temperature: 0.3,
+          systemPrompt: AUTO_BEWERB_LETTER_SYSTEM_PROMPT,
+        });
+      } finally {
+        // Drop the entry once the work has settled (identity check: a later
+        // identical request may have registered a NEW promise).
+        if (inFlight.get(sfKey) === work) inFlight.delete(sfKey);
+      }
+    })();
+    inFlight.set(sfKey, work);
+  }
+
   try {
-    const raw = await provider().generateText(
-      [{ role: "user", content: prompt }],
-      120_000,
-      { temperature: 0.3, systemPrompt: AUTO_BEWERB_LETTER_SYSTEM_PROMPT },
-    );
+    const raw = await work;
     const text = normalizeLetterText(raw);
     const checked = autoBewerbLetterSchema.safeParse({ text, tone: "professional" });
     if (!checked.success) {
