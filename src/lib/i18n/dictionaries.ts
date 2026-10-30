@@ -2453,8 +2453,6 @@ const de = {
     generatedNote: "Lebenslauf erstellt — bitte prüfen und speichern.",
     regeneratedNote: "Lebenslauf neu erstellt — die gespeicherte Version bleibt unverändert.",
     cvUnsavedNote: "Nicht gespeichert",
-    cvFactGuardError:
-      "Die generierte Version enthält Angaben, die sich nicht aus Ihren Daten ableiten lassen. Es wurde nichts gespeichert — bitte erneut versuchen.",
     generateError: "Die Erstellung ist fehlgeschlagen. Bitte erneut versuchen.",
     docSaveButton: "Speichern",
     docSavedVersion: "Gespeichert (Version {version})",
@@ -4941,8 +4939,6 @@ const en: Dict = {
     generatedNote: "CV created — please review and save.",
     regeneratedNote: "CV regenerated — the saved version is unchanged.",
     cvUnsavedNote: "Unsaved",
-    cvFactGuardError:
-      "The generated version contains details that cannot be derived from your data. Nothing was saved — please try again.",
     generateError: "Generation failed. Please try again.",
     docSaveButton: "Save",
     docSavedVersion: "Saved (version {version})",
@@ -7440,8 +7436,6 @@ const fr: Dict = {
     generatedNote: "CV créé — veuillez le vérifier et l'enregistrer.",
     regeneratedNote: "CV régénéré — la version enregistrée reste inchangée.",
     cvUnsavedNote: "Non enregistré",
-    cvFactGuardError:
-      "La version générée contient des données qui ne peuvent pas être déduites de vos informations. Rien n'a été enregistré — veuillez réessayer.",
     generateError: "La génération a échoué. Veuillez réessayer.",
     docSaveButton: "Enregistrer",
     docSavedVersion: "Enregistré (version {version})",
@@ -9856,8 +9850,6 @@ const ar: Dict = {
     generatedNote: "تم إنشاء السيرة — يرجى المراجعة والحفظ.",
     regeneratedNote: "أُعيدت إنشاء السيرة — النسخة المحفوظة لم تتغير.",
     cvUnsavedNote: "غير محفوظة",
-    cvFactGuardError:
-      "تحتوي النسخة المولّدة على بيانات لا يمكن اشتقاقها من معلوماتك. لم يُحفظ أي شيء — يرجى المحاولة مرة أخرى.",
     generateError: "فشل الإنشاء. يرجى المحاولة مرة أخرى.",
     docSaveButton: "حفظ",
     docSavedVersion: "تم الحفظ (الإصدار {version})",

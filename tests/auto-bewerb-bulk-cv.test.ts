@@ -2,17 +2,20 @@
  * AUTO BEWERB — Step 4: BULK tailored CV generation (source-of-truth contract).
  *
  * The redesigned step must (1) drive the EXISTING per-company generate-cv
- * API (quota/rate-limit/fact-guard unchanged), (2) persist every generated
- * CV via saveCompanyDocumentAction before it counts as successful,
- * (3) skip companies that already have a saved CV (never overwrite),
- * (4) keep preview and PDF export strictly scoped to one company id, and
- * (5) no longer render the per-company selection tabs.
+ * API (quota/rate-limit unchanged), (2) persist every generated CV via
+ * saveCompanyDocumentAction before it counts as successful, (3) skip
+ * companies that already have a saved CV (never overwrite), (4) keep
+ * preview and PDF export strictly scoped to one company id, (5) no longer
+ * render the per-company selection tabs, and (6) never reject a generated
+ * CV via the strict fact guard — provider/quota/network failures must
+ * surface their actual error message.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const read = (p: string) => readFileSync(p, "utf8");
 const STEP4 = read("src/components/auto-bewerb/step4-cv-generation.tsx");
+const ROUTE = read("src/app/api/auto-bewerb/generate-cv/route.ts");
 
 describe("bulk CV generation contract (Step 4)", () => {
   it("uses the existing per-company generate-cv API", () => {
@@ -35,8 +38,25 @@ describe("bulk CV generation contract (Step 4)", () => {
   });
 
   it("continues past a single company's failure (no abort, per-company state)", () => {
-    // Each outcome is stored per company; the loop has no early return on error.
-    expect(STEP4).toContain('setPerCompany((p) => ({ ...p, [c.company.id]: outcome }))');
+    // Each failure message is stored per company; the loop has no early return on error.
+    expect(STEP4).toContain("setPerCompany((p) => ({ ...p, [c.company.id]: failure }))");
+  });
+
+  it("reports the ACTUAL error (provider/quota/network) instead of the old fact-guard text", () => {
+    expect(STEP4).toContain('return data.error ?? t("autoBewerb.generateError");');
+    expect(STEP4).not.toContain("fact_violations");
+    expect(STEP4).not.toContain("cvFactGuardError");
+  });
+
+  it("the generate-cv route no longer rejects via the strict fact guard (no 422)", () => {
+    // No fact-guard CALL (the header comment may name the removed guard).
+    expect(ROUTE).not.toContain("validateGeneratedCv(");
+    expect(ROUTE).not.toContain("fact_violations");
+    expect(ROUTE).not.toContain("422");
+    // ...while schema validation, sanitization and quota handling stay.
+    expect(ROUTE).toContain("sanitizeCvDocument(parseJsonObject(raw))");
+    expect(ROUTE).toContain("completeFeatureOp(user.id, \"resume_ai\", runId)");
+    expect(ROUTE).toContain("checkRateLimit(\"auto_bewerb_ai\", user.id)");
   });
 
   it("keeps preview and PDF export scoped to a single company id", () => {
