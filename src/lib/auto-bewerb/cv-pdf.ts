@@ -1,17 +1,20 @@
 /**
  * AUTO BEWERB — deterministic tailored-CV → PDF renderer (pdf-lib).
  *
- * The tailored CVs are stored as structured CvDocument JSON (user-reviewed,
- * fact-guarded). This module renders that SAME document to a professional
- * German Lebenslauf PDF: A4, Helvetica, section rules, right-aligned date
- * ranges, bullet responsibilities, multi-page continuation.
+ * The tailored CVs are stored as structured CvDocument JSON (user-reviewed).
+ * This module renders that SAME document to a professional German
+ * Lebenslauf PDF: A4 on pure white, Helvetica, black/dark-grey text with a
+ * subtle brand-purple accent, section rules, right-aligned date ranges,
+ * bullet entries, the candidate's photograph (when present) top-right, and
+ * multi-page continuation.
  *
  * It is the CV counterpart of the existing letter renderer
  * (src/lib/bew-letter-pdf.ts): zero external services, zero cost, and the
- * only output the email send path ever attaches. Nothing is invented here —
- * empty sections are simply not rendered.
+ * only output the email send path and the A4 document preview ever use —
+ * so the preview and the exported PDF are pixel-identical by construction.
+ * Nothing is invented here — empty sections are simply not rendered.
  */
-import { PDFDocument, PDFFont, StandardFonts, rgb, type Color } from "pdf-lib";
+import { PDFDocument, PDFFont, PDFImage, StandardFonts, rgb, type Color } from "pdf-lib";
 import {
   certificateVisible,
   educationVisible,
@@ -32,7 +35,8 @@ const RIGHT = A4_WIDTH - MARGIN_X;
 const INK: Color = rgb(0.11, 0.13, 0.18);
 const MUTED: Color = rgb(0.42, 0.45, 0.52);
 const RULE: Color = rgb(0.75, 0.78, 0.84);
-const ACCENT: Color = rgb(0.13, 0.35, 0.6);
+/** Subtle brand purple (#6D5DF6) — accent only, text stays black/grey. */
+const ACCENT: Color = rgb(109 / 255, 93 / 255, 246 / 255);
 
 /* ------------------------------------------------------------------ */
 /* Layout helpers (same greedy-wrap approach as bew-letter-pdf.ts)      */
@@ -94,8 +98,26 @@ export async function generateCvPdf(cv: CvDocument): Promise<Uint8Array> {
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const oblique = await doc.embedFont(StandardFonts.HelveticaOblique);
 
+  // Optional candidate photograph (data-URI from the uploaded CV) — standard
+  // German-CV position, top-right, aspect preserved. An unreadable image
+  // never fails the render; the CV simply appears without it.
+  const PHOTO_W = 62; // ≈22 mm wide
+  const PHOTO_H_MAX = 88; // ≈31 mm tall
+  let photo: { img: PDFImage; w: number; h: number } | null = null;
+  const photoMatch = (cv.personal.photo ?? "").match(/^data:image\/(png|jpe?g);base64,([A-Za-z0-9+/=]+)$/);
+  if (photoMatch) {
+    try {
+      const bytes = Uint8Array.from(atob(photoMatch[2]), (c) => c.charCodeAt(0));
+      const img = photoMatch[1] === "png" ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+      photo = { img, w: img.width, h: img.height };
+    } catch {
+      photo = null;
+    }
+  }
+
   let page = doc.addPage([A4_WIDTH, A4_HEIGHT]);
-  let y = A4_HEIGHT - MARGIN_TOP;
+  const TOP = A4_HEIGHT - MARGIN_TOP;
+  let y = TOP;
   const newPage = () => {
     page = doc.addPage([A4_WIDTH, A4_HEIGHT]);
     y = A4_HEIGHT - MARGIN_TOP;
@@ -138,10 +160,14 @@ export async function generateCvPdf(cv: CvDocument): Promise<Uint8Array> {
     }
   };
 
-  // ---- header: name / title / contact line -------------------------------
-  if (cv.personal.fullName) draw(cv.personal.fullName.toUpperCase(), bold, 19, { spaceAfter: 3 });
+  // ---- header: name / title / contact line (photo-aware) -----------------
+  const headerWidth = photo ? CONTENT_WIDTH - PHOTO_W - 24 : CONTENT_WIDTH;
+  if (cv.personal.fullName)
+    for (const line of wrapLine(bold, cv.personal.fullName.toUpperCase(), 19, headerWidth))
+      draw(line, bold, 19, { spaceAfter: 3 });
   if (cv.personal.professionalTitle)
-    draw(cv.personal.professionalTitle, regular, 11.5, { color: ACCENT, spaceAfter: 6 });
+    for (const line of wrapLine(regular, cv.personal.professionalTitle, 11.5, headerWidth))
+      draw(line, regular, 11.5, { color: ACCENT, spaceAfter: 6 });
   const contact = [
     cv.personal.email,
     cv.personal.phone,
@@ -149,16 +175,27 @@ export async function generateCvPdf(cv: CvDocument): Promise<Uint8Array> {
     cv.personal.linkedin,
     cv.personal.website,
   ].filter(Boolean);
-  for (const line of wrapLine(regular, contact.join("  ·  "), 9.5, CONTENT_WIDTH)) {
+  for (const line of wrapLine(regular, contact.join("  ·  "), 9.5, headerWidth)) {
     draw(line, regular, 9.5, { color: MUTED });
   }
-  // Optional personal facts, one line (only what the user provided).
+  // Optional personal facts (only what the user provided).
   const facts = [
     cv.personal.dateOfBirth ? `Geburtsdatum: ${cv.personal.dateOfBirth}` : "",
     cv.personal.nationality ? `Staatsangehörigkeit: ${cv.personal.nationality}` : "",
     cv.personal.availability ? `Verfügbar: ${cv.personal.availability}` : "",
   ].filter(Boolean);
-  if (facts.length) draw(facts.join("  ·  "), regular, 9.5, { color: MUTED });
+  for (const line of wrapLine(regular, facts.join("  ·  "), 9.5, headerWidth)) {
+    draw(line, regular, 9.5, { color: MUTED });
+  }
+  if (photo) {
+    let w = PHOTO_W;
+    let h = (w * photo.h) / photo.w;
+    if (h > PHOTO_H_MAX) {
+      h = PHOTO_H_MAX;
+      w = (h * photo.w) / photo.h;
+    }
+    page.drawImage(photo.img, { x: RIGHT - w, y: TOP - h, width: w, height: h });
+  }
   y -= 10;
   ensure(14);
   page.drawLine({
