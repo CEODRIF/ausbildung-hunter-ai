@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { FileText, Image as ImageIcon, RefreshCw, Trash2, UploadCloud } from "lucide-react";
+import { AlertTriangle, FileText, Image as ImageIcon, RefreshCw, Trash2, UploadCloud } from "lucide-react";
 import { Button, Input, Modal, Textarea } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
@@ -17,8 +17,53 @@ const PHOTO_ACCEPT = ".jpg,.jpeg,.png,.webp";
 const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 /** Client pre-check only — the server re-validates from magic bytes. */
 const PHOTO_CLIENT_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
-/** Same-origin, cookie-authenticated preview (private bucket, no public URL). */
-const photoPreviewUrl = (uploadedAt: string) => `/api/auto-bewerb/profile-photo?ts=${encodeURIComponent(uploadedAt)}`;
+/**
+ * Same-origin, cookie-authenticated preview (private bucket, no public
+ * URL, no blob-URL lifecycle). The upload timestamp in the query is the
+ * cache-buster — it changes on every upload/replace, and the server
+ * answers `no-store`, so a replaced photo can never render a stale cached
+ * image. `attempt` re-busts on explicit retry after a load failure.
+ */
+const photoPreviewUrl = (uploadedAt: string, attempt = 0) =>
+  `/api/auto-bewerb/profile-photo?ts=${encodeURIComponent(uploadedAt)}${attempt > 0 ? `&r=${attempt}` : ""}`;
+
+/**
+ * The uploaded photo, with an explicit failure state: a retrieval error
+ * (expired session, storage hiccup) renders a clean placeholder + Retry —
+ * never the browser's broken-image icon. Mount per upload timestamp
+ * (`key={uploadedAt}` upstream) so a replace/reset re-arms the loader and
+ * a removed photo unmounts the whole card state.
+ */
+export function ProfilePhotoImage({ uploadedAt, alt }: { uploadedAt: string; alt: string }) {
+  const { t } = useI18n();
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  if (failed) {
+    return (
+      <div className="flex h-36 w-28 shrink-0 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-line bg-surface-2/40 p-2 text-center">
+        <AlertTriangle size={18} className="text-danger" />
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            setFailed(false);
+            setAttempt((a) => a + 1);
+          }}
+        >
+          <RefreshCw size={12} /> {t("autoBewerb.retry")}
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <img
+      src={photoPreviewUrl(uploadedAt, attempt)}
+      alt={alt}
+      onError={() => setFailed(true)}
+      className="h-36 w-28 shrink-0 rounded-2xl border border-line bg-surface-2 object-cover"
+    />
+  );
+}
 
 /** Compact byte size (de-style). */
 function fmtSize(bytes: number): string {
@@ -272,11 +317,9 @@ export function Step1Cv() {
           <Note kind="info">{t("autoBewerb.photoSetupPending")}</Note>
         ) : photo ? (
           <div className="flex flex-wrap items-start gap-5">
-            <img
-              src={photoPreviewUrl(photo.uploadedAt)}
-              alt={t("autoBewerb.photoTitle")}
-              className="h-36 w-28 rounded-2xl border border-line bg-surface-2 object-cover"
-            />
+            {/* key = upload timestamp: a replace remounts (fresh cache-
+                buster + reset failure state); a remove unmounts it. */}
+            <ProfilePhotoImage key={photo.uploadedAt} uploadedAt={photo.uploadedAt} alt={t("autoBewerb.photoTitle")} />
             <div className="min-w-0 flex-1">
               <p className="text-sm leading-6 text-muted">{t("autoBewerb.photoDesc")}</p>
               <p className="mt-1 text-xs text-faint">

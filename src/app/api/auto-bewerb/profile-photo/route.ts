@@ -6,6 +6,7 @@ import {
 } from "@/lib/rate-limit";
 import {
   deleteAutoBewerbProfilePhoto,
+  getAutoBewerbProfilePhotoRef,
   resolveAutoBewerbPhotoDataUrl,
   uploadAutoBewerbProfilePhoto,
 } from "@/lib/auto-bewerb/engine";
@@ -68,7 +69,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "ref is invalid." }, { status: 400 });
   }
 
-  const dataUrl = await resolveAutoBewerbPhotoDataUrl(user.id, ref).catch(() => null);
+  // No ?ref → the candidate's CURRENT photo (Step 1 preview): the
+  // owner-scoped DB row is resolved to its frozen-style token HERE, from
+  // the session-verified user id. With ?ref → the FROZEN token of a saved
+  // document (Step 4 edit preview) — resolved directly, so a replaced or
+  // removed photo can never change an old document (and the current row
+  // is never consulted for frozen refs).
+  const effectiveRef = ref ?? (await getAutoBewerbProfilePhotoRef(user.id).catch(() => null));
+  const dataUrl = await resolveAutoBewerbPhotoDataUrl(user.id, effectiveRef).catch(() => null);
   const bytes = dataUrl ? dataUrlToBytes(dataUrl) : null;
   if (!bytes) {
     return NextResponse.json(

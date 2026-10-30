@@ -54,6 +54,7 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
   };
   const calls: RecordedOp[] = [];
   const uploaded: Array<{ bucket: string; path: string }> = [];
+  const objects = new Map<string, Buffer>();
   let failTables: Set<string> = new Set();
   let rpcImpl: ((fn: string, args: Record<string, unknown>) => { data: unknown; error: unknown } | Promise<{ data: unknown; error: unknown }>) | null = null;
   let uploadError: unknown = null;
@@ -258,15 +259,25 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     },
     storage: {
       from: (bucket: string) => ({
-        upload: async (path: string, _buffer: unknown, _opts: unknown) => {
+        upload: async (path: string, buffer: unknown, _opts: unknown) => {
           calls.push({ table: bucket, op: "storage", filters: { path }, args: [] });
           if (uploadError) return { error: uploadError };
           uploaded.push({ bucket, path });
+          objects.set(`${bucket}/${path}`, Buffer.from(buffer as Uint8Array | string));
           return { error: null };
         },
         remove: async (paths: string[]) => {
           calls.push({ table: bucket, op: "storage", filters: { remove: paths }, args: [] });
+          for (const p of paths) objects.delete(`${bucket}/${p}`);
           return { error: null };
+        },
+        /** Reads the in-memory object store (upload/remove above) — a
+         *  missing object behaves like Supabase's 404 download. */
+        download: async (path: string) => {
+          calls.push({ table: bucket, op: "storage", filters: { download: path }, args: [] });
+          const buf = objects.get(`${bucket}/${path}`);
+          if (!buf) return { data: null, error: { message: "NotFound" } };
+          return { data: new Blob([new Uint8Array(buf)]), error: null };
         },
       }),
     },
