@@ -29,6 +29,15 @@ export const dynamic = "force-dynamic";
  *
  *  - GET ?companyId=…&doc=cv     → the tailored Lebenslauf (A4, Helvetica)
  *  - GET ?companyId=…&doc=letter → the Anschreiben (letter folio)
+ *
+ * DISPOSITION:
+ *  - default            → `Content-Disposition: attachment` (explicit
+ *    download via "Export PDF" / window.open)
+ *  - &preview=1         → `Content-Disposition: inline` (the in-app Step 4
+ *    preview). A browser refuses to render an `attachment` response inside
+ *    an iframe — it downloads the file and leaves the frame blank. The PDF
+ *    bytes are identical in both modes (same renderer call, same stored
+ *    document version); only the disposition header differs.
  */
 
 export async function GET(request: Request) {
@@ -41,9 +50,14 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const companyId = url.searchParams.get("companyId") ?? "";
   const doc = url.searchParams.get("doc");
+  const preview = url.searchParams.get("preview") === "1";
   if (!companyId || (doc !== "cv" && doc !== "letter")) {
     return NextResponse.json({ error: "companyId and doc (cv|letter) are required." }, { status: 400 });
   }
+
+  /** The only difference between preview and export: the disposition. */
+  const disposition = (filename: string) =>
+    `${preview ? "inline" : "attachment"}; filename="${encodeURIComponent(filename)}"`;
 
   const bundle = await getAutoBewerbCompany(user.id, companyId);
   if (!bundle) return NextResponse.json({ error: "Unternehmen nicht gefunden." }, { status: 404 });
@@ -69,7 +83,7 @@ export async function GET(request: Request) {
         status: 200,
         headers: {
           "Content-Type": BEW_LETTER_PDF_MIME,
-          "Content-Disposition": `attachment; filename="${encodeURIComponent(cvPdfFilename(cv.personal.fullName))}"`,
+          "Content-Disposition": disposition(cvPdfFilename(cv.personal.fullName)),
           "Cache-Control": "no-store",
         },
       });
@@ -111,7 +125,7 @@ export async function GET(request: Request) {
       status: 200,
       headers: {
         "Content-Type": BEW_LETTER_PDF_MIME,
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(letterPdfFilename(extract?.company || bundle.company.company))}"`,
+        "Content-Disposition": disposition(letterPdfFilename(extract?.company || bundle.company.company)),
         "Cache-Control": "no-store",
       },
     });
