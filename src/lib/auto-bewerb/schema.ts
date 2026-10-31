@@ -132,10 +132,11 @@ export const autoBewerbEmailSettingsSchema = z.object({
 export type AutoBewerbEmailSettingsInput = z.infer<typeof autoBewerbEmailSettingsSchema>;
 
 /** Resolve the DELIVERY destination for one company, in priority order:
- *  1. the explicit GLOBAL recipient (a deliberate user choice → the whole
- *     batch is delivered there),
- *  2. the legacy per-company manual value (preserved — never overwritten),
- *  3. the VERIFIED application email extracted from that company's ad.
+ *  1. the legacy per-company manual value (preserved — never overwritten),
+ *  2. the VERIFIED application email extracted from that company's ad.
+ *  The first parameter (the old shared/global recipient) is DEPRECATED —
+ *  the Step 6 override was removed, so no caller passes a value; the
+ *  parameter stays only for signature compatibility with stored data.
  *  Returns "" when nothing is available — the caller must then refuse to
  *  send. Pure and deterministic; never invents an address. */
 export function resolveAutoBewerbRecipient(

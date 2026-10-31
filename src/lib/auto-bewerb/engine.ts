@@ -1442,20 +1442,20 @@ export async function prepareAutoBewerbSend(
    // body, sending account and attachment flags come EXCLUSIVELY from the
    // global settings — no company (and no client input) can override them.
    // The SAME shared template is used for every company; its supported
-   // {{tokens}} are personalized per recipient from verified data (missing →
-   // empty, never invented). Per-company: the DELIVERY destination (explicit
-   // global recipient → legacy manual value → the ad's extracted
-   // applicationEmail) and the CV/Anschreiben PDFs. Databases without the
-   // settings migration keep the legacy per-company values (fallback).
+  // {{tokens}} are personalized per recipient from verified data (missing →
+  // empty, never invented). Per-company: the DELIVERY destination is the
+  // company's OWN verified recipient (legacy manual value → the ad's
+  // extracted applicationEmail) and the CV/Anschreiben PDFs. Databases
+  // without the settings migration keep the legacy per-company values
+  // (fallback). A stale stored shared-recipient value is NEVER honored:
+  // every company receives its application at its own verified address.
   const settings = await getAutoBewerbEmailSettings(userId);
   let subject: string;
   let accountId: string;
   let attachCv: boolean;
   let attachLetter: boolean;
   let bodyText: string;
-  const recipient = settings
-    ? resolveAutoBewerbRecipient(settings.recipient, app.recipient_email, app.ad_extracted)
-    : resolveAutoBewerbRecipient("", app.recipient_email, app.ad_extracted);
+  const recipient = resolveAutoBewerbRecipient("", app.recipient_email, app.ad_extracted);
   if (settings) {
     bodyText = settings.body.trim();
     subject = settings.subject.trim().slice(0, 200);

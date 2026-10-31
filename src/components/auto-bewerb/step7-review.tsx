@@ -51,7 +51,7 @@ export function Step7Review() {
     const r = v.company;
     if (s) {
       return {
-        dest: resolveAutoBewerbRecipient(s.recipient, r.recipient_email, r.ad_extracted),
+        dest: resolveAutoBewerbRecipient("", r.recipient_email, r.ad_extracted),
         subject: s.subject.trim(),
         body: s.body.trim(),
         attachCv: s.attachCv,
@@ -236,13 +236,6 @@ export function Step7Review() {
           )
         }
       >
-        {/* The global-recipient override (Step 6) is NEVER silent: while it
-            is set, the review names the single address up front. */}
-        {s && s.recipient.trim() !== "" && (
-          <div className="mb-2 rounded-2xl border border-warning/40 bg-warning-soft/60 p-3 text-xs font-semibold leading-5 text-warning">
-            {t("autoBewerb.globalRecipientStep7Note", { count: ws.companies.length, address: s.recipient.trim() })}
-          </div>
-        )}
         <ul className="divide-y divide-line">
           {ws.companies.map((v) => {
             const r = v.company;
@@ -361,11 +354,6 @@ export function Step7Review() {
       <Modal open={confirmOpen} onClose={() => !sending && setConfirmOpen(false)} title={t("autoBewerb.confirmTitle")}>
         <p className="text-sm leading-6 text-muted">{t("autoBewerb.confirmIntro")}</p>
         <p className="mt-2 text-xs text-muted">{t("autoBewerb.confirmBodySharedNote")}</p>
-        {s && s.recipient.trim() !== "" && (
-          <p className="mt-2 text-xs font-semibold text-warning">
-            {t("autoBewerb.globalRecipientStep7Note", { count: selectedViews.length, address: s.recipient.trim() })}
-          </p>
-        )}
 
         {/* The ONE shared e-mail (identical for every recipient) */}
         {selectedViews.length > 0 && (

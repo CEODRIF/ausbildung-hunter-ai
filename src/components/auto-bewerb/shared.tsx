@@ -159,7 +159,7 @@ export function computeStepState(ws: AutoBewerbWorkspace): {
               (c) =>
                 Boolean(
                   resolveAutoBewerbRecipient(
-                    ws.emailSettings!.recipient,
+                    "",
                     c.company.recipient_email,
                     c.company.ad_extracted,
                   ),
