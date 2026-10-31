@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Building2, CheckCheck, ChevronRight, Pencil, RefreshCw, Search, Trash2 } from "lucide-react";
+import { Building2, CalendarClock, CheckCheck, ChevronRight, Pencil, RefreshCw, Search, Trash2 } from "lucide-react";
 import { Button, Input, Modal, Textarea } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
@@ -53,8 +53,14 @@ export function Step2Companies() {
   const [deleting, setDeleting] = useState<AutoBewerbCompanyRow | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // GLOBAL capacity — PERSISTED server counters (the active list is the same
+  // reserved set; the server value is the truth for the "X / 100" display and
+  // survives concurrent sessions). The active list length is only the
+  // pre-migration fallback.
   const count = ws.companies.length;
-  const atLimit = count >= AUTO_BEWERB_COMPANY_LIMIT;
+  const capacity = ws.capacity?.capacity ?? AUTO_BEWERB_COMPANY_LIMIT;
+  const reserved = ws.capacity?.reserved ?? count;
+  const atLimit = reserved >= capacity;
 
   const analyze = async () => {
     setAnalyzing(true);
@@ -134,7 +140,10 @@ export function Step2Companies() {
       await refresh();
       notify("success", t("autoBewerb.saved"));
     } else {
-      notify("error", t("autoBewerb.saveError"));
+      notify(
+        "error",
+        res.code === "scheduled_protected" ? t("autoBewerb.scheduledProtectedNote") : t("autoBewerb.saveError"),
+      );
     }
   };
 
@@ -144,9 +153,10 @@ export function Step2Companies() {
       <SectionCard
         title={t("autoBewerb.adInputTitle")}
         aside={
-          <span className="text-xs font-semibold text-muted">
-            {count} / {AUTO_BEWERB_COMPANY_LIMIT}
-          </span>
+          <div className="flex flex-col items-end gap-0.5 text-xs">
+            <span className="font-semibold text-muted">{reserved} / {capacity}</span>
+            <span className="font-medium text-faint">{t("autoBewerb.capacityAvailable", { count: Math.max(0, capacity - reserved) })}</span>
+          </div>
         }
       >
         <div className="space-y-3">
@@ -200,6 +210,9 @@ export function Step2Companies() {
           )}
         </div>
       </SectionCard>
+
+      {/* Preserved history note — sent companies auto-leave THIS list */}
+      {(ws.sendHistory?.length ?? 0) > 0 && <Note kind="info">{t("autoBewerb.sentAutoRemovedNote")}</Note>}
 
       {/* Company cards */}
       {ws.companies.length === 0 ? (
@@ -282,7 +295,11 @@ function CompanyCard({
   const ex = c.ad_extracted;
   const an = c.ad_analysis;
   const { name, job } = companyLabel(c);
-  const locked = c.status === "sent" || c.status === "sending";
+  // Scheduled = PENDING application: the server protects it (delete is
+  // refused with scheduled_protected); the UI shows the scheduled indicator
+  // and disables the manual actions so the user cannot fight the server.
+  const scheduled = c.status === "scheduled";
+  const locked = c.status === "sent" || c.status === "sending" || scheduled;
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -308,7 +325,14 @@ function CompanyCard({
           </button>
           {job && <p className="truncate text-xs text-muted">{job}</p>}
         </div>
-        {c.ad_confirmed_at ? (
+        {scheduled ? (
+          <span
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold text-accent"
+            title={t("autoBewerb.scheduledProtectedNote")}
+          >
+            <CalendarClock size={12} /> {t("autoBewerb.statusScheduled")}
+          </span>
+        ) : c.ad_confirmed_at ? (
           <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success-soft px-2.5 py-1 text-[11px] font-semibold text-success">
             <CheckCheck size={12} /> {t("autoBewerb.confirmedLabel")}
           </span>
@@ -319,7 +343,13 @@ function CompanyCard({
           <Button variant="ghost" size="sm" onClick={onEdit} disabled={locked} title={t("autoBewerb.editCompany")}>
             <Pencil size={14} />
           </Button>
-          <Button variant="ghost" size="sm" onClick={onDelete} disabled={locked} title={t("autoBewerb.deleteCompany")}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onDelete}
+            disabled={locked}
+            title={scheduled ? t("autoBewerb.scheduledProtectedNote") : t("autoBewerb.deleteCompany")}
+          >
             <Trash2 size={14} />
           </Button>
         </div>

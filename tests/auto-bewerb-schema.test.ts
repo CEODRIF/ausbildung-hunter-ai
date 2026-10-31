@@ -20,8 +20,8 @@ const extract = (partial: Partial<AdExtract> = {}): AdExtract =>
   adExtractSchema.parse(partial);
 
 describe("AUTO_BEWERB_COMPANY_LIMIT", () => {
-  it("caps the workflow at 10 companies", () => {
-    expect(AUTO_BEWERB_COMPANY_LIMIT).toBe(10);
+  it("caps the workflow at 100 companies (global across all campaigns)", () => {
+    expect(AUTO_BEWERB_COMPANY_LIMIT).toBe(100);
   });
 });
 

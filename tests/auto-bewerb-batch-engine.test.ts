@@ -370,9 +370,9 @@ describe("createAutoBewerbBatch — creation & pre-validation", () => {
     expect(sendEmail).not.toHaveBeenCalled();
   });
 
-  it("(1) rejects an 11-company batch (batch_too_large) without side effects", async () => {
-    seed({ count: 11 });
-    const res = await createAutoBewerbBatch(USER, { companyIds: idsOf(11), schedule: FUTURE });
+  it("(1) rejects a 101-company batch (batch_too_large) without side effects", async () => {
+    seed({ count: 101 });
+    const res = await createAutoBewerbBatch(USER, { companyIds: idsOf(101), schedule: FUTURE });
     expect(res.ok).toBe(false);
     expect(res.code).toBe("batch_too_large");
     expect(db.tables.auto_bewerb_batches).toHaveLength(0);
@@ -941,8 +941,8 @@ describe("queue views & statistics", () => {
     expect(now.ok).toBe(true);
     expect(fut.ok).toBe(true);
     const stats = await getAutoBewerbSendStats(USER);
-    expect(stats).toEqual({ sentToday: 1, scheduled: 1, processing: 0, totalToday: 2 });
+    expect(stats).toEqual({ sentToday: 1, scheduled: 1, processing: 0, totalToday: 2, failed: 0 });
     // Another user sees zeros (user-scoped):
-    expect(await getAutoBewerbSendStats(USER_B)).toEqual({ sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 });
+    expect(await getAutoBewerbSendStats(USER_B)).toEqual({ sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 });
   });
 });

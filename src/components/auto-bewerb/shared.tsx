@@ -172,8 +172,10 @@ export function computeStepState(ws: AutoBewerbWorkspace): {
             ),
       ready: companies.length > 0,
     },
-    // 7 review
-    { done: companies.some((c) => c.company.status === "sent"), ready: companies.length > 0 },
+    // 7 review — done when at least one application was DELIVERED. Sent
+    // companies leave the active list on success (auto-removal), so the proof
+    // is the persisted history / stats, never a "sent" row in the active set.
+    { done: (ws.sendHistory?.length ?? 0) > 0 || (ws.sendStats?.sentToday ?? 0) > 0, ready: companies.length > 0 },
   ];
 }
 

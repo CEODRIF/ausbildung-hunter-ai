@@ -60,6 +60,10 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
   let uploadError: unknown = null;
   /** Inject a PostgREST-style insert error per table (e.g. missing column). */
   const insertErrors: Record<string, string> = {};
+  /** OPT-IN (default OFF): tables where the (user_id, slot_no) partial UNIQUE
+   *  index (slot_no > 0) is modeled — the finite capacity arbiter — plus the
+   *  ab_companies_release_slot trigger semantics on update. */
+  const slotUnique = new Set<string>();
   /** Inject a PostgREST-style select error for queries that REQUEST A
    *  SPECIFIC COLUMN (e.g. a stale schema missing slot_no). Column-aware so
    *  unrelated selects on the same table (schema probe selects "id") pass. */
@@ -86,6 +90,11 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     // Mirrors the real partial unique index from
     // 20261212000000_studio_slot_no.sql: (user_id, slot_no) WHERE slot_no > 0.
     if (table === "studio_applications" && typeof vals.slot_no === "number" && vals.slot_no > 0) {
+      return rows(table).some((r) => r.user_id === vals.user_id && r.slot_no === vals.slot_no);
+    }
+    // OPT-IN mirror of auto_bewerb_companies_user_slot_unique (the same
+    // index shape): concurrent slot grabs cannot both win.
+    if (slotUnique.has(table) && typeof vals.slot_no === "number" && vals.slot_no > 0) {
       return rows(table).some((r) => r.user_id === vals.user_id && r.slot_no === vals.slot_no);
     }
     if (table === "studio_send_attempts" && vals.idempotency_key != null) {
@@ -160,7 +169,9 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
           const constraint =
             table === "studio_applications" && typeof st.pending.vals.slot_no === "number" && st.pending.vals.slot_no > 0
               ? "studio_applications_user_slot_unique"
-              : table === "studio_send_attempts"
+              : slotUnique.has(table) && typeof st.pending.vals.slot_no === "number" && st.pending.vals.slot_no > 0
+                ? `${table}_user_slot_unique`
+                : table === "studio_send_attempts"
                 ? "studio_send_attempts_idempotency_key_key"
                 : table === "studio_documents"
                   ? "studio_documents_application_id_doc_type_version_key"
@@ -219,7 +230,28 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
       }
       if (st.pending?.op === "update") {
         calls.push({ table, op: "update", filters: filterMap(st), args: [st.pending.vals] });
-        for (const r of matched) Object.assign(r, st.pending.vals, { updated_at: new Date().toISOString() });
+        for (const r of matched) {
+          const vals = { ...st.pending.vals };
+          // OPT-IN mirror of the ab_companies_release_slot trigger
+          // (migration 20261220000000): any transition OUT of the reserved
+          // set (draft/ready/scheduled/sending/failed) INTO a released state
+          // (sent/cancelled) frees the capacity token. BEFORE-UPDATE
+          // semantics — it rewrites the outgoing row, idempotent on rows that
+          // never held a slot (already released), so a release can never
+          // happen twice.
+          if (
+            slotUnique.has(table) &&
+            typeof vals.status === "string" &&
+            (vals.status === "sent" || vals.status === "cancelled") &&
+            typeof r.status === "string" &&
+            ["draft", "ready", "scheduled", "sending", "failed"].includes(r.status) &&
+            typeof r.slot_no === "number" &&
+            r.slot_no > 0
+          ) {
+            vals.slot_no = 0;
+          }
+          Object.assign(r, vals, { updated_at: new Date().toISOString() });
+        }
         const out = st.shape === "maybeSingle" ? matched[0] ?? null : st.shape === "single" ? matched[0] ?? null : st.selectAfter ? matched : null;
         if (st.shape === "single" && !matched.length) {
           return { data: null, error: { message: "no rows" } };
@@ -303,6 +335,9 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     failInsert: (table: string, message: string) => (insertErrors[table] = message),
     /** Force a select error for queries requesting `col` on `table`. */
     failSelect: (table: string, col: string, message: string) => (selectFail = { table, col, message }),
+    /** OPT-IN: model the (user_id, slot_no) partial unique index (slot_no > 0)
+     *  + the release trigger for a table (capacity concurrency tests). */
+    enableSlotUnique: (table: string) => void slotUnique.add(table),
     setRpc: (impl: NonNullable<typeof rpcImpl>) => (rpcImpl = impl),
     setUploadError: (e: unknown) => (uploadError = e),
     /** Place a pre-existing object into the in-memory store (seed files the

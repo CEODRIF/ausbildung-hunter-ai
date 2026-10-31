@@ -4,14 +4,14 @@
  *
  * The reference layout, wired to REAL persisted queue data:
  *   - "Aktueller Batch (X Unternehmen)" with per-company readiness (X von Y
- *     bereit) and the hard cap of 10;
+ *     bereit) and the global 100-company cap;
  *   - Send now behind the explicit confirmation modal (client passes ONLY
  *     company ids + confirmation);
  *   - "Versand-Warteschlange" from ws.batches (batch #, count, time, visual
  *     countdown, status, account, details, cancel ONLY pre-start);
  *   - Smart Sending policy panel (always on, real interval constants);
  *   - statistics from ws.sendStats (persisted data, never demo numbers);
- *   - graceful legacy mode (batchesSupported = false hides queue + stats).
+ *   - graceful legacy mode (batchesSupported = false hides the queue; stats stay visible).
  */
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -148,7 +148,8 @@ function makeWs(opts: {
   batchMode?: boolean;
   companies?: ReturnType<typeof companyView>[];
   batches?: Record<string, unknown>[];
-  stats?: { sentToday: number; scheduled: number; processing: number; totalToday: number };
+  stats?: { sentToday: number; scheduled: number; processing: number; totalToday: number; failed?: number };
+  capacity?: { reserved: number; capacity: number; available: number };
 }) {
   return {
     ready: true,
@@ -165,7 +166,8 @@ function makeWs(opts: {
     candidateName: "Mustapha Drif",
     batchesSupported: opts.batchMode ?? true,
     batches: opts.batches ?? [],
-    sendStats: opts.stats ?? { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 },
+    sendStats: opts.stats ?? { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 },
+    ...(opts.capacity ? { capacity: opts.capacity } : {}),
   };
 }
 
@@ -187,7 +189,7 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
   it("renders the queue from persisted data: batch #, count, time, countdown, status, account", () => {
     mount(makeWs({
       batches: [batchView()],
-      stats: { sentToday: 2, scheduled: 1, processing: 0, totalToday: 5 },
+      stats: { sentToday: 2, scheduled: 1, processing: 0, totalToday: 5, failed: 0 },
     }));
     // Current batch panel (nothing selected yet):
     expect(screen.getByText("Aktueller Batch (0 Unternehmen)")).toBeInTheDocument();
@@ -258,18 +260,31 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     await waitFor(() => expect(screen.getByText("Aktueller Batch (0 Unternehmen)")).toBeInTheDocument());
   });
 
-  it("enforces the hard cap of 10 companies per batch", () => {
-    const many = Array.from({ length: 11 }, (_, i) =>
-      companyView(`c${i + 1}`, `Firma ${i + 1} GmbH`, `jobs@firma-${i + 1}.de`, `Ausbildung ${i + 1}`, true),
-    );
-    mount(makeWs({ companies: many }));
-    for (let i = 1; i <= 10; i++) fireEvent.click(screen.getByLabelText(`Firma ${i} GmbH`));
-    expect(screen.getByText("Aktueller Batch (10 Unternehmen)")).toBeInTheDocument();
-    expect(screen.getByText("10 von 10 bereit")).toBeInTheDocument();
-    // The 11th company cannot be added to the current batch:
-    expect(screen.getByLabelText("Firma 11 GmbH")).toBeDisabled();
-    expect(screen.getByText("Maximal 10 Unternehmen pro Batch.")).toBeInTheDocument();
-  });
+  // 30 s budget: this test clicks 100 checkboxes sequentially, each re-rendering
+  // the full 101-row list — fine locally, but beyond vitest's 5 s default on
+  // slower CI runners (assertions are unchanged, only the time budget).
+  it(
+    "enforces the global 100-company cap for the current batch (101st only rejected at exhausted capacity)",
+    () => {
+      const many = Array.from({ length: 101 }, (_, i) =>
+        companyView(`c${i + 1}`, `Firma ${i + 1} GmbH`, `jobs@firma-${i + 1}.de`, `Ausbildung ${i + 1}`, true),
+      );
+      mount(makeWs({
+        companies: many,
+        capacity: { reserved: 100, capacity: 100, available: 0 }, // global capacity exhausted (persisted server data)
+      }));
+      for (let i = 1; i <= 100; i++) fireEvent.click(screen.getByLabelText(`Firma ${i} GmbH`));
+      expect(screen.getByText("Aktueller Batch (100 Unternehmen)")).toBeInTheDocument();
+      expect(screen.getByText("100 von 100 bereit")).toBeInTheDocument();
+      // The 101st company cannot be added to the current batch — the selection is
+      // bounded by the GLOBAL capacity (exhausted at 100 reserved):
+      expect(screen.getByLabelText("Firma 101 GmbH")).toBeDisabled();
+      expect(screen.getByText("Maximal 100 Unternehmen pro Batch — begrenzt durch Ihre globale Kapazität.")).toBeInTheDocument();
+      // The exhausted capacity is displayed from the persisted counters:
+      expect(screen.getByText("100 / 100")).toBeInTheDocument();
+    },
+    30_000,
+  );
 
   it("an incomplete company can be selected but blocks sending (readiness indicator)", () => {
     const companies = [
@@ -323,7 +338,7 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
 });
 
 describe("Step 7 legacy mode (batchesSupported = false, migration pending)", () => {
-  it("hides queue + statistics but keeps the full per-company workflow", async () => {
+  it("hides the queue but keeps statistics visible + the full per-company workflow", async () => {
     (sendCompaniesAction as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
       value: [{ companyId: "ca", ok: true, dispatchStatus: "sent" }],
@@ -331,10 +346,14 @@ describe("Step 7 legacy mode (batchesSupported = false, migration pending)", () 
     mount(makeWs({
       batchMode: false,
       batches: [batchView()], // must NOT be rendered
-      stats: { sentToday: 99, scheduled: 99, processing: 99, totalToday: 99 },
+      stats: { sentToday: 99, scheduled: 99, processing: 99, totalToday: 99, failed: 0 },
     }));
     expect(screen.queryByText("Versand-Warteschlange")).toBeNull();
-    expect(screen.queryByText("Versand-Statistik")).toBeNull();
+    // Spec §9: capacity + sending statistics are now visible in ALL modes
+    // (they derive from persisted counters, not from the batch queue):
+    expect(screen.getByText("Versand-Statistik")).toBeInTheDocument();
+    // 99 renders in every counter tile (sent today / scheduled / processing / total):
+    expect(screen.getAllByText("99").length).toBeGreaterThanOrEqual(4);
     expect(screen.queryByText("Batch #1")).toBeNull();
     // Smart Sending policy still shown (platform-wide):
     expect(screen.getByText("Smart Sending")).toBeInTheDocument();
