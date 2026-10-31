@@ -11,7 +11,6 @@ import {
   AUTO_BEWERB_EMAIL_DEFAULT_BODY,
   AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT,
   buildAutoBewerbGreeting,
-  isValidEmail,
   resolveAutoBewerbRecipient,
   substituteEmailTokens,
 } from "@/lib/auto-bewerb/schema";
@@ -29,7 +28,7 @@ import { Note, SectionCard, companyLabel, useAutoBewerb } from "./shared";
  * Layout (matches the reference design):
  *   1. Shared e-mail template — subject + rich-text body (+ toolbar, tokens,
  *      character counter, AI draft, live preview) and the remaining shared
- *      options (optional shared recipient, attach-CV / attach-letter flags).
+ *      options (attach-CV / attach-letter flags).
  *   2. Companies and attachments — a clean read-only list: company, position,
  *      its OWN cover-letter PDF + the shared supporting documents as chips;
  *      a warning (→ Step 2) when a verified recipient is missing.
@@ -37,11 +36,11 @@ import { Note, SectionCard, companyLabel, useAutoBewerb } from "./shared";
  *      actual connected accounts, persisted through the existing settings
  *      action; the dispatch pipeline uses this single account everywhere.
  *
- * What is deliberately UNCHANGED: the recipient model (verified per-company
- * address from Step 2, optional global override with an explicit warning),
- * the attachment mapping, the Step 2 verification flow, the Step 6 e-mail
- * behavior of the engine, and the legacy per-company display for databases
- * without the email-settings migration.
+ * What is deliberately UNCHANGED: the recipient model (each company's
+ * verified per-company address from Step 2 — displayed read-only, never
+ * overridable), the attachment mapping, the Step 2 verification flow, the
+ * Step 6 e-mail behavior of the engine, and the legacy per-company display
+ * for databases without the email-settings migration.
  */
 
 const looksLikeHtml = (s: string) => /<[a-z][\s\/>]/i.test(s);
@@ -67,7 +66,6 @@ export function Step6Email() {
   // Local edits are buffered against the server value (body as a DRAFT, null =
   // follow the server) — step navigation never discards an unsaved edit.
   const [templateDraft, setTemplateDraft] = useState<string | null>(null);
-  const [recipient, setRecipient] = useState(s?.recipient ?? "");
   const [subject, setSubject] = useState(supported && s ? s.subject || AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT : "");
   const [accountId, setAccountId] = useState(s?.accountId ?? "");
   const [attachCv, setAttachCv] = useState(s?.attachCv ?? true);
@@ -85,7 +83,6 @@ export function Step6Email() {
   const globalDirty =
     bodyDirty ||
     subject !== (s?.subject ?? "") ||
-    recipient !== (s?.recipient ?? "") ||
     accountId !== (s?.accountId ?? "") ||
     attachCv !== (s?.attachCv ?? true) ||
     attachLetter !== (s?.attachLetter ?? true);
@@ -103,12 +100,14 @@ export function Step6Email() {
     } else notify("error", t("autoBewerb.saveError"));
   };
 
-  /** One Save — the complete global configuration (subject + body included). */
+  /** One Save — the complete global configuration (subject + body included).
+   *  `recipient` is written back with its stored value (the shared-recipient
+   *  override was removed from the UI; the engine never honors it). */
   const saveSettings = async () => {
     setSaving(true);
     const res = await saveEmailSettingsAction({
       body: bodyDisplay,
-      recipient,
+      recipient: s?.recipient ?? "",
       subject,
       accountId,
       attachCv,
@@ -200,9 +199,8 @@ export function Step6Email() {
   if (supported) {
     if (!bodyDisplay.trim()) issues.push(t("autoBewerb.templateEmptyNote"));
     if (!accountId) issues.push(t("autoBewerb.missingAccount"));
-    if (recipient.trim() && !isValidEmail(recipient)) issues.push(t("autoBewerb.invalidRecipient"));
     const missingDest = ws.companies.filter(
-      (c) => !resolveAutoBewerbRecipient(recipient, c.company.recipient_email, c.company.ad_extracted),
+      (c) => !resolveAutoBewerbRecipient("", c.company.recipient_email, c.company.ad_extracted),
     );
     if (missingDest.length > 0) issues.push(t("autoBewerb.missingRecipient"));
     const missingCv = ws.companies.filter((c) => attachCv && !c.cv);
@@ -270,37 +268,18 @@ export function Step6Email() {
 
         {supported && (
           <>
-            {/* Remaining shared options — one optional recipient override + the attach flags */}
-            <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-end">
-              <div className="min-w-0 flex-1">
-                <Input
-                  label={t("autoBewerb.globalRecipientLabel")}
-                  type="email"
-                  value={recipient}
-                  onChange={(e) => setRecipient(e.target.value)}
-                  error={recipient && !isValidEmail(recipient) ? t("autoBewerb.invalidEmail") : undefined}
-                  hint={t("autoBewerb.globalRecipientHint")}
-                />
-              </div>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pb-1">
-                <label className="flex items-center gap-2 text-sm font-medium text-ink-soft">
-                  <input type="checkbox" checked={attachCv} onChange={(e) => setAttachCv(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
-                  {t("autoBewerb.attachCvLabel")}
-                </label>
-                <label className="flex items-center gap-2 text-sm font-medium text-ink-soft">
-                  <input type="checkbox" checked={attachLetter} onChange={(e) => setAttachLetter(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
-                  {t("autoBewerb.attachLetterLabel")}
-                </label>
-              </div>
+            {/* Remaining shared options — the attach flags (recipients are
+                per-company and verified in Step 2 — never overridable here) */}
+            <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+              <label className="flex items-center gap-2 text-sm font-medium text-ink-soft">
+                <input type="checkbox" checked={attachCv} onChange={(e) => setAttachCv(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
+                {t("autoBewerb.attachCvLabel")}
+              </label>
+              <label className="flex items-center gap-2 text-sm font-medium text-ink-soft">
+                <input type="checkbox" checked={attachLetter} onChange={(e) => setAttachLetter(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
+                {t("autoBewerb.attachLetterLabel")}
+              </label>
             </div>
-
-            {/* The override is never silent: while a shared recipient is set,
-                a prominent warning states that ALL companies route to one address. */}
-            {recipient.trim() !== "" && (
-              <div className="mt-3 rounded-2xl border border-warning/40 bg-warning-soft/60 p-3 text-xs font-semibold leading-5 text-warning">
-                {t("autoBewerb.globalRecipientOverrideWarning", { count: ws.companies.length })}
-              </div>
-            )}
 
             {issues.length > 0 && (
               <div className="mt-3 rounded-2xl border border-warning/30 bg-warning-soft/50 p-3">

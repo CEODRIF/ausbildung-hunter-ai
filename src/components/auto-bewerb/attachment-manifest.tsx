@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { AlertTriangle, Building2, FileText } from "lucide-react";
+import { AlertTriangle, Building2, CheckCircle2, FileText, Mail } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import {
   resolveAutoBewerbRecipient,
@@ -20,7 +20,9 @@ import { companyLabel, useAutoBewerb } from "./shared";
  * Recipient handling (deliberately unchanged business logic):
  *   - the verified per-company recipient stays in the DATA (the send engine
  *     resolves it via `resolveAutoBewerbRecipient` exactly as before);
- *   - the address itself is no longer shown next to each company;
+ *   - each row shows that company's OWN resolved recipient as READ-ONLY
+ *     text below the name/position (mail icon + green verified indicator);
+ *   - there is no editable e-mail input and no shared override anywhere;
  *   - a company WITHOUT a verified recipient gets a clear warning pointing
  *     back to Step 2 (nothing is invented, nothing is silent).
  *
@@ -59,13 +61,16 @@ export function AttachmentManifest({ footer }: { footer?: ReactNode }) {
   const rows = ws.companies.map((v) => {
     const attachCv = s ? s.attachCv : v.company.email_attach_cv;
     const attachLetter = s ? s.attachLetter : v.company.email_attach_letter;
-    const dest = resolveAutoBewerbRecipient(s?.recipient ?? "", v.company.recipient_email, v.company.ad_extracted);
+    // The recipient is ALWAYS the company's own verified address (legacy
+    // manual value → the ad's extracted applicationEmail) — the removed
+    // shared-recipient override is never consulted here or in the engine.
+    const dest = resolveAutoBewerbRecipient("", v.company.recipient_email, v.company.ad_extracted);
     const entries = buildEntries(v, attachCv, attachLetter, ws.attachments);
     const missing: string[] = [];
     if (!dest) missing.push(t("autoBewerb.missingRecipientStep2"));
     if (attachCv && !v.cv) missing.push(t("autoBewerb.missingCv"));
     if (attachLetter && !v.letter) missing.push(t("autoBewerb.missingLetter"));
-    return { v, entries, missing, count: entries.length };
+    return { v, dest, entries, missing, count: entries.length };
   });
   const total = rows.reduce((n, r) => n + r.count, 0);
 
@@ -97,6 +102,15 @@ export function AttachmentManifest({ footer }: { footer?: ReactNode }) {
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-semibold text-ink">{name}</span>
                   {job ? <span className="block truncate text-xs text-muted">{job}</span> : null}
+                  {r.dest ? (
+                    // READ-ONLY verified recipient (never an input, never overridable):
+                    <span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted">
+                      <Mail size={12} className="shrink-0 text-faint" />
+                      <span className="truncate">{r.dest}</span>
+                      <CheckCircle2 size={12} className="shrink-0 text-success" aria-label={t("autoBewerb.recipientVerified")} />
+                      <span className="sr-only">{t("autoBewerb.recipientVerified")}</span>
+                    </span>
+                  ) : null}
                 </span>
               </div>
 
