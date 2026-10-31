@@ -170,17 +170,26 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
             error: { message: `duplicate key value violates unique constraint "${constraint}"` },
           };
         }
-        const row: Record<string, unknown> = {
-          id: randomUUID(),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          ...st.pending.vals,
-        };
-        ts.push(row);
-        const out = st.shape === "single" || st.selectAfter ? row : null;
-        return { data: out, error: null };
-      }
-      if (st.pending?.op === "upsert") {
+         const row: Record<string, unknown> = {
+           id: randomUUID(),
+           created_at: new Date().toISOString(),
+           updated_at: new Date().toISOString(),
+           ...st.pending.vals,
+         };
+         // The Postgres column defaults (the in-memory harness has no DDL):
+         if (table === "auto_bewerb_send_attempts") {
+           if (row.attempt_count === undefined) row.attempt_count = 0;
+           if (row.next_attempt_at === undefined) row.next_attempt_at = null;
+         }
+         if (table === "auto_bewerb_batches") {
+           if (row.started_at === undefined) row.started_at = null;
+           if (row.completed_at === undefined) row.completed_at = null;
+         }
+         ts.push(row);
+         const out = st.shape === "single" || st.selectAfter ? row : null;
+         return { data: out, error: null };
+       }
+       if (st.pending?.op === "upsert") {
         // Capture before the find() closure: TS resets property narrowing
         // after a function boundary (the closure could run later).
         const pending = st.pending;
@@ -296,6 +305,12 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     failSelect: (table: string, col: string, message: string) => (selectFail = { table, col, message }),
     setRpc: (impl: NonNullable<typeof rpcImpl>) => (rpcImpl = impl),
     setUploadError: (e: unknown) => (uploadError = e),
+    /** Place a pre-existing object into the in-memory store (seed files the
+     *  engine only references — e.g. the shared document library). */
+    seedObject: (bucket: string, path: string, bytes: Uint8Array | string) => {
+      objects.set(`${bucket}/${path}`, Buffer.from(bytes));
+      uploaded.push({ bucket, path });
+    },
   };
 }
 

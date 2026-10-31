@@ -4,7 +4,9 @@ import { getCurrentUserAndProfile } from "@/lib/auth";
 import type { CandidateProfile } from "@/lib/bewerbung-schema";
 import {
   approveAutoBewerbCompany,
+  cancelAutoBewerbBatch,
   cancelAutoBewerbSend,
+  createAutoBewerbBatch,
   createAutoBewerbCompany,
   deleteAutoBewerbCompany,
   deleteAutoBewerbProfile,
@@ -17,6 +19,8 @@ import {
   saveAutoBewerbProfile,
   updateAutoBewerbCompany,
   updateAutoBewerbProfileExtract,
+  type AutoBewerbBatchItemError,
+  type AutoBewerbBatchResult,
   type AutoBewerbCompanyPatch,
   type AutoBewerbDocType,
   type AutoBewerbScheduleInput,
@@ -71,7 +75,10 @@ export async function refreshWorkspaceAction(): Promise<
 > {
   const { user } = await getCurrentUserAndProfile();
   if (!user) return unauthorized();
-  await processDueAutoBewerbAttemptsForUser(user.id, 1);
+  // Server-side catch-up: start the user's due batches (3:30 gate included)
+  // and advance their due attempts — the browser only triggers; the schedule
+  // is owned by Postgres (the cron tick does the same for everyone else).
+  await processDueAutoBewerbAttemptsForUser(user.id, 5);
   const workspace = await getAutoBewerbWorkspace(user.id);
   return { ok: true, value: workspace };
 }
@@ -305,6 +312,48 @@ export async function cancelSendAction(attemptId: string): Promise<ActionResult<
   const { user } = await getCurrentUserAndProfile();
   if (!user) return unauthorized();
   return toResult(await cancelAutoBewerbSend(user.id, attemptId)) as ActionResult<{ ok: true }>;
+}
+
+/** Step 7 — create a BATCH (immediate or scheduled). One explicit
+ *  `confirmed` covers the whole batch (immediate); the engine re-validates
+ *  every company + the schedule server-side (all-or-nothing pre-checks).
+ *  On failure, `errors` carries the exact per-company gaps (actionable UI). */
+export type AutoBewerbBatchActionError = {
+  ok: false;
+  code: string;
+  message: string;
+  errors?: AutoBewerbBatchItemError[];
+};
+
+export async function createBatchAction(
+  companyIds: string[],
+  schedule: AutoBewerbScheduleInput | null,
+  confirmed: boolean,
+): Promise<ActionResult<AutoBewerbBatchResult> | AutoBewerbBatchActionError> {
+  const { user } = await getCurrentUserAndProfile();
+  if (!user) return unauthorized();
+  if (!Array.isArray(companyIds) || companyIds.length === 0) {
+    return { ok: false, code: "empty_selection", message: "empty_selection" };
+  }
+  if (!schedule && !confirmed) {
+    return { ok: false, code: "not_confirmed", message: "not_confirmed" };
+  }
+  const res = await createAutoBewerbBatch(user.id, { companyIds, schedule });
+  if (res.ok) return { ok: true, value: res };
+  return {
+    ok: false,
+    code: res.code ?? "error",
+    message: res.message ?? "Batch-Vorbereitung fehlgeschlagen.",
+    errors: res.errors,
+  };
+}
+
+/** Step 7 — cancel a batch that has NOT started (releases only the queue
+ *  reservations; applications, documents and the batch record are kept). */
+export async function cancelBatchAction(batchId: string): Promise<ActionResult<{ ok: true }>> {
+  const { user } = await getCurrentUserAndProfile();
+  if (!user) return unauthorized();
+  return toResult(await cancelAutoBewerbBatch(user.id, batchId)) as ActionResult<{ ok: true }>;
 }
 
 /** Schedule the selected companies at the given wall-clock time (the

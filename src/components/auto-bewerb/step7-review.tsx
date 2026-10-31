@@ -1,36 +1,101 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { CalendarClock, CheckCircle2, Paperclip, Send, XCircle } from "lucide-react";
+import { CalendarClock, CheckCircle2, ChevronDown, ListPlus, Paperclip, Send, Timer, XCircle } from "lucide-react";
 import { Button, Modal } from "@/components/ui";
-import { EmptyState } from "@/components/ui/feedback";
+import { EmptyState, StatusPill, type StatusTone } from "@/components/ui/feedback";
 import { ScheduleForm } from "@/components/schedule-form";
 import { useI18n } from "@/lib/i18n";
-import { isValidEmail, resolveAutoBewerbRecipient, type AutoBewerbCompanyView } from "@/lib/auto-bewerb/schema";
+import { HARD_MIN_SEND_INTERVAL_MS, MAX_SEND_INTERVAL_MS, MIN_SEND_INTERVAL_MS } from "@/lib/email-rate-limit";
+import {
+  isValidEmail,
+  resolveAutoBewerbRecipient,
+  type AutoBewerbBatchStatus,
+  type AutoBewerbCompanyView,
+} from "@/lib/auto-bewerb/schema";
+import type {
+  AutoBewerbBatchItemError,
+  AutoBewerbBatchItemResult,
+  AutoBewerbBatchResult,
+  AutoBewerbScheduleInput,
+} from "@/lib/auto-bewerb/engine";
 import {
   approveCompanyAction,
+  cancelBatchAction,
   cancelSendAction,
+  createBatchAction,
   scheduleCompaniesAction,
   sendCompaniesAction,
-  type SendCompanyResult,
 } from "@/app/auto-bewerb/actions";
 import { Note, SectionCard, companyLabel, statusPill, useAutoBewerb } from "./shared";
 
 /**
- * Step 7 — final review, explicit confirmation, send / schedule.
+ * Step 7 — final review, explicit confirmation, multi-batch send / schedule.
  *
  * Safety contract (mirrors the engine):
  *  - the ONE global e-mail configuration (Step 6) is the exact content for
- *    EVERY selected company — the client passes only company ids;
+ *    EVERY company in the batch — the client passes only company ids;
+ *  - a batch is a persistent unit: an immutable snapshot + per-company
+ *    attempts are stored server-side and survive refresh / logout / restart;
  *  - a send only happens after a confirmation modal that lists the EXACT
  *    shared subject/body/account/attachments + the per-company delivery
  *    destination (each company's verified address);
- *  - statuses are honest: "sent" only when the provider confirmed, "queued"
- *    when dispatched to the scheduler, failures stay per-company (isolation);
- *  - scheduling reuses the existing cron pipeline (the tick endpoint) and
- *    resolves the SAME global configuration at schedule time.
+ *  - the 3:30 inter-batch delay and the 5s per-account e-mail interval are
+ *    enforced SERVER-SIDE (RPC gate + sender slots) — every countdown here
+ *    is visual only;
+ *  - databases without the batches migration fall back to the legacy
+ *    per-company send/schedule path (batchesSupported = false).
  */
+
+/** The status set a company can still (re-)enter a batch from — sent,
+ *  scheduled and sending companies are already committed to a delivery. */
+const BASE_SELECTABLE: ReadonlyArray<AutoBewerbCompanyView["company"]["status"]> = [
+  "draft",
+  "ready",
+  "failed",
+  "cancelled",
+];
+
+const BATCH_TONE: Record<AutoBewerbBatchStatus, StatusTone> = {
+  scheduled: "neutral",
+  waiting: "neutral",
+  sending: "running",
+  completed: "success",
+  partially_failed: "blocked",
+  failed: "blocked",
+  cancelled: "skipped",
+};
+
+const BATCH_TERMINAL: ReadonlyArray<AutoBewerbBatchStatus> = [
+  "completed",
+  "partially_failed",
+  "failed",
+  "cancelled",
+];
+
+/** Visual-only countdown formatting (the server owns the actual schedule). */
+function countdownText(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function StatTile({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-2xl border border-line bg-surface-2/50 px-4 py-3">
+      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-faint">{label}</p>
+      <p className="mt-1 text-2xl font-bold tabular-nums text-ink">{value}</p>
+    </div>
+  );
+}
+
 export function Step7Review() {
   const { ws, refresh, notify, goToStep } = useAutoBewerb();
   const { t, lang } = useI18n();
@@ -39,11 +104,25 @@ export function Step7Review() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [scheduling, setScheduling] = useState(false);
-  const [results, setResults] = useState<SendCompanyResult[] | null>(null);
+  const [results, setResults] = useState<AutoBewerbBatchItemResult[] | null>(null);
+  const [batchMeta, setBatchMeta] = useState<AutoBewerbBatchResult | null>(null);
+  const [batchErrors, setBatchErrors] = useState<AutoBewerbBatchItemError[] | null>(null);
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [expandedBatch, setExpandedBatch] = useState<string | null>(null);
+  const [cancellingBatch, setCancellingBatch] = useState<string | null>(null);
+  // Visual-only clock for the queue countdowns (30 s tick, never authoritative).
+  const [now, setNow] = useState(() => Date.now());
 
   const s = ws.emailSettings; // null = legacy database (per-company rows)
   const globalComplete = Boolean(s && s.body.trim() && s.subject.trim() && s.accountId);
+  const batchMode = ws.batchesSupported;
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const fmtTime = (iso: string) => new Date(iso).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
 
   /** The e-mail configuration that will actually be sent for this company —
    *  global settings (supported) or the legacy stored row values. */
@@ -86,6 +165,12 @@ export function Step7Review() {
     return Boolean(cfg.dest) && isValidEmail(cfg.dest) && Boolean(cfg.subject) && Boolean(v.cv) && Boolean(v.letter) && Boolean(cfg.account);
   };
 
+  /** Checkbox eligibility: batch mode allows selecting INCOMPLETE companies
+   *  (the readiness is shown, gaps are actionable); legacy mode only
+   *  fully-ready rows (the old per-company isolation). */
+  const selectable = (v: AutoBewerbCompanyView): boolean =>
+    batchMode ? BASE_SELECTABLE.includes(v.company.status) : sendable(v);
+
   const missing = (v: AutoBewerbCompanyView): string[] => {
     const out: string[] = [];
     const r = v.company;
@@ -101,39 +186,158 @@ export function Step7Review() {
     return out;
   };
 
+  /** Attachment count exactly as the engine resolves it: the GLOBAL document
+   *  library + this company's own CV/letter PDF (per the attachment flags). */
+  const attachmentCount = (v: AutoBewerbCompanyView): number => {
+    const cfg = emailCfg(v);
+    let n = ws.attachments.length;
+    if (cfg.attachCv && v.cv) n += 1;
+    if (cfg.attachLetter && v.letter) n += 1;
+    return n;
+  };
+
   const toggle = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
-      else next.add(id);
+      else if (next.size < 10) next.add(id); // hard cap: 10 companies per batch
       return next;
     });
   };
 
-  const selectedViews = ws.companies.filter((c) => selected.has(c.company.id) && sendable(c));
+  // Derived, never an effect: the server row is the truth. Companies that
+  // entered a delivery (scheduled/sending/sent) — e.g. after a refresh —
+  // silently drop out of the selection, so "Current batch" only shows
+  // actionable companies and stale ids never consume the 10-company cap.
+  const selection = new Set(
+    ws.companies.filter((c) => selectable(c) && selected.has(c.company.id)).map((c) => c.company.id),
+  );
+  const selectedViews = ws.companies.filter((c) => selected.has(c.company.id) && selectable(c));
+  const readyViews = selectedViews.filter(sendable);
+  const allReady = selectedViews.length > 0 && readyViews.length === selectedViews.length;
+  const atCap = selection.size >= 10;
+
+  /** One honest result line per company of the last accepted batch. */
+  const resultText = (r: AutoBewerbBatchItemResult): string => {
+    if (r.ok) {
+      if (r.scheduledAt) return t("autoBewerb.resultScheduled", { time: fmtTime(r.scheduledAt) });
+      if (r.dispatchStatus === "sent") return t("autoBewerb.resultSent");
+      if (r.dispatchStatus === "duplicate") return t("autoBewerb.resultDuplicate");
+      if (r.dispatchStatus === "queued" || r.dispatchStatus === "skipped") return t("autoBewerb.resultQueued");
+      return t("autoBewerb.resultSent");
+    }
+    const code = r.failureCode ?? r.code ?? "";
+    if (code === "already_sent") return t("autoBewerb.alreadySentNote");
+    if (code === "not_approved") return t("autoBewerb.notApprovedResult");
+    if (code === "no_email_account") return t("autoBewerb.emailAccountNoneBody");
+    return t("autoBewerb.resultFailed", { code });
+  };
+
+  /** Actionable per-company gap text for batch pre-validation failures. */
+  const itemErrorText = (code: string): string => {
+    switch (code) {
+      case "not_approved": return t("autoBewerb.notApprovedResult");
+      case "already_sent": return t("autoBewerb.alreadySentNote");
+      case "invalid_recipient": return t("autoBewerb.invalidRecipient");
+      case "missing_cv": return t("autoBewerb.missingCv");
+      case "missing_letter": return t("autoBewerb.missingLetter");
+      case "schedule_after_deadline": return t("autoBewerb.scheduleAfterDeadline");
+      case "send_in_progress": return t("autoBewerb.sendInProgress");
+      case "not_found": return t("autoBewerb.companyNotFound");
+      default: return t("autoBewerb.resultFailed", { code });
+    }
+  };
+
+  const globalErrorText = (code: string): string => {
+    switch (code) {
+      case "no_settings":
+      case "incomplete_settings": return t("autoBewerb.emailSettingsIncomplete");
+      case "no_email_account": return t("autoBewerb.emailAccountNoneBody");
+      case "invalid_schedule": return t("autoBewerb.invalidScheduleNote");
+      case "batch_too_large": return t("autoBewerb.currentBatchMaxHint");
+      case "schema_pending": return t("autoBewerb.batchesPendingNote");
+      default: return t("autoBewerb.resultFailed", { code });
+    }
+  };
+
+  const handleBatchCreated = (res: AutoBewerbBatchResult) => {
+    setResults(res.items ?? []);
+    setBatchMeta(res);
+    setBatchErrors(null);
+    setSelected(new Set()); // spec: accepted batch leaves the active selection
+    void refresh();
+    notify(
+      "success",
+      res.scheduledAt
+        ? t("autoBewerb.batchCreatedScheduled", { no: res.batchNo ?? "", time: fmtTime(res.scheduledAt) })
+        : t("autoBewerb.batchCreatedStarted", { no: res.batchNo ?? "" }),
+    );
+  };
+
+  const handleBatchError = (code: string, errors: AutoBewerbBatchItemError[] | undefined) => {
+    if (errors && errors.length > 0) {
+      setBatchErrors(errors);
+      setResults([]);
+      setBatchMeta(null);
+    } else {
+      setBatchErrors(null);
+      notify("error", globalErrorText(code));
+    }
+  };
 
   const doSend = async () => {
     setSending(true);
     setConfirmOpen(false);
-    // ONLY company ids + the explicit confirmation — every e-mail setting is
-    // resolved server-side from the ONE global configuration (no override).
-    const inputs = selectedViews.map((v) => ({ companyId: v.company.id, confirmed: true }));
-    const res = await sendCompaniesAction(inputs);
-    setSending(false);
-    if (res.ok) {
-      setResults(res.value);
-      await refresh();
+    if (batchMode) {
+      // The client passes ONLY company ids + the explicit confirmation —
+      // every e-mail setting is resolved server-side into the batch snapshot.
+      const res = await createBatchAction(selectedViews.map((v) => v.company.id), null, true);
+      setSending(false);
+      if (res.ok) handleBatchCreated(res.value);
+      else handleBatchError(res.code, "errors" in res ? res.errors : undefined);
     } else {
-      notify("error", t("autoBewerb.saveError"));
+      // Legacy path (batches migration pending): per-company isolation.
+      const inputs = selectedViews.map((v) => ({ companyId: v.company.id, confirmed: true }));
+      const res = await sendCompaniesAction(inputs);
+      setSending(false);
+      if (res.ok) {
+        setResults(res.value);
+        setBatchMeta(null);
+        setBatchErrors(null);
+        setSelected(new Set());
+        await refresh();
+      } else {
+        notify("error", t("autoBewerb.saveError"));
+      }
     }
   };
 
   const onSchedule = (formData: FormData) => {
     setScheduling(true);
-    void scheduleCompaniesAction(Array.from(selected), formData).then((res) => {
+    if (batchMode) {
+      const num = (k: string) => Number(formData.get(k) ?? 0);
+      const schedule: AutoBewerbScheduleInput = {
+        timeZone: String(formData.get("scheduleTimezone") ?? "Europe/Berlin"),
+        year: num("scheduleYear"),
+        month: num("scheduleMonth"),
+        day: num("scheduleDay"),
+        hour: num("scheduleHour"),
+        minute: num("scheduleMinute"),
+      };
+      void createBatchAction(selectedViews.map((v) => v.company.id), schedule, true).then((res) => {
+        setScheduling(false);
+        if (res.ok) handleBatchCreated(res.value);
+        else handleBatchError(res.code, "errors" in res ? res.errors : undefined);
+      });
+      return;
+    }
+    void scheduleCompaniesAction(Array.from(selection), formData).then((res) => {
       setScheduling(false);
       if (res.ok) {
         setResults(res.value);
+        setBatchMeta(null);
+        setBatchErrors(null);
+        setSelected(new Set());
         void refresh();
       } else {
         notify("error", t("autoBewerb.saveError"));
@@ -163,28 +367,40 @@ export function Step7Review() {
     } else notify("error", t("autoBewerb.saveError"));
   };
 
+  /** Safe batch cancellation — only before the batch started (the engine
+   *  re-checks the status atomically); releases queue reservations only. */
+  const cancelBatch = async (batchId: string) => {
+    setCancellingBatch(batchId);
+    const res = await cancelBatchAction(batchId);
+    setCancellingBatch(null);
+    if (res.ok) {
+      await refresh();
+      notify("success", t("autoBewerb.queueCancelled"));
+    } else {
+      notify("error", t("autoBewerb.saveError"));
+    }
+  };
+
+  const batchStatusLabel = (status: AutoBewerbBatchStatus): string =>
+    status === "scheduled"
+      ? t("autoBewerb.batchStatusScheduled")
+      : status === "waiting"
+        ? t("autoBewerb.batchStatusWaiting")
+        : status === "sending"
+          ? t("autoBewerb.batchStatusSending")
+          : status === "completed"
+            ? t("autoBewerb.batchStatusCompleted")
+            : status === "partially_failed"
+              ? t("autoBewerb.batchStatusPartiallyFailed")
+              : status === "failed"
+                ? t("autoBewerb.batchStatusFailed")
+                : t("autoBewerb.batchStatusCancelled");
+
   if (ws.companies.length === 0) {
     return <EmptyState title={t("autoBewerb.reviewEmpty")} body={t("autoBewerb.reviewEmptyBody")} illustration={<Send size={34} strokeWidth={1.6} />} ctaIcon={<Button variant="primary" onClick={() => goToStep(2)}>{t("autoBewerb.goToCompanies")}</Button>} />;
   }
 
   const resultFor = (id: string) => results?.find((r) => r.companyId === id) ?? null;
-
-  /** Honest, ACTIONABLE per-company result text (an approval failure names
-   *  the exact fix instead of a bare code). */
-  const resultText = (r: SendCompanyResult): string => {
-    if (r.ok) {
-      if (r.dispatchStatus === "sent") return t("autoBewerb.resultSent");
-      if (r.dispatchStatus === "queued") return t("autoBewerb.resultQueued");
-      if (r.dispatchStatus === "duplicate") return t("autoBewerb.resultDuplicate");
-      if (r.scheduledAt) return t("autoBewerb.resultScheduled", { time: new Date(r.scheduledAt).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" }) });
-      return t("autoBewerb.resultSent");
-    }
-    const code = r.failureCode ?? r.code ?? "";
-    if (code === "already_sent") return t("autoBewerb.alreadySentNote");
-    if (code === "not_approved") return t("autoBewerb.notApprovedResult");
-    if (code === "no_email_account") return t("autoBewerb.emailAccountNoneBody");
-    return t("autoBewerb.resultFailed", { code });
-  };
 
   return (
     <div className="space-y-5">
@@ -199,48 +415,235 @@ export function Step7Review() {
         </Note>
       )}
 
-      {/* Results (honest, per company) */}
-      {results && (
-        <SectionCard title={t("autoBewerb.resultsTitle")}>
-          <ul className="space-y-2">
-            {results.map((r) => {
-              const v = ws.companies.find((c) => c.company.id === r.companyId);
-              const label = v ? companyLabel(v.company).name : r.companyId;
-              const tone = r.ok ? "success" : "error";
-              const text = resultText(r);
-              return (
-                <li key={r.companyId} className={`rounded-2xl border px-4 py-3 text-sm ${tone === "success" ? "border-success/25 bg-success-soft/50 text-success" : "border-danger/25 bg-danger-soft/50 text-danger"}`}>
-                  <span className="font-bold">{label}:</span> {text}
-                </li>
-              );
-            })}
-          </ul>
+      {/* Results of the last accepted batch (honest, per company) */}
+      {(results || batchErrors) && (
+        <SectionCard
+          title={t("autoBewerb.resultsTitle")}
+          aside={
+            batchMeta && batchMeta.status ? (
+              <span className="flex items-center gap-2 text-xs font-semibold text-muted">
+                {t("autoBewerb.queueBatchNo", { no: batchMeta.batchNo ?? "" })}
+                <StatusPill tone={BATCH_TONE[batchMeta.status]} label={batchStatusLabel(batchMeta.status)} />
+              </span>
+            ) : undefined
+          }
+        >
+          {batchErrors && batchErrors.length > 0 && (
+            <ul className="mb-3 space-y-2">
+              {batchErrors.map((e) => {
+                const v = ws.companies.find((c) => c.company.id === e.companyId);
+                const label = v ? companyLabel(v.company).name : e.companyId;
+                return (
+                  <li key={e.companyId} className="rounded-2xl border border-danger/25 bg-danger-soft/50 px-4 py-3 text-sm text-danger">
+                    <span className="font-bold">{label}:</span> {itemErrorText(e.code)}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {results && results.length > 0 && (
+            <ul className="space-y-2">
+              {results.map((r) => {
+                const v = ws.companies.find((c) => c.company.id === r.companyId);
+                const label = v ? companyLabel(v.company).name : r.companyId;
+                const tone = r.ok ? "success" : "error";
+                const text = resultText(r);
+                return (
+                  <li key={r.companyId} className={`rounded-2xl border px-4 py-3 text-sm ${tone === "success" ? "border-success/25 bg-success-soft/50 text-success" : "border-danger/25 bg-danger-soft/50 text-danger"}`}>
+                    <span className="font-bold">{label}:</span> {text}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </SectionCard>
       )}
 
-      {/* Review table */}
+      {/* A. Current batch — the companies that will form the next batch */}
       <SectionCard
-        title={t("autoBewerb.reviewHeading")}
+        title={t("autoBewerb.currentBatchTitle", { count: selectedViews.length })}
         aside={
-          selectedViews.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              <Button variant="primary" size="sm" onClick={() => setConfirmOpen(true)} disabled={sending}>
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedViews.length > 0 && (
+              <span
+                className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${
+                  allReady ? "border-success/30 bg-success-soft/50 text-success" : "border-warning/40 bg-warning-soft/50 text-warning"
+                }`}
+              >
+                {t("autoBewerb.currentBatchReady", { ready: readyViews.length, total: selectedViews.length })}
+              </span>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())} disabled={selection.size === 0}>
+              <ListPlus size={14} />
+              {t("autoBewerb.addAnotherList")}
+            </Button>
+          </div>
+        }
+      >
+        <p className="mb-3 text-xs leading-5 text-muted">{t("autoBewerb.currentBatchBody")}</p>
+        {selectedViews.length === 0 ? (
+          <p className="rounded-2xl border border-dashed border-line-strong px-4 py-6 text-center text-sm text-muted">
+            {t("autoBewerb.currentBatchEmpty")}
+          </p>
+        ) : (
+          <>
+            <ul className="divide-y divide-line">
+              {selectedViews.map((v) => {
+                const r = v.company;
+                const { name, job } = companyLabel(r);
+                const cfg = emailCfg(v);
+                const isReady = sendable(v);
+                return (
+                  <li key={r.id} className="flex flex-wrap items-center gap-3 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="truncate text-sm font-bold text-ink">{name}</span>
+                        {job && <span className="truncate text-xs text-muted">{job}</span>}
+                      </div>
+                      <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted">
+                        <span>
+                          {t("autoBewerb.recipientLabel")}:{" "}
+                          <span className={`font-medium ${cfg.dest && isValidEmail(cfg.dest) ? "text-ink-soft" : "text-warning"}`}>
+                            {cfg.dest || t("autoBewerb.unavailable")}
+                          </span>
+                        </span>
+                        <span className="text-faint">·</span>
+                        <span className="inline-flex items-center gap-1">
+                          <Paperclip size={11} />
+                          {attachmentCount(v)}
+                        </span>
+                      </p>
+                    </div>
+                    {isReady ? (
+                      <span className="rounded-full border border-success/30 bg-success-soft/50 px-2 py-0.5 text-[10px] font-bold text-success">
+                        {t("autoBewerb.currentBatchReadyChip")}
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-warning/40 bg-warning-soft/50 px-2 py-0.5 text-[10px] font-bold text-warning">
+                        {t("autoBewerb.currentBatchNotReady")}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            {!allReady && <p className="mt-2 text-xs text-warning">{t("autoBewerb.noneSelectable")}</p>}
+            {atCap && <p className="mt-2 text-xs text-faint">{t("autoBewerb.currentBatchMaxHint")}</p>}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button variant="primary" size="sm" onClick={() => setConfirmOpen(true)} disabled={!allReady || sending}>
                 <Send size={14} />
                 {sending ? t("autoBewerb.sendingNote") : t("autoBewerb.sendNowButton", { count: selectedViews.length })}
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => document.getElementById("schedule-form")?.scrollIntoView({ behavior: "smooth" })} disabled={scheduling}>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => document.getElementById("schedule-form")?.scrollIntoView({ behavior: "smooth" })}
+                disabled={!allReady || scheduling}
+              >
                 <CalendarClock size={14} />
                 {t("autoBewerb.scheduleButton", { count: selectedViews.length })}
               </Button>
             </div>
-          )
-        }
-      >
+          </>
+        )}
+      </SectionCard>
+
+      {/* B. Schedule automatically — validated future datetime, persistent */}
+      {selectedViews.length > 0 && (
+        <div id="schedule-form">
+          <SectionCard title={t("autoBewerb.scheduleTitle")}>
+            <ScheduleForm
+              action={onSchedule}
+              submitLabel={scheduling ? t("autoBewerb.scheduling") : t("autoBewerb.scheduleSubmit", { count: selectedViews.length })}
+              pendingLabel={t("autoBewerb.scheduling")}
+            />
+          </SectionCard>
+        </div>
+      )}
+
+      {/* C. Versand-Warteschlange — real persisted queue data */}
+      {batchMode && (
+        <SectionCard title={t("autoBewerb.queueTitle")}>
+          {ws.batches.length === 0 ? (
+            <p className="text-sm text-muted">{t("autoBewerb.queueEmpty")}</p>
+          ) : (
+            <ul className="space-y-3">
+              {ws.batches.map((b) => {
+                const cancellable = b.status === "scheduled" || b.status === "waiting";
+                const countdown =
+                  cancellable && b.scheduled_at && Date.parse(b.scheduled_at) > now
+                    ? countdownText(Date.parse(b.scheduled_at) - now)
+                    : null;
+                const expanded = expandedBatch === b.id;
+                const terminal = BATCH_TERMINAL.includes(b.status);
+                return (
+                  <li
+                    key={b.id}
+                    className={`rounded-2xl border p-4 ${
+                      b.status === "sending" ? "border-accent/40 bg-accent-soft/10" : "border-line bg-surface-2/30"
+                    } ${terminal ? "opacity-75" : ""}`}
+                  >
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                      <span className="text-sm font-bold text-ink">{t("autoBewerb.queueBatchNo", { no: b.batch_no })}</span>
+                      <span className="text-xs text-muted">{t("autoBewerb.queueCompanies", { count: b.snapshot.items.length })}</span>
+                      <StatusPill tone={BATCH_TONE[b.status]} label={batchStatusLabel(b.status)} />
+                      {b.scheduled_at && (
+                        <span className="text-xs text-ink-soft">{t("autoBewerb.queueScheduledAt", { time: fmtTime(b.scheduled_at) })}</span>
+                      )}
+                      {b.started_at && (
+                        <span className="text-xs text-ink-soft">{t("autoBewerb.queueStartedAt", { time: fmtTime(b.started_at) })}</span>
+                      )}
+                      {countdown && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft/60 px-2 py-0.5 text-[11px] font-bold text-accent">
+                          <Timer size={11} />
+                          {t("autoBewerb.queueCountdown", { time: countdown })}
+                        </span>
+                      )}
+                      {b.status === "waiting" && !countdown && (
+                        <span className="text-[11px] font-semibold text-warning">{t("autoBewerb.queueWaitingGate")}</span>
+                      )}
+                      <span className="text-xs text-muted">{t("autoBewerb.queueAccount", { account: b.snapshot.accountEmail || "—" })}</span>
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-faint">
+                      {t("autoBewerb.queueCounts", { sent: b.sentCount, failed: b.failedCount, pending: b.pendingCount })}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => setExpandedBatch(expanded ? null : b.id)}>
+                        <ChevronDown size={14} className={expanded ? "rotate-180" : ""} />
+                        {expanded ? t("autoBewerb.queueHideDetails") : t("autoBewerb.queueDetails")}
+                      </Button>
+                      {cancellable && (
+                        <Button variant="ghost" size="sm" onClick={() => void cancelBatch(b.id)} disabled={cancellingBatch !== null}>
+                          <XCircle size={14} />
+                          {cancellingBatch === b.id ? t("autoBewerb.queueCancelling") : t("autoBewerb.queueCancel")}
+                        </Button>
+                      )}
+                    </div>
+                    {expanded && (
+                      <ul className="mt-3 divide-y divide-line rounded-xl border border-line bg-surface px-3 py-1">
+                        {b.snapshot.items.map((item) => (
+                          <li key={item.companyId} className="flex flex-wrap items-baseline gap-2 py-2 text-xs">
+                            <span className="font-semibold text-ink">{item.company}</span>
+                            {item.position && <span className="text-muted">{item.position}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </SectionCard>
+      )}
+
+      {/* Company review list — build the batch (cap 10) */}
+      <SectionCard title={t("autoBewerb.reviewHeading")}>
         <ul className="divide-y divide-line">
           {ws.companies.map((v) => {
             const r = v.company;
-            const { name, job } = companyLabel(v.company);
-            const canSelect = sendable(v);
+            const { name, job } = companyLabel(r);
+            const canSelect = selectable(v);
             const gaps = missing(v);
             const cfg = emailCfg(v);
             const res = resultFor(r.id);
@@ -249,8 +652,8 @@ export function Step7Review() {
                 <input
                   type="checkbox"
                   aria-label={name}
-                  checked={selected.has(r.id)}
-                  disabled={!canSelect}
+                  checked={selection.has(r.id)}
+                  disabled={!canSelect || (!selection.has(r.id) && atCap)}
                   onChange={() => toggle(r.id)}
                   className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
                 />
@@ -266,7 +669,7 @@ export function Step7Review() {
                     )}
                     {res && (
                       <span className={`text-xs font-semibold ${res.ok ? "text-success" : "text-danger"}`}>
-                        {res.ok ? (res.dispatchStatus === "queued" || res.scheduledAt ? t("autoBewerb.resultQueued") : t("autoBewerb.resultSent")) : resultText(res)}
+                        {res.ok ? (res.dispatchStatus === "queued" || res.dispatchStatus === "skipped" || res.scheduledAt ? t("autoBewerb.resultQueued") : t("autoBewerb.resultSent")) : resultText(res)}
                       </span>
                     )}
                   </div>
@@ -317,7 +720,9 @@ export function Step7Review() {
                     </p>
                   )}
                 </div>
-                {r.status === "scheduled" && v.latestAttempt && (
+                {/* Legacy per-attempt cancel only (batch mode: cancel the whole
+                    batch from the queue panel — the atomic status gate applies). */}
+                {!batchMode && r.status === "scheduled" && v.latestAttempt && (
                   <Button variant="ghost" size="sm" onClick={() => void cancelScheduled(v.latestAttempt!.id)}>
                     <XCircle size={14} />
                     {t("autoBewerb.cancelSchedule")}
@@ -336,17 +741,48 @@ export function Step7Review() {
         {selectedViews.length === 0 && <p className="mt-3 text-xs text-muted">{t("autoBewerb.noneSelectable")}</p>}
       </SectionCard>
 
-      {/* Schedule (existing cron pipeline) */}
-      {selectedViews.length > 0 && (
-        <div id="schedule-form">
-          <SectionCard title={t("autoBewerb.scheduleTitle")}>
-            <ScheduleForm
-              action={onSchedule}
-              submitLabel={scheduling ? t("autoBewerb.scheduling") : t("autoBewerb.scheduleSubmit", { count: selectedViews.length })}
-              pendingLabel={t("autoBewerb.scheduling")}
-            />
-          </SectionCard>
+      {/* E. Smart Sending — the actual server-enforced policy (no bypass UI) */}
+      <SectionCard
+        title={t("autoBewerb.smartSendingTitle")}
+        aside={
+          <span className="rounded-full border border-success/40 bg-success-soft/50 px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider text-success">
+            {t("autoBewerb.smartSendingAlwaysOn")}
+          </span>
+        }
+      >
+        <div className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-success" aria-hidden="true" />
+          <span className="text-sm font-bold text-success">{t("autoBewerb.smartSendingEnabled")}</span>
         </div>
+        <p className="mt-2 text-sm leading-6 text-muted">{t("autoBewerb.smartSendingDesc")}</p>
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {(
+            [
+              [t("autoBewerb.smartSendingMinInterval"), t("autoBewerb.smartSendingSeconds", { n: `${HARD_MIN_SEND_INTERVAL_MS / 1000}–${MAX_SEND_INTERVAL_MS / 1000}` })],
+              [t("autoBewerb.smartSendingRecommended"), t("autoBewerb.smartSendingSeconds", { n: String(MIN_SEND_INTERVAL_MS / 1000) })],
+              [t("autoBewerb.smartSendingAllowedMin"), t("autoBewerb.smartSendingSeconds", { n: String(HARD_MIN_SEND_INTERVAL_MS / 1000) })],
+            ] as Array<[string, string]>
+          ).map(([label, value]) => (
+            <div key={label} className="rounded-2xl border border-line bg-surface-2/50 px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-faint">{label}</p>
+              <p className="mt-1 text-sm font-bold text-ink">{value}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-xs leading-5 text-faint">{t("autoBewerb.smartSendingFootnote")}</p>
+        <p className="mt-1.5 text-xs leading-5 text-faint">{t("autoBewerb.smartSendingInterBatch")}</p>
+      </SectionCard>
+
+      {/* F. Sending statistics — always derived from persisted queue data */}
+      {batchMode && (
+        <SectionCard title={t("autoBewerb.statsTitle")}>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatTile label={t("autoBewerb.statsSentToday")} value={ws.sendStats.sentToday} />
+            <StatTile label={t("autoBewerb.statsScheduled")} value={ws.sendStats.scheduled} />
+            <StatTile label={t("autoBewerb.statsProcessing")} value={ws.sendStats.processing} />
+            <StatTile label={t("autoBewerb.statsTotalToday")} value={ws.sendStats.totalToday} />
+          </div>
+        </SectionCard>
       )}
 
       {/* Explicit confirmation — the EXACT shared e-mail configuration +

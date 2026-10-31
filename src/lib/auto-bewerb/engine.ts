@@ -37,13 +37,19 @@ import {
   type AdAnalysis,
   type AdExtract,
   type AutoBewerbAttachmentRow,
+  type AutoBewerbBatchRow,
+  type AutoBewerbBatchSnapshot,
+  type AutoBewerbBatchStatus,
+  type AutoBewerbBatchView,
   type AutoBewerbCompanyRow,
   type AutoBewerbDocumentRow,
   type AutoBewerbProfileRow,
   type AutoBewerbSendAttemptRow,
   type AutoBewerbSendPayload,
+  type AutoBewerbSendStats,
   type AutoBewerbAppStatus,
 } from "./schema";
+import { reserveSenderSlot, SENDER_SLOT_WAIT_BUDGET_MS } from "../email-rate-limit";
 import { generateCvPdf, cvPdfFilename } from "./cv-pdf";
 import { selectBestCoverLetterTemplate } from "./letter-template-match";
 import { parseAdDeadline } from "../studio/quality";
@@ -1385,13 +1391,17 @@ export interface AutoBewerbScheduleInput {
 export interface AutoBewerbSendInput {
   companyId: string;
   schedule?: AutoBewerbScheduleInput | null;
+  /** The batch this attempt belongs to (Step 7 multi-batch queue). The
+   *  attempt is only claimable while its batch has been STARTED — the
+   *  inter-batch gate (3:30 per account) owns the timing. */
+  batchId?: string | null;
   /**
    * Everything else (recipient, subject, account, attachments, body) comes
    * from the ONE global e-mail configuration (Step 6) or, on databases
    * without the settings migration, from the legacy per-company values —
    * never from the client. The per-company DELIVERY destination is resolved
-   * server-side from the verified data (global explicit recipient → legacy
-   * manual recipient → the ad's extracted applicationEmail).
+   * server-side from the verified data (legacy manual recipient → the ad's
+   * extracted applicationEmail).
    */
 }
 
@@ -1697,6 +1707,7 @@ export async function prepareAutoBewerbSend(
       company_id: app.id,
       user_id: userId,
       idempotency_key: idempotencyKey,
+      batch_id: input.batchId ?? null,
       recipient_email: recipient,
       subject,
       payload,
@@ -1721,9 +1732,15 @@ export async function prepareAutoBewerbSend(
     { companyId: app.id, recipient, company: app.company },
   );
 
-  // Immediate dispatch happens inline (server action context — same trust
-  // boundary as every other send in this codebase).
-  if (!scheduledAt) {
+  // Dispatch ownership:
+  //  - LEGACY (no batch): the immediate send dispatches inline (server action
+  //    context — same trust boundary as every other send in this codebase).
+  //  - BATCH: the attempt stays "queued" and the BATCH is the dispatch driver
+  //    (its inline loop for immediate batches; the cron tick / page-load
+  //    catch-up for scheduled ones). Dispatching here too would leave the
+  //    batch's settle step with no due attempts (stuck "sending") and would
+  //    interleave sends with the still-running per-company preparation.
+  if (!scheduledAt && input.batchId == null) {
     const result = await dispatchAutoBewerbAttempt((attempt as unknown as AutoBewerbSendAttemptRow).id);
     return {
       ok: true,
@@ -1802,7 +1819,9 @@ const backoffMs = (attempt: number): number => 2 * 60_000 * 2 ** (attempt - 1); 
  */
 export async function dispatchAutoBewerbAttempt(
   attemptId: string,
-  opts: { claimed?: boolean } = {},
+  opts: { claimed?: boolean; /** How long to wait for a busy sender slot
+   *  (Smart Sending) before re-queueing. Default = the shared 8s budget. */
+  slotBudgetMs?: number } = {},
 ): Promise<AutoBewerbDispatchResult> {
   const admin = createAdminClient();
 
@@ -1833,6 +1852,29 @@ export async function dispatchAutoBewerbAttempt(
     return terminalAttempt(admin, attempt, "not_approved", "Bewerbung wurde nicht genehmigt.");
   if (!app.email_account_id)
     return terminalAttempt(admin, attempt, "no_email_account", "E-Mail-Konto wurde getrennt.");
+
+  // Smart Sending — sender-level pacing (Postgres slot, 5s DB floor): two
+  // messages from the SAME account are never sent closer than the configured
+  // interval, no matter which campaign, batch, worker or session dispatches
+  // them. The reservation happens BEFORE the claim: a busy slot is NOT a
+  // send failure, so no retry budget is consumed — the attempt is simply
+  // re-queued with a short backoff and retried (the slot stays the single
+  // source of truth for pacing).
+  if (app.email_account_id) {
+    const slot = await reserveSenderSlot(admin, app.email_account_id, opts.slotBudgetMs ?? SENDER_SLOT_WAIT_BUDGET_MS);
+    if (!slot.reserved) {
+      if (opts.claimed) {
+        // The claim RPC already flipped the row to 'sending' — put it back
+        // (attempt_count is untouched: the RPC never increments it).
+        await admin
+          .from("auto_bewerb_send_attempts")
+          .update({ status: "queued", next_attempt_at: new Date(Date.now() + slot.waitMs).toISOString() })
+          .eq("id", attempt.id)
+          .eq("status", "sending");
+      }
+      return { ok: false, duplicate: false, status: "queued", failureCode: "sender_slot_busy" };
+    }
+  }
 
   // The claim (atomic on the inline path; the increment happens here).
   let executedCount: number;
@@ -1934,6 +1976,486 @@ async function terminalAttempt(
 }
 
 // ---------------------------------------------------------------------------
+// Step 7 — batches: the persistent multi-batch sending queue
+// ---------------------------------------------------------------------------
+//
+// A batch groups up to 10 companies into ONE sending unit (immediate or
+// scheduled). Batches own the SCHEDULING + the inter-batch gate; the existing
+// per-company attempts stay the SEND unit (same payloads, same atomic claims,
+// same retry budget, same per-account slot pacing). Invariants:
+//   * the snapshot is IMMUTABLE — resolved recipients, attachment references,
+//     subject/account and flags survive until delivery (data retention:
+//     scheduled data is never deleted before successful delivery);
+//   * the 3:30 inter-batch gate is atomic in Postgres
+//     (claim_startable_auto_bewerb_batches) and mirrored in TS for the
+//     immediate-start + page-load catch-up paths (same conditional flip);
+//   * cancellation is only possible BEFORE a batch starts.
+
+/** A batch may start no earlier than this after the PREVIOUS batch of the
+ *  SAME sending account STARTED (separate from the per-email slot). */
+export const AUTO_BEWERB_INTER_BATCH_DELAY_MS = 3 * 60_000 + 30_000;
+/** Maximum companies per batch. */
+export const AUTO_BEWERB_BATCH_COMPANY_LIMIT = 10;
+/** Wall budget for the inline dispatch loop of an immediately started batch
+ *  (the rest completes via the cron tick / page-load catch-up — durable). */
+const BATCH_INLINE_DISPATCH_BUDGET_MS = 30_000;
+
+let batchesProbeCache: { at: number; available: boolean } | null = null;
+const BATCHES_PROBE_NEGATIVE_TTL_MS = 60_000;
+
+/** False = the batch-queue migration is not applied yet (UI hides the queue
+ *  panel; the rest of the workflow is unaffected). */
+export async function getAutoBewerbBatchesProbe(): Promise<{ available: boolean }> {
+  if (batchesProbeCache) {
+    if (batchesProbeCache.available || Date.now() - batchesProbeCache.at < BATCHES_PROBE_NEGATIVE_TTL_MS) {
+      return { available: batchesProbeCache.available };
+    }
+  }
+  let available = true;
+  try {
+    const { error } = await createAdminClient().from("auto_bewerb_batches").select("id").limit(1);
+    if (error) {
+      const msg = error.message ?? String(error);
+      const expected = classifyProbeError({ message: msg }) === "missing" || /42P01|relation .* does not exist/i.test(msg);
+      if (!expected) console.error(`[auto-bewerb] batches schema probe blocked: ${error}`);
+      available = false;
+    }
+  } catch {
+    available = false;
+  }
+  batchesProbeCache = { at: Date.now(), available };
+  return { available };
+}
+
+export interface AutoBewerbBatchItemError {
+  companyId: string;
+  code: string;
+  message: string;
+}
+
+export interface AutoBewerbBatchItemResult {
+  companyId: string;
+  ok: boolean;
+  code?: string;
+  message?: string;
+  dispatchStatus?: "sent" | "failed" | "queued" | "duplicate" | "skipped" | null;
+  failureCode?: string | null;
+  scheduledAt?: string | null;
+}
+
+export interface AutoBewerbBatchResult {
+  ok: boolean;
+  code?: string;
+  message?: string;
+  batchId?: string;
+  batchNo?: number;
+  status?: AutoBewerbBatchStatus;
+  scheduledAt?: string | null;
+  items?: AutoBewerbBatchItemResult[];
+  /** Non-empty = NOTHING was created (pre-validation is all-or-nothing). */
+  errors?: AutoBewerbBatchItemError[];
+}
+
+/** Create a batch (immediate or scheduled) and prepare every company in it.
+ *
+ *  Pre-validation is ALL-OR-NOTHING: if any company is not sendable
+ *  (missing approval/recipient/documents), no batch is created and the
+ *  caller receives the exact per-company gaps. After creation, one company's
+ *  preparation failing (e.g. a PDF render error) does NOT roll back the
+ *  others — the batch keeps the sendable subset (honest per-company
+ *  results; the failed company stays selectable for a new batch).
+ */
+export async function createAutoBewerbBatch(
+  userId: string,
+  input: { companyIds: string[]; schedule: AutoBewerbScheduleInput | null },
+): Promise<AutoBewerbBatchResult> {
+  if (!(await hasAutoBewerbSchema())) return { ok: false, code: "schema_pending", message: "AUTO BEWERB Datenbank wird vorbereitet." };
+  if (!(await getAutoBewerbBatchesProbe()).available) return { ok: false, code: "schema_pending", message: "Die Batch-Warteschlange wird vorbereitet (Migration ausstehend)." };
+  const ids = Array.from(new Set((input.companyIds ?? []).filter(Boolean)));
+  if (ids.length < 1) return { ok: false, code: "empty_selection", message: "Bitte mindestens ein Unternehmen auswählen." };
+  if (ids.length > AUTO_BEWERB_BATCH_COMPANY_LIMIT) return { ok: false, code: "batch_too_large", message: `Maximal ${AUTO_BEWERB_BATCH_COMPANY_LIMIT} Unternehmen pro Batch.` };
+  const admin = createAdminClient();
+
+  // 1) The ONE global e-mail configuration (Step 6) — a batch is only valid
+  //    when it is complete (body + subject + an active owned account).
+  const settings = await getAutoBewerbEmailSettings(userId);
+  if (!settings) return { ok: false, code: "no_settings", message: "Bitte zuerst die gemeinsame E-Mail-Konfiguration (Schritt 6) speichern." };
+  if (!settings.body.trim() || !settings.subject.trim()) return { ok: false, code: "incomplete_settings", message: "E-Mail-Betreff und -Text müssen vollständig sein (Schritt 6)." };
+  const { data: accountRow } = await admin
+    .from("email_accounts")
+    .select("id, email, is_active")
+    .eq("id", settings.accountId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!accountRow || !(accountRow as { is_active: boolean }).is_active) return { ok: false, code: "no_email_account", message: "Kein aktives E-Mail-Konto verbunden." };
+  const accountEmail = String((accountRow as { email?: string }).email ?? "");
+
+  // 2) Companies + documents (bulk, ownership-scoped):
+  const { data: appRows } = await admin.from("auto_bewerb_companies").select("*").eq("user_id", userId).in("id", ids);
+  const apps = revalidateCompanies((appRows ?? []) as unknown[]);
+  const { data: docRows } = await admin
+    .from("auto_bewerb_documents")
+    .select("*")
+    .eq("user_id", userId)
+    .in("company_id", ids)
+    .order("version", { ascending: false });
+  const latestCv = new Map<string, { id: string; content: unknown }>();
+  const latestLetter = new Map<string, { id: string; content: unknown }>();
+  for (const d of (docRows ?? []) as unknown as AutoBewerbDocumentRow[]) {
+    if (d.doc_type === "cv" && !latestCv.has(d.company_id)) latestCv.set(d.company_id, d as never);
+    if (d.doc_type === "cover_letter" && !latestLetter.has(d.company_id)) latestLetter.set(d.company_id, d as never);
+  }
+
+  // 3) Schedule (validated once for the whole batch — same rules as the
+  //    single-company path): explicit timezone, in the future, before each
+  //    ad's deadline.
+  let scheduledAt: string | null = null;
+  if (input.schedule) {
+    const utcMs = zonedTimeToUtc(
+      input.schedule.year, input.schedule.month, input.schedule.day,
+      input.schedule.hour, input.schedule.minute, input.schedule.timeZone,
+    );
+    if (utcMs === null) return { ok: false, code: "invalid_schedule", message: "Ungültiges Datum, Uhrzeit oder Zeitzone." };
+    if (utcMs <= Date.now() + 60_000) return { ok: false, code: "invalid_schedule", message: "Der Versandzeitpunkt muss in der Zukunft liegen." };
+    scheduledAt = new Date(utcMs).toISOString();
+  }
+
+  // 4) All-or-nothing pre-validation (every company, verified data only):
+  const errors: AutoBewerbBatchItemError[] = [];
+  const ready: Array<{ app: AutoBewerbCompanyRow; dest: string; cvName: string | null; letterName: string | null }> = [];
+  for (const id of ids) {
+    const fail = (code: string, message: string) => {
+      errors.push({ companyId: id, code, message });
+    };
+    const app = apps.find((a) => a.id === id);
+    if (!app) { fail("not_found", "Unternehmen nicht gefunden."); continue; }
+    if (!app.approved) { fail("not_approved", "Bitte genehmigen Sie die Bewerbung zuerst."); continue; }
+    if (app.status === "sent") { fail("already_sent", "Diese Bewerbung wurde bereits versendet."); continue; }
+    if (app.status === "sending" || app.status === "scheduled") { fail("send_in_progress", "Es läuft bereits ein Versand für diese Bewerbung."); continue; }
+    const dest = resolveAutoBewerbRecipient("", app.recipient_email, app.ad_extracted);
+    if (!isValidEmail(dest)) { fail("invalid_recipient", "Keine verifizierte Empfänger-Adresse für dieses Unternehmen gefunden."); continue; }
+    const cvDoc = latestCv.get(id) ?? null;
+    const letterDoc = latestLetter.get(id) ?? null;
+    let cvName: string | null = null;
+    let letterName: string | null = null;
+    if (settings.attachCv) {
+      const cv = cvDoc ? sanitizeCvDocument(cvDoc.content) : null;
+      cvName = cv ? cvPdfFilename(cv.personal.fullName) : null;
+      if (!cvName) { fail("missing_cv", "Für dieses Unternehmen fehlt das maßgeschneiderte CV (Schritt 4)."); continue; }
+    }
+    if (settings.attachLetter) {
+      const lp = letterDoc ? autoBewerbLetterSchema.safeParse(letterDoc.content) : null;
+      if (!lp?.success || !lp.data.text.trim()) { fail("missing_letter", "Für dieses Unternehmen fehlt das individualisierte Anschreiben (Schritt 5)."); continue; }
+      letterName = letterPdfFilename(app.ad_extracted?.company || app.company);
+    }
+    if (scheduledAt) {
+      const deadline = parseAdDeadline(app.ad_extracted?.applicationDeadline ?? null);
+      if (deadline !== null && Date.parse(scheduledAt) > deadline) { fail("schedule_after_deadline", "Der geplante Versand liegt nach der Bewerbungsfrist."); continue; }
+    }
+    ready.push({ app, dest, cvName, letterName });
+  }
+  if (errors.length > 0) return { ok: false, code: "batch_not_ready", message: "Nicht alle Unternehmen sind versandbereit.", errors };
+
+  // 5) The shared document library (attachment references for the snapshot):
+  const { data: libraryAtts } = await admin
+    .from("auto_bewerb_attachments")
+    .select("display_name")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+  const sharedDocs = (libraryAtts ?? []).map((a) => String((a as { display_name: string }).display_name));
+
+  // 6) The immutable snapshot + the batch row (batch_no = per-user sequence):
+  const { data: noRows } = await admin.from("auto_bewerb_batches").select("batch_no").eq("user_id", userId).order("batch_no", { ascending: false }).limit(1);
+  const batchNo = (((noRows ?? []) as Array<{ batch_no: number }>)[0]?.batch_no ?? 0) + 1;
+  let snapshot: AutoBewerbBatchSnapshot = {
+    items: ready.map(({ app, dest, cvName, letterName }) => ({
+      companyId: app.id,
+      company: app.company,
+      position: String(app.ad_extracted?.jobTitle || app.ad_extracted?.occupation || "").trim(),
+      recipientEmail: dest,
+      cvPdfName: cvName,
+      letterPdfName: letterName,
+      sharedDocs,
+    })),
+    subject: settings.subject.trim(),
+    accountId: settings.accountId,
+    accountEmail,
+    attachCv: settings.attachCv,
+    attachLetter: settings.attachLetter,
+    sharedDocs,
+  };
+  const { data: batchRow, error: batchError } = await admin
+    .from("auto_bewerb_batches")
+    .insert({
+      user_id: userId,
+      batch_no: batchNo,
+      snapshot,
+      account_id: settings.accountId,
+      status: scheduledAt ? "scheduled" : "waiting",
+      scheduled_at: scheduledAt,
+    })
+    .select("*")
+    .single();
+  if (batchError || !batchRow) return { ok: false, code: "storage_error", message: "Der Batch konnte nicht gespeichert werden." };
+  let batch = batchRow as unknown as AutoBewerbBatchRow;
+
+  // 7) Per-company preparation (renders the PDFs, claims the companies,
+  //    creates the attempts with the batch reference). One failing company
+  //    is dropped from the IMMUTABLE snapshot (rewritten exactly once,
+  //    before anything can dispatch) — its data and documents stay intact.
+  const items: AutoBewerbBatchItemResult[] = [];
+  let snapshotDirty = false;
+  for (const r of ready) {
+    const res = await prepareAutoBewerbSend(userId, { companyId: r.app.id, schedule: input.schedule, batchId: batch.id });
+    items.push({
+      companyId: r.app.id,
+      ok: res.ok,
+      code: res.code,
+      message: res.message,
+      dispatchStatus: res.dispatchStatus ?? null,
+      failureCode: res.failureCode ?? null,
+      scheduledAt: res.scheduledAt ?? null,
+    });
+    if (!res.ok) {
+      snapshot = { ...snapshot, items: snapshot.items.filter((i) => i.companyId !== r.app.id) };
+      snapshotDirty = true;
+    }
+  }
+  const okItems = items.filter((i) => i.ok);
+  if (okItems.length === 0) {
+    // Nothing was sendable → cancel the empty batch (clean state; every
+    // failed prepare released its company claim already).
+    await admin.from("auto_bewerb_batches").update({ status: "cancelled", completed_at: new Date().toISOString() }).eq("id", batch.id).eq("status", "waiting");
+    return {
+      ok: false, code: "batch_not_ready", message: "Kein Unternehmen des Batches war versandbereit.",
+      batchId: batch.id, batchNo, status: "cancelled",
+      errors: items.map((i) => ({ companyId: i.companyId, code: i.code ?? "prepare_failed", message: i.message ?? "" })),
+    };
+  }
+  if (snapshotDirty) await admin.from("auto_bewerb_batches").update({ snapshot }).eq("id", batch.id);
+
+  // 8) Immediate batches: try to start NOW (inter-batch gate) + dispatch
+  //    within a bounded budget; the remainder completes via the cron tick /
+  //    page-load catch-up (durable, browser-independent). Scheduled batches
+  //    start ONLY at their time, via the same server-side machinery.
+  if (!scheduledAt) {
+    await startAutoBewerbBatchesForUser(userId, 5);
+    const { data: afterStart } = await admin.from("auto_bewerb_batches").select("status, started_at").eq("id", batch.id).maybeSingle();
+    const st = afterStart as { status?: AutoBewerbBatchStatus; started_at?: string | null } | null;
+    batch = { ...batch, status: st?.status ?? batch.status, started_at: st?.started_at ?? null };
+    if (batch.status === "sending") {
+      const deadline = Date.now() + BATCH_INLINE_DISPATCH_BUDGET_MS;
+      for (;;) {
+        const due = await dueBatchAttempts(admin, batch.id);
+        if (due.length === 0) break;
+        for (const a of due) {
+          const dispatch = await dispatchAutoBewerbAttempt(a.id, { slotBudgetMs: SENDER_SLOT_WAIT_BUDGET_MS });
+          const it = items.find((i) => i.companyId === a.company_id);
+          if (it && dispatch.status !== "skipped") it.dispatchStatus = dispatch.status === "sent" ? "sent" : "queued";
+          if (Date.now() > deadline) break;
+        }
+        await settleAutoBewerbBatch(admin, batch.id);
+        if (Date.now() > deadline) break;
+      }
+    }
+  }
+
+  // Final state (settle may have flipped a fully-dispatched batch terminal):
+  const { data: finalRow } = await admin.from("auto_bewerb_batches").select("status").eq("id", batch.id).maybeSingle();
+  batch = { ...batch, status: ((finalRow as { status?: AutoBewerbBatchStatus } | null)?.status ?? batch.status) };
+
+  void logAutoBewerbActivity(
+    userId,
+    scheduledAt ? "auto_bewerb_batch_scheduled" : "auto_bewerb_batch_started",
+    scheduledAt ? `AUTO BEWERB: Batch ${batchNo} geplant` : `AUTO BEWERB: Batch ${batchNo} gestartet`,
+    undefined,
+    { batchId: batch.id, companies: okItems.length, accountEmail },
+  );
+  return { ok: true, batchId: batch.id, batchNo, status: batch.status, scheduledAt, items };
+}
+
+/** The TS mirror of the claim_startable RPC (same rule, same conditional
+ *  flip) — used by the immediate-start path and the page-load catch-up,
+ *  where the service-role RPC is not the active writer. Overlapping writers
+ *  are still safe: the flip is conditional (status must still be
+ *  scheduled/waiting), so exactly one wins. */
+export async function startAutoBewerbBatchesForUser(userId: string, limit = 5): Promise<AutoBewerbBatchRow[]> {
+  const admin = createAdminClient();
+  const nowIso = new Date().toISOString();
+  const { data: dueRows } = await admin
+    .from("auto_bewerb_batches")
+    .select("*")
+    .eq("user_id", userId)
+    .in("status", ["scheduled", "waiting"])
+    .limit(20);
+  const due = ((dueRows ?? []) as unknown as AutoBewerbBatchRow[])
+    .filter((b) => b.scheduled_at === null || b.scheduled_at <= nowIso)
+    .sort((a, b) => String(a.scheduled_at ?? a.created_at).localeCompare(String(b.scheduled_at ?? b.created_at)));
+  const started: AutoBewerbBatchRow[] = [];
+  for (const b of due.slice(0, limit)) {
+    // The 3:30 inter-batch gate for the SAME sending account:
+    const { data: sameAccount } = await admin.from("auto_bewerb_batches").select("id, started_at").eq("account_id", b.account_id);
+    const lastStart = ((sameAccount ?? []) as Array<{ id: string; started_at: string | null }>)
+      .filter((x) => x.id !== b.id && x.started_at)
+      .map((x) => Date.parse(x.started_at as string))
+      .sort((x, y) => x - y)
+      .at(-1);
+    if (lastStart !== undefined && lastStart + AUTO_BEWERB_INTER_BATCH_DELAY_MS > Date.now()) {
+      if (b.status === "scheduled")
+        await admin.from("auto_bewerb_batches").update({ status: "waiting", updated_at: nowIso }).eq("id", b.id).eq("status", "scheduled");
+      continue;
+    }
+    const { data: flipped } = await admin
+      .from("auto_bewerb_batches")
+      .update({ status: "sending", started_at: nowIso, updated_at: nowIso })
+      .eq("id", b.id)
+      .in("status", ["scheduled", "waiting"])
+      .select("id");
+    if (flipped && flipped.length > 0) started.push({ ...b, status: "sending", started_at: nowIso });
+  }
+  return started;
+}
+
+/** The queued + due attempts of one batch (the dispatch loop's work list). */
+async function dueBatchAttempts(admin: ReturnType<typeof createAdminClient>, batchId: string) {
+  const nowIso = new Date().toISOString();
+  const { data: rows } = await admin
+    .from("auto_bewerb_send_attempts")
+    .select("id, company_id, scheduled_at, next_attempt_at")
+    .eq("batch_id", batchId)
+    .eq("status", "queued")
+    .order("created_at", { ascending: true })
+    .limit(20);
+  return ((rows ?? []) as Array<{ id: string; company_id: string; scheduled_at: string | null; next_attempt_at: string | null }>).filter(
+    (r) => (r.scheduled_at === null || r.scheduled_at <= nowIso) && (r.next_attempt_at === null || r.next_attempt_at <= nowIso),
+  );
+}
+
+/** Settle a 'sending' batch whose attempts are all terminal:
+ *  all sent → completed; some sent → partially_failed; none → failed.
+ *  Returns the new status (null = not terminal yet / not 'sending'). */
+export async function settleAutoBewerbBatch(
+  admin: ReturnType<typeof createAdminClient>,
+  batchId: string,
+): Promise<AutoBewerbBatchStatus | null> {
+  const { data: row } = await admin.from("auto_bewerb_batches").select("status").eq("id", batchId).maybeSingle();
+  const status = (row as { status?: AutoBewerbBatchStatus } | null)?.status;
+  if (status !== "sending") return null;
+  const { data: atts } = await admin.from("auto_bewerb_send_attempts").select("status").eq("batch_id", batchId);
+  const statuses = ((atts ?? []) as Array<{ status: string }>).map((a) => a.status);
+  if (statuses.length === 0 || statuses.some((s) => s === "queued" || s === "sending")) return null;
+  const sent = statuses.filter((s) => s === "sent").length;
+  const next: AutoBewerbBatchStatus = sent === statuses.length ? "completed" : sent > 0 ? "partially_failed" : "failed";
+  await admin
+    .from("auto_bewerb_batches")
+    .update({ status: next, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", batchId)
+    .eq("status", "sending");
+  return next;
+}
+
+/** Cancel a batch that has NOT started (scheduled / waiting). Releases only
+ *  the queue reservations (the queued attempts) + the companies' send slots;
+ *  applications, documents and the batch record itself are preserved. */
+export async function cancelAutoBewerbBatch(userId: string, batchId: string): Promise<{ ok: boolean; code?: string; message?: string }> {
+  const admin = createAdminClient();
+  const { data: row } = await admin.from("auto_bewerb_batches").select("*").eq("id", batchId).eq("user_id", userId).maybeSingle();
+  if (!row) return { ok: false, code: "not_found", message: "Batch nicht gefunden." };
+  const batch = row as unknown as AutoBewerbBatchRow;
+  if (batch.status !== "scheduled" && batch.status !== "waiting")
+    return { ok: false, code: "batch_not_cancellable", message: "Dieser Batch kann nicht mehr storniert werden." };
+  // Atomic: a batch that started in the meantime is never cancelled.
+  const { data: flipped } = await admin
+    .from("auto_bewerb_batches")
+    .update({ status: "cancelled", completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", batchId)
+    .in("status", ["scheduled", "waiting"])
+    .select("id");
+  if (!flipped || flipped.length === 0)
+    return { ok: false, code: "batch_not_cancellable", message: "Dieser Batch kann nicht mehr storniert werden." };
+  const { data: atts } = await admin.from("auto_bewerb_send_attempts").select("id, company_id").eq("batch_id", batchId).eq("status", "queued");
+  for (const a of (atts ?? []) as Array<{ id: string; company_id: string }>) {
+    await admin.from("auto_bewerb_send_attempts").update({ status: "cancelled" }).eq("id", a.id).eq("status", "queued");
+    // The company's send slot goes back to 'ready' (no dispatch can be in
+    // flight: an unstarted batch's attempts are unclaimable by design).
+    await admin
+      .from("auto_bewerb_companies")
+      .update({ status: "ready", scheduled_at: null, schedule_timezone: null, idempotency_key: null })
+      .eq("id", a.company_id)
+      .eq("user_id", userId)
+      .in("status", ["scheduled", "sending"]);
+  }
+  void logAutoBewerbActivity(userId, "auto_bewerb_batch_cancelled", `AUTO BEWERB: Batch ${batch.batch_no} storniert`, undefined, { batchId });
+  return { ok: true };
+}
+
+/** The user's batches, newest first (with live outcome counts). */
+export async function getAutoBewerbBatches(userId: string): Promise<AutoBewerbBatchView[]> {
+  const admin = createAdminClient();
+  const { data: rows, error } = await admin
+    .from("auto_bewerb_batches")
+    .select("*")
+    .eq("user_id", userId)
+    .order("batch_no", { ascending: false })
+    .limit(10);
+  if (error || !rows || rows.length === 0) return [];
+  const batches = rows as unknown as AutoBewerbBatchRow[];
+  const { data: attRows } = await admin
+    .from("auto_bewerb_send_attempts")
+    .select("batch_id, status")
+    .in("batch_id", batches.map((b) => b.id));
+  const byBatch = new Map<string, { sent: number; failed: number; pending: number }>();
+  for (const a of (attRows ?? []) as Array<{ batch_id: string | null; status: string }>) {
+    if (!a.batch_id) continue;
+    const m = byBatch.get(a.batch_id) ?? { sent: 0, failed: 0, pending: 0 };
+    if (a.status === "sent") m.sent += 1;
+    else if (a.status === "failed" || a.status === "cancelled") m.failed += 1;
+    else m.pending += 1;
+    byBatch.set(a.batch_id, m);
+  }
+  return batches.map((b) => ({
+    ...b,
+    sentCount: byBatch.get(b.id)?.sent ?? 0,
+    failedCount: byBatch.get(b.id)?.failed ?? 0,
+    pendingCount: byBatch.get(b.id)?.pending ?? 0,
+  }));
+}
+
+/** Step 7 statistics — always computed from persisted queue data (never
+ *  client state, never demo numbers). */
+export async function getAutoBewerbSendStats(userId: string): Promise<AutoBewerbSendStats> {
+  const zero: AutoBewerbSendStats = { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 };
+  try {
+    const admin = createAdminClient();
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const todayIso = todayStart.toISOString();
+    const { data: atts } = await admin
+      .from("auto_bewerb_send_attempts")
+      .select("status, sent_at, created_at")
+      .eq("user_id", userId)
+      .limit(500);
+    let sentToday = 0;
+    let processing = 0;
+    let totalToday = 0;
+    for (const a of (atts ?? []) as Array<{ status: string; sent_at: string | null; created_at: string }>) {
+      if (a.status === "sent" && a.sent_at && a.sent_at >= todayIso) sentToday += 1;
+      if (a.status === "sending") processing += 1;
+      if (a.created_at >= todayIso) totalToday += 1;
+    }
+    const { data: batchRows } = await admin
+      .from("auto_bewerb_batches")
+      .select("status")
+      .eq("user_id", userId)
+      .in("status", ["scheduled", "waiting"])
+      .limit(50);
+    return { sentToday, scheduled: (batchRows ?? []).length, processing, totalToday };
+  } catch {
+    return zero;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Scheduler entry points (cron + page-load catch-up)
 // ---------------------------------------------------------------------------
 
@@ -1943,17 +2465,26 @@ export interface AutoBewerbSweepResult {
   results: AutoBewerbDispatchResult[];
 }
 
-/** Cron worker: recover stale rows, claim due attempts, dispatch each. */
+/** Cron worker: recover stale rows, START due batches (3:30 gate), claim
+ *  due attempts, dispatch each, settle finished batches. */
 export async function claimAndDispatchDueAutoBewerbAttempts(limit = 5, budgetMs = 45_000): Promise<AutoBewerbSweepResult> {
   const deadline = Date.now() + budgetMs;
   const admin = createAdminClient();
   const { data: recovered } = await admin.rpc("recover_stale_auto_bewerb_attempts");
   const recoveredCount = Number(recovered ?? 0) || 0;
+  // Batches: recover stale + start the due ones (the inter-batch gate is
+  // atomic inside the RPC — overlapping ticks can never double-start).
+  await admin.rpc("recover_stale_auto_bewerb_batches");
+  const { data: startedBatches } = await admin.rpc("claim_startable_auto_bewerb_batches", { p_limit: limit });
+  const startedIds = ((startedBatches ?? []) as Array<{ id?: string }>).map((b) => b.id).filter(Boolean) as string[];
+  // Attempts: the claim RPC only returns attempts of STARTED batches (or
+  // legacy rows without a batch) — a batch's gate owns when they may fire.
   const { data: rows, error } = await admin.rpc("claim_due_auto_bewerb_attempts", { p_limit: limit });
   if (error || !Array.isArray(rows))
     return { recovered: recoveredCount, claimed: 0, results: [] };
   const results: AutoBewerbDispatchResult[] = [];
-  for (const row of rows as Array<Pick<AutoBewerbSendAttemptRow, "id">>) {
+  const touchedBatches = new Set<string>(startedIds);
+  for (const row of rows as Array<Pick<AutoBewerbSendAttemptRow, "id" | "batch_id">>) {
     // Soft wall-clock budget: stop dispatching early; rows already flipped
     // to 'sending' by the claim RPC are recovered by the next tick's
     // recover_stale_auto_bewerb_attempts (durable Postgres state, no loss).
@@ -1962,32 +2493,62 @@ export async function claimAndDispatchDueAutoBewerbAttempts(limit = 5, budgetMs 
     // dispatch runs WITHOUT re-claiming — the attempt budget is still
     // enforced inside dispatch (attempt_count += 1 exactly once).
     results.push(await dispatchAutoBewerbAttempt(row.id, { claimed: true }));
+    if (row.batch_id) touchedBatches.add(row.batch_id);
     if (results.length >= 10) break;
+  }
+  // Settle: every 'sending' batch (newly started, finished this tick, or
+  // stranded by an earlier crash) that has no queued/sending attempts left
+  // gets its honest terminal status.
+  for (const id of touchedBatches) {
+    if (Date.now() > deadline) break;
+    await settleAutoBewerbBatch(admin, id);
+  }
+  const { data: sendingBatches } = await admin
+    .from("auto_bewerb_batches")
+    .select("id")
+    .eq("status", "sending")
+    .limit(10);
+  for (const b of (sendingBatches ?? []) as Array<{ id: string }>) {
+    if (Date.now() > deadline) break;
+    await settleAutoBewerbBatch(admin, b.id);
   }
   return { recovered: recoveredCount, claimed: rows.length, results };
 }
 
-/** Best-effort page-load catch-up: process at most `limit` DUE attempts of
- *  the visiting user (server-side; the browser only triggers the re-check). */
-export async function processDueAutoBewerbAttemptsForUser(userId: string, limit = 1): Promise<AutoBewerbSweepResult> {
+/** Best-effort page-load catch-up: start the visiting user's due batches
+ *  (the 3:30 gate included) and process at most `limit` of their DUE
+ *  attempts (server-side; the browser only triggers the re-check — the
+ *  schedule itself is owned by Postgres, never by the client). */
+export async function processDueAutoBewerbAttemptsForUser(userId: string, limit = 5): Promise<AutoBewerbSweepResult> {
   const admin = createAdminClient();
+  const started = await startAutoBewerbBatchesForUser(userId, 5);
+  const sendingIds = new Set(started.map((b) => b.id));
+  // Batches that were ALREADY 'sending' (started by the cron) stay eligible:
+  const { data: sendingRows } = await admin
+    .from("auto_bewerb_batches")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("status", "sending")
+    .limit(10);
+  for (const b of (sendingRows ?? []) as Array<{ id: string }>) sendingIds.add(b.id);
   const nowMs = Date.now();
   const due = (ts: string | null): boolean => ts === null || new Date(ts).getTime() <= nowMs;
   const { data: rows } = await admin
     .from("auto_bewerb_send_attempts")
-    .select("id, scheduled_at, next_attempt_at")
+    .select("id, batch_id, scheduled_at, next_attempt_at")
     .eq("user_id", userId)
     .eq("status", "queued")
     .order("created_at", { ascending: true })
-    .limit(10);
-  const dueRows = ((rows ?? []) as Array<{ id: string; scheduled_at: string | null; next_attempt_at: string | null }>)
-    .filter((r) => due(r.scheduled_at) && due(r.next_attempt_at))
+    .limit(20);
+  const dueRows = ((rows ?? []) as Array<{ id: string; batch_id: string | null; scheduled_at: string | null; next_attempt_at: string | null }>)
+    .filter((r) => due(r.scheduled_at) && due(r.next_attempt_at) && (!r.batch_id || sendingIds.has(r.batch_id)))
     .slice(0, limit);
   const results: AutoBewerbDispatchResult[] = [];
-  for (const row of dueRows) {
-    results.push(await dispatchAutoBewerbAttempt(row.id));
+  for (const r of dueRows) {
+    results.push(await dispatchAutoBewerbAttempt(r.id, { slotBudgetMs: 2_000 }));
+    if (r.batch_id) await settleAutoBewerbBatch(admin, r.batch_id);
   }
-  return { recovered: 0, claimed: results.length, results };
+   return { recovered: 0, claimed: results.length, results };
 }
 
 // ---------------------------------------------------------------------------
@@ -2050,6 +2611,9 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     emailSettingsSupported: false,
     emailAccounts: [],
     candidateName: "",
+    batchesSupported: false,
+    batches: [],
+    sendStats: { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 },
   };
   if (!ready) return empty;
 
@@ -2171,6 +2735,21 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     };
   });
 
+  // Step 7 — batch queue + statistics (graceful: pre-migration DB →
+  // unsupported, everything else keeps working).
+  let batches: AutoBewerbBatchView[] = [];
+  let sendStats: AutoBewerbSendStats = { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 };
+  let batchesSupported = false;
+  if ((await getAutoBewerbBatchesProbe()).available) {
+    batchesSupported = true;
+    try {
+      [batches, sendStats] = await Promise.all([getAutoBewerbBatches(userId), getAutoBewerbSendStats(userId)]);
+    } catch {
+      batches = [];
+      sendStats = { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 };
+    }
+  }
+
   return {
     ready: true,
     setupIssue: null,
@@ -2193,5 +2772,8 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     emailSettingsSupported,
     emailAccounts,
     candidateName: String(letterhead.full_name ?? "").trim(),
+    batchesSupported,
+    batches,
+    sendStats,
   };
 }
