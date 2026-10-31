@@ -176,6 +176,20 @@ describe("buildAutoBewerbCvPrompt — full company-specific context", () => {
     expect(promptA).toContain("Keine Füllsätze");
   });
 
+  it("pins the professional-German quality + completeness contract (every verified item, achievement-oriented, consistent)", () => {
+    // Completeness: EVERY verified job/skill/achievement must be carried into
+    // the CV — tailoring reorders/emphasizes, never drops verified facts.
+    expect(promptA).toContain("VOLLSTÄNDIGKEIT");
+    expect(promptA).toContain("jede Ausbildung, jede Tätigkeit/Erfahrung");
+    expect(promptA).toContain("niemals das Streichen vorhandener, verifizierter Fakten");
+    expect(promptA).toContain("NIE vorhandene Fakten streichen");
+    // Professional, polished, natural German + achievement-oriented phrasing
+    // + consistent parallel structure.
+    expect(promptA).toContain("poliertes, NATÜRLICHES Deutsch");
+    expect(promptA).toContain("Ergebnis- und leistungsorientiert");
+    expect(promptA).toContain("parallele Formulierung aller Aufzählungspunkte");
+  });
+
   it("points the professional title at THIS ad's occupation", () => {
     expect(promptA).toContain("„Anlagenmechaniker/in Sanitär-Heizung-Klima“");
   });

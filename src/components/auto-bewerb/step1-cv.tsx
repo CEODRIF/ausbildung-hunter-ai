@@ -10,6 +10,7 @@ import {
   deleteProfileAction,
   saveProfileExtractAction,
 } from "@/app/auto-bewerb/actions";
+import { SignatureUpload } from "./signature-upload";
 import { Note, SectionCard, useAutoBewerb, useSaveFlash } from "./shared";
 
 const ACCEPT = ".pdf,.doc,.docx,.png,.jpg,.jpeg";
@@ -360,6 +361,9 @@ export function Step1Cv() {
           </div>
         )}
       </SectionCard>
+
+      {/* Signature — one global upload, applied to every cover letter */}
+      <SignatureUpload />
 
       {/* Review / correction */}
       {extracted && (

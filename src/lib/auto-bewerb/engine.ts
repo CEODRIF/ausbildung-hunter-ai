@@ -63,6 +63,7 @@ import {
 } from "./profile-photo";
 import { processProfilePhoto, resolvePhotoDataUrl } from "./profile-photo-process";
 import type { AutoBewerbProfilePhotoRow } from "./schema";
+import { SIGNATURE_MIME, signatureStoragePaths, validateSignature } from "./signature";
 
 /**
  * AUTO BEWERB — server-side data + dispatch engine (the /auto-bewerb workflow).
@@ -611,6 +612,88 @@ export async function resolveAutoBewerbPhotoDataUrl(
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Step 5 — the candidate's GENUINE handwritten signature
+// ---------------------------------------------------------------------------
+//
+// One signature per user, at a FIXED owner-scoped path in the private
+// `application-attachments` bucket — deliberately NOT a row in the
+// `auto_bewerb_attachments` e-mail library (no migration, and it can never
+// become a standalone e-mail attachment). The image is embedded INTO the
+// cover-letter PDF (a separate attachment), between the closing and the name.
+// It is the user's uploaded image — never generated or invented.
+
+/** Upload / REPLACE the candidate's signature. Only the raw uploaded bytes
+ *  (magic-byte validated, ≤ 5 MB, PNG or JPEG) are stored — the browser's
+ *  MIME hint and file name are ignored. The opposite-format object is removed
+ *  so exactly ONE signature always exists for the owner. */
+export async function uploadAutoBewerbSignature(
+  userId: string,
+  buffer: Buffer,
+): Promise<AutoBewerbOpResult<{ mime: string; sizeBytes: number }>> {
+  const validation = validateSignature(buffer);
+  if (!validation.ok) {
+    const message =
+      validation.code === "too_large"
+        ? "Die Signatur ist zu groß (max. 5 MB)."
+        : "Nur PNG oder JPEG werden akzeptiert.";
+    return fail(validation.code === "too_large" ? "file_too_large" : "invalid_file_type", message);
+  }
+  const admin = createAdminClient();
+  const { png, jpg } = signatureStoragePaths(userId);
+  const target = validation.type === "png" ? png : jpg;
+  const other = validation.type === "png" ? jpg : png;
+  const { error: uploadError } = await admin
+    .storage.from(ATTACHMENT_BUCKET)
+    .upload(target, buffer, { contentType: SIGNATURE_MIME[validation.type], upsert: true });
+  if (uploadError) return fail("storage_error", "Signatur-Upload fehlgeschlagen. Bitte erneut versuchen.");
+  // Drop the opposite-format object: only ONE signature may exist per owner.
+  await admin.storage.from(ATTACHMENT_BUCKET).remove([other]).catch(() => undefined);
+  void logAutoBewerbActivity(userId, "auto_bewerb_signature_uploaded", "AUTO BEWERB: Signatur hochgeladen");
+  return { ok: true, value: { mime: SIGNATURE_MIME[validation.type], sizeBytes: buffer.length } };
+}
+
+/** Remove the candidate's signature (user request). Both fixed paths are
+ *  cleared (one of them is always the live object). */
+export async function deleteAutoBewerbSignature(userId: string): Promise<AutoBewerbOpResult> {
+  const admin = createAdminClient();
+  const { png, jpg } = signatureStoragePaths(userId);
+  const { error } = await admin.storage.from(ATTACHMENT_BUCKET).remove([png, jpg]);
+  if (error) return fail("storage_error", "Die Signatur konnte nicht entfernt werden. Bitte erneut versuchen.");
+  void logAutoBewerbActivity(userId, "auto_bewerb_signature_removed", "AUTO BEWERB: Signatur entfernt");
+  return { ok: true };
+}
+
+/**
+ * The current signature image for the VERIFIED owner (null = none). The
+ * storage path is built from the session-verified userId — never client
+ * input. PNG is tried first, then JPEG (the two fixed paths). A missing or
+ * unreadable object resolves to null: the letter then renders with the
+ * verified name line only (never a fabricated signature, never a failure).
+ */
+export async function getAutoBewerbSignatureImage(
+  userId: string,
+): Promise<{ bytes: Uint8Array; mime: string } | null> {
+  const admin = createAdminClient();
+  const { png, jpg } = signatureStoragePaths(userId);
+  const candidates: Array<[string, string]> = [
+    [png, "image/png"],
+    [jpg, "image/jpeg"],
+  ];
+  for (const [path, mime] of candidates) {
+    try {
+      const { data, error } = await admin.storage.from(ATTACHMENT_BUCKET).download(path);
+      if (!error && data) {
+        const bytes = new Uint8Array(await data.arrayBuffer());
+        if (bytes.length > 0) return { bytes, mime };
+      }
+    } catch {
+      // Not found / transient → try the other format.
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1511,6 +1594,9 @@ export async function prepareAutoBewerbSend(
       };
     let letterBytes: Uint8Array;
     try {
+      // The genuine uploaded signature (if any) is embedded into the PDF —
+      // a missing/unreadable image degrades to the verified name line only.
+      const signatureImage = await getAutoBewerbSignatureImage(userId);
       const folio = buildLetterFolio({
         applicantName: pr.full_name ?? null,
         applicantEmail: pr.email ?? null,
@@ -1524,8 +1610,9 @@ export async function prepareAutoBewerbSend(
         companyAddress: app.ad_extracted?.companyAddress || null,
         subject: subject,
         bodyHtml: emailBodyToHtml(letterParse.data.text),
+        signatureImage,
       });
-      letterBytes = await generateLetterPdf(folio);
+      letterBytes = await generateLetterPdf(folio, { singlePage: true });
     } catch (error) {
       console.error("[auto-bewerb] letter PDF rendering failed:", error instanceof Error ? error.message : error);
       return { ok: false, code: "letter_render_failed", message: "Das Anschreiben-PDF für dieses Unternehmen konnte nicht erstellt werden." };
