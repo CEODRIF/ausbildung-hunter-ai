@@ -347,12 +347,87 @@ export interface AutoBewerbSendAttemptRow {
   sent_at: string | null;
   created_at: string;
   updated_at: string;
+  /** The batch this attempt belongs to (null = legacy / pre-batch row). */
+  batch_id: string | null;
 }
 
 export interface AutoBewerbSendPayload {
   html: string;
   text: string;
   attachments: Array<{ filename: string; mimeType: string; storagePath: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// Step 7 — batches (the persistent multi-batch sending queue)
+// ---------------------------------------------------------------------------
+
+export type AutoBewerbBatchStatus =
+  | "scheduled"
+  | "waiting"
+  | "sending"
+  | "completed"
+  | "partially_failed"
+  | "failed"
+  | "cancelled";
+
+/** One company's frozen, RESOLVED data inside the batch snapshot. */
+export interface AutoBewerbBatchItem {
+  companyId: string;
+  company: string;
+  position: string;
+  /** The verified per-company recipient (never invented). */
+  recipientEmail: string;
+  cvPdfName: string | null;
+  letterPdfName: string | null;
+  /** Shared supporting documents that accompany every e-mail of the batch. */
+  sharedDocs: string[];
+}
+
+/** The IMMUTABLE batch snapshot (frozen at creation; the attempts carry the
+ *  full e-mail payloads + attachment storage paths). */
+export interface AutoBewerbBatchSnapshot {
+  items: AutoBewerbBatchItem[];
+  subject: string;
+  accountId: string;
+  accountEmail: string;
+  attachCv: boolean;
+  attachLetter: boolean;
+  sharedDocs: string[];
+}
+
+export interface AutoBewerbBatchRow {
+  id: string;
+  user_id: string;
+  batch_no: number;
+  snapshot: AutoBewerbBatchSnapshot;
+  account_id: string;
+  status: AutoBewerbBatchStatus;
+  /** null = immediate (starts as soon as the inter-batch gate allows). */
+  scheduled_at: string | null;
+  /** Set exactly once when the batch starts (feeds the 3:30 gate). */
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Batch row + live attempt outcome counts (derived, bounded). */
+export interface AutoBewerbBatchView extends AutoBewerbBatchRow {
+  sentCount: number;
+  failedCount: number;
+  pendingCount: number;
+}
+
+/** Step 7 statistics — always computed from persisted queue data. */
+export interface AutoBewerbSendStats {
+  /** Attempts sent today (provider-confirmed). */
+  sentToday: number;
+  /** Batches queued for the future (scheduled + waiting). */
+  scheduled: number;
+  /** Attempts currently being dispatched (sending). */
+  processing: number;
+  /** All attempts created today (every outcome). */
+  totalToday: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +509,13 @@ export interface AutoBewerbWorkspace {
    *  {{candidate_name}} token in the e-mail template + the manifest preview.
    *  "" = not set (the token then renders empty, never invented). */
   candidateName: string;
+  /** False = the batch-queue migration is not applied yet (the UI hides the
+   *  queue panel and batch actions; everything else keeps working). */
+  batchesSupported: boolean;
+  /** The user's batches, newest first (with live outcome counts). */
+  batches: AutoBewerbBatchView[];
+  /** Step 7 statistics, always derived from persisted queue data. */
+  sendStats: AutoBewerbSendStats;
 }
 
 /** All tables the AUTO BEWERB feature needs (the probe checks all seven). */

@@ -18,7 +18,9 @@ import { approveCompanyAction } from "@/app/auto-bewerb/actions";
 
 vi.mock("@/app/auto-bewerb/actions", () => ({
   approveCompanyAction: vi.fn(),
+  cancelBatchAction: vi.fn(),
   cancelSendAction: vi.fn(),
+  createBatchAction: vi.fn(),
   scheduleCompaniesAction: vi.fn(),
   sendCompaniesAction: vi.fn(),
 }));
@@ -116,6 +118,11 @@ function makeWs() {
     emailSettingsSupported: true,
     emailAccounts: [{ id: "acct1", provider: "gmail", email: "mail@example.de", is_active: true, requires_reconnect: false }],
     candidateName: "Mustapha Drif",
+    // Legacy mode (batches migration pending) — the approval-gate contract
+    // below documents the per-company isolation path.
+    batchesSupported: false,
+    batches: [],
+    sendStats: { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 },
   };
 }
 
