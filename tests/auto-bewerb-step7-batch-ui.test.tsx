@@ -260,24 +260,31 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     await waitFor(() => expect(screen.getByText("Aktueller Batch (0 Unternehmen)")).toBeInTheDocument());
   });
 
-  it("enforces the global 100-company cap for the current batch (101st only rejected at exhausted capacity)", () => {
-    const many = Array.from({ length: 101 }, (_, i) =>
-      companyView(`c${i + 1}`, `Firma ${i + 1} GmbH`, `jobs@firma-${i + 1}.de`, `Ausbildung ${i + 1}`, true),
-    );
-    mount(makeWs({
-      companies: many,
-      capacity: { reserved: 100, capacity: 100, available: 0 }, // global capacity exhausted (persisted server data)
-    }));
-    for (let i = 1; i <= 100; i++) fireEvent.click(screen.getByLabelText(`Firma ${i} GmbH`));
-    expect(screen.getByText("Aktueller Batch (100 Unternehmen)")).toBeInTheDocument();
-    expect(screen.getByText("100 von 100 bereit")).toBeInTheDocument();
-    // The 101st company cannot be added to the current batch — the selection is
-    // bounded by the GLOBAL capacity (exhausted at 100 reserved):
-    expect(screen.getByLabelText("Firma 101 GmbH")).toBeDisabled();
-    expect(screen.getByText("Maximal 100 Unternehmen pro Batch — begrenzt durch Ihre globale Kapazität.")).toBeInTheDocument();
-    // The exhausted capacity is displayed from the persisted counters:
-    expect(screen.getByText("100 / 100")).toBeInTheDocument();
-  });
+  // 30 s budget: this test clicks 100 checkboxes sequentially, each re-rendering
+  // the full 101-row list — fine locally, but beyond vitest's 5 s default on
+  // slower CI runners (assertions are unchanged, only the time budget).
+  it(
+    "enforces the global 100-company cap for the current batch (101st only rejected at exhausted capacity)",
+    () => {
+      const many = Array.from({ length: 101 }, (_, i) =>
+        companyView(`c${i + 1}`, `Firma ${i + 1} GmbH`, `jobs@firma-${i + 1}.de`, `Ausbildung ${i + 1}`, true),
+      );
+      mount(makeWs({
+        companies: many,
+        capacity: { reserved: 100, capacity: 100, available: 0 }, // global capacity exhausted (persisted server data)
+      }));
+      for (let i = 1; i <= 100; i++) fireEvent.click(screen.getByLabelText(`Firma ${i} GmbH`));
+      expect(screen.getByText("Aktueller Batch (100 Unternehmen)")).toBeInTheDocument();
+      expect(screen.getByText("100 von 100 bereit")).toBeInTheDocument();
+      // The 101st company cannot be added to the current batch — the selection is
+      // bounded by the GLOBAL capacity (exhausted at 100 reserved):
+      expect(screen.getByLabelText("Firma 101 GmbH")).toBeDisabled();
+      expect(screen.getByText("Maximal 100 Unternehmen pro Batch — begrenzt durch Ihre globale Kapazität.")).toBeInTheDocument();
+      // The exhausted capacity is displayed from the persisted counters:
+      expect(screen.getByText("100 / 100")).toBeInTheDocument();
+    },
+    30_000,
+  );
 
   it("an incomplete company can be selected but blocks sending (readiness indicator)", () => {
     const companies = [
