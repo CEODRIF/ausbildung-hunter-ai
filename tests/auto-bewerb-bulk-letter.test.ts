@@ -21,6 +21,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildAutoBewerbLetterPrompt } from "@/lib/auto-bewerb/prompts";
+import { selectBestCoverLetterTemplate } from "@/lib/auto-bewerb/letter-template-match";
 import type { AdExtract } from "@/lib/auto-bewerb/schema";
 
 const read = (p: string) => readFileSync(p, "utf8");
@@ -187,6 +188,17 @@ const ANALYSIS_A = {
   missing: [{ requirement: "Führerschein Klasse B" }],
 };
 
+/** The mandatory template foundation: the deterministic auto-match for the ad
+ *  (the profile in PROFILE_TEXT contains a verified internship). */
+const tplFor = (e: AdExtract) =>
+  selectBestCoverLetterTemplate({
+    jobTitle: e.jobTitle,
+    occupation: e.occupation,
+    adRaw: "",
+    contactPerson: e.contactPerson,
+    hasInternshipExperience: true,
+  }).template;
+
 describe("letter prompt — per-company individualization (content quality)", () => {
   it("carries the FULL structured extraction (every requirement dimension)", () => {
     const p = buildAutoBewerbLetterPrompt({
@@ -196,6 +208,7 @@ describe("letter prompt — per-company individualization (content quality)", ()
       extract: extractA,
       analysis: ANALYSIS_A,
       candidateName: "Mustapha Drif",
+      template: tplFor(extractA),
     });
     // All extraction dimensions reach the model — not only a name + two
     // requirements.
@@ -227,6 +240,7 @@ describe("letter prompt — per-company individualization (content quality)", ()
       extract: extractA,
       analysis: ANALYSIS_A,
       candidateName: "Mustapha Drif",
+      template: tplFor(extractA),
     });
     expect(p).toContain("PROFIL-ABGLEICH");
     expect(p).toContain("vorhanden und passend: Schaltpläne lesen");
@@ -241,6 +255,7 @@ describe("letter prompt — per-company individualization (content quality)", ()
       extract: extractA,
       analysis: null,
       candidateName: "Mustapha Drif",
+      template: tplFor(extractA),
     });
     expect(p).toContain("PROFIL-ABGLEICH: nicht vorhanden");
   });
@@ -252,6 +267,7 @@ describe("letter prompt — per-company individualization (content quality)", ()
       extract: extractA,
       analysis: ANALYSIS_A,
       candidateName: "Mustapha Drif",
+      template: tplFor(extractA),
     });
     expect(p).toContain("niemals als vorhanden behaupten");
     expect(p).toContain("Behaupte NIEMALS eine Anforderung als erfüllt");
@@ -266,9 +282,18 @@ describe("letter prompt — per-company individualization (content quality)", ()
       candidateName: "Mustapha Drif",
       analysis: ANALYSIS_A,
     };
-    const pA = buildAutoBewerbLetterPrompt({ ...common, adFenced: "AD A", extract: extractA });
-    const pB = buildAutoBewerbLetterPrompt({ ...common, adFenced: "AD B", extract: extractB });
+    const pA = buildAutoBewerbLetterPrompt({ ...common, adFenced: "AD A", extract: extractA, template: tplFor(extractA) });
+    const pB = buildAutoBewerbLetterPrompt({ ...common, adFenced: "AD B", extract: extractB, template: tplFor(extractB) });
     expect(pA).not.toBe(pB);
+    // Each prompt carries ITS OWN selected ORIGINAL template — full verbatim
+    // text + the original PDF page reference (the generation foundation):
+    expect(pA).toContain(tplFor(extractA).text);
+    expect(pA).toContain(`SEITE ${tplFor(extractA).page}`);
+    expect(pB).toContain(tplFor(extractB).text);
+    expect(pB).toContain(`SEITE ${tplFor(extractB).page}`);
+    // …and NOT the other company's template:
+    expect(pA).not.toContain(tplFor(extractB).text);
+    expect(pB).not.toContain(tplFor(extractA).text);
     // Company A's specific requirements appear ONLY in A's prompt…
     expect(pA).toContain("Kälteanlagen");
     expect(pA).not.toContain("Kubernetes");

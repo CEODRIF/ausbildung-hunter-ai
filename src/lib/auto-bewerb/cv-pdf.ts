@@ -3,30 +3,49 @@
  *
  * The tailored CVs are stored as structured CvDocument JSON (user-reviewed).
  * This module renders that SAME document to a professional German
- * Lebenslauf PDF — a clean white A4 document in an elegant serif:
+ * Lebenslauf PDF, porting 1:1 the visual design of the platform CV
+ * builder's "modern" template (src/components/cv-templates/
+ * modern-template.tsx, the builder's professional sans-serif design):
  *
- *   - centered, bold serif name + centered italic professional title
- *   - one balanced contact row (location · email · phone · linkedin) with
- *     small monochrome icons; extra facts (website, Geburtsdatum, …)
- *     appended as plain text
+ *   - left-aligned header: steel-blue bold name, lighter-steel title,
+ *     icon contact line (email, phone, location, website, LinkedIn) and
+ *     an extra-facts line (nationality | Geburtsdatum | Verfügbarkeit)
  *   - the candidate's photograph (when available) in the header's
  *     upper-right, aspect preserved, never stretched
- *   - strong uppercase serif section headings with a thin black rule
- *   - experience/education entries: bold title left, italic institution
- *     under it, dates + location right-aligned (overlap-safe)
- *   - skills, certificates and languages as balanced TWO-COLUMN bullets
- *   - proper multi-page flow: consistent margins, no orphan headings,
- *     entry headers kept together, subtle "Seite i von N" page numbers
+ *   - steel-blue section headings (bold, thin blue rule underneath)
+ *   - "Position, Unternehmen" entries (bold + italic), dates + location
+ *     stacked top-right, bullet lists for responsibilities/achievements
+ *   - skills as two columns, languages as up to three columns (level
+ *     under the language), certificates as two columns, project entries,
+ *     interests as a single paragraph
+ *
+ * The builder renders its templates as browser CSS (PDF export via the
+ * print portal), which cannot run server-side — so this module reuses the
+ * template's ACTUAL design system (palette, type scale, spacing, section
+ * organization and entry structure) in pdf-lib. The platform's standard-14
+ * Helvetica family is the PDF counterpart of the template's web-safe
+ * sans-serif stack (WinAnsiEncoding — reliable ä ö ü ß in every viewer,
+ * no binary font files to ship).
+ *
+ * One-page discipline: the document is first fully MEASURED (exact
+ * word-wrap + every block's height) and the largest of three density
+ * tiers (comfortable → compact → dense) that fits ONE A4 page is chosen.
+ * Nothing is ever removed or shortened to save space — only sizes and
+ * spacing adapt, and the densest tier stays comfortably readable. If even
+ * the densest tier overflows (pathologically long profiles), the document
+ * flows to further pages (running header + subtle page numbers) instead of
+ * clipping or deleting verified facts — the conflict stays visible.
+ *
+ * Section ORDER and VISIBILITY follow the document's customization
+ * (sanitizeCvCustomization defaults) — the same organization logic the CV
+ * builder applies (CvSectionKeys order, per-section show/hide,
+ * showDates/showLocation/showAchievements flags).
  *
  * It is the CV counterpart of the existing letter renderer
  * (src/lib/bew-letter-pdf.ts): zero external services, zero cost, and the
  * ONLY output the email send path and the A4 document preview ever use —
  * so the preview and the exported PDF are byte-identical by construction.
  * Nothing is invented here — empty sections are simply not rendered.
- *
- * Fonts: the PDF standard-14 Times family (Times-Roman / -Bold / -Italic).
- * Standard fonts use WinAnsiEncoding — reliable ä ö ü ß support in every
- * PDF viewer (PDFium, Acrobat, Preview) with no binary font files to ship.
  *
  * Photo contract: `options.photoDataUrl` (resolved, ownership-checked data
  * URL from the platform — the server ALWAYS passes this for generated CVs)
@@ -35,53 +54,166 @@
  * is NEVER interpreted here directly — it is the server's job to resolve
  * it (renderer stays deterministic + owner-agnostic).
  */
-import { PDFDocument, PDFFont, PDFPage, PDFImage, StandardFonts, rgb, type Color } from "pdf-lib";
+import { PDFDocument, PDFImage, PDFPage, PDFFont, StandardFonts, rgb, type Color } from "pdf-lib";
 import {
   certificateVisible,
   educationVisible,
   experienceVisible,
   languageVisible,
   projectVisible,
+  sanitizeCvDocument,
   type CvDocument,
 } from "@/lib/templates/cv";
+import { sanitizeCvCustomization, type CvSectionKey } from "@/lib/templates/cv-customization";
 
 const A4_WIDTH = 595.28;
 const A4_HEIGHT = 841.89;
-const MARGIN_X = 48; // ≈16.9 mm — generous, consistent on every page
-const MARGIN_TOP = 50;
-const MARGIN_BOTTOM = 46;
-const CONTENT_WIDTH = A4_WIDTH - 2 * MARGIN_X;
-const RIGHT = A4_WIDTH - MARGIN_X;
-/** Usable height of one page (for "fits on one page" decisions). */
-const PAGE_CONTENT_HEIGHT = A4_HEIGHT - MARGIN_TOP - MARGIN_BOTTOM;
+const MM = 72 / 25.4; // pt per millimetre
 
-const INK: Color = rgb(0.1, 0.11, 0.13); // near-black charcoal
-const MUTED: Color = rgb(0.36, 0.39, 0.43); // dates, locations, page numbers
-const BLACK_RULE: Color = rgb(0.08, 0.09, 0.11); // header + section rules
+/* The modern template's palette (modern-template.tsx IDENTITY) --------- */
+const ACCENT: Color = rgb(47 / 255, 92 / 255, 153 / 255); // #2f5c99 name, headings, rules
+const TITLE_TONE: Color = rgb(74 / 255, 120 / 255, 176 / 255); // #4a78b0 professional title
+const BODY: Color = rgb(31 / 255, 41 / 255, 55 / 255); // #1f2937 text + icons + bullets
+const META: Color = rgb(85 / 255, 95 / 255, 107 / 255); // #555f6b dates, locations, contact
 
-/* Type scale (design targets from the reference) ------------------------- */
-const SIZE_NAME = 24;
-const SIZE_TITLE = 15;
-const SIZE_CONTACT = 9.5;
-const SIZE_HEADING = 13.5;
-const SIZE_LEAD = 11; // job title / degree (bold)
-const SIZE_SUB = 10.5; // employer / institution (italic)
-const SIZE_META = 10; // right-aligned dates / locations
-const SIZE_BODY = 10; // summary, bullets, columns
-const SIZE_PAGE_NO = 8.5;
-
-const LH_LEAD = 14.5;
-const LH_SUB = 14;
-const LH_BODY = 13.8;
-const LH_COL = 15.5; // two-column bullet rows
-
-const PHOTO_W_MAX = 90; // ≈31.8 mm wide  (header box, aspect preserved)
-const PHOTO_H_MAX = 116; // ≈41 mm tall
-const PHOTO_GAP = 20; // between the text block and the photo
-const COL_GUTTER = 26; // between the two bullet columns
+/** German section titles — the builder's exact i18n labels
+ *  (src/lib/i18n/dictionaries.ts, `templates.doc*`, German). */
+const SECTION_LABELS: Record<CvSectionKey, string> = {
+  summary: "Profil",
+  experience: "Berufserfahrung",
+  education: "Ausbildung & Studium",
+  skills: "Kenntnisse",
+  languages: "Sprachen",
+  certificates: "Zertifikate",
+  projects: "Projekte",
+  interests: "Interessen",
+};
 
 /* ------------------------------------------------------------------ */
-/* Layout helpers (greedy word wrap; long-word breaker)                */
+/* Density tiers — the adaptive one-page fit system                    */
+/* ------------------------------------------------------------------ */
+
+/** All values in PDF points. Tier 2 (compact) equals the modern template's
+ *  exact px scale (1 CSS px = 0.75 pt); tier 1 adds headroom, tier 3
+ *  tightens for very full profiles. Every tier keeps a ≥8.5 pt body. */
+interface Tier {
+  ml: number;
+  mt: number;
+  mb: number;
+  name: number;
+  title: number;
+  contact: number;
+  heading: number;
+  entry: number;
+  base: number;
+  nameLh: number;
+  titleLh: number;
+  contactLh: number;
+  baseLh: number;
+  entryLh: number;
+  metaLh: number; // right-stacked dates/location line step
+  headerTitleGap: number;
+  headerContactGap: number;
+  otherGap: number;
+  sectionGap: number;
+  headingLh: number;
+  headingPadB: number;
+  sectionPadT: number;
+  ruleTh: number;
+  spaceBetween: number;
+  bulletTop: number;
+  iconSize: number;
+  iconTextGap: number;
+  contactItemGap: number;
+  photoW: number;
+  photoH: number;
+  photoGap: number;
+  skillsGap: number;
+  langGap: number;
+  descGap: number;
+  techGap: number;
+}
+
+const COMFORTABLE: Tier = {
+  ml: 10 * MM, mt: 12 * MM, mb: 10 * MM,
+  name: 21, title: 13, contact: 9.5, heading: 10, entry: 10, base: 9.5,
+  nameLh: 1.15, titleLh: 1.3, contactLh: 1.5, baseLh: 1.5, entryLh: 1.35, metaLh: 1.4,
+  headerTitleGap: 3, headerContactGap: 9, otherGap: 3,
+  sectionGap: 13, headingLh: 1.2, headingPadB: 3, sectionPadT: 6, ruleTh: 1.2,
+  spaceBetween: 9, bulletTop: 1.5,
+  iconSize: 8.25, iconTextGap: 3.75, contactItemGap: 12,
+  photoW: 96, photoH: 128, photoGap: 19.5,
+  skillsGap: 21, langGap: 18, descGap: 2, techGap: 1.5,
+};
+
+const COMPACT: Tier = {
+  ml: 10 * MM, mt: 11 * MM, mb: 10 * MM,
+  name: 19, title: 12, contact: 8.6, heading: 9.75, entry: 9.75, base: 9,
+  nameLh: 1.12, titleLh: 1.25, contactLh: 1.4, baseLh: 1.4, entryLh: 1.3, metaLh: 1.35,
+  headerTitleGap: 2.5, headerContactGap: 7.5, otherGap: 2.5,
+  sectionGap: 11, headingLh: 1.15, headingPadB: 2.5, sectionPadT: 5, ruleTh: 1.1,
+  spaceBetween: 7, bulletTop: 1.2,
+  iconSize: 7.5, iconTextGap: 3.5, contactItemGap: 10,
+  photoW: 90, photoH: 120, photoGap: 18,
+  skillsGap: 21, langGap: 18, descGap: 1.5, techGap: 1.5,
+};
+
+const DENSE: Tier = {
+  ml: 9 * MM, mt: 10 * MM, mb: 9 * MM,
+  name: 17.5, title: 11, contact: 8, heading: 9.25, entry: 9.25, base: 8.5,
+  nameLh: 1.1, titleLh: 1.2, contactLh: 1.35, baseLh: 1.32, entryLh: 1.26, metaLh: 1.3,
+  headerTitleGap: 2, headerContactGap: 6, otherGap: 2,
+  sectionGap: 9, headingLh: 1.12, headingPadB: 2, sectionPadT: 4, ruleTh: 1,
+  spaceBetween: 5.5, bulletTop: 1,
+  iconSize: 7, iconTextGap: 3, contactItemGap: 9,
+  photoW: 84, photoH: 112, photoGap: 16,
+  skillsGap: 16, langGap: 14, descGap: 1.5, techGap: 1,
+};
+
+const TIERS: readonly Tier[] = [COMFORTABLE, COMPACT, DENSE];
+
+/* ------------------------------------------------------------------ */
+/* Layout plan (measure-then-draw)                                     */
+/* ------------------------------------------------------------------ */
+
+interface Fonts {
+  reg: PDFFont;
+  bold: PDFFont;
+  obi: PDFFont;
+}
+
+type IconKind = "mail" | "phone" | "pin" | "globe" | "linkedin";
+
+type PlanItem =
+  | { kind: "text"; x: number; y: number; font: PDFFont; size: number; color: Color; text: string; keepThrough?: number }
+  | { kind: "icon"; icon: IconKind; x: number; y: number; size: number }
+  | { kind: "rule"; y: number; thickness: number; color: Color; x0: number; x1: number }
+  | { kind: "photo"; x: number; y: number; w: number; h: number; img: PDFImage };
+
+interface Layout {
+  tier: Tier;
+  plan: PlanItem[];
+  /** Total content height (from the content top). */
+  totalH: number;
+  /** True when the content fits one A4 page of this tier. */
+  fits: boolean;
+}
+
+interface PhotoBox {
+  img: PDFImage;
+  w: number;
+  h: number;
+}
+
+/** Helvetica ascent ≈ 0.72 em — the baseline offset inside a line box. */
+const firstBaseline = (lineTop: number, size: number, lh: number): number =>
+  lineTop + ((size * lh - size) / 2 + size * 0.72);
+
+/** The line-box height of one text line. */
+const lineH = (size: number, lh: number): number => size * lh;
+
+/* ------------------------------------------------------------------ */
+/* Word wrapping (greedy, exact font metrics)                          */
 /* ------------------------------------------------------------------ */
 
 function breakLongWord(font: PDFFont, word: string, size: number, maxWidth: number): string[] {
@@ -127,71 +259,487 @@ function wrapLine(font: PDFFont, text: string, size: number, maxWidth: number): 
   return lines;
 }
 
+interface Chunk {
+  text: string;
+  font: PDFFont;
+}
+
+/** Wrap a line built of styled segments (bold lead + italic company) with
+ *  exact per-segment metrics; consecutive same-font words merge. */
+function wrapSegments(segs: Chunk[], size: number, maxWidth: number): Chunk[][] {
+  if (maxWidth <= 0) maxWidth = 10;
+  const words: Chunk[] = [];
+  for (const seg of segs) {
+    for (const w of seg.text.split(/\s+/).filter(Boolean)) {
+      words.push({ text: w, font: seg.font });
+    }
+  }
+  const lines: Chunk[][] = [];
+  let line: Chunk[] = [];
+  let lineW = 0;
+  for (const { text: word, font } of words) {
+    if (font.widthOfTextAtSize(word, size) > maxWidth && line.length === 0) {
+      for (const piece of breakLongWord(font, word, size, maxWidth)) {
+        lines.push([{ text: piece, font }]);
+      }
+      continue;
+    }
+    const withSpace = line.length ? ` ${word}` : word;
+    const ww = font.widthOfTextAtSize(withSpace, size);
+    if (line.length && lineW + ww > maxWidth) {
+      lines.push(line);
+      line = [{ text: word, font }];
+      lineW = font.widthOfTextAtSize(word, size);
+    } else if (line.length === 0) {
+      line = [{ text: word, font }];
+      lineW = font.widthOfTextAtSize(word, size);
+    } else {
+      const last = line[line.length - 1];
+      if (last.font === font) last.text += withSpace;
+      else line.push({ text: withSpace, font });
+      lineW += ww;
+    }
+  }
+  if (line.length) lines.push(line);
+  return lines;
+}
+
 /* ------------------------------------------------------------------ */
-/* Small monochrome contact icons (vector, baseline-anchored)          */
+/* Contact items + icons (the modern template's header contact line)   */
 /* ------------------------------------------------------------------ */
 
-/** Scale every number in a simple SVG path (M/L/H/V/C/Z, absolute) by k. */
+interface ContactItem {
+  kind: IconKind;
+  text: string;
+}
+
+/** email / phone / location / website / linkedin — the same order and the
+ *  same "only what the candidate provided" rule as the builder. */
+function buildContactItems(cv: CvDocument): ContactItem[] {
+  const { personal } = cv;
+  const items: ContactItem[] = [];
+  if (personal.email.trim()) items.push({ kind: "mail", text: personal.email.trim() });
+  if (personal.phone.trim()) items.push({ kind: "phone", text: personal.phone.trim() });
+  if (personal.location.trim()) items.push({ kind: "pin", text: personal.location.trim() });
+  if (personal.website.trim()) items.push({ kind: "globe", text: personal.website.trim() });
+  if (personal.linkedin.trim()) items.push({ kind: "linkedin", text: personal.linkedin.trim() });
+  return items;
+}
+
+/** nationality | date of birth | availability (may be empty). */
+function buildOtherText(cv: CvDocument): string {
+  const { personal } = cv;
+  return [personal.nationality, personal.dateOfBirth, personal.availability]
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .join("  |  ");
+}
+
+const dateRange = (start: string, end: string, isCurrent?: boolean): string => {
+  const s = (start ?? "").trim();
+  const e = (end ?? "").trim();
+  const endShown = isCurrent ? (e || "heute") : e;
+  if (!s && !endShown) return "";
+  if (!s) return endShown;
+  if (!endShown) return s;
+  return `${s} – ${endShown}`;
+};
+
+/* ------------------------------------------------------------------ */
+/* The layout builder — measures EVERYTHING before anything is drawn   */
+/* ------------------------------------------------------------------ */
+
+function buildLayout(cv: CvDocument, fonts: Fonts, photo: PhotoBox | null, tier: Tier): Layout {
+  const left = tier.ml;
+  const right = A4_WIDTH - tier.ml;
+  const contentW = right - left;
+  const headerW = photo ? contentW - photo.w - tier.photoGap : contentW;
+  const plan: PlanItem[] = [];
+  const s = sanitizeCvCustomization(cv.customization);
+  let y = 0; // offset below the content top
+
+  const pushText = (
+    x: number,
+    yTop: number,
+    font: PDFFont,
+    size: number,
+    color: Color,
+    text: string,
+    lh: number,
+  ): number => {
+    plan.push({ kind: "text", x, y: firstBaseline(yTop, size, lh), font, size, color, text });
+    return lineH(size, lh);
+  };
+
+  // ------------------------------------------------------------------
+  // Header — left text block (name / title / contact / other) + photo
+  // ------------------------------------------------------------------
+  const name = cv.personal.fullName.trim();
+  const title = cv.personal.professionalTitle.trim();
+  let yTop = 0;
+  if (name) {
+    for (const line of wrapLine(fonts.bold, name, tier.name, headerW)) {
+      yTop += pushText(left, yTop, fonts.bold, tier.name, ACCENT, line, tier.nameLh);
+    }
+  }
+  if (title) {
+    yTop += tier.headerTitleGap;
+    for (const line of wrapLine(fonts.reg, title, tier.title, headerW)) {
+      yTop += pushText(left, yTop, fonts.reg, tier.title, TITLE_TONE, line, tier.titleLh);
+    }
+  }
+  const contact = buildContactItems(cv);
+  if (contact.length) {
+    yTop += tier.headerContactGap;
+    // Pack the icon items into lines (an icon never splits from its text).
+    const itemW = (it: ContactItem) =>
+      tier.iconSize + tier.iconTextGap + fonts.reg.widthOfTextAtSize(it.text, tier.contact);
+    const lines: ContactItem[][] = [];
+    let line: ContactItem[] = [];
+    let lineW = 0;
+    for (const it of contact) {
+      const w = itemW(it);
+      if (line.length && lineW + tier.contactItemGap + w > headerW) {
+        lines.push(line);
+        line = [];
+        lineW = 0;
+      }
+      line.push(it);
+      lineW += (line.length > 1 ? tier.contactItemGap : 0) + w;
+    }
+    if (line.length) lines.push(line);
+    for (const items of lines) {
+      const h = lineH(tier.contact, tier.contactLh);
+      let x = left;
+      const baseline = firstBaseline(yTop, tier.contact, tier.contactLh);
+      for (const it of items) {
+        // Icons anchor to the text baseline (the original renderer's idiom).
+        plan.push({ kind: "icon", icon: it.kind, x, y: baseline, size: tier.iconSize });
+        x += tier.iconSize + tier.iconTextGap;
+        pushText(x, yTop, fonts.reg, tier.contact, META, it.text, tier.contactLh);
+        x += fonts.reg.widthOfTextAtSize(it.text, tier.contact) + tier.contactItemGap;
+      }
+      yTop += h;
+    }
+  }
+  const other = buildOtherText(cv);
+  if (other) {
+    if (contact.length) yTop += tier.otherGap;
+    for (const line of wrapLine(fonts.reg, other, tier.contact, headerW)) {
+      yTop += pushText(left, yTop, fonts.reg, tier.contact, META, line, tier.contactLh);
+    }
+  }
+  if (photo) {
+    plan.push({ kind: "photo", x: right - photo.w, y: 0, w: photo.w, h: photo.h, img: photo.img });
+  }
+  y = Math.max(yTop, photo?.h ?? 0);
+
+  // ------------------------------------------------------------------
+  // Sections — in the document's customization order & visibility
+  // ------------------------------------------------------------------
+  const exp = cv.experience.filter(experienceVisible);
+  const edu = cv.education.filter(educationVisible);
+  const skills = cv.skills.map((x) => x.trim()).filter(Boolean);
+  const langs = cv.languages.filter(languageVisible);
+  const certs = cv.certificates.filter(certificateVisible);
+  const projects = cv.projects.filter(projectVisible);
+  const interests = cv.interests.map((x) => x.trim()).filter(Boolean);
+
+  const sectionContent: Record<CvSectionKey, boolean> = {
+    summary: Boolean(cv.summary.trim()),
+    experience: exp.length > 0,
+    education: edu.length > 0,
+    skills: skills.length > 0,
+    languages: langs.length > 0,
+    certificates: certs.length > 0,
+    projects: projects.length > 0,
+    interests: interests.length > 0,
+  };
+
+  /** One entry. `origin` = the current content offset (plan items are
+   *  absolute); returns the entry's height (the caller advances `y`). */
+  const entry = (
+    bold: string,
+    italic: string | undefined,
+    dates: string | undefined,
+    meta: string | undefined,
+    bullets: string[],
+    origin: number,
+  ): number => {
+    let h = 0;
+    const segs: Chunk[] = [{ text: bold, font: fonts.bold }];
+    if (italic) segs.push({ text: ` , ${italic}`, font: fonts.obi });
+    const datesW = dates ? fonts.reg.widthOfTextAtSize(dates, tier.contact) : 0;
+    const metaW = meta ? fonts.reg.widthOfTextAtSize(meta, tier.contact) : 0;
+    const reserve = Math.max(datesW, metaW);
+    const leadLines = wrapSegments(segs, tier.entry, contentW - (reserve ? reserve + 12 : 0));
+    for (const line of leadLines) {
+      let x = left;
+      for (const chunk of line) {
+        pushText(x, origin + h, chunk.font, tier.entry, chunk.font === fonts.obi ? META : BODY, chunk.text, tier.entryLh);
+        x += chunk.font.widthOfTextAtSize(chunk.text, tier.entry);
+      }
+      h += lineH(tier.entry, tier.entryLh);
+    }
+    // Dates + location stacked top-right (modern template entry header).
+    const leadBaseline = firstBaseline(0, tier.entry, tier.entryLh);
+    if (dates) {
+      plan.push({
+        kind: "text",
+        x: right - datesW,
+        y: origin + leadBaseline,
+        font: fonts.reg,
+        size: tier.contact,
+        color: META,
+        text: dates,
+      });
+    }
+    if (meta) {
+      plan.push({
+        kind: "text",
+        x: right - metaW,
+        y: origin + leadBaseline + lineH(tier.contact, tier.metaLh),
+        font: fonts.reg,
+        size: tier.contact,
+        color: META,
+        text: meta,
+      });
+    }
+    const rightH = ((dates ? 1 : 0) + (meta ? 1 : 0)) * lineH(tier.contact, tier.metaLh);
+    h = Math.max(h, rightH);
+    for (const b of bullets.filter((b) => b.trim())) {
+      const lines = wrapLine(fonts.reg, b, tier.base, contentW - 10.5);
+      for (let i = 0; i < lines.length; i += 1) {
+        const lt = origin + h + tier.bulletTop + i * lineH(tier.base, tier.baseLh);
+        plan.push({ kind: "text", x: left + 1, y: firstBaseline(lt, tier.base, tier.baseLh), font: fonts.reg, size: tier.base, color: BODY, text: "•" });
+        plan.push({ kind: "text", x: left + 10.5, y: firstBaseline(lt, tier.base, tier.baseLh), font: fonts.reg, size: tier.base, color: BODY, text: lines[i] });
+      }
+      h += tier.bulletTop + lines.length * lineH(tier.base, tier.baseLh);
+    }
+    return h;
+  };
+
+  const columnBullets = (items: string[], gap: number, origin: number): number => {
+    const cols = Math.min(2, items.length);
+    const colW = (contentW - (cols - 1) * gap) / cols;
+    const perCol: string[][] = Array.from({ length: cols }, () => []);
+    items.forEach((it, i) => perCol[i % cols].push(it)); // CSS grid: row-first
+    let maxH = 0;
+    perCol.forEach((colItems, ci) => {
+      const x0 = left + ci * (colW + gap);
+      let ch = 0;
+      for (const it of colItems) {
+        const lines = wrapLine(fonts.reg, it, tier.base, colW - 10.5);
+        for (let i = 0; i < lines.length; i += 1) {
+          const lt = origin + ch + tier.bulletTop + i * lineH(tier.base, tier.baseLh);
+          plan.push({ kind: "text", x: x0 + 1, y: firstBaseline(lt, tier.base, tier.baseLh), font: fonts.reg, size: tier.base, color: BODY, text: "•" });
+          plan.push({ kind: "text", x: x0 + 10.5, y: firstBaseline(lt, tier.base, tier.baseLh), font: fonts.reg, size: tier.base, color: BODY, text: lines[i] });
+        }
+        ch += tier.bulletTop + lines.length * lineH(tier.base, tier.baseLh);
+      }
+      maxH = Math.max(maxH, ch);
+    });
+    return maxH;
+  };
+
+  const languageGrid = (items: typeof langs, origin: number): number => {
+    const cols = Math.min(3, items.length);
+    const colW = (contentW - (cols - 1) * tier.langGap) / cols;
+    const perCol: Array<(typeof langs)[number][]> = Array.from({ length: cols }, () => []);
+    items.forEach((l, i) => perCol[i % cols].push(l));
+    let maxH = 0;
+    perCol.forEach((colItems, ci) => {
+      const x0 = left + ci * (colW + tier.langGap);
+      let ch = 0;
+      for (const l of colItems) {
+        ch += pushText(x0, origin + ch, fonts.bold, tier.base, BODY, l.language.trim(), tier.baseLh);
+        if (l.level.trim()) ch += pushText(x0, origin + ch, fonts.reg, tier.contact, META, l.level.trim(), 1.3);
+      }
+      maxH = Math.max(maxH, ch);
+    });
+    return maxH;
+  };
+
+  /** Description/tech line under an entry (full content width, like the
+   *  modern template's entry paragraphs). */
+  const desc = (text: string, size: number, font: PDFFont, color: Color, lh: number, gap: number, origin: number): number => {
+    let h = gap;
+    for (const line of wrapLine(font, text, size, contentW)) {
+      h += pushText(left, origin + h, font, size, color, line, lh);
+    }
+    return h;
+  };
+
+  for (const key of s.layout.sectionOrder) {
+    if (!s.sections.visibility[key] || !sectionContent[key]) continue;
+    const startIdx = plan.length;
+    y += tier.sectionGap;
+    const headingTop = y;
+    plan.push({
+      kind: "text",
+      x: left,
+      y: firstBaseline(headingTop, tier.heading, tier.headingLh),
+      font: fonts.bold,
+      size: tier.heading,
+      color: ACCENT,
+      text: SECTION_LABELS[key],
+    });
+    const ruleY = headingTop + lineH(tier.heading, tier.headingLh) + tier.headingPadB;
+    plan.push({ kind: "rule", y: ruleY, thickness: tier.ruleTh, color: ACCENT, x0: left, x1: right });
+    y = ruleY + tier.ruleTh + tier.sectionPadT;
+
+    switch (key) {
+      case "summary": {
+        const lines = wrapLine(fonts.reg, cv.summary.trim(), tier.base, contentW);
+        for (const line of lines) y += pushText(left, y, fonts.reg, tier.base, BODY, line, tier.baseLh);
+        break;
+      }
+      case "experience": {
+        exp.forEach((x, i) => {
+          const job = x.jobTitle.trim();
+          const company = x.company.trim();
+          const bullets = [
+            ...x.responsibilities,
+            ...(s.entries.showAchievements ? x.achievements : []),
+          ];
+          y += entry(job || company || "Erfahrung", job && company ? company : undefined,
+            s.entries.showDates ? dateRange(x.start, x.end, x.isCurrent) || undefined : undefined,
+            s.entries.showLocation ? x.location.trim() || undefined : undefined, bullets, y);
+          if (i < exp.length - 1) y += tier.spaceBetween;
+        });
+        break;
+      }
+      case "education": {
+        edu.forEach((e, i) => {
+          const degree = e.degree.trim();
+          const institution = e.institution.trim();
+          let h = entry(
+            degree || institution || "Bildung",
+            degree && institution ? institution : undefined,
+            s.entries.showDates ? dateRange(e.start, e.end) || undefined : undefined,
+            s.entries.showLocation ? e.location.trim() || undefined : undefined,
+            [],
+            y,
+          );
+          if (e.description.trim()) h += desc(e.description.trim(), tier.base, fonts.reg, META, tier.baseLh, tier.descGap, y + h);
+          y += h;
+          if (i < edu.length - 1) y += tier.spaceBetween;
+        });
+        break;
+      }
+      case "skills":
+        y += columnBullets(skills, tier.skillsGap, y);
+        break;
+      case "languages":
+        y += languageGrid(langs, y);
+        break;
+      case "certificates": {
+        // The full verified fact set per certificate (name + issuer + date)
+        // stays in the document — nothing is dropped for the two-column
+        // presentation.
+        y += columnBullets(
+          certs.map((c) => [c.name.trim(), c.issuer.trim(), c.date.trim()].filter(Boolean).join(" — ") || "—"),
+          tier.skillsGap,
+          y,
+        );
+        break;
+      }
+      case "projects": {
+        projects.forEach((p, i) => {
+          const nameP = p.name.trim();
+          let h = entry(
+            nameP || "Projekt",
+            p.role.trim() || undefined,
+            s.entries.showDates ? p.date.trim() || undefined : undefined,
+            undefined,
+            [],
+            y,
+          );
+          if (p.description.trim()) h += desc(p.description.trim(), tier.base, fonts.reg, META, tier.baseLh, tier.descGap, y + h);
+          if (p.technologies.trim()) h += desc(p.technologies.trim(), tier.contact, fonts.obi, META, 1.3, tier.techGap, y + h);
+          y += h;
+          if (i < projects.length - 1) y += tier.spaceBetween;
+        });
+        break;
+      }
+      case "interests": {
+        const lines = wrapLine(fonts.reg, interests.join(", "), tier.base, contentW);
+        for (const line of lines) y += pushText(left, y, fonts.reg, tier.base, BODY, line, tier.baseLh);
+        break;
+      }
+    }
+
+    // Keep heading + rule + the first content line(s) together (no orphan
+    // headings across page breaks). Item count of one first content row:
+    const firstRowItems =
+      key === "experience" || key === "education" || key === "projects"
+        ? 4 // lead chunks (≤2) + dates + location
+        : key === "languages"
+          ? Math.min(3, langs.length) * 2 // language + level per column
+          : key === "skills" || key === "certificates"
+            ? 4 // bullet dot + text per column (2 columns)
+            : 1; // summary / interests line
+    const head = plan[startIdx];
+    if (head.kind === "text") head.keepThrough = Math.min(plan.length, startIdx + 2 + firstRowItems);
+  }
+
+  const available = A4_HEIGHT - tier.mt - tier.mb;
+  return { tier, plan, totalH: y, fits: y <= available };
+}
+
+/* ------------------------------------------------------------------ */
+/* Icon drawing (carried over from the previous renderer, re-coloured) */
+/* ------------------------------------------------------------------ */
+
+/** Material "call" handset, 24px design box → scaled to the icon size. */
 function scalePath(d: string, k: number): string {
   return d.replace(/-?\d*\.?\d+/g, (n) => {
     const v = Number(n) * k;
     return Number.isInteger(v) ? String(v) : v.toFixed(2);
   });
 }
-
-/** Material "call" handset, 24px → ≈6.9pt. */
 const ICON_PHONE_PATH = scalePath(
   "M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z",
   0.29,
 );
 
-function drawPinIcon(page: PDFPage, x: number, y: number): void {
-  const cx = x + 3.5;
-  page.drawCircle({ x: cx, y: y + 4.1, size: 3.1, color: INK });
-  page.drawSvgPath("M1.2 2.6 L5.8 2.6 L3.5 -0.1 Z", { x, y, color: INK });
-  page.drawCircle({ x: cx, y: y + 4.1, size: 1.3, color: rgb(1, 1, 1) });
-}
-
-function drawMailIcon(page: PDFPage, x: number, y: number): void {
-  page.drawRectangle({ x, y, width: 8.4, height: 5.8, color: INK });
-  page.drawLine({ start: { x: x + 0.7, y: y + 5.1 }, end: { x: x + 4.2, y: y + 2.4 }, thickness: 0.9, color: rgb(1, 1, 1) });
-  page.drawLine({ start: { x: x + 4.2, y: y + 2.4 }, end: { x: x + 7.7, y: y + 5.1 }, thickness: 0.9, color: rgb(1, 1, 1) });
-}
-
-function drawPhoneIcon(page: PDFPage, x: number, y: number): void {
-  page.drawSvgPath(ICON_PHONE_PATH, { x, y, color: INK });
-}
-
-function drawLinkedInIcon(page: PDFPage, x: number, y: number, inFont: PDFFont): void {
-  page.drawRectangle({ x, y, width: 7.4, height: 7.4, color: INK });
-  const w = inFont.widthOfTextAtSize("in", 5.4);
-  page.drawText("in", { x: x + (7.4 - w) / 2, y: y + 1.7, size: 5.4, font: inFont, color: rgb(1, 1, 1) });
-}
-
-type ContactIconKind = "pin" | "mail" | "phone" | "linkedin" | null;
-const ICON_W = 10.5; // icon box + gap to the following text
-
-function drawContactIcon(page: PDFPage, kind: ContactIconKind, x: number, baselineY: number, inFont: PDFFont): void {
+/** Draw a contact icon at (x, baseline) — baseline-anchored, scaled to
+ *  `size`, the way the original renderer did. */
+function drawContactIcon(page: PDFPage, kind: IconKind, x: number, baseline: number, size: number, inFont: PDFFont): void {
+  const k = size / 8.25;
   switch (kind) {
     case "pin":
-      drawPinIcon(page, x, baselineY - 0.5);
+      page.drawCircle({ x: x + 3.5 * k, y: baseline - 0.5 * k + 4.1 * k, size: 3.1 * k * 2, color: BODY });
+      page.drawSvgPath(scalePath("M1.2 2.6 L5.8 2.6 L3.5 -0.1 Z", k), { x, y: baseline - 0.5 * k, color: BODY });
+      page.drawCircle({ x: x + 3.5 * k, y: baseline - 0.5 * k + 4.1 * k, size: 1.3 * k * 2, color: rgb(1, 1, 1) });
       break;
     case "mail":
-      drawMailIcon(page, x, baselineY + 0.2);
+      page.drawRectangle({ x, y: baseline + 0.2 * k, width: 8.4 * k, height: 5.8 * k, color: BODY });
+      page.drawLine({ start: { x: x + 0.7 * k, y: baseline + (0.2 + 5.1) * k }, end: { x: x + 4.2 * k, y: baseline + (0.2 + 2.4) * k }, thickness: 0.9 * k, color: rgb(1, 1, 1) });
+      page.drawLine({ start: { x: x + 4.2 * k, y: baseline + (0.2 + 2.4) * k }, end: { x: x + 7.7 * k, y: baseline + (0.2 + 5.1) * k }, thickness: 0.9 * k, color: rgb(1, 1, 1) });
       break;
     case "phone":
-      drawPhoneIcon(page, x, baselineY - 0.3);
+      page.drawSvgPath(ICON_PHONE_PATH, { x, y: baseline - 0.3 * k, color: BODY });
       break;
     case "linkedin":
-      drawLinkedInIcon(page, x, baselineY - 0.4, inFont);
+      page.drawRectangle({ x, y: baseline - 0.4 * k, width: 7.4 * k, height: 7.4 * k, color: BODY });
+      const w = inFont.widthOfTextAtSize("in", 5.4 * k);
+      page.drawText("in", { x: x + ((7.4 * k - w) / 2), y: baseline - 0.4 * k + 1.7 * k, size: 5.4 * k, font: inFont, color: rgb(1, 1, 1) });
       break;
-    default:
+    case "globe": {
+      const c = 3.7 * k;
+      const cx = x + c;
+      const cy = baseline + c - 0.5 * k;
+      page.drawCircle({ x: cx, y: cy, size: c * 2, color: BODY });
+      page.drawCircle({ x: cx, y: cy, size: c * 2 * 0.62, color: rgb(1, 1, 1) });
+      page.drawCircle({ x: cx, y: cy, size: c * 2 * 0.3, color: BODY });
       break;
+    }
   }
 }
 
 /* ------------------------------------------------------------------ */
-/* Renderer                                                            */
+/* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
 export interface GenerateCvPdfOptions {
@@ -204,390 +752,134 @@ export interface GenerateCvPdfOptions {
   photoDataUrl?: string | null;
 }
 
-interface PhotoBox {
-  img: PDFImage;
-  w: number;
-  h: number;
-}
-
 /** Render the given (already user-reviewed) CV document to A4 PDF bytes. */
 export async function generateCvPdf(cv: CvDocument, options: GenerateCvPdfOptions = {}): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.setTitle("Lebenslauf");
   if (cv.personal.fullName) doc.setAuthor(cv.personal.fullName);
 
-  const serif = await doc.embedFont(StandardFonts.TimesRoman);
-  const serifBold = await doc.embedFont(StandardFonts.TimesRomanBold);
-  const serifItalic = await doc.embedFont(StandardFonts.TimesRomanItalic);
-  const sansBold = await doc.embedFont(StandardFonts.HelveticaBold); // "in" glyph only
+  const fonts: Fonts = {
+    reg: await doc.embedFont(StandardFonts.Helvetica),
+    bold: await doc.embedFont(StandardFonts.HelveticaBold),
+    obi: await doc.embedFont(StandardFonts.HelveticaOblique),
+  };
 
-  // Optional candidate photograph — standard German-CV position, top-right,
-  // aspect preserved inside a fixed box (consistent sizing across all
-  // companies, never stretched). An unreadable image never fails the
-  // render; the CV simply appears without it.
+  // Defensive re-sanitization (documents arrive from the DB; a valid
+  // document is unchanged — idempotent).
+  const clean = sanitizeCvDocument(cv) ?? cv;
+
+  // Optional candidate photograph — the standard German-CV position
+  // (header's upper-right, aspect preserved, never stretched). An
+  // unreadable image never fails the render; the CV simply appears
+  // without it.
   const photoSource =
     options.photoDataUrl ??
-    (cv.personal.photo?.startsWith("data:image/") ? cv.personal.photo : null);
-  let photo: PhotoBox | null = null;
+    (clean.personal.photo?.startsWith("data:image/") ? clean.personal.photo : null);
+  let img: PDFImage | null = null;
   const photoMatch = (photoSource ?? "").match(/^data:image\/(png|jpe?g);base64,([A-Za-z0-9+/=]+)$/);
   if (photoMatch) {
     try {
       const bytes = Uint8Array.from(atob(photoMatch[2]), (c) => c.charCodeAt(0));
-      const img = photoMatch[1] === "png" ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
-      let w = PHOTO_W_MAX;
-      let h = (w * img.height) / img.width;
-      if (h > PHOTO_H_MAX) {
-        h = PHOTO_H_MAX;
-        w = (h * img.width) / img.height;
-      }
-      photo = { img, w, h };
+      img = photoMatch[1] === "png" ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
     } catch {
-      photo = null;
+      img = null;
     }
   }
 
+  // Measure every tier, then draw the largest one that fits a single page.
+  // The densest tier is the fallback for overflowing profiles (all content
+  // is still rendered — nothing is deleted, nothing is clipped).
+  let layout: Layout | null = null;
+  for (const tier of TIERS) {
+    const box = img
+      ? (() => {
+          let w = tier.photoW;
+          let h = (w * img.height) / img.width;
+          if (h > tier.photoH) {
+            h = tier.photoH;
+            w = (h * img.width) / img.height;
+          }
+          return { img, w, h };
+        })()
+      : null;
+    layout = buildLayout(clean, fonts, box, tier);
+    if (layout.fits) break; // the most comfortable tier that fits one page
+  }
+  const chosen = layout!;
+
   // ------------------------------------------------------------------
-  // Page + cursor state
+  // Draw the plan (page 1 = the header page; further pages only on
+  // overflow, with a running header + subtle page numbers).
   // ------------------------------------------------------------------
   let page = doc.addPage([A4_WIDTH, A4_HEIGHT]);
-  const TOP = A4_HEIGHT - MARGIN_TOP;
-  let y = TOP;
+  const t = chosen.tier;
+  const runningLabel = clean.personal.fullName ? `${clean.personal.fullName} — Lebenslauf` : "Lebenslauf";
 
-  /** Running header on continuation pages (name + document type + rule). */
-  const runningHeader = () => {
-    const label = cv.personal.fullName ? `${cv.personal.fullName} — Lebenslauf` : "Lebenslauf";
-    page.drawText(label, { x: MARGIN_X, y: y - 10, size: SIZE_PAGE_NO, font: serif, color: MUTED });
-    page.drawLine({
-      start: { x: MARGIN_X, y: y - 16 },
-      end: { x: RIGHT, y: y - 16 },
-      thickness: 0.7,
-      color: rgb(0.6, 0.62, 0.66),
-    });
-    y -= 26;
-  };
-  const newPage = () => {
+  // Plan items carry `y` as an absolute offset from PAGE-1's content top.
+  // On continuation pages we re-baseline against `pageStartY` (the offset of
+  // the first item drawn on the page) so every item lands at the right place.
+  let contentTop = A4_HEIGHT - t.mt; // page coordinate the current origin maps to
+  let pageStartY = 0;
+
+  const startNewPage = (originY: number): void => {
     page = doc.addPage([A4_WIDTH, A4_HEIGHT]);
-    y = TOP;
-    runningHeader();
-  };
-  const ensure = (height: number) => {
-    if (y - height < MARGIN_BOTTOM) newPage();
-  };
-
-  /** Draw at the CURRENT baseline without advancing the cursor (used for
-   *  the right-aligned date/location partners of lead lines). */
-  const drawAt = (text: string, font: PDFFont, size: number, opts: { x?: number; right?: boolean; color?: Color } = {}) => {
-    if (!text) return;
-    ensure(size + 4);
-    const width = font.widthOfTextAtSize(text, size);
-    page.drawText(text, {
-      x: opts.x ?? (opts.right ? RIGHT - width : MARGIN_X),
-      y,
-      size,
-      font,
-      color: opts.color ?? INK,
+    contentTop = A4_HEIGHT - t.mt;
+    page.drawText(runningLabel, { x: t.ml, y: contentTop - 10, size: 8.5, font: fonts.reg, color: META });
+    page.drawLine({
+      start: { x: t.ml, y: contentTop - 16 },
+      end: { x: A4_WIDTH - t.ml, y: contentTop - 16 },
+      thickness: 0.7,
+      color: ACCENT,
     });
+    contentTop -= 26; // leave room for the running header
+    pageStartY = originY;
   };
 
-  const draw = (
-    text: string,
-    font: PDFFont,
-    size: number,
-    opts: { x?: number; color?: Color; lineGap?: number } = {},
-  ): void => {
-    if (!text) return;
-    drawAt(text, font, size, { x: opts.x, color: opts.color });
-    y -= size + 4;
-    if (opts.lineGap) y -= opts.lineGap;
-  };
+  /** Map a plan offset (from page-1 top) to the current page's baseline. */
+  const yOf = (itemY: number): number => contentTop - (itemY - pageStartY);
 
-  const drawWrapped = (text: string, font: PDFFont, size: number, opts: { color?: Color; indent?: number; lineGap?: number } = {}) => {
-    for (const line of wrapLine(font, text, size, CONTENT_WIDTH - (opts.indent ?? 0))) {
-      draw(line, font, size, { x: MARGIN_X + (opts.indent ?? 0), color: opts.color, lineGap: opts.lineGap ?? 1 });
-    }
-  };
+  const descentOf = (item: PlanItem): number =>
+    item.kind === "text" ? item.size * 0.28 : item.kind === "photo" ? item.h : item.kind === "rule" ? item.thickness : item.size;
 
-  // ------------------------------------------------------------------
-  // Header — top-anchored: centered name + italic title + icon contact
-  // row (balanced within the width left of the photo), photo top-right.
-  // ------------------------------------------------------------------
-  const headerWidth = photo ? CONTENT_WIDTH - photo.w - PHOTO_GAP : CONTENT_WIDTH;
-
-  const name = cv.personal.fullName.trim();
-  const title = cv.personal.professionalTitle.trim();
-  const nameLines = name ? wrapLine(serifBold, name, SIZE_NAME, headerWidth) : [];
-  const titleLines = title ? wrapLine(serifItalic, title, SIZE_TITLE, headerWidth) : [];
-
-  // Contact items: the four icon items (reference order), then any extra
-  // facts as plain text — only values the candidate already provided.
-  const per = cv.personal;
-  const iconItems: Array<{ kind: ContactIconKind; text: string }> = [];
-  if (per.location.trim()) iconItems.push({ kind: "pin", text: per.location.trim() });
-  if (per.email.trim()) iconItems.push({ kind: "mail", text: per.email.trim() });
-  if (per.phone.trim()) iconItems.push({ kind: "phone", text: per.phone.trim() });
-  if (per.linkedin.trim()) iconItems.push({ kind: "linkedin", text: per.linkedin.trim() });
-  const extras = [
-    per.website.trim(),
-    per.dateOfBirth.trim() ? `Geburtsdatum: ${per.dateOfBirth.trim()}` : "",
-    per.nationality.trim() ? `Staatsangehörigkeit: ${per.nationality.trim()}` : "",
-    per.availability.trim() ? `Verfügbar: ${per.availability.trim()}` : "",
-  ].filter(Boolean);
-  if (extras.length) iconItems.push({ kind: null, text: extras.join("   ·   ") });
-
-  // Pack the items into lines (an icon never splits from its text);
-  // each line is centered as a group.
-  const itemW = (it: { kind: ContactIconKind; text: string }) =>
-    (it.kind ? ICON_W : 0) + serif.widthOfTextAtSize(it.text, SIZE_CONTACT);
-  const CONTACT_GAP = 16;
-  const packedLines: Array<Array<{ kind: ContactIconKind; text: string; w: number }>> = [];
-  {
-    let line: Array<{ kind: ContactIconKind; text: string; w: number }> = [];
-    let lineW = 0;
-    for (const it of iconItems) {
-      const w = itemW(it);
-      if (line.length && lineW + CONTACT_GAP + w > headerWidth) {
-        packedLines.push(line);
-        line = [];
-        lineW = 0;
+  // Keep-together chunks (heading + rule + first content line) are checked
+  // as a unit at their head; items inside a checked chunk only draw.
+  let checkedChunkUntil = -1;
+  for (let idx = 0; idx < chosen.plan.length; idx += 1) {
+    const item = chosen.plan[idx];
+    if (idx >= checkedChunkUntil) {
+      if (item.kind === "text" && typeof item.keepThrough === "number") {
+        const last = chosen.plan[Math.min(item.keepThrough, chosen.plan.length - 1)];
+        if (yOf(last.y) - descentOf(last) < t.mb) startNewPage(item.y);
+        checkedChunkUntil = Math.min(item.keepThrough, chosen.plan.length - 1) + 1;
+      } else if (yOf(item.y) - descentOf(item) < t.mb) {
+        startNewPage(item.y);
       }
-      line.push({ ...it, w });
-      lineW += (line.length > 1 ? CONTACT_GAP : 0) + w;
     }
-    if (line.length) packedLines.push(line);
-  }
-
-  // Draw top-anchored; `hy` = the current top of the next line.
-  let hy = TOP;
-  const centerAt = (text: string, font: PDFFont, size: number, baseline: number) => {
-    const w = font.widthOfTextAtSize(text, size);
-    page.drawText(text, { x: MARGIN_X + (headerWidth - w) / 2, y: baseline, size, font, color: INK });
-  };
-  for (const line of nameLines) {
-    const baseline = hy - 20;
-    centerAt(line, serifBold, SIZE_NAME, baseline);
-    hy = baseline - 10;
-  }
-  if (titleLines.length) hy -= 3;
-  for (const line of titleLines) {
-    const baseline = hy - 13;
-    centerAt(line, serifItalic, SIZE_TITLE, baseline);
-    hy = baseline - 7;
-  }
-  if (packedLines.length) hy -= 8;
-  for (const items of packedLines) {
-    const lineW = items.reduce((s, it) => s + it.w, 0) + (items.length - 1) * CONTACT_GAP;
-    let x = MARGIN_X + (headerWidth - lineW) / 2;
-    const baseline = hy - 8;
-    for (const it of items) {
-      if (it.kind) drawContactIcon(page, it.kind, x, baseline, sansBold);
-      page.drawText(it.text, { x: x + (it.kind ? ICON_W : 0), y: baseline, size: SIZE_CONTACT, font: serif, color: INK });
-      x += it.w + CONTACT_GAP;
-    }
-    hy = baseline - 6;
-  }
-  const headerTextBottom = TOP - hy + 4;
-
-  if (photo) {
-    page.drawImage(photo.img, { x: RIGHT - photo.w, y: TOP - photo.h, width: photo.w, height: photo.h });
-  }
-
-  // Header rule — BELOW the taller of the centered text block and the
-  // photo (never crossing the photograph). The body cursor starts below
-  // the rule; the whole header always fits on the first page.
-  const ruleY = TOP - Math.max(headerTextBottom, photo?.h ?? 0) - 12;
-  page.drawLine({ start: { x: MARGIN_X, y: ruleY }, end: { x: RIGHT, y: ruleY }, thickness: 1, color: BLACK_RULE });
-  y = ruleY - 12;
-
-  // ------------------------------------------------------------------
-  // Section chrome + entry + two-column building blocks
-  // ------------------------------------------------------------------
-  const sectionTitle = (label: string) => {
-    y -= 12;
-    // Reserve heading + rule + at least one content line (no orphan titles).
-    ensure(44);
-    page.drawText(label.toUpperCase(), { x: MARGIN_X, y, size: SIZE_HEADING, font: serifBold, color: INK });
-    // The rule sits directly under the heading, as in the reference.
-    const ruleY = y - 11;
-    page.drawLine({ start: { x: MARGIN_X, y: ruleY }, end: { x: RIGHT, y: ruleY }, thickness: 1, color: BLACK_RULE });
-    y = ruleY - 9;
-  };
-
-  const dateRange = (start: string, end: string, isCurrent?: boolean): string => {
-    const e = isCurrent ? (end || "heute") : end;
-    if (!start && !e) return "";
-    return [start, e].filter(Boolean).join(" – ");
-  };
-
-  /** One entry: bold lead (left) + right-aligned date on the same
-   *  baseline; italic sub (left) + right-aligned location on the same
-   *  baseline; "•" bullets with hanging indent. The two header lines are
-   *  kept together across page breaks. */
-  const entry = (lead: string, sub: string, date: string, location: string, bullets: string[]) => {
-    const bulletLines = bullets.filter((b) => b.trim()).flatMap((b) => wrapLine(serif, b, SIZE_BODY, CONTENT_WIDTH - 15));
-    // Reserve the wider of date / location when wrapping, so the lead and
-    // sub lines can never collide with their right-aligned partners.
-    const reserve = Math.max(date ? serif.widthOfTextAtSize(date, SIZE_META) : 0, location ? serif.widthOfTextAtSize(location, SIZE_META) : 0);
-    const leadW = reserve ? CONTENT_WIDTH - reserve - 20 : CONTENT_WIDTH;
-    const leadLines = wrapLine(serifBold, lead, SIZE_LEAD, leadW);
-    const subLines = sub ? wrapLine(serifItalic, sub, SIZE_SUB, leadW) : [];
-
-    // Keep the entry header (lead + sub lines) atomic.
-    const headerH = leadLines.length * LH_LEAD + subLines.length * LH_SUB;
-    if (headerH + LH_BODY <= PAGE_CONTENT_HEIGHT) ensure(headerH + LH_BODY);
-
-    leadLines.forEach((line, i) => {
-      drawAt(line, serifBold, SIZE_LEAD, {});
-      if (i === 0 && date) drawAt(date, serif, SIZE_META, { right: true, color: MUTED });
-      y -= LH_LEAD;
-    });
-    subLines.forEach((line, i) => {
-      drawAt(line, serifItalic, SIZE_SUB, { color: INK });
-      if (i === 0 && location) drawAt(location, serif, SIZE_META, { right: true, color: MUTED });
-      y -= LH_SUB;
-    });
-    for (const line of bulletLines) {
-      ensure(LH_BODY);
-      drawAt("•", serif, SIZE_BODY, { x: MARGIN_X + 1 });
-      drawAt(line, serif, SIZE_BODY, { x: MARGIN_X + 14 });
-      y -= LH_BODY;
-    }
-    y -= 9;
-  };
-
-  /** Balanced two-column "•" bullet list (first half left, rest right).
-   *  Wrapped items occupy as many rows as needed; rows stay aligned. */
-  const twoColumnBullets = (leftItems: string[], rightItems: string[]) => {
-    const colW = (CONTENT_WIDTH - COL_GUTTER) / 2;
-    const wrapItems = (items: string[]) => items.map((it) => wrapLine(serif, it, SIZE_BODY, colW - 15));
-    const leftLines = wrapItems(leftItems);
-    const rightLines = wrapItems(rightItems);
-    const rows = Math.max(
-      leftLines.reduce((s, l) => s + l.length, 0),
-      rightLines.reduce((s, l) => s + l.length, 0),
-    );
-    let lIdx = 0;
-    let lNo = 0;
-    let rIdx = 0;
-    let rNo = 0;
-    const drawSide = (lines: string[][], x0: number): void => {
-      const item = lines[lines === leftLines ? lIdx : rIdx];
-      const no = lines === leftLines ? lNo : rNo;
-      if (!item || no >= item.length) return;
-      const first = no === 0;
-      drawAt("•", serif, SIZE_BODY, { x: x0 + 1 });
-      drawAt(item[no], serif, SIZE_BODY, { x: x0 + (first ? 14 : 12) });
-      let nextNo = no + 1;
-      let nextIdx = lines === leftLines ? lIdx : rIdx;
-      if (nextNo >= item.length) {
-        nextNo = 0;
-        nextIdx += 1;
-      }
-      if (lines === leftLines) {
-        lIdx = nextIdx;
-        lNo = nextNo;
-      } else {
-        rIdx = nextIdx;
-        rNo = nextNo;
-      }
-    };
-    for (let row = 0; row < rows; row += 1) {
-      ensure(LH_COL);
-      drawSide(leftLines, MARGIN_X);
-      drawSide(rightLines, MARGIN_X + colW + COL_GUTTER);
-      y -= LH_COL;
-    }
-    y -= 4;
-  };
-
-  const splitColumns = (items: string[]) => {
-    const mid = Math.ceil(items.length / 2);
-    return [items.slice(0, mid), items.slice(mid)] as const;
-  };
-
-  // ---- 1 · Profil ---------------------------------------------------------
-  if (cv.summary.trim()) {
-    sectionTitle("Profil");
-    drawWrapped(cv.summary.trim(), serif, SIZE_BODY, { lineGap: 1.5 });
-  }
-
-  // ---- 2 · Berufserfahrung --------------------------------------------------
-  const exp = cv.experience.filter(experienceVisible);
-  if (exp.length) {
-    sectionTitle("Berufserfahrung & Praktika");
-    for (const x of exp) {
-      const job = x.jobTitle.trim();
-      const company = x.company.trim();
-      entry(job || company || "Erfahrung", job && company ? company : "", dateRange(x.start, x.end, x.isCurrent), x.location, [
-        ...x.responsibilities,
-        ...x.achievements,
-      ]);
+    const Y = yOf(item.y);
+    switch (item.kind) {
+      case "text":
+        page.drawText(item.text, { x: item.x, y: Y, size: item.size, font: item.font, color: item.color });
+        break;
+      case "icon":
+        drawContactIcon(page, item.icon, item.x, Y, item.size, fonts.bold);
+        break;
+      case "rule":
+        page.drawLine({ start: { x: item.x0, y: Y }, end: { x: item.x1, y: Y }, thickness: item.thickness, color: item.color });
+        break;
+      case "photo":
+        page.drawImage(item.img, { x: item.x, y: Y - item.h, width: item.w, height: item.h });
+        break;
     }
   }
 
-  // ---- 3 · Ausbildung / Bildung -------------------------------------------------
-  const edu = cv.education.filter(educationVisible);
-  if (edu.length) {
-    sectionTitle("Ausbildung & Bildung");
-    for (const e of edu) {
-      const degree = e.degree.trim();
-      const institution = e.institution.trim();
-      entry(degree || institution || "Bildung", degree && institution ? institution : "", dateRange(e.start, e.end), e.location, e.description ? [e.description] : []);
-    }
-  }
-
-  // ---- 4 · Kenntnisse & Fähigkeiten (two-column bullets) -------------------------
-  const skills = cv.skills.map((s) => s.trim()).filter(Boolean);
-  if (skills.length) {
-    sectionTitle("Kenntnisse & Fähigkeiten");
-    const [sl, sr] = splitColumns(skills);
-    twoColumnBullets(sl, sr);
-  }
-
-  // ---- 5 · Zertifikate & Qualifikationen (two-column bullets) ---------------------
-  const certs = cv.certificates.filter(certificateVisible);
-  if (certs.length) {
-    sectionTitle("Zertifikate & Qualifikationen");
-    const certTexts = certs.map((c) => [c.name, c.issuer, c.date].filter(Boolean).join(" — "));
-    const [cl, cr] = splitColumns(certTexts);
-    twoColumnBullets(cl, cr);
-  }
-
-  // ---- 6 · Sprachen (two-column bullets) ---------------------------------------------
-  const langs = cv.languages.filter(languageVisible);
-  if (langs.length) {
-    sectionTitle("Sprachen");
-    const langTexts = langs.map((l) => [l.language, l.level].filter(Boolean).join(" – "));
-    const [ll, lr] = splitColumns(langTexts);
-    twoColumnBullets(ll, lr);
-  }
-
-  // ---- Projekte (beyond the reference's six sections — only when present) -----------
-  const projects = cv.projects.filter(projectVisible);
-  if (projects.length) {
-    sectionTitle("Projekte");
-    for (const x of projects) {
-      const nameP = x.name.trim();
-      const roleTech = [x.role.trim(), x.technologies.trim()].filter(Boolean).join(" · ");
-      entry(nameP || "Projekt", nameP && roleTech ? roleTech : "", x.date.trim(), "", x.description ? [x.description] : []);
-    }
-  }
-
-  // ---- Interessen -----------------------------------------------------------------------
-  const interests = cv.interests.map((i) => i.trim()).filter(Boolean);
-  if (interests.length) {
-    sectionTitle("Interessen");
-    const [il, ir] = splitColumns(interests);
-    twoColumnBullets(il, ir);
-  }
-
-  // ---- subtle page numbers (multi-page documents only) ---------------------------------
+  // Subtle page numbers (multi-page documents only).
   const pageCount = doc.getPageCount();
   if (pageCount > 1) {
     for (let i = 0; i < pageCount; i += 1) {
       const pg = doc.getPage(i);
       const label = `Seite ${i + 1} von ${pageCount}`;
-      const w = serif.widthOfTextAtSize(label, SIZE_PAGE_NO);
-      pg.drawText(label, { x: (A4_WIDTH - w) / 2, y: MARGIN_BOTTOM - 18, size: SIZE_PAGE_NO, font: serif, color: MUTED });
+      const w = fonts.reg.widthOfTextAtSize(label, 8.5);
+      pg.drawText(label, { x: (A4_WIDTH - w) / 2, y: t.mb - 10, size: 8.5, font: fonts.reg, color: META });
     }
   }
 

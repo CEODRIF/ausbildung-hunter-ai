@@ -17,6 +17,7 @@
  *    infrastructure without a parallel data model.
  */
 import { z } from "zod";
+import { renderGreeting } from "@/lib/personalization";
 import {
   adAnalysisSchema,
   adExtractSchema,
@@ -70,6 +71,14 @@ export const autoBewerbLetterSchema = z.object({
   text: z.string().trim().min(20).max(16_000),
   /** Tone used at generation (display only). */
   tone: z.enum(["professional", "formal", "engaged"]).default("professional"),
+  /**
+   * Trace: the ORIGINAL template (Bewerbungsvorlagen_50, page 1..50) this
+   * letter was generated FROM. Present on every template-based letter;
+   * optional for backward compatibility with pre-template rows.
+   */
+  templateId: z.string().max(120).optional(),
+  templatePage: z.number().int().min(1).max(50).optional(),
+  templateTitle: z.string().max(300).optional(),
 });
 export type AutoBewerbLetter = z.infer<typeof autoBewerbLetterSchema>;
 
@@ -171,21 +180,29 @@ export function substituteEmailTokens(
   });
 }
 
-/** The German salutation for a recipient: a verified contact person when the
- *  ad provides one, otherwise the neutral default. */
+/** The German salutation for a recipient — the platform's single greeting
+ *  source (renderGreeting): an explicit "Herr …" / "Frau …" from the ad
+ *  renders the proper salutation ("Sehr geehrter Herr …," /
+ *  "Sehr geehrte Frau …,"); anything else (incl. an ungendered name) falls
+ *  back to "Sehr geehrte Damen und Herren,". Gender is NEVER guessed. */
 export function buildAutoBewerbGreeting(contactPerson: string | null | undefined): string {
-  const name = (contactPerson ?? "").trim();
-  return name ? `Sehr geehrte/r ${name},` : "Sehr geehrte Damen und Herren,";
+  return renderGreeting(contactPerson);
 }
 
 /** The concise, professional DEFAULT e-mail template (pre-filled in the
- *  editor when the user has none yet). The subject/body are editable; the
- *  Anschreiben PDF is a SEPARATE attachment and is never inserted here. */
-export const AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT = "Bewerbung um einen Ausbildungsplatz – {{position}}";
+ *  editor when the user has none yet) — the platform's business-e-mail
+ *  house style (bewerbung-automation email-templates, "ausbildung"):
+ *  greeting token, application sentence with the company, the attachments
+ *  presented explicitly, interview request, standard closing. The subject
+ *  follows the platform convention (company-based; degrades safely when the
+ *  position is missing). The subject/body are editable; the Anschreiben
+ *  PDF is a SEPARATE attachment and is never inserted here. */
+export const AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT = "Bewerbung um einen Ausbildungsplatz bei {{company_name}}";
 export const AUTO_BEWERB_EMAIL_DEFAULT_BODY = [
-  "<p>Sehr geehrte Damen und Herren,</p>",
-  "<p>anbei sende ich Ihnen meine Bewerbungsunterlagen für den ausgeschriebenen Ausbildungsplatz.</p>",
-  "<p>Ich freue mich über Ihre Rückmeldung und die Möglichkeit eines persönlichen Gesprächs.</p>",
+  "<p>{{greeting}}</p>",
+  "<p>hiermit bewerbe ich mich um einen Ausbildungsplatz bei {{company_name}}.</p>",
+  "<p>Meine vollständigen Bewerbungsunterlagen (Lebenslauf und mein Anschreiben) finden Sie im Anhang.</p>",
+  "<p>Über die Gelegenheit, mich und meine Motivation in einem persönlichen Gespräch vorzustellen, freue ich mich sehr.</p>",
   "<p>Mit freundlichen Grüßen</p>",
   "<p>{{candidate_name}}</p>",
 ].join("\n");
@@ -360,9 +377,15 @@ export interface AutoBewerbCompanyView {
    /** Latest parsed Anschreiben (null = not generated). */
    letter: { text: string; tone: "professional" | "formal" | "engaged" } | null;
    letterVersion: number | null;
-   /** Exact filename of THIS company's individualized cover-letter PDF (null = no letter). */
-   letterPdfName: string | null;
-   latestAttempt: AutoBewerbSendAttemptRow | null;
+    /** Exact filename of THIS company's individualized cover-letter PDF (null = no letter). */
+    letterPdfName: string | null;
+    latestAttempt: AutoBewerbSendAttemptRow | null;
+    /** The ORIGINAL template (Bewerbungsvorlagen_50 page) this letter was
+     *  generated FROM (null = not yet generated or legacy letter). */
+    letterTemplate: { id: string; page: number; title: string } | null;
+    /** Live deterministic auto-selection from the 50-template library — the
+     *  top match for THIS ad (what "generate" uses when no manual choice). */
+    suggestedTemplate: { id: string; page: number; title: string } | null;
 }
 
 export interface AutoBewerbWorkspace {
