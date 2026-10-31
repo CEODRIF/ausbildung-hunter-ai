@@ -36,16 +36,38 @@ export type { AdExtract, AdAnalysis };
 // Workflow constants
 // ---------------------------------------------------------------------------
 
-/** Max companies per workflow (mirrors the studio batch cap). */
-export const AUTO_BEWERB_COMPANY_LIMIT = 10;
+/** GLOBAL per-user campaign limit: the maximum number of companies reserved
+ *  across ALL active / scheduled / queued / processing campaigns combined.
+ *  (Replaces the former per-workflow cap of 10.) A company holds one unit of
+ *  capacity while reserved; it is released the moment it is sent or safely
+ *  cancelled, so successfully-sent companies can never exceed 100 "at a time"
+ *  while their history is preserved. */
+export const AUTO_BEWERB_COMPANY_LIMIT = 100;
 /** Pseudo-attachment ids for the server-rendered per-company PDFs (the
  *  tailored CV / Anschreiben are rendered locally at send preparation —
  *  no AI, no external service — exactly like the studio's letter PDF). */
 export const AUTO_BEWERB_CV_PDF_ID = "auto-bewerb-cv-pdf";
 export const AUTO_BEWERB_LETTER_PDF_ID = "auto-bewerb-letter-pdf";
 
-/** The 10-company cap, in 1..10 slots (0 = legacy/unassigned). */
+/** The 100-company capacity token, in 1..100 slots (0 = released/unassigned).
+ *  Each reserved company holds one distinct slot; the partial unique index
+ *  (user_id, slot_no) WHERE slot_no > 0 is the database arbiter that keeps the
+ *  reserved count at or below AUTO_BEWERB_COMPANY_LIMIT even under concurrency. */
 export const AUTO_BEWERB_MAX_SLOT = AUTO_BEWERB_COMPANY_LIMIT;
+
+/** The company statuses that RESERVE one unit of the global capacity (the
+ *  "active" working set). Sent + cancelled companies are RELEASED (0 units).
+ *  Single source of truth for the capacity count + the active-list filter. */
+export const AUTO_BEWERB_RESERVED_STATUSES: readonly AutoBewerbAppStatus[] = [
+  "draft",
+  "ready",
+  "scheduled",
+  "sending",
+  "failed",
+] as const;
+export const AUTO_BEWERB_RELEASED_STATUSES: readonly AutoBewerbAppStatus[] = ["sent", "cancelled"] as const;
+export const isAutoBewerbReservedStatus = (s: string | null | undefined): boolean =>
+  s !== null && s !== undefined && (AUTO_BEWERB_RESERVED_STATUSES as readonly string[]).includes(s);
 
 // ---------------------------------------------------------------------------
 // Step 1 — analyzed CV profile (stored: auto_bewerb_profiles.extracted)
@@ -422,12 +444,42 @@ export interface AutoBewerbBatchView extends AutoBewerbBatchRow {
 export interface AutoBewerbSendStats {
   /** Attempts sent today (provider-confirmed). */
   sentToday: number;
-  /** Batches queued for the future (scheduled + waiting). */
+  /** Companies currently SCHEDULED (status "scheduled", awaiting their time). */
   scheduled: number;
-  /** Attempts currently being dispatched (sending). */
+  /** Companies/Attempts currently being dispatched (sending). */
   processing: number;
   /** All attempts created today (every outcome). */
   totalToday: number;
+  /** Companies that FAILED and remain available for retry (retryable). */
+  failed: number;
+}
+
+/** The GLOBAL 100-company capacity, always derived from persisted server data. */
+export interface AutoBewerbCapacity {
+  /** Companies reserved right now (draft + ready + scheduled + sending + failed). */
+  reserved: number;
+  /** The hard per-user limit (always 100). */
+  capacity: number;
+  /** `capacity - reserved`, clamped at 0 — the places still available. */
+  available: number;
+}
+
+/** One sent / cancelled company retained for the sending history. Automatic
+ *  removal hides it from the ACTIVE list but NEVER deletes it — this is the
+ *  preserved audit record (name, recipient, position, result, timestamp,
+ *  account, batch) required by the data-integrity contract. */
+export interface AutoBewerbSendHistoryItem {
+  companyId: string;
+  company: string;
+  position: string;
+  /** The preserved delivery destination (never invented). */
+  recipient: string | null;
+  /** Terminal company status: "sent" or "cancelled". */
+  status: "sent" | "cancelled";
+  sentAt: string | null;
+  accountId: string | null;
+  accountEmail: string | null;
+  batchId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +568,13 @@ export interface AutoBewerbWorkspace {
   batches: AutoBewerbBatchView[];
   /** Step 7 statistics, always derived from persisted queue data. */
   sendStats: AutoBewerbSendStats;
+  /** The GLOBAL 100-company capacity (persisted server counters). Optional so
+   *  pre-feature workspace snapshots and test fixtures remain valid. */
+  capacity?: AutoBewerbCapacity | null;
+  /** Preserved sending history (sent + cancelled companies), newest first.
+   *  The ACTIVE list (`companies`) excludes these; they are retained here so
+   *  automatic removal never loses the audit record. */
+  sendHistory?: AutoBewerbSendHistoryItem[];
 }
 
 /** All tables the AUTO BEWERB feature needs (the probe checks all seven). */

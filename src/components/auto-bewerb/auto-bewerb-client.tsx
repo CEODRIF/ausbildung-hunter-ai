@@ -109,6 +109,22 @@ export function AutoBewerbClient({ initial }: { initial: AutoBewerbWorkspace }) 
     };
   }, []);
 
+  // Background sync: while the page is open, silently re-read the workspace.
+  // This is what makes a successfully sent company DISAPPEAR from the active
+  // list without a manual reload — and since refreshWorkspaceAction runs the
+  // server-side due-send catch-up first, an open tab also advances scheduled
+  // sends (the cron tick covers closed tabs). Safe: refresh() is the single
+  // sync path (silent = no toast), and drafts/inputs are separate state that
+  // a refresh never touches.
+  const wsReady = ws.ready;
+  useEffect(() => {
+    if (!wsReady) return;
+    const id = setInterval(() => {
+      void refresh(true);
+    }, 15_000);
+    return () => clearInterval(id);
+  }, [wsReady, refresh]);
+
   const goToStep = useCallback((n: number) => {
     setStep(Math.min(7, Math.max(1, n)));
   }, []);

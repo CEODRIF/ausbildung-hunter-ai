@@ -9,6 +9,7 @@ import { ScheduleForm } from "@/components/schedule-form";
 import { useI18n } from "@/lib/i18n";
 import { HARD_MIN_SEND_INTERVAL_MS, MAX_SEND_INTERVAL_MS, MIN_SEND_INTERVAL_MS } from "@/lib/email-rate-limit";
 import {
+  AUTO_BEWERB_COMPANY_LIMIT,
   isValidEmail,
   resolveAutoBewerbRecipient,
   type AutoBewerbBatchStatus,
@@ -87,11 +88,12 @@ function countdownText(ms: number): string {
   return `${s}s`;
 }
 
-function StatTile({ label, value }: { label: string; value: number }) {
+function StatTile({ label, value, hint }: { label: string; value: number | string; hint?: string }) {
   return (
     <div className="rounded-2xl border border-line bg-surface-2/50 px-4 py-3">
       <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-faint">{label}</p>
       <p className="mt-1 text-2xl font-bold tabular-nums text-ink">{value}</p>
+      {hint && <p className="mt-0.5 text-[11px] font-semibold text-accent">{hint}</p>}
     </div>
   );
 }
@@ -116,6 +118,13 @@ export function Step7Review() {
   const s = ws.emailSettings; // null = legacy database (per-company rows)
   const globalComplete = Boolean(s && s.body.trim() && s.subject.trim() && s.accountId);
   const batchMode = ws.batchesSupported;
+  // GLOBAL capacity from PERSISTED server counters (fallback: the active list
+  // is the same reserved set — honest even pre-migration).
+  const cap = ws.capacity ?? {
+    reserved: ws.companies.length,
+    capacity: AUTO_BEWERB_COMPANY_LIMIT,
+    available: Math.max(0, AUTO_BEWERB_COMPANY_LIMIT - ws.companies.length),
+  };
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 30_000);
@@ -200,7 +209,9 @@ export function Step7Review() {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
-      else if (next.size < 10) next.add(id); // hard cap: 10 companies per batch
+      // Per-batch max = the global limit (server: AUTO_BEWERB_BATCH_COMPANY_LIMIT
+      // = AUTO_BEWERB_COMPANY_LIMIT); the reserved set is already bounded by it.
+      else if (next.size < AUTO_BEWERB_COMPANY_LIMIT) next.add(id);
       return next;
     });
   };
@@ -215,7 +226,7 @@ export function Step7Review() {
   const selectedViews = ws.companies.filter((c) => selected.has(c.company.id) && selectable(c));
   const readyViews = selectedViews.filter(sendable);
   const allReady = selectedViews.length > 0 && readyViews.length === selectedViews.length;
-  const atCap = selection.size >= 10;
+  const atCap = selection.size >= AUTO_BEWERB_COMPANY_LIMIT;
 
   /** One honest result line per company of the last accepted batch. */
   const resultText = (r: AutoBewerbBatchItemResult): string => {
@@ -396,7 +407,10 @@ export function Step7Review() {
                 ? t("autoBewerb.batchStatusFailed")
                 : t("autoBewerb.batchStatusCancelled");
 
-  if (ws.companies.length === 0) {
+  // Empty ONLY when there is truly nothing: no active companies, no batches
+  // and no preserved history. With automatic removal a fully-delivered
+  // campaign leaves the active list — the queue + history must still show.
+  if (ws.companies.length === 0 && ws.batches.length === 0 && (ws.sendHistory?.length ?? 0) === 0) {
     return <EmptyState title={t("autoBewerb.reviewEmpty")} body={t("autoBewerb.reviewEmptyBody")} illustration={<Send size={34} strokeWidth={1.6} />} ctaIcon={<Button variant="primary" onClick={() => goToStep(2)}>{t("autoBewerb.goToCompanies")}</Button>} />;
   }
 
@@ -637,7 +651,7 @@ export function Step7Review() {
         </SectionCard>
       )}
 
-      {/* Company review list — build the batch (cap 10) */}
+      {/* Company review list — build the batch (up to 100, bounded by the global capacity) */}
       <SectionCard title={t("autoBewerb.reviewHeading")}>
         <ul className="divide-y divide-line">
           {ws.companies.map((v) => {
@@ -773,17 +787,72 @@ export function Step7Review() {
         <p className="mt-1.5 text-xs leading-5 text-faint">{t("autoBewerb.smartSendingInterBatch")}</p>
       </SectionCard>
 
-      {/* F. Sending statistics — always derived from persisted queue data */}
-      {batchMode && (
-        <SectionCard title={t("autoBewerb.statsTitle")}>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatTile label={t("autoBewerb.statsSentToday")} value={ws.sendStats.sentToday} />
-            <StatTile label={t("autoBewerb.statsScheduled")} value={ws.sendStats.scheduled} />
-            <StatTile label={t("autoBewerb.statsProcessing")} value={ws.sendStats.processing} />
-            <StatTile label={t("autoBewerb.statsTotalToday")} value={ws.sendStats.totalToday} />
-          </div>
-        </SectionCard>
-      )}
+      {/* F. Capacity + sending statistics — always derived from PERSISTED
+          server counters (never client state, never demo numbers) */}
+      <SectionCard title={t("autoBewerb.statsTitle")}>
+        {ws.companies.length === 0 && (ws.sendHistory?.length ?? 0) > 0 && (
+          <p className="mb-3 text-xs leading-5 text-muted">{t("autoBewerb.sentAutoRemovedNote")}</p>
+        )}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <StatTile
+            label={t("autoBewerb.statsReserved")}
+            value={`${cap.reserved} / ${cap.capacity}`}
+            hint={t("autoBewerb.capacityAvailable", { count: Math.max(0, cap.available) })}
+          />
+          <StatTile label={t("autoBewerb.statsSentToday")} value={ws.sendStats.sentToday} />
+          <StatTile label={t("autoBewerb.statsScheduled")} value={ws.sendStats.scheduled} />
+          <StatTile label={t("autoBewerb.statsProcessing")} value={ws.sendStats.processing} />
+          <StatTile label={t("autoBewerb.statsFailed")} value={ws.sendStats.failed} />
+          <StatTile label={t("autoBewerb.statsTotalToday")} value={ws.sendStats.totalToday} />
+        </div>
+      </SectionCard>
+
+      {/* G. Sending history — the preserved audit records of companies that
+          auto-left the active list (sent / safely cancelled). Nothing is ever
+          cascade-deleted: name, recipient, position, result, timestamp,
+          sending account and batch id stay accessible here. */}
+      <SectionCard title={t("autoBewerb.historyTitle")}>
+        {(ws.sendHistory?.length ?? 0) === 0 ? (
+          <p className="text-sm text-muted">{t("autoBewerb.historyEmpty")}</p>
+        ) : (
+          <ul className="divide-y divide-line">
+            {(ws.sendHistory ?? []).map((h) => (
+              <li key={h.companyId} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-xs">
+                <StatusPill
+                  tone={h.status === "sent" ? "success" : "skipped"}
+                  label={h.status === "sent" ? t("autoBewerb.historyStatusSent") : t("autoBewerb.historyStatusCancelled")}
+                />
+                <span className="font-bold text-ink">{h.company}</span>
+                {h.position && <span className="text-muted">{h.position}</span>}
+                {h.recipient && (
+                  <span className="text-muted">
+                    {t("autoBewerb.recipientLabel")}: {h.recipient}
+                  </span>
+                )}
+                <span className="text-faint">
+                  {h.sentAt
+                    ? h.status === "sent"
+                      ? t("autoBewerb.historySentAt", { time: fmtTime(h.sentAt) })
+                      : t("autoBewerb.historyCancelledAt", { time: fmtTime(h.sentAt) })
+                    : h.status === "sent"
+                      ? t("autoBewerb.historySentAt", { time: "—" })
+                      : t("autoBewerb.historyCancelledAt", { time: "—" })}
+                </span>
+                {h.accountEmail && (
+                  <span className="text-faint">
+                    {t("autoBewerb.historyAccount")}: {h.accountEmail}
+                  </span>
+                )}
+                {h.batchId && (
+                  <span className="font-mono text-[10px] text-faint">
+                    {t("autoBewerb.historyBatch")} {h.batchId.slice(0, 8)}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
 
       {/* Explicit confirmation — the EXACT shared e-mail configuration +
           the verified delivery destination for EVERY recipient */}

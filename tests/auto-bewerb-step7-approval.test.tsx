@@ -122,7 +122,7 @@ function makeWs() {
     // below documents the per-company isolation path.
     batchesSupported: false,
     batches: [],
-    sendStats: { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 },
+    sendStats: { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 },
   };
 }
 

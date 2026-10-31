@@ -118,7 +118,7 @@ describe("engine — automatic confirmation on company save", () => {
     expect(db.tables.auto_bewerb_companies[0].ad_confirmed_at).toBe(before);
   });
 
-  it("keeps the 10-company limit (server-enforced)", async () => {
+  it("keeps the 100-company global limit (server-enforced)", async () => {
     for (let i = 1; i <= AUTO_BEWERB_COMPANY_LIMIT; i += 1) {
       const res = await createAutoBewerbCompany(USER, { adRaw: AD_RAW, company: `Firma ${i} GmbH`, extract: extractFor(`Firma ${i} GmbH`), analysis: null });
       expect(res.ok, `company ${i}`).toBe(true);

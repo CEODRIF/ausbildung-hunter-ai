@@ -24,6 +24,7 @@ import {
   autoBewerbLetterSchema,
   AUTO_BEWERB_COMPANY_LIMIT,
   AUTO_BEWERB_DOC_CATEGORIES,
+  AUTO_BEWERB_RESERVED_STATUSES,
   AUTO_BEWERB_TABLES,
   classifyProbeError,
   isValidEmail,
@@ -31,7 +32,9 @@ import {
   resolveAutoBewerbRecipient,
   buildAutoBewerbGreeting,
   substituteEmailTokens,
+  type AutoBewerbCapacity,
   type AutoBewerbEmailSettings,
+  type AutoBewerbSendHistoryItem,
   adExtractSchema,
   adAnalysisSchema,
   type AdAnalysis,
@@ -111,6 +114,7 @@ export type AutoBewerbErrorCode =
   | "workflow_full"
   | "company_duplicate"
   | "not_deletable"
+  | "scheduled_protected"
   | "no_template"
   | "no_subject"
   | "missing_cv"
@@ -262,10 +266,13 @@ function classifyInsertError(error: { message?: string } | null | undefined): Au
     );
   }
   // Two concurrent creates that both computed the same smallest free slot:
-  // the unique index refused the second one — a safe "workflow full", never
-  // an 11th company.
+  // the unique index refused the second one — a safe "workflow full", never an
+  // over-capacity company.
   if (/auto_bewerb_companies_user_slot_unique/i.test(msg)) {
-    return fail("workflow_full", "Der Workflow ist voll (max. 10 Unternehmen). Bitte ein Unternehmen entfernen, um Platz zu schaffen.");
+    return fail(
+      "workflow_full",
+      `Ihr globales Limit von ${AUTO_BEWERB_COMPANY_LIMIT} Unternehmen ist gerade erreicht — bitte kurz erneut versuchen.`,
+    );
   }
   // Same company added twice: the partial unique index is the arbiter.
   if (/auto_bewerb_companies_user_company_unique/i.test(msg)) {
@@ -744,21 +751,38 @@ export async function createAutoBewerbCompany(
       );
     }
   }
-  // 10-company cap (server-enforced; slot unique index is the race arbiter).
+  // GLOBAL 100-company cap (server-enforced). Only RESERVED companies count —
+  // sent + cancelled campaigns have released their capacity, so a user with 90
+  // already-sent companies still has 100 places for new ones. The slot unique
+  // index is the database race arbiter (the losing concurrent insert is mapped
+  // to "workflow full" by classifyInsertError, never an 101st company).
   const { data: slotRows, error: slotErr } = await admin
     .from("auto_bewerb_companies")
     .select("slot_no")
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .in("status", [...AUTO_BEWERB_RESERVED_STATUSES]);
   if (slotErr) return classifyInsertError(slotErr);
   const active = (slotRows ?? []) as Array<{ slot_no?: number | null }>;
   if (active.length >= AUTO_BEWERB_COMPANY_LIMIT) {
-    return fail("workflow_full", "Der Workflow ist voll (max. 10 Unternehmen). Bitte ein Unternehmen entfernen, um Platz zu schaffen.");
+    return fail(
+      "workflow_full",
+      `Ihr globales Limit von ${AUTO_BEWERB_COMPANY_LIMIT} Unternehmen ist erreicht. Bitte erst Unternehmen entfernen oder abwarten, bis versendete Bewerbungen abgeschlossen sind, um Platz zu schaffen.`,
+    );
   }
   const usedSlots = new Set(
     active.map((r) => r.slot_no).filter((s): s is number => typeof s === "number" && s >= 1 && s <= AUTO_BEWERB_COMPANY_LIMIT),
   );
   let slotNo = 1;
   while (usedSlots.has(slotNo)) slotNo += 1;
+  if (slotNo > AUTO_BEWERB_COMPANY_LIMIT) {
+    // Defensive: the count check above should have caught this, but the slot
+    // range is the final arbiter — surface a clean capacity error, never an
+    // out-of-range slot.
+    return fail(
+      "workflow_full",
+      `Ihr globales Limit von ${AUTO_BEWERB_COMPANY_LIMIT} Unternehmen ist erreicht.`,
+    );
+  }
 
   const { data, error } = await admin
     .from("auto_bewerb_companies")
@@ -785,11 +809,17 @@ export async function createAutoBewerbCompany(
   return { ok: true, value: data as unknown as AutoBewerbCompanyRow };
 }
 
+/** The user's ACTIVE working list — only RESERVED companies (draft / ready /
+ *  scheduled / sending / failed). A company leaves this list AUTOMATICALLY the
+ *  moment it is sent (or safely cancelled): its row is never deleted (history
+ *  is preserved), but it no longer reserves capacity and is filtered out here.
+ *  See getAutoBewerbSendHistory() for the retained sent/cancelled records. */
 export async function listAutoBewerbCompanies(userId: string): Promise<AutoBewerbCompanyRow[]> {
   const { data, error } = await createAdminClient()
     .from("auto_bewerb_companies")
     .select("*")
     .eq("user_id", userId)
+    .in("status", [...AUTO_BEWERB_RESERVED_STATUSES])
     .order("slot_no", { ascending: true })
     .limit(AUTO_BEWERB_COMPANY_LIMIT);
   if (error) return [];
@@ -971,6 +1001,17 @@ export async function deleteAutoBewerbCompany(
   const app = appData as unknown as AutoBewerbCompanyRow;
   if (app.status === "sending") {
     return fail("not_deletable", "Der Versand läuft gerade — bitte warten, bis er abgeschlossen ist.");
+  }
+  // Scheduled-company protection: while the scheduled application is PENDING,
+  // the company cannot be removed from the active list (its snapshot +
+  // attachments must stay intact so it can run even if the browser closes).
+  // The user must CANCEL the scheduled send first (→ "ready"), which releases
+  // the queue reservation safely, and only then delete.
+  if (app.status === "scheduled") {
+    return fail(
+      "scheduled_protected",
+      "Diese Bewerbung ist geplant. Bitte zuerst den geplanten Versand stornieren, um sie entfernen zu können.",
+    );
   }
 
   // 1) Cancel queued attempts so the scheduler can never fire.
@@ -1910,9 +1951,15 @@ export async function dispatchAutoBewerbAttempt(
       .from("auto_bewerb_send_attempts")
       .update({ status: "sent", provider_message_id: result.providerMessageId, sent_at: sentAt, next_attempt_at: null })
       .eq("id", attempt.id);
+    // Automatic removal: mark sent AND release the company's capacity token
+    // (slot_no = 0). The ab_companies_release_slot trigger does the same as a
+    // deterministic backstop; both are idempotent, so capacity is freed exactly
+    // once. The ROW stays (status "sent") — only the active list + capacity
+    // change; the historical record (name/recipient/position/result/timestamp/
+    // account/batch) is fully preserved (no cascade delete).
     await admin
       .from("auto_bewerb_companies")
-      .update({ status: "sent", sent_at: sentAt, provider_message_id: result.providerMessageId, last_failure_code: null })
+      .update({ status: "sent", slot_no: 0, sent_at: sentAt, provider_message_id: result.providerMessageId, last_failure_code: null })
       .eq("id", app.id);
     void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_application_sent", "AUTO BEWERB: Bewerbung versendet", undefined, {
       recipient: attempt.recipient_email,
@@ -1994,8 +2041,9 @@ async function terminalAttempt(
 /** A batch may start no earlier than this after the PREVIOUS batch of the
  *  SAME sending account STARTED (separate from the per-email slot). */
 export const AUTO_BEWERB_INTER_BATCH_DELAY_MS = 3 * 60_000 + 30_000;
-/** Maximum companies per batch. */
-export const AUTO_BEWERB_BATCH_COMPANY_LIMIT = 10;
+/** Maximum companies per batch — up to 100, always bounded by the GLOBAL
+ *  100-company capacity (a batch can only contain already-reserved companies). */
+export const AUTO_BEWERB_BATCH_COMPANY_LIMIT = AUTO_BEWERB_COMPANY_LIMIT;
 /** Wall budget for the inline dispatch loop of an immediately started batch
  *  (the rest completes via the cron tick / page-load catch-up — durable). */
 const BATCH_INLINE_DISPATCH_BUDGET_MS = 30_000;
@@ -2422,9 +2470,12 @@ export async function getAutoBewerbBatches(userId: string): Promise<AutoBewerbBa
 }
 
 /** Step 7 statistics — always computed from persisted queue data (never
- *  client state, never demo numbers). */
+ *  client state, never demo numbers). The pipeline states (scheduled /
+ *  processing / failed-retryable) are counted from the RESERVED companies the
+ *  user sees in the active list; the delivery counts (sentToday / totalToday)
+ *  are counted from the attempts (the durable send record). */
 export async function getAutoBewerbSendStats(userId: string): Promise<AutoBewerbSendStats> {
-  const zero: AutoBewerbSendStats = { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 };
+  const zero: AutoBewerbSendStats = { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 };
   try {
     const admin = createAdminClient();
     const todayStart = new Date();
@@ -2436,22 +2487,116 @@ export async function getAutoBewerbSendStats(userId: string): Promise<AutoBewerb
       .eq("user_id", userId)
       .limit(500);
     let sentToday = 0;
-    let processing = 0;
     let totalToday = 0;
     for (const a of (atts ?? []) as Array<{ status: string; sent_at: string | null; created_at: string }>) {
       if (a.status === "sent" && a.sent_at && a.sent_at >= todayIso) sentToday += 1;
-      if (a.status === "sending") processing += 1;
       if (a.created_at >= todayIso) totalToday += 1;
     }
-    const { data: batchRows } = await admin
-      .from("auto_bewerb_batches")
+    // Reserved companies → honest pipeline counts (sent/cancelled excluded by
+    // the status filter, exactly matching the global capacity model).
+    const { data: comps } = await admin
+      .from("auto_bewerb_companies")
       .select("status")
       .eq("user_id", userId)
-      .in("status", ["scheduled", "waiting"])
-      .limit(50);
-    return { sentToday, scheduled: (batchRows ?? []).length, processing, totalToday };
+      .in("status", [...AUTO_BEWERB_RESERVED_STATUSES]);
+    let scheduled = 0;
+    let processing = 0;
+    let failed = 0;
+    for (const c of (comps ?? []) as Array<{ status: string }>) {
+      if (c.status === "scheduled") scheduled += 1;
+      else if (c.status === "sending") processing += 1;
+      else if (c.status === "failed") failed += 1;
+    }
+    return { sentToday, scheduled, processing, totalToday, failed };
   } catch {
     return zero;
+  }
+}
+
+/** The GLOBAL 100-company capacity as PERSISTED server-side counters. The
+ *  Supabase RPC `ab_user_capacity` is the source of truth when available
+ *  (migration applied); the count query fallback keeps the same semantics on
+ *  a pre-migration database and in the in-memory test harness. */
+export async function getAutoBewerbCapacity(userId: string): Promise<AutoBewerbCapacity> {
+  const admin = createAdminClient();
+  try {
+    const { data } = await admin.rpc("ab_user_capacity", { p_user: userId });
+    const row = (Array.isArray(data) ? data[0] : data) as
+      | { reserved?: number; capacity?: number; available?: number }
+      | null
+      | undefined;
+    if (row && Number.isFinite(row.reserved) && Number.isFinite(row.capacity)) {
+      return {
+        reserved: row.reserved as number,
+        capacity: row.capacity as number,
+        available: Number.isFinite(row.available)
+          ? (row.available as number)
+          : Math.max(0, (row.capacity as number) - (row.reserved as number)),
+      };
+    }
+  } catch {
+    // Fall through to the count query (RPC missing / pre-migration).
+  }
+  const { data: rows } = await admin
+    .from("auto_bewerb_companies")
+    .select("id")
+    .eq("user_id", userId)
+    .in("status", [...AUTO_BEWERB_RESERVED_STATUSES]);
+  const reserved = (rows ?? []).length;
+  return { reserved, capacity: AUTO_BEWERB_COMPANY_LIMIT, available: Math.max(0, AUTO_BEWERB_COMPANY_LIMIT - reserved) };
+}
+
+/** The preserved SENDING HISTORY: sent + cancelled companies, newest first.
+ *  Automatic removal hides these from the ACTIVE list but never deletes them —
+ *  this is the retained audit record (name, recipient, position, delivery
+ *  result, sent timestamp, sending account, batch id) required by the
+ *  data-integrity contract. Bounded (50) and derived purely from persisted
+ *  rows. */
+export async function getAutoBewerbSendHistory(userId: string): Promise<AutoBewerbSendHistoryItem[]> {
+  try {
+    const admin = createAdminClient();
+    const { data: rows } = await admin
+      .from("auto_bewerb_companies")
+      .select("*")
+      .eq("user_id", userId)
+      .in("status", ["sent", "cancelled"])
+      .order("updated_at", { ascending: false })
+      .limit(50);
+    const companies = (rows ?? []) as unknown as AutoBewerbCompanyRow[];
+    if (companies.length === 0) return [];
+    const ids = companies.map((c) => c.id);
+    const { data: attRows } = await admin
+      .from("auto_bewerb_send_attempts")
+      .select("company_id, batch_id")
+      .in("company_id", ids)
+      .order("created_at", { ascending: false });
+    const batchIdByCompany = new Map<string, string | null>();
+    for (const a of (attRows ?? []) as Array<{ company_id: string; batch_id: string | null }>) {
+      if (a.company_id && !batchIdByCompany.has(a.company_id)) batchIdByCompany.set(a.company_id, a.batch_id ?? null);
+    }
+    const accountId = new Set(companies.map((c) => c.email_account_id).filter((x): x is string => Boolean(x)));
+    const accountEmail = new Map<string, string>();
+    if (accountId.size > 0) {
+      const { data: acctRows } = await admin.from("email_accounts").select("id, email").in("id", [...accountId]);
+      for (const r of (acctRows ?? []) as Array<{ id: string; email: string }>) accountEmail.set(r.id, r.email);
+    }
+    return companies.map((c) => {
+      const position = String(c.ad_extracted?.jobTitle || c.ad_extracted?.occupation || "").trim();
+      const accountIdValue = c.email_account_id ?? null;
+      return {
+        companyId: c.id,
+        company: c.company,
+        position,
+        recipient: c.recipient_email ?? null,
+        status: c.status === "cancelled" ? "cancelled" : "sent",
+        sentAt: c.sent_at ?? null,
+        accountId: accountIdValue,
+        accountEmail: accountIdValue ? (accountEmail.get(accountIdValue) ?? null) : null,
+        batchId: batchIdByCompany.get(c.id) ?? null,
+      };
+    });
+  } catch {
+    return [];
   }
 }
 
@@ -2613,7 +2758,9 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     candidateName: "",
     batchesSupported: false,
     batches: [],
-    sendStats: { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 },
+    sendStats: { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 },
+    capacity: { reserved: 0, capacity: AUTO_BEWERB_COMPANY_LIMIT, available: AUTO_BEWERB_COMPANY_LIMIT },
+    sendHistory: [],
   };
   if (!ready) return empty;
 
@@ -2735,10 +2882,20 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     };
   });
 
+  // GLOBAL capacity + preserved sending history (persisted server counters;
+  // never client state). Computed independently of the batch-queue probe so a
+  // pre-batch database still shows honest capacity + history.
+  let capacity: AutoBewerbCapacity = { reserved: 0, capacity: AUTO_BEWERB_COMPANY_LIMIT, available: AUTO_BEWERB_COMPANY_LIMIT };
+  let sendHistory: AutoBewerbSendHistoryItem[] = [];
+  try {
+    [capacity, sendHistory] = await Promise.all([getAutoBewerbCapacity(userId), getAutoBewerbSendHistory(userId)]);
+  } catch {
+    /* keep the honest defaults */
+  }
   // Step 7 — batch queue + statistics (graceful: pre-migration DB →
   // unsupported, everything else keeps working).
   let batches: AutoBewerbBatchView[] = [];
-  let sendStats: AutoBewerbSendStats = { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 };
+  let sendStats: AutoBewerbSendStats = { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 };
   let batchesSupported = false;
   if ((await getAutoBewerbBatchesProbe()).available) {
     batchesSupported = true;
@@ -2746,7 +2903,7 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
       [batches, sendStats] = await Promise.all([getAutoBewerbBatches(userId), getAutoBewerbSendStats(userId)]);
     } catch {
       batches = [];
-      sendStats = { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0 };
+      sendStats = { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 };
     }
   }
 
@@ -2775,5 +2932,7 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     batchesSupported,
     batches,
     sendStats,
+    capacity,
+    sendHistory,
   };
 }
