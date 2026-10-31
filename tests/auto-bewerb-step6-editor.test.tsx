@@ -1,30 +1,39 @@
 // @vitest-environment jsdom
 /**
- * AUTO BEWERB — Step 6 rich-text editor + attachment manifest (UI contract).
+ * AUTO BEWERB — Step 6 simplified e-mail preparation (UI contract).
  *
- * Contract pinned here (real components, jsdom, German = the default language):
- *   1. the editor toolbar offers paragraph format / bold / italic / underline
- *      / alignment / bulleted + numbered lists / undo / redo / insert link
- *      and the FOUR token buttons (candidate, contact, company, greeting);
- *   2. every edit and every token insertion flows to onChange (persistence);
- *   3. the manifest renders the REAL filenames, the per-company document
- *      count and the batch-wide total; missing required documents warn and
- *      open the card by default; healthy cards are collapsed;
- *   4. Step 6 pre-fills the concise default subject + body, renders the
- *      personalized + sanitized live preview and the manifest section.
+ * Reference layout pinned here (real components, jsdom, German = default):
+ *   1. Shared e-mail template — subject + rich-text editor (toolbar, tokens,
+ *      character counter), AI draft, live preview, optional shared recipient
+ *      + attach flags, explicit override warning, validation checklist.
+ *   2. Companies and attachments — read-only rows: company, position, the
+ *      company's OWN cover-letter PDF + shared supporting documents as chips,
+ *      batch-wide total in the header, NO recipient address next to each
+ *      company; a missing verified recipient warns (→ Step 2).
+ *   3. ONE global sending-account selector (for the whole batch) — real
+ *      connected accounts only (no hardcoded/fictional entries, no
+ *      credentials); selecting persists immediately through the EXISTING
+ *      settings action (saved values only — an in-progress draft is never
+ *      flushed); failures revert the selection.
+ *   4. Back / Continue navigation unchanged.
+ *
+ * Also pinned: the editor toolbar contract and its onChange flow (persistence).
  */
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import React from "react";
 import { I18nProvider } from "@/lib/i18n";
 import { EmailRichEditor } from "@/components/auto-bewerb/email-rich-editor";
 import { AttachmentManifest } from "@/components/auto-bewerb/attachment-manifest";
+import { SendingAccountSelect } from "@/components/auto-bewerb/sending-account-select";
 import { Step6Email } from "@/components/auto-bewerb/step6-email";
+import { AutoBewerbContext, StepShell } from "@/components/auto-bewerb/shared";
 import {
   AUTO_BEWERB_EMAIL_DEFAULT_BODY,
   AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT,
 } from "@/lib/auto-bewerb/schema";
+import { saveEmailSettingsAction } from "@/app/auto-bewerb/actions";
 
 vi.mock("@/app/auto-bewerb/actions", () => ({
   saveEmailTemplateAction: vi.fn(),
@@ -32,8 +41,8 @@ vi.mock("@/app/auto-bewerb/actions", () => ({
 }));
 
 /** Mutable fake workspace (per test) for the `useAutoBewerb` hook — the rest
- *  of the shared module (Note, SectionCard, companyLabel, statusPill) stays
- *  REAL so the rendered markup is the production markup. */
+ *  of the shared module (Note, SectionCard, StepShell, companyLabel,
+ *  statusPill) stays REAL so the rendered markup is the production markup. */
 const wsHolder = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock("@/components/auto-bewerb/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/auto-bewerb/shared")>();
@@ -41,6 +50,9 @@ vi.mock("@/components/auto-bewerb/shared", async (importOriginal) => {
 });
 
 const ts = "2026-12-01T00:00:00.000Z";
+
+const ACCT1 = { id: "acct1", provider: "gmail", email: "mail@example.de", is_active: true, requires_reconnect: false };
+const ACCT2 = { id: "acct2", provider: "outlook", email: "outlook@example.de", is_active: true, requires_reconnect: false };
 
 function companyRow(id: string, company: string, email: string, job: string) {
   return {
@@ -147,15 +159,21 @@ function makeWs(over: Record<string, unknown> = {}) {
       attachLetter: true,
     },
     emailSettingsSupported: true,
-    emailAccounts: [{ id: "acct1", provider: "gmail", email: "mail@example.de", is_active: true, requires_reconnect: false }],
+    emailAccounts: [ACCT1],
     candidateName: "Mustapha Drif",
     ...over,
   };
 }
 
-const setWs = (ws: unknown) => {
-  wsHolder.current = { ws, refresh: vi.fn(), notify: vi.fn(), goToStep: vi.fn() };
+let lastCtx: { ws: unknown; step: number; refresh: ReturnType<typeof vi.fn>; notify: ReturnType<typeof vi.fn>; goToStep: ReturnType<typeof vi.fn> } | null = null;
+const setWs = (ws: unknown, step = 6) => {
+  const ctx = { ws, step, refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), goToStep: vi.fn() };
+  lastCtx = ctx;
+  wsHolder.current = ctx;
 };
+
+/** The ONE global sending-account control (disclosure button, fixed label). */
+const accountButton = () => screen.getByRole("button", { name: "Versand-Konto (für alle E-Mails)" });
 
 // jsdom has no document.execCommand — a test-local stub so token insertion
 // and formatting have a visible effect (appends the inserted text).
@@ -164,10 +182,12 @@ let origExecCommand: unknown;
 afterEach(() => {
   cleanup();
   document.execCommand = origExecCommand as never;
+  vi.mocked(saveEmailSettingsAction).mockReset();
+  lastCtx = null;
 });
 
 // ---------------------------------------------------------------------------
-// The rich-text editor
+// The rich-text editor (unchanged contract)
 // ---------------------------------------------------------------------------
 
 describe("EmailRichEditor", () => {
@@ -237,11 +257,11 @@ describe("EmailRichEditor", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The attachment manifest
+// Companies and attachments panel (the simplified manifest)
 // ---------------------------------------------------------------------------
 
-describe("AttachmentManifest", () => {
-  it("lists REAL filenames, per-company counts + batch total; missing docs warn (card open on issue)", () => {
+describe("AttachmentManifest (companies and attachments)", () => {
+  it("lists REAL filenames as chips + batch total; NO recipient address next to company rows", () => {
     setWs(makeWs());
     render(
       <I18nProvider>
@@ -249,31 +269,59 @@ describe("AttachmentManifest", () => {
       </I18nProvider>,
     );
     // Section title + batch-wide total (c1: cv+letter+shared = 3, c2: letter+shared = 2):
-    expect(screen.getByText("Unternehmen und zu sendende Dokumente")).toBeInTheDocument();
+    expect(screen.getByText("Unternehmen und Anhänge")).toBeInTheDocument();
     expect(screen.getByText("5 Anhänge insgesamt")).toBeInTheDocument();
+    // Column header:
+    expect(screen.getByText("Anhänge")).toBeInTheDocument();
 
-    // Healthy company (collapsed by default → filenames hidden):
+    // Company + applied position per row:
     expect(screen.getByText("Kältebau Nord GmbH")).toBeInTheDocument();
-    expect(screen.getByText("3 Dokumente")).toBeInTheDocument();
-    expect(screen.queryByText("Lebenslauf_Mustapha_Drif.pdf")).not.toBeInTheDocument();
-    // Its verified recipient + personalized subject are visible:
-    expect(screen.getByText("jobs@kaltbau-nord.de")).toBeInTheDocument();
+    expect(screen.getByText("Anlagenmechaniker SHK")).toBeInTheDocument();
+    expect(screen.getByText("Tech Süd AG")).toBeInTheDocument();
+    expect(screen.getByText("Fachinformatiker")).toBeInTheDocument();
 
-    // Company with a MISSING CV → the warning is visible and the card is
-    // OPEN by default, showing the REAL filenames of what WILL be sent:
-    expect(screen.getByText("Lebenslauf noch nicht erstellt")).toBeInTheDocument();
-    expect(screen.getByText("2 Dokumente")).toBeInTheDocument();
-    expect(screen.getByText("Anschreiben_Tech Süd AG.pdf")).toBeInTheDocument();
-    expect(screen.getByText("Abiturzeugnis.pdf")).toBeInTheDocument();
-    expect(screen.getByText("bewerbung@tech-sued.de")).toBeInTheDocument();
-
-    // Expanding the healthy card reveals its exact per-company filenames:
-    fireEvent.click(screen.getByRole("button", { name: /Kältebau Nord GmbH/ }));
+    // Company-specific cover-letter PDF + shared supporting documents as chips:
     expect(screen.getByText("Lebenslauf_Mustapha_Drif.pdf")).toBeInTheDocument();
     expect(screen.getByText("Anschreiben_Kältebau Nord GmbH.pdf")).toBeInTheDocument();
+    expect(screen.getByText("Anschreiben_Tech Süd AG.pdf")).toBeInTheDocument();
+    expect(screen.getAllByText("Abiturzeugnis.pdf").length).toBe(2);
+
+    // The individual recipient data is preserved in the DATA — but no longer
+    // rendered next to the company rows:
+    expect(screen.queryByText("jobs@kaltbau-nord.de")).not.toBeInTheDocument();
+    expect(screen.queryByText("bewerbung@tech-sued.de")).not.toBeInTheDocument();
   });
 
-  it("shows no manifest for an empty series", () => {
+  it("a company WITHOUT a verified recipient warns and points to Step 2", () => {
+    setWs(
+      makeWs({
+        companies: [
+          companyView({ id: "c1", company: "Kältebau Nord GmbH", email: "", job: "Anlagenmechaniker SHK" }),
+          companyView({ id: "c2", company: "Tech Süd AG", email: "", job: "Fachinformatiker" }),
+        ],
+      }),
+    );
+    render(
+      <I18nProvider>
+        <AttachmentManifest />
+      </I18nProvider>,
+    );
+    expect(screen.getAllByText("Empfänger fehlt — bitte in Schritt 2 prüfen").length).toBe(2);
+  });
+
+  it("missing CV/letter warn on the affected company's row", () => {
+    setWs(makeWs()); // c2 has no CV in the default workspace
+    render(
+      <I18nProvider>
+        <AttachmentManifest />
+      </I18nProvider>,
+    );
+    expect(screen.getByText("Lebenslauf noch nicht erstellt")).toBeInTheDocument();
+    // …while the healthy company has no warning at all:
+    expect(screen.queryByText(/Empfänger fehlt/)).not.toBeInTheDocument();
+  });
+
+  it("shows no panel for an empty series", () => {
     setWs(makeWs({ companies: [] }));
     const { container } = render(
       <I18nProvider>
@@ -285,11 +333,108 @@ describe("AttachmentManifest", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Step 6 — subject + body rendering, live preview, defaults
+// The ONE global sending-account selector
 // ---------------------------------------------------------------------------
 
-describe("Step 6 (subject + body rendering, live preview, defaults)", () => {
-  it("pre-fills the concise DEFAULT subject when none is saved; renders the personalized, sanitized preview + manifest", () => {
+describe("SendingAccountSelect (one global selector for the batch)", () => {
+  it("lists ONLY the actual connected accounts (real data, nothing hardcoded)", () => {
+    setWs(makeWs({ emailAccounts: [ACCT1, ACCT2] }));
+    render(
+      <I18nProvider>
+        <SendingAccountSelect accountId="acct1" onAccountChange={vi.fn()} saving={false} />
+      </I18nProvider>,
+    );
+    // Exactly ONE account control:
+    expect(screen.getAllByRole("button", { name: "Versand-Konto (für alle E-Mails)" }).length).toBe(1);
+    fireEvent.click(accountButton());
+    const options = within(screen.getByRole("listbox")).getAllByRole("option");
+    expect(options.length).toBe(2); // exactly ws.emailAccounts — no fictional entries
+    const listbox = screen.getByRole("listbox");
+    expect(within(listbox).getByText("mail@example.de")).toBeInTheDocument();
+    expect(within(listbox).getByText("outlook@example.de")).toBeInTheDocument();
+    // No credentials ever rendered:
+    expect(document.body.textContent).not.toContain("token");
+  });
+
+  it("displays the selected account clearly (address + checkmark in the list)", () => {
+    setWs(makeWs({ emailAccounts: [ACCT1, ACCT2] }));
+    render(
+      <I18nProvider>
+        <SendingAccountSelect accountId="acct1" onAccountChange={vi.fn()} saving={false} />
+      </I18nProvider>,
+    );
+    // The selected address is visible on the control itself:
+    expect(accountButton().textContent).toContain("mail@example.de");
+    fireEvent.click(accountButton());
+    expect(screen.getByRole("option", { name: /mail@example\.de/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: /outlook@example\.de/ })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("no connected account → helpful empty state with the existing connect action (no dropdown)", () => {
+    setWs(makeWs({ emailAccounts: [] }));
+    render(
+      <I18nProvider>
+        <SendingAccountSelect accountId="" onAccountChange={vi.fn()} saving={false} />
+      </I18nProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "Versand-Konto (für alle E-Mails)" })).not.toBeInTheDocument();
+    const cta = screen.getByRole("link", { name: "E-Mail-Konto verbinden" });
+    expect(cta).toHaveAttribute("href", "/settings/email");
+  });
+
+  it("an account needing reconnection cannot be selected", () => {
+    setWs(makeWs({ emailAccounts: [{ ...ACCT2, requires_reconnect: true }] }));
+    render(
+      <I18nProvider>
+        <SendingAccountSelect accountId="" onAccountChange={vi.fn()} saving={false} />
+      </I18nProvider>,
+    );
+    fireEvent.click(accountButton());
+    expect(screen.getByRole("option", { name: /outlook@example\.de/ })).toBeDisabled();
+    expect(screen.getByText("Neu verbinden")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 6 — simplified layout, defaults, persistence, navigation
+// ---------------------------------------------------------------------------
+
+describe("Step 6 (simplified layout)", () => {
+  it("layout order: shared template → companies and attachments → ONE global sending account", () => {
+    setWs(makeWs());
+    render(
+      <I18nProvider>
+        <Step6Email />
+      </I18nProvider>,
+    );
+    const template = screen.getByRole("heading", { name: "Gemeinsame E-Mail-Vorlage" });
+    const companies = screen.getByRole("heading", { name: "Unternehmen und Anhänge" });
+    const account = accountButton();
+    expect(template.compareDocumentPosition(companies) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(companies.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The sending-account label (the explicit reference wording) — exactly ONE:
+    expect(screen.getAllByText("Versand-Konto (für alle E-Mails)").length).toBe(1);
+    // AI draft button is still in the template section:
+    expect(screen.getByRole("button", { name: "E-Mail-Entwurf (KI)" })).toBeInTheDocument();
+  });
+
+  it("NO individual recipient input beside company rows — exactly one (shared) recipient field", () => {
+    setWs(makeWs());
+    render(
+      <I18nProvider>
+        <Step6Email />
+      </I18nProvider>,
+    );
+    // The only e-mail input on the page is the optional SHARED recipient:
+    const emailInputs = document.querySelectorAll('input[type="email"]');
+    expect(emailInputs.length).toBe(1);
+    expect((emailInputs[0] as HTMLInputElement).value).toBe("");
+    // No company address is rendered anywhere on the step:
+    expect(screen.queryByText("jobs@kaltbau-nord.de")).not.toBeInTheDocument();
+    expect(screen.queryByText("bewerbung@tech-sued.de")).not.toBeInTheDocument();
+  });
+
+  it("pre-fills the DEFAULT subject; editor holds the default body; personalized preview renders", () => {
     setWs(
       makeWs({
         emailSettings: {
@@ -323,8 +468,60 @@ describe("Step 6 (subject + body rendering, live preview, defaults)", () => {
     const previewSubjects = screen.getAllByText("Bewerbung um einen Ausbildungsplatz bei Kältebau Nord GmbH");
     expect(previewSubjects.length).toBeGreaterThanOrEqual(1);
 
-    // The attachment manifest section is part of Step 6:
-    expect(screen.getByText("Unternehmen und zu sendende Dokumente")).toBeInTheDocument();
+    // The companies-and-attachments section is part of Step 6:
+    expect(screen.getByText("Unternehmen und Anhänge")).toBeInTheDocument();
+  });
+
+  it("selecting a sending account persists immediately via the EXISTING settings action (saved values; the in-progress draft is NOT flushed)", async () => {
+    vi.mocked(saveEmailSettingsAction).mockResolvedValue({ ok: true } as never);
+    setWs(makeWs({ emailAccounts: [ACCT1, ACCT2] }));
+    render(
+      <I18nProvider>
+        <Step6Email />
+      </I18nProvider>,
+    );
+    // Start an UNSAVED body edit first (the draft must survive the account switch):
+    const box = document.querySelector('[role="textbox"]') as HTMLElement;
+    box.innerHTML = "<p>Mein ungespeicherter <strong>Entwurf</strong></p>";
+    fireEvent.input(box);
+
+    // Select the other account:
+    fireEvent.click(accountButton());
+    fireEvent.click(screen.getByRole("option", { name: /outlook@example\.de/ }));
+
+    // Persisted through the existing mechanism with the SAVED field values:
+    expect(saveEmailSettingsAction).toHaveBeenCalledTimes(1);
+    expect(saveEmailSettingsAction).toHaveBeenCalledWith({
+      body: AUTO_BEWERB_EMAIL_DEFAULT_BODY,
+      recipient: "",
+      subject: AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT,
+      accountId: "acct2",
+      attachCv: true,
+      attachLetter: true,
+    });
+    // The control now shows the newly selected account:
+    expect(accountButton().textContent).toContain("outlook@example.de");
+    // Success feedback (persist → refresh → toast, all async):
+    await vi.waitFor(() => expect(lastCtx?.notify).toHaveBeenCalledWith("success", expect.any(String)));
+  });
+
+  it("a FAILED account persistence reverts the selection and reports the error", () => {
+    vi.mocked(saveEmailSettingsAction).mockResolvedValue({ ok: false } as never);
+    setWs(makeWs({ emailAccounts: [ACCT1, ACCT2] }));
+    render(
+      <I18nProvider>
+        <Step6Email />
+      </I18nProvider>,
+    );
+    fireEvent.click(accountButton());
+    fireEvent.click(screen.getByRole("option", { name: /outlook@example\.de/ }));
+    // Wait for the async revert:
+    return vi.waitFor(() => {
+      expect(accountButton().textContent).toContain("mail@example.de");
+      expect(accountButton().textContent).not.toContain("outlook@example.de");
+    }).then(() => {
+      expect(lastCtx?.notify).toHaveBeenCalledWith("error", expect.any(String));
+    });
   });
 
   it("a SET global recipient shows the explicit override warning (never silent)", () => {
@@ -381,5 +578,37 @@ describe("Step 6 (subject + body rendering, live preview, defaults)", () => {
     expect(subjectInput.value).toBe("Mein individueller Betreff");
     const box = document.querySelector('[role="textbox"]') as HTMLElement;
     expect(box.innerHTML).toContain("Mein gespeicherter <strong>Text</strong>");
+  });
+
+  it("Back and Continue navigation are intact around the redesigned step", () => {
+    const ws = makeWs();
+    setWs(ws);
+    // StepShell uses the REAL context hook (the mock only replaces the export
+    // for other modules) — so the provider gets the full real context value:
+    const fullCtx = {
+      ...(lastCtx as object),
+      toast: null,
+      dismissToast: vi.fn(),
+      syncing: false,
+      companyId: null,
+      selectCompany: vi.fn(),
+      drafts: { cv: {}, letter: {} },
+      setDraft: vi.fn(),
+    };
+    render(
+      <I18nProvider>
+        <AutoBewerbContext.Provider value={fullCtx as never}>
+          <StepShell title="Schritt 6 · E-Mail vorbereiten" subtitle="…">
+            <Step6Email />
+          </StepShell>
+        </AutoBewerbContext.Provider>
+      </I18nProvider>,
+    );
+    expect(screen.getByRole("button", { name: /Zurück/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Weiter/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Zurück/ }));
+    expect(lastCtx?.goToStep).toHaveBeenCalledWith(5);
+    fireEvent.click(screen.getByRole("button", { name: /Weiter/ }));
+    expect(lastCtx?.goToStep).toHaveBeenCalledWith(7);
   });
 });

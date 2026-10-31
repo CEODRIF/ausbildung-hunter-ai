@@ -2560,6 +2560,13 @@ const de = {
     emailMessageIntro:
       "Diese E-Mail geht an alle Unternehmen der Serie – mit Ihrem CV, den gemeinsamen Nachweisen und dem Anschreiben der jeweiligen Firma als Anhängen. Das Anschreiben bleibt ein separater Anhang und wird nie als E-Mail-Text gesendet.",
     subjectTokenHint: "Gleicher Betreff für alle; {{position}} wird pro Unternehmen ersetzt.",
+    companiesTitle: "Unternehmen und Anhänge",
+    companiesHint: "Die folgenden Unternehmen erhalten diese E-Mail mit den aufgeführten Anhängen.",
+    companiesColCompany: "Unternehmen",
+    companiesColAttachments: "Anhänge",
+    missingRecipientStep2: "Empfänger fehlt — bitte in Schritt 2 prüfen",
+    sendingAccountLabel: "Versand-Konto (für alle E-Mails)",
+    sendingAccountInfo: "Dieses Konto wird für alle E-Mails der Serie verwendet — für jedes Unternehmen derselbe Absender.",
     manifestTitle: "Unternehmen und zu sendende Dokumente",
     manifestHint:
       "Was jede Bewerbungs-E-Mail enthält – die eigenen CV- und Anschreiben-PDFs der Firma plus die gemeinsamen Nachweise. Nur lesend, identisch mit dem Versand.",
@@ -5186,6 +5193,13 @@ const en: Dict = {
     emailMessageIntro:
       "This e-mail goes to every company in the batch — with your CV, the shared certificates and each company's cover letter as attachments. The cover letter stays a separate attachment and is never sent as the e-mail text.",
     subjectTokenHint: "One subject for all; {{position}} is replaced per company.",
+    companiesTitle: "Companies and attachments",
+    companiesHint: "The following companies will receive this email with the listed attachments.",
+    companiesColCompany: "Company",
+    companiesColAttachments: "Attachments",
+    missingRecipientStep2: "Recipient missing — please check in Step 2",
+    sendingAccountLabel: "Sending account (für alle E-Mails)",
+    sendingAccountInfo: "This account is used for every e-mail of the batch — the same sender for all companies.",
     manifestTitle: "Companies and documents to be sent",
     manifestHint:
       "What each application e-mail will carry — the company's own CV and cover-letter PDFs plus the shared supporting documents. Read-only, identical to the dispatch.",
@@ -7822,6 +7836,13 @@ const fr: Dict = {
     emailMessageIntro:
       "Cet e-mail est envoyé à toutes les entreprises de la série — avec votre CV, les justificatifs partagés et la lettre de motivation de chaque entreprise en pièces jointes. La lettre de motivation reste une pièce jointe séparée et n'est jamais envoyée comme texte de l'e-mail.",
     subjectTokenHint: "Un objet pour tous ; {{position}} est remplacé par entreprise.",
+    companiesTitle: "Entreprises et pièces jointes",
+    companiesHint: "Les entreprises suivantes recevront cet e-mail avec les pièces jointes listées.",
+    companiesColCompany: "Entreprise",
+    companiesColAttachments: "Pièces jointes",
+    missingRecipientStep2: "Destinataire manquant — veuillez vérifier à l'étape 2",
+    sendingAccountLabel: "Compte d'envoi (pour tous les e-mails)",
+    sendingAccountInfo: "Ce compte est utilisé pour tous les e-mails de la série — même expéditeur pour toutes les entreprises.",
     manifestTitle: "Entreprises et documents à envoyer",
     manifestHint:
       "Ce que portera chaque e-mail de candidature — les propres PDF CV et lettre de motivation de l'entreprise plus les justificatifs partagés. Lecture seule, identique à l'envoi.",
@@ -10375,6 +10396,13 @@ const ar: Dict = {
     emailMessageIntro:
       "يُرسَل هذا البريد الإلكتروني إلى جميع الشركات في الدفعة — مع سيرتك الذاتية والشهادات المشتركة وخطاب الدافع الخاص بكل شركة كمرفقات. يبقى خطاب الدافع مرفقًا منفصلًا ولا يُرسَل أبدًا كنص البريد.",
     subjectTokenHint: "موضوع واحد للجميع؛ يُستبدل {{position}} حسب كل شركة.",
+    companiesTitle: "الشركات والمرفقات",
+    companiesHint: "ستتلقى الشركات التالية هذه الرسالة مع المرفقات المذكورة.",
+    companiesColCompany: "الشركة",
+    companiesColAttachments: "المرفقات",
+    missingRecipientStep2: "لا يوجد مستلم — يرجى التحقق من الخطوة 2",
+    sendingAccountLabel: "حساب الإرسال (لكل الرسائل)",
+    sendingAccountInfo: "يُستخدم هذا الحساب لجميع رسائل البريد الإلكتروني في الدفعة — نفس المرسل لكل الشركات.",
     manifestTitle: "الشركات والمستندات المرسلَة",
     manifestHint:
       "ما يحتويه بريد كل طلب — ملفات PDF الخاصة بالشركة للسيرة الذاتية وخطاب الدافع بالإضافة إلى الشهادات المشتركة. قائمة للقراءة فقط مطابقة للإرسال.",
