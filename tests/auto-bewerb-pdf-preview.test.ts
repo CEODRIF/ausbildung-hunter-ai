@@ -218,6 +218,71 @@ describe("export-pdf route — real renderer output is a valid, NON-BLANK PDF", 
   });
 });
 
+describe("export-pdf route — the letter carries the owner's CURRENT signature (live from storage)", () => {
+  /** A VALID 1×1 PNG — pdf-lib must actually decode it to embed it. */
+  const VALID_PNG = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const hasImageBytes = (bytes: Uint8Array) => Buffer.from(bytes).toString("latin1").includes("/Subtype /Image");
+
+  function seedWithLetter(cv: CvDocument) {
+    const db = seedWorkspace(cv);
+    db.tables.auto_bewerb_documents.push({
+      id: "doc-letter",
+      user_id: USER_A,
+      company_id: "comp-a",
+      doc_type: "cover_letter",
+      version: 1,
+      content: {
+        text:
+          "Sehr geehrte Damen und Herren,\n\n" +
+          "hiermit bewerbe ich mich um den Ausbildungsplatz. Ich bringe Erfahrung im Anlagenbau mit.\n\n" +
+          "Mit freundlichen Grüßen\n" +
+          "Mustapha Drif",
+        tone: "professional",
+      },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    return db;
+  }
+
+  it("no signature yet → text-only PDF; after the upload → the SAME route embeds it (live read)", async () => {
+    const db = seedWithLetter(sampleCv());
+    mockAuth(USER_A);
+    (createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(db.admin);
+
+    const getLetter = async () => {
+      const res = await GET(new Request(`${BASE}?companyId=comp-a&doc=letter&preview=1`));
+      expect(res.status).toBe(200);
+      return new Uint8Array(await res.arrayBuffer());
+    };
+
+    // Before any signature exists: a valid one-page letter, NO embedded image.
+    const before = await getLetter();
+    expect(hasImageBytes(before)).toBe(false);
+    const pdfBefore = await PDFDocument.load(before);
+    expect(pdfBefore.getPageCount()).toBe(1);
+
+    // The user uploads the global signature (Step 1) at the fixed owner path:
+    const { error: upErr } = await db.admin.storage
+      .from("application-attachments")
+      .upload(`${USER_A}/auto-bewerb/signature/signature.png`, VALID_PNG, {
+        contentType: "image/png",
+        upsert: true,
+      });
+    expect(upErr).toBeNull();
+
+    // The SAME route now embeds the owner's current signature — nothing to
+    // restart, no second upload flow, never a fabricated image.
+    const after = await getLetter();
+    expect(hasImageBytes(after)).toBe(true);
+    const pdfAfter = await PDFDocument.load(after);
+    expect(pdfAfter.getPageCount()).toBe(1);
+  });
+});
+
 describe("export-pdf route — authentication + ownership stay enforced", () => {
   it("unauthenticated → 401 JSON (never a PDF)", async () => {
     mockAuth(null);
