@@ -22,7 +22,7 @@ import "server-only";
  *    Regeneration UPSERTs the same object → no duplicates, no orphans.
  */
 
-import { PDFDocument, PDFFont, StandardFonts, rgb, type Color } from "pdf-lib";
+import { PDFDocument, PDFFont, StandardFonts, rgb, type Color, type PDFImage } from "pdf-lib";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -38,6 +38,24 @@ import {
 
 export const BEW_LETTER_PDF_MIME = "application/pdf";
 export const BEW_ATTACHMENT_BUCKET = "application-attachments";
+
+/**
+ * The user's GENUINE handwritten signature as raw image bytes (PNG or JPEG —
+ * pdf-lib's two natively-embeddable rasters). Embedded in the PDF between the
+ * closing ("Mit freundlichen Grüßen") and the verified name. NEVER invented:
+ * it is the uploaded image bytes, or null when the user has none.
+ */
+export interface LetterSignatureImage {
+  bytes: Uint8Array;
+  mime: string;
+}
+
+/** Renderer options. `singlePage` (AUTO BEWERB Step 5) forces the whole
+ *  letter onto exactly one A4 page by shrinking the body type when needed —
+ *  it NEVER truncates content (all paragraphs always stay). */
+export interface LetterPdfOptions {
+  singlePage?: boolean;
+}
 
 /** A4 in points (the reference document's paper size). */
 export const A4_WIDTH = 595.28;
@@ -91,7 +109,10 @@ export interface LetterFolio {
   greeting: string;
   bodyParagraphs: string[];
   closing: string;
+  /** The verified candidate name (drawn as text under the signature image). */
   signature: string;
+  /** The genuine uploaded signature image (null = none → only the name line). */
+  signatureImage?: LetterSignatureImage | null;
 }
 
 /**
@@ -112,6 +133,7 @@ export function buildLetterFolio(input: {
   subject: string;
   bodyHtml: string;
   date?: Date;
+  signatureImage?: LetterSignatureImage | null;
 }): LetterFolio {
   const paragraphs = htmlToParagraphs(input.bodyHtml);
   const parts = splitLetterParagraphs(paragraphs, input.applicantName ?? "");
@@ -136,6 +158,7 @@ export function buildLetterFolio(input: {
     bodyParagraphs: parts.body,
     closing: parts.closing,
     signature: parts.signature,
+    signatureImage: input.signatureImage ?? null,
   };
 }
 
@@ -204,13 +227,53 @@ function wrapLine(font: PDFFont, text: string, size: number, maxWidth: number): 
  * Renderer
  * ------------------------------------------------------------------ */
 
-export async function generateLetterPdf(folio: LetterFolio): Promise<Uint8Array> {
+/** Body type sizes tried when `singlePage` forces the letter onto one A4
+ *  page: start at the reference 11 pt, tighten only as far as needed. The
+ *  letter NEVER loses content — the whole point of shrinking (vs. truncating)
+ *  is that every paragraph stays, just in slightly smaller type. */
+const SINGLE_PAGE_BODY_SIZES = [11, 10.5, 10, 9.5, 9];
+
+/** Display box for the uploaded signature image (≈ 2.5 × 0.9 cm, kept within
+ *  the existing signature space so it never pushes the letter off the page). */
+const SIGNATURE_MAX_WIDTH = 72;
+const SIGNATURE_MAX_HEIGHT = 26;
+
+/**
+ * Render the folio at a given body font size into a fresh A4 document.
+ * `bodySize` scales the letter text (subject / greeting / body / closing /
+ * name) — the compact sender + recipient headers keep their reference sizes.
+ * When `folio.signatureImage` is set, the genuine signature image is embedded
+ * between the closing ("Mit freundlichen Grüßen") and the name.
+ */
+async function renderLetterDoc(folio: LetterFolio, bodySize: number): Promise<PDFDocument> {
+  const lineH = bodySize + 4.5; // 15.5 at the reference 11 pt
+
   const doc = await PDFDocument.create();
   doc.setTitle(folio.subject || "Anschreiben");
   if (folio.senderName) doc.setAuthor(folio.senderName);
 
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+
+  // Embed the genuine signature image up front (once per doc). A corrupt or
+  // unsupported image degrades to "no image" — the letter still renders with
+  // the (verified) name line. pdf-lib embeds PNG and JPEG natively.
+  let sigImg: PDFImage | null = null;
+  let sigW = 0;
+  let sigH = 0;
+  if (folio.signatureImage) {
+    try {
+      if (folio.signatureImage.mime === "image/jpeg") sigImg = await doc.embedJpg(folio.signatureImage.bytes);
+      else if (folio.signatureImage.mime === "image/png") sigImg = await doc.embedPng(folio.signatureImage.bytes);
+      if (sigImg) {
+        const scale = Math.min(SIGNATURE_MAX_WIDTH / sigImg.width, SIGNATURE_MAX_HEIGHT / sigImg.height);
+        sigW = sigImg.width * scale;
+        sigH = sigImg.height * scale;
+      }
+    } catch {
+      sigImg = null;
+    }
+  }
 
   let page = doc.addPage([A4_WIDTH, A4_HEIGHT]);
   let y = A4_HEIGHT - MARGIN_TOP;
@@ -286,67 +349,97 @@ export async function generateLetterPdf(folio: LetterFolio): Promise<Uint8Array>
 
   // ---- subject (bold, may wrap; kept with the greeting below) -----------
   if (folio.subject) {
-    const subjectLines = wrapLine(bold, folio.subject, 11, CONTENT_WIDTH);
-    const greetingLines = wrapLine(regular, folio.greeting, 11, CONTENT_WIDTH);
-    ensure(subjectLines.length * 15.5 + 30 + greetingLines.length * 15.5 + 20);
+    const subjectLines = wrapLine(bold, folio.subject, bodySize, CONTENT_WIDTH);
+    const greetingLines = wrapLine(regular, folio.greeting, bodySize, CONTENT_WIDTH);
+    ensure(subjectLines.length * lineH + 30 + greetingLines.length * lineH + 20);
     y -= 30;
     for (const line of subjectLines) {
-      page.drawText(line, { x: MARGIN_X, y, size: 11, font: bold, color: INK });
-      y -= 15.5;
+      page.drawText(line, { x: MARGIN_X, y, size: bodySize, font: bold, color: INK });
+      y -= lineH;
     }
   }
 
   // ---- greeting -----------------------------------------------------------
-  const greetingLines = wrapLine(regular, folio.greeting, 11, CONTENT_WIDTH);
+  const greetingLines = wrapLine(regular, folio.greeting, bodySize, CONTENT_WIDTH);
   y -= 24;
   for (const line of greetingLines) {
-    page.drawText(line, { x: MARGIN_X, y, size: 11, font: regular, color: INK });
-    y -= 15.5;
+    page.drawText(line, { x: MARGIN_X, y, size: bodySize, font: regular, color: INK });
+    y -= lineH;
   }
 
   // ---- body (justified paragraphs, normal line breaks) --------------------
   const drawJustified = (paragraph: string) => {
-    const lines = wrapLine(regular, paragraph, 11, CONTENT_WIDTH);
+    const lines = wrapLine(regular, paragraph, bodySize, CONTENT_WIDTH);
     lines.forEach((line, index) => {
       const isLast = index === lines.length - 1;
-      ensure(15.5);
+      ensure(lineH);
       const words = line.split(" ").filter(Boolean);
       if (words.length <= 1 || isLast) {
-        page.drawText(words.join(" "), { x: MARGIN_X, y, size: 11, font: regular, color: INK });
+        page.drawText(words.join(" "), { x: MARGIN_X, y, size: bodySize, font: regular, color: INK });
       } else {
-        const space = regular.widthOfTextAtSize(" ", 11);
-        const textWidth = words.reduce((sum, w) => sum + regular.widthOfTextAtSize(w, 11), 0);
+        const space = regular.widthOfTextAtSize(" ", bodySize);
+        const textWidth = words.reduce((sum, w) => sum + regular.widthOfTextAtSize(w, bodySize), 0);
         const gap = (CONTENT_WIDTH - textWidth) / (words.length - 1);
         let x = MARGIN_X;
         for (const w of words) {
-          page.drawText(w, { x, y, size: 11, font: regular, color: INK });
-          x += regular.widthOfTextAtSize(w, 11) + (isLast ? space : gap);
+          page.drawText(w, { x, y, size: bodySize, font: regular, color: INK });
+          x += regular.widthOfTextAtSize(w, bodySize) + (isLast ? space : gap);
         }
       }
-      y -= 15.5;
+      y -= lineH;
     });
     y -= 8; // paragraph spacing
   };
   for (const paragraph of folio.bodyParagraphs) drawJustified(paragraph);
 
-  // ---- closing + name (kept together — the reference's awkward page split
-  //      is deliberately not reproduced) ------------------------------------
-  const closingLines = wrapLine(regular, folio.closing, 11, CONTENT_WIDTH);
-  const sigLines = folio.signature ? wrapLine(regular, folio.signature, 11, CONTENT_WIDTH) : [];
-  const closingHeight = closingLines.length * 15.5 + 34 + sigLines.length * 15.5;
+  // ---- closing + signature image + name (kept together — the reference's
+  //      awkward page split is deliberately not reproduced) ----------------
+  const closingLines = wrapLine(regular, folio.closing, bodySize, CONTENT_WIDTH);
+  const sigLines = folio.signature ? wrapLine(regular, folio.signature, bodySize, CONTENT_WIDTH) : [];
+  // Reserve room for the signature block: the genuine image (when present) or
+  // the classic 34 pt blank signature space (when absent).
+  const sigBlockHeight = sigImg ? sigH + 8 : 34;
+  const closingHeight = closingLines.length * lineH + sigBlockHeight + sigLines.length * lineH;
   ensure(closingHeight);
   y -= 10;
   for (const line of closingLines) {
-    page.drawText(line, { x: MARGIN_X, y, size: 11, font: regular, color: INK });
-    y -= 15.5;
+    page.drawText(line, { x: MARGIN_X, y, size: bodySize, font: regular, color: INK });
+    y -= lineH;
   }
-  y -= 34; // signature space
+  if (sigImg) {
+    // Bottom-align the image in its reserved space, above the name line.
+    page.drawImage(sigImg, { x: MARGIN_X, y: y - sigH, width: sigW, height: sigH });
+    y -= sigH + 8;
+  } else {
+    y -= 34; // signature space (no image → the verified name line sits below)
+  }
   for (const line of sigLines) {
-    page.drawText(line, { x: MARGIN_X, y, size: 11, font: regular, color: INK });
-    y -= 15.5;
+    page.drawText(line, { x: MARGIN_X, y, size: bodySize, font: regular, color: INK });
+    y -= lineH;
   }
 
-  return await doc.save();
+  return doc;
+}
+
+/**
+ * Generate the Anschreiben PDF. Default (the legacy Bewerbung-automation
+ * path): the reference 11 pt layout, allowed to flow across pages for a very
+ * long letter. With `singlePage` (AUTO BEWERB Step 5): the whole letter is
+ * forced onto EXACTLY one A4 page — the body type is tightened as far as
+ * needed. No content is ever truncated; a letter bounded to ~300 words
+ * (the prompt contract) fits at the reference size and the loop never
+ * engages.
+ */
+export async function generateLetterPdf(folio: LetterFolio, opts: LetterPdfOptions = {}): Promise<Uint8Array> {
+  if (!opts.singlePage) return (await renderLetterDoc(folio, 11)).save();
+  let doc: PDFDocument | null = null;
+  for (const size of SINGLE_PAGE_BODY_SIZES) {
+    doc = await renderLetterDoc(folio, size);
+    if (doc.getPageCount() === 1) return doc.save();
+  }
+  // Pathological overflow (never for a template-bounded letter): keep the
+  // smallest type — still every paragraph, still a single A4 document.
+  return (doc ?? (await renderLetterDoc(folio, SINGLE_PAGE_BODY_SIZES[SINGLE_PAGE_BODY_SIZES.length - 1]))).save();
 }
 
 /* ------------------------------------------------------------------ *

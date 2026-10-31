@@ -12,6 +12,7 @@ import { autoBewerbLetterSchema } from "@/lib/auto-bewerb/schema";
 import { generateCvPdf, cvPdfFilename } from "@/lib/auto-bewerb/cv-pdf";
 import {
   getAutoBewerbCompany,
+  getAutoBewerbSignatureImage,
   getLatestAutoBewerbCv,
   getLatestAutoBewerbDocument,
   resolveAutoBewerbPhotoDataUrl,
@@ -106,6 +107,10 @@ export async function GET(request: Request) {
       .eq("id", user.id)
       .maybeSingle();
     const pr = (prof ?? {}) as Record<string, string | null | undefined>;
+    // The genuine uploaded signature (if any) — embedded into the PDF between
+    // the closing and the verified name. The preview and the export render
+    // the SAME bytes (same renderer call).
+    const signatureImage = await getAutoBewerbSignatureImage(user.id);
     const folio = buildLetterFolio({
       applicantName: pr.full_name ?? null,
       applicantEmail: pr.email ?? null,
@@ -119,8 +124,9 @@ export async function GET(request: Request) {
       companyAddress: extract?.companyAddress || null,
       subject: bundle.company.email_subject || `Bewerbung als ${extract?.jobTitle || extract?.occupation || "Auszubildende:r"}`,
       bodyHtml: emailBodyToHtml(letter.data.text),
+      signatureImage,
     });
-    const bytes = await generateLetterPdf(folio);
+    const bytes = await generateLetterPdf(folio, { singlePage: true });
     return new NextResponse(Buffer.from(bytes), {
       status: 200,
       headers: {
