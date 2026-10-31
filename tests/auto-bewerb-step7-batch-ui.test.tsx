@@ -3,11 +3,11 @@
  * AUTO BEWERB — Step 7 multi-batch UI contract (jsdom).
  *
  * The reference layout, wired to REAL persisted queue data:
- *   - "Aktueller Batch (X Unternehmen)" with per-company readiness (X von Y
- *     bereit) and the hard cap of 10;
+ *   - "Aktuelle Versandgruppe (X Unternehmen)" with per-company readiness
+ *     (X von Y bereit) and the hard cap of 10;
  *   - Send now behind the explicit confirmation modal (client passes ONLY
  *     company ids + confirmation);
- *   - "Versand-Warteschlange" from ws.batches (batch #, count, time, visual
+ *   - "Geplante & frühere Versände" from ws.batches (batch #, count, time, visual
  *     countdown, status, account, details, cancel ONLY pre-start);
  *   - Smart Sending policy panel (always on, real interval constants);
  *   - statistics from ws.sendStats (persisted data, never demo numbers);
@@ -190,9 +190,9 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
       stats: { sentToday: 2, scheduled: 1, processing: 0, totalToday: 5 },
     }));
     // Current batch panel (nothing selected yet):
-    expect(screen.getByText("Aktueller Batch (0 Unternehmen)")).toBeInTheDocument();
+    expect(screen.getByText("Aktuelle Versandgruppe (0 Unternehmen)")).toBeInTheDocument();
     // The queue panel with the REAL persisted batch:
-    expect(screen.getByText("Versand-Warteschlange")).toBeInTheDocument();
+    expect(screen.getByText("Geplante & frühere Versände")).toBeInTheDocument();
     expect(screen.getByText("Batch #1")).toBeInTheDocument();
     expect(screen.getByText("2 Unternehmen")).toBeInTheDocument();
     // "Geplant" = the batch status pill (also the "Scheduled" stats label):
@@ -209,10 +209,12 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     // Smart Sending policy (real constants, always on, no bypass UI):
     expect(screen.getByText("Smart Sending")).toBeInTheDocument();
     expect(screen.getByText("IMMER AN")).toBeInTheDocument();
-    expect(screen.getByText("5–6 Sekunden")).toBeInTheDocument();
-    expect(screen.getByText("6 Sekunden")).toBeInTheDocument();
+    expect(screen.getByText("Mindestintervall")).toBeInTheDocument();
     expect(screen.getByText("5 Sekunden")).toBeInTheDocument();
-    expect(screen.getByText(/3 Minuten 30 Sekunden/)).toBeInTheDocument();
+    expect(screen.getByText("Empfohlen")).toBeInTheDocument();
+    expect(screen.getByText("6 Sekunden")).toBeInTheDocument();
+    expect(screen.getByText("Zwischen Batch-Starts")).toBeInTheDocument();
+    expect(screen.getByText("3 Minuten 30 Sekunden")).toBeInTheDocument();
     // Statistics from persisted data:
     expect(screen.getByText("Versand-Statistik")).toBeInTheDocument();
     expect(screen.getByText("Heute gesendet")).toBeInTheDocument();
@@ -238,7 +240,7 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     const { notify } = mount(makeWs({}));
     fireEvent.click(screen.getByLabelText("Firma A GmbH"));
     fireEvent.click(screen.getByLabelText("Firma B AG"));
-    expect(screen.getByText("Aktueller Batch (2 Unternehmen)")).toBeInTheDocument();
+    expect(screen.getByText("Aktuelle Versandgruppe (2 Unternehmen)")).toBeInTheDocument();
     expect(screen.getByText("2 von 2 bereit")).toBeInTheDocument();
     // Send now → explicit confirmation modal with the exact shared config:
     fireEvent.click(screen.getByRole("button", { name: "Ausgewählte senden (2)" }));
@@ -255,7 +257,7 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     expect(createBatchAction).toHaveBeenCalledWith(["ca", "cb"], null, true);
     // Accepted batch leaves the active selection (spec D) + honest result:
     await waitFor(() => expect(notify).toHaveBeenCalledWith("success", expect.stringContaining("Batch #7")));
-    await waitFor(() => expect(screen.getByText("Aktueller Batch (0 Unternehmen)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Aktuelle Versandgruppe (0 Unternehmen)")).toBeInTheDocument());
   });
 
   it("enforces the hard cap of 10 companies per batch", () => {
@@ -264,7 +266,7 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     );
     mount(makeWs({ companies: many }));
     for (let i = 1; i <= 10; i++) fireEvent.click(screen.getByLabelText(`Firma ${i} GmbH`));
-    expect(screen.getByText("Aktueller Batch (10 Unternehmen)")).toBeInTheDocument();
+    expect(screen.getByText("Aktuelle Versandgruppe (10 Unternehmen)")).toBeInTheDocument();
     expect(screen.getByText("10 von 10 bereit")).toBeInTheDocument();
     // The 11th company cannot be added to the current batch:
     expect(screen.getByLabelText("Firma 11 GmbH")).toBeDisabled();
@@ -333,14 +335,14 @@ describe("Step 7 legacy mode (batchesSupported = false, migration pending)", () 
       batches: [batchView()], // must NOT be rendered
       stats: { sentToday: 99, scheduled: 99, processing: 99, totalToday: 99 },
     }));
-    expect(screen.queryByText("Versand-Warteschlange")).toBeNull();
+    expect(screen.queryByText("Geplante & frühere Versände")).toBeNull();
     expect(screen.queryByText("Versand-Statistik")).toBeNull();
     expect(screen.queryByText("Batch #1")).toBeNull();
     // Smart Sending policy still shown (platform-wide):
     expect(screen.getByText("Smart Sending")).toBeInTheDocument();
     // The legacy send path is intact (per-company isolation, explicit confirm):
     fireEvent.click(screen.getByLabelText("Firma A GmbH"));
-    expect(screen.getByText("Aktueller Batch (1 Unternehmen)")).toBeInTheDocument();
+    expect(screen.getByText("Aktuelle Versandgruppe (1 Unternehmen)")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Ausgewählte senden (1)" }));
     await screen.findByRole("dialog");
     fireEvent.click(screen.getByRole("button", { name: "Jetzt senden (1)" }));
