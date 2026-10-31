@@ -349,8 +349,12 @@ describe("cv-pdf renderer — platform-resolved photo only", () => {
     // the abphoto token is never interpreted inside the renderer.
     expect(renderer).toContain('options.photoDataUrl ??');
     expect(renderer).toContain('startsWith("data:image/")');
-    // The photo sits in a FIXED box (consistent sizing, aspect preserved).
-    expect(renderer).toContain("PHOTO_W");
-    expect(renderer).toContain("PHOTO_H_MAX");
+    // The photo sits in a FIXED box per density tier (96×128 / 90×120 /
+    // 84×112 pt, all 3:4) — consistent sizing, aspect preserved, never
+    // stretched: the loader fits the image into the tier's box.
+    expect(renderer).toContain("photoW: 96, photoH: 128");
+    expect(renderer).toContain("photoW: 90, photoH: 120");
+    expect(renderer).toContain("photoW: 84, photoH: 112");
+    expect(renderer).toContain("if (h > tier.photoH)");
   });
 });

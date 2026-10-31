@@ -17,6 +17,8 @@ import {
 } from "@/lib/auto-bewerb/prompts";
 import { autoBewerbLetterSchema } from "@/lib/auto-bewerb/schema";
 import { getAutoBewerbCompany, getAutoBewerbProfile } from "@/lib/auto-bewerb/engine";
+import { getCoverLetterTemplate } from "@/lib/auto-bewerb/letter-templates";
+import { selectBestCoverLetterTemplate } from "@/lib/auto-bewerb/letter-template-match";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -143,6 +145,27 @@ export async function POST(request: Request) {
   accountName = String((prof as { full_name?: string } | null)?.full_name ?? "").trim();
   const candidateName = profileName || accountName;
 
+  // TEMPLATE FOUNDATION (mandatory): the letter is generated FROM one of the
+  // 50 original templates — a manual choice (validated against the library)
+  // or the deterministic auto-match. There is no template-free code path.
+  const templateId = typeof body.templateId === "string" ? body.templateId.trim() : "";
+  let template = templateId ? getCoverLetterTemplate(templateId) : null;
+  if (templateId && !template) {
+    return NextResponse.json(
+      { error: "Unbekannte Vorlage.", code: "unknown_template" },
+      { status: 400 },
+    );
+  }
+  if (!template) {
+    template = selectBestCoverLetterTemplate({
+      jobTitle: extract.jobTitle,
+      occupation: extract.occupation,
+      adRaw: bundle.company.ad_raw,
+      contactPerson: extract.contactPerson,
+      hasInternshipExperience: (profile.extracted.experience ?? []).some((e) => e.type === "internship"),
+    }).template;
+  }
+
   const prompt = buildAutoBewerbLetterPrompt({
     profileText: formatProfileForPrompt(profile.extracted),
     adFenced: fenceAdText(bundle.company.ad_raw),
@@ -150,9 +173,12 @@ export async function POST(request: Request) {
     analysis: bundle.company.ad_analysis,
     candidateName,
     currentText: current,
+    template,
   });
 
-  const sfKey = `${user.id}\u0000${companyId}`;
+  // Single-flight is keyed per template as well: a manual template switch is
+  // a different generation and must not receive a cached result of another one.
+  const sfKey = `${user.id}\u0000${companyId}\u0000${template.id}`;
   let work = inFlight.get(sfKey);
   if (!work) {
     work = (async () => {
@@ -182,7 +208,19 @@ export async function POST(request: Request) {
       );
     }
     await completeFeatureOp(user.id, "cover_letter", runId);
-    return NextResponse.json({ letter: checked.data }, { headers: rateLimitHeaders(limited) });
+    // Trace: the letter carries the original template it was generated from
+    // (id + ORIGINAL PDF page) — persisted with the document, shown in the UI.
+    return NextResponse.json(
+      {
+        letter: {
+          ...checked.data,
+          templateId: template!.id,
+          templatePage: template!.page,
+          templateTitle: template!.title,
+        },
+      },
+      { headers: rateLimitHeaders(limited) },
+    );
   } catch (error) {
     await releaseFeatureOp(user.id, "cover_letter", runId);
     return NextResponse.json(

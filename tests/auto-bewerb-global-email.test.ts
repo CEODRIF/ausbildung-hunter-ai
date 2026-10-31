@@ -577,7 +577,7 @@ describe("per-recipient personalization (shared template, verified data only)", 
     expect(a3.payload.html).toContain("bei Heizungsbau Ost GmbH als Anlagenmechaniker SHK");
     // Greeting: verified contact person when available, neutral default otherwise:
     expect(a1.payload.html).toContain("Sehr geehrte Damen und Herren,");
-    expect(a2.payload.html).toContain("Sehr geehrte/r Frau Müller,");
+    expect(a2.payload.html).toContain("Sehr geehrte Frau Müller,");
     expect(a3.payload.html).toContain("Sehr geehrte Damen und Herren,");
     // Candidate name (from the profile) is the SAME for everyone; no
     // placeholder survives in the HTML or the text part:
@@ -826,8 +826,9 @@ describe("single global configuration (source contracts)", () => {
     expect(SCHEMA).toContain("export const AUTO_BEWERB_EMAIL_DEFAULT_BODY");
     expect(SCHEMA).toContain("export function resolveAutoBewerbRecipient");
     expect(SCHEMA).not.toContain("renderAutoBewerbEmailBody");
-    // The concise default subject from the spec:
-    expect(SCHEMA).toContain("Bewerbung um einen Ausbildungsplatz – {{position}}");
+    // The concise default subject follows the platform convention
+    // (company-based, like the bewerbung-automation templates):
+    expect(SCHEMA).toContain("Bewerbung um einen Ausbildungsplatz bei {{company_name}}");
   });
 
   it("Step 6 UI: rich-text editor + live preview + manifest; one global Save; no per-company email save path", () => {

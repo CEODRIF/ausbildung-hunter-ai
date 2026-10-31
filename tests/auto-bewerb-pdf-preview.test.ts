@@ -213,8 +213,8 @@ describe("export-pdf route — real renderer output is a valid, NON-BLANK PDF", 
     // (The redesign renders the name in normal case, per the reference.)
     expect(all).toContain("Mustapha Drif");
     expect(all).toContain("Auszubildende:r Anlagenmechaniker SHK");
-    expect(all).toContain("PROFIL");
-    expect(all).toContain("KENNTNISSE");
+    expect(all).toContain("Profil");
+    expect(all).toContain("Kenntnisse");
   });
 });
 

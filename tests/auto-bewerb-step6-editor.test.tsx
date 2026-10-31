@@ -307,20 +307,20 @@ describe("Step 6 (subject + body rendering, live preview, defaults)", () => {
         <Step6Email />
       </I18nProvider>,
     );
-    // The subject is pre-filled with the concise default ({{position}} kept
-    // as a token — personalized per recipient):
+    // The subject is pre-filled with the concise default ({{company_name}}
+    // kept as a token — personalized per recipient):
     const subjectInput = screen.getByLabelText(/Gemeinsamer Betreff/) as HTMLInputElement;
     expect(subjectInput.value).toBe(AUTO_BEWERB_EMAIL_DEFAULT_SUBJECT);
 
     // The editor holds the default body (tokens stay as editable tokens):
     const box = document.querySelector('[role="textbox"]') as HTMLElement;
-    expect(box.innerHTML).toContain("anbei sende ich Ihnen meine Bewerbungsunterlagen");
+    expect(box.innerHTML).toContain("Meine vollständigen Bewerbungsunterlagen");
     expect(box.innerHTML).toContain("{{candidate_name}}");
 
     // Live preview: personalized for the first company (candidate name +
-    // position substituted from verified data):
+    // company substituted from verified data):
     expect(screen.getByText("Mustapha Drif")).toBeInTheDocument();
-    const previewSubjects = screen.getAllByText("Bewerbung um einen Ausbildungsplatz – Anlagenmechaniker SHK");
+    const previewSubjects = screen.getAllByText("Bewerbung um einen Ausbildungsplatz bei Kältebau Nord GmbH");
     expect(previewSubjects.length).toBeGreaterThanOrEqual(1);
 
     // The attachment manifest section is part of Step 6:

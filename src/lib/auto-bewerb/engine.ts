@@ -45,6 +45,7 @@ import {
   type AutoBewerbAppStatus,
 } from "./schema";
 import { generateCvPdf, cvPdfFilename } from "./cv-pdf";
+import { selectBestCoverLetterTemplate } from "./letter-template-match";
 import { parseAdDeadline } from "../studio/quality";
 import { zonedTimeToUtc } from "../studio/timezone";
 import {
@@ -2118,6 +2119,10 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
   const docsByCompany = group((docsRes.data ?? []) as unknown as AutoBewerbDocumentRow[]);
   const attemptsByCompany = group((attemptsRes.data ?? []) as unknown as AutoBewerbSendAttemptRow[]);
 
+  // Verified internship experience (drives the template matcher: templates
+  // containing a [Praktikum] paragraph only fit when the profile has one).
+  const hasInternship = (profileRow?.extracted?.experience ?? []).some((e) => e.type === "internship");
+
   const views: AutoBewerbCompanyView[] = companies.map((company) => {
     const docs = (docsByCompany.get(company.id) ?? []).sort((a, b) => b.version - a.version);
     const cvDoc = docs.find((d) => d.doc_type === "cv") ?? null;
@@ -2125,6 +2130,18 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     const cv = cvDoc ? sanitizeCvDocument(cvDoc.content) : null;
     const parsedLetter = letterDoc ? autoBewerbLetterSchema.safeParse(letterDoc.content) : null;
     const attempts = (attemptsByCompany.get(company.id) ?? []).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    // Live deterministic auto-selection for THIS ad (top of the 50-template
+    // ranking) — the same function the generate-letter route uses, so the UI
+    // preview and the actual generation can never disagree.
+    const suggested = company.ad_extracted
+      ? selectBestCoverLetterTemplate({
+          jobTitle: company.ad_extracted.jobTitle,
+          occupation: company.ad_extracted.occupation,
+          adRaw: company.ad_raw,
+          contactPerson: company.ad_extracted.contactPerson,
+          hasInternshipExperience: hasInternship,
+        }).template
+      : null;
     return {
       company,
       cv,
@@ -2139,6 +2156,18 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
       letterVersion: letterDoc ? letterDoc.version : null,
       letterPdfName: parsedLetter?.success ? letterPdfFilename(company.ad_extracted?.company || company.company) : null,
       latestAttempt: attempts[0] ?? null,
+      // Trace: the ORIGINAL template this letter was generated from.
+      letterTemplate:
+        parsedLetter?.success && parsedLetter.data.templateId
+          ? {
+              id: parsedLetter.data.templateId,
+              page: parsedLetter.data.templatePage ?? 0,
+              title: parsedLetter.data.templateTitle ?? "",
+            }
+          : null,
+      suggestedTemplate: suggested
+        ? { id: suggested.id, page: suggested.page, title: suggested.title }
+        : null,
     };
   });
 

@@ -104,7 +104,8 @@ describe("tailored CV renderer — profile photo contract", () => {
 
   it("photo + long content: every page stays true A4 and the photo is present", async () => {
     const cv = baseCv();
-    cv.summary = "Langes Kurzprofil über Anlagenbau und Kältetechnik. ".repeat(30);
+    // Genuinely overflows even the densest tier → multi-page contract.
+    cv.summary = "Langes Kurzprofil über Anlagenbau und Kältetechnik. ".repeat(80);
     cv.experience = Array.from({ length: 8 }, (_, i) => {
       const e = emptyExperience();
       e.jobTitle = `Praktikant Kältetechnik (${i + 1})`;
@@ -162,7 +163,7 @@ describe("tailored CV renderer — multi-page continuation", () => {
     cv.summary = "Profil. ";
     const pdf = await PDFDocument.load(await generateCvPdf(cv));
     const all = Array.from({ length: pdf.getPageCount() }, (_, i) => pageText(pdf, i)).join("\n");
-    for (const section of ["PROFIL", "KENNTNISSE & FÄHIGKEITEN", "SPRACHEN"]) {
+    for (const section of ["Profil", "Kenntnisse", "Sprachen"]) {
       expect(all, `missing section ${section}`).toContain(section);
     }
   });
