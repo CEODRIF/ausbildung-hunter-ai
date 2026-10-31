@@ -4,12 +4,14 @@
  *
  * Reference layout pinned here (real components, jsdom, German = default):
  *   1. Shared e-mail template — subject + rich-text editor (toolbar, tokens,
- *      character counter), AI draft, live preview, optional shared recipient
- *      + attach flags, explicit override warning, validation checklist.
+ *      character counter), AI draft, live preview, attach flags, validation
+ *      checklist. NO shared-recipient override (field, hint and warning are
+ *      removed — a stale stored value is ignored and never displayed).
  *   2. Companies and attachments — read-only rows: company, position, the
- *      company's OWN cover-letter PDF + shared supporting documents as chips,
- *      batch-wide total in the header, NO recipient address next to each
- *      company; a missing verified recipient warns (→ Step 2).
+ *      company's OWN verified recipient (read-only, green verified marker;
+ *      never an input), the company's OWN cover-letter PDF + shared
+ *      supporting documents as chips, batch-wide total in the header; a
+ *      missing verified recipient warns (→ Step 2).
  *   3. ONE global sending-account selector (for the whole batch) — real
  *      connected accounts only (no hardcoded/fictional entries, no
  *      credentials); selecting persists immediately through the EXISTING
@@ -261,7 +263,7 @@ describe("EmailRichEditor", () => {
 // ---------------------------------------------------------------------------
 
 describe("AttachmentManifest (companies and attachments)", () => {
-  it("lists REAL filenames as chips + batch total; NO recipient address next to company rows", () => {
+  it("lists REAL filenames as chips + batch total; each company's OWN verified recipient is shown read-only", () => {
     setWs(makeWs());
     render(
       <I18nProvider>
@@ -286,10 +288,13 @@ describe("AttachmentManifest (companies and attachments)", () => {
     expect(screen.getByText("Anschreiben_Tech Süd AG.pdf")).toBeInTheDocument();
     expect(screen.getAllByText("Abiturzeugnis.pdf").length).toBe(2);
 
-    // The individual recipient data is preserved in the DATA — but no longer
-    // rendered next to the company rows:
-    expect(screen.queryByText("jobs@kaltbau-nord.de")).not.toBeInTheDocument();
-    expect(screen.queryByText("bewerbung@tech-sued.de")).not.toBeInTheDocument();
+    // Each company's OWN verified recipient (from the Step 2 data) is
+    // displayed READ-ONLY below the name/position, with a verified marker:
+    expect(screen.getByText("jobs@kaltbau-nord.de")).toBeInTheDocument();
+    expect(screen.getByText("bewerbung@tech-sued.de")).toBeInTheDocument();
+    expect(screen.getAllByText("Verifizierter Empfänger").length).toBe(2);
+    // …but it is never an input — no editable e-mail field exists here:
+    expect(document.querySelectorAll('input[type="email"]').length).toBe(0);
   });
 
   it("a company WITHOUT a verified recipient warns and points to Step 2", () => {
@@ -307,6 +312,8 @@ describe("AttachmentManifest (companies and attachments)", () => {
       </I18nProvider>,
     );
     expect(screen.getAllByText("Empfänger fehlt — bitte in Schritt 2 prüfen").length).toBe(2);
+    // No address is invented or shown as verified for the missing ones:
+    expect(screen.queryByText("Verifizierter Empfänger")).not.toBeInTheDocument();
   });
 
   it("missing CV/letter warn on the affected company's row", () => {
@@ -418,20 +425,21 @@ describe("Step 6 (simplified layout)", () => {
     expect(screen.getByRole("button", { name: "E-Mail-Entwurf (KI)" })).toBeInTheDocument();
   });
 
-  it("NO individual recipient input beside company rows — exactly one (shared) recipient field", () => {
+  it("NO recipient input anywhere in Step 6 — the shared-recipient override is gone, addresses are read-only", () => {
     setWs(makeWs());
     render(
       <I18nProvider>
         <Step6Email />
       </I18nProvider>,
     );
-    // The only e-mail input on the page is the optional SHARED recipient:
-    const emailInputs = document.querySelectorAll('input[type="email"]');
-    expect(emailInputs.length).toBe(1);
-    expect((emailInputs[0] as HTMLInputElement).value).toBe("");
-    // No company address is rendered anywhere on the step:
-    expect(screen.queryByText("jobs@kaltbau-nord.de")).not.toBeInTheDocument();
-    expect(screen.queryByText("bewerbung@tech-sued.de")).not.toBeInTheDocument();
+    // No editable e-mail input of any kind on the page:
+    expect(document.querySelectorAll('input[type="email"]').length).toBe(0);
+    // The shared-recipient field (label/hint/warning) no longer exists:
+    expect(screen.queryByLabelText(/Gemeinsamer Empfänger/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/WARNUNG: Der gemeinsame Empfänger/)).not.toBeInTheDocument();
+    // Each company's OWN verified address is shown as read-only text:
+    expect(screen.getByText("jobs@kaltbau-nord.de")).toBeInTheDocument();
+    expect(screen.getByText("bewerbung@tech-sued.de")).toBeInTheDocument();
   });
 
   it("pre-fills the DEFAULT subject; editor holds the default body; personalized preview renders", () => {
@@ -524,7 +532,8 @@ describe("Step 6 (simplified layout)", () => {
     });
   });
 
-  it("a SET global recipient shows the explicit override warning (never silent)", () => {
+  it("no override warning is displayed — even with a STALE stored shared recipient (per-company routing only)", () => {
+    // A stored settings row still carries an old shared-recipient value:
     setWs(
       makeWs({
         emailSettings: {
@@ -542,17 +551,13 @@ describe("Step 6 (simplified layout)", () => {
         <Step6Email />
       </I18nProvider>,
     );
-    expect(screen.getByText(/WARNUNG: Der gemeinsame Empfänger ist gesetzt — alle 2 Bewerbungen werden an diese EINE Adresse gesendet/)).toBeInTheDocument();
-  });
-
-  it("an EMPTY global recipient shows no override warning (per-company routing is the default)", () => {
-    setWs(makeWs());
-    render(
-      <I18nProvider>
-        <Step6Email />
-      </I18nProvider>,
-    );
-    expect(screen.queryByText(/WARNUNG: Der gemeinsame Empfänger ist gesetzt/)).not.toBeInTheDocument();
+    // No override warning, no shared-recipient field, and the stale address
+    // is never shown — the per-company verified recipients are displayed:
+    expect(screen.queryByText(/WARNUNG: Der gemeinsame Empfänger/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Gemeinsamer Empfänger/)).not.toBeInTheDocument();
+    expect(screen.queryByText("zentral@postbox.de")).not.toBeInTheDocument();
+    expect(screen.getByText("jobs@kaltbau-nord.de")).toBeInTheDocument();
+    expect(screen.getByText("bewerbung@tech-sued.de")).toBeInTheDocument();
   });
 
   it("a SAVED subject wins over the default; the editor keeps the saved body", () => {

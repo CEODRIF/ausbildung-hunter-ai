@@ -273,14 +273,22 @@ describe("one global configuration — functional (engine, fake DB, scheduled)",
     expect(row?.email_body).toBeNull();
   });
 
-  it("an EXPLICIT global recipient is delivered to ALL companies", async () => {
+  it("a STALE saved shared recipient NEVER overrides — every company keeps its OWN verified recipient", async () => {
+    // The stored settings still carry an old shared-recipient value (left
+    // over from before the Step 6 override was removed):
     seed(globalTemplate({ recipient: " Zentral@Postbox.de " }));
+    for (const r of db.tables.auto_bewerb_companies) r.recipient_email = null; // no manual value → verified ad address
     for (const id of [CO1, CO2, CO3]) {
       const res = await prepareAutoBewerbSend(USER, { companyId: id, schedule: FUTURE });
       expect(res.ok).toBe(true);
     }
+    // The destination is each company's OWN verified ad address:
+    expect(attempt(CO1).recipient_email).toBe("jobs@kaltbau-nord.de");
+    expect(attempt(CO2).recipient_email).toBe("bewerbung@tech-sued.de");
+    expect(attempt(CO3).recipient_email).toBe("hr@heizung-ost.de");
+    // …and the stale shared value is never used as a destination:
     for (const id of [CO1, CO2, CO3]) {
-      expect(attempt(id).recipient_email).toBe("zentral@postbox.de");
+      expect(attempt(id).recipient_email).not.toBe("zentral@postbox.de");
     }
   });
 
@@ -787,7 +795,10 @@ describe("resolveAutoBewerbRecipient (pure)", () => {
 describe("single global configuration (source contracts)", () => {
   it("the engine resolves EVERYTHING from the global settings (no client/company override)", () => {
     expect(ENGINE).toContain("const settings = await getAutoBewerbEmailSettings(userId);");
-    expect(ENGINE).toContain("resolveAutoBewerbRecipient(settings.recipient, app.recipient_email, app.ad_extracted)");
+    // The delivery destination is the company's OWN verified recipient —
+    // the shared-recipient override was removed and is never consulted:
+    expect(ENGINE).toContain('resolveAutoBewerbRecipient("", app.recipient_email, app.ad_extracted)');
+    expect(ENGINE).not.toContain("settings.recipient, app.recipient_email");
     expect(ENGINE).toContain("subject = settings.subject.trim().slice(0, 200);");
     expect(ENGINE).toContain("accountId = settings.accountId;");
     expect(ENGINE).toContain("attachCv = settings.attachCv;");
@@ -863,23 +874,20 @@ describe("single global configuration (source contracts)", () => {
     }
   });
 
-  it("the global-recipient override is EXPLICIT everywhere (Step 6 warning + Step 7 banner/modal) — never silent", () => {
-    // The field itself announces the override semantics:
-    expect(STEP6).toContain('label={t("autoBewerb.globalRecipientLabel")}');
-    // Step 6: a prominent warning renders ONLY while a recipient is set:
-    expect(STEP6).toContain("globalRecipientOverrideWarning");
-    expect(STEP6).toMatch(/recipient\.trim\(\)\s*!==\s*""/);
-    // Step 7: the override is named in the review AND the confirmation modal:
-    expect(STEP7).toContain("globalRecipientStep7Note");
-    expect(STEP7).toMatch(/s\.recipient\.trim\(\)\s*!==\s*""/);
-    expect(STEP7.match(/globalRecipientStep7Note/g)!.length).toBe(2);
-    // The disclosure texts exist in all four languages:
-    for (const key of ["globalRecipientOverrideWarning", "globalRecipientStep7Note"]) {
-      expect(DICT.match(new RegExp(key + ":", "g"))!.length).toBe(4);
-    }
-    // Default routing (empty field) stays per-company verified:
+  it("the shared-recipient override is REMOVED — every company routes to its own verified recipient", () => {
+    // No shared-recipient field and no override warning anywhere in Step 6:
+    expect(STEP6).not.toContain("globalRecipientLabel");
+    expect(STEP6).not.toContain("globalRecipientOverrideWarning");
+    // No stale-override banner in the Step 7 review or confirmation modal:
+    expect(STEP7).not.toContain("globalRecipientStep7Note");
+    // The engine resolves the per-company verified destination only:
+    expect(ENGINE).toContain('resolveAutoBewerbRecipient("", app.recipient_email, app.ad_extracted)');
+    expect(ENGINE).not.toContain("settings.recipient, app.recipient_email");
+    // Routing primitives stay (legacy manual value → verified ad address):
     expect(SCHEMA).toContain("if (legacy) return legacy;");
     expect(SCHEMA).toContain("applicationEmail");
+    // The read-only verified-recipient indicator exists in all four languages:
+    expect(DICT.match(/recipientVerified:/g)!.length).toBe(4);
   });
 
   it("Step 7: inputs are company ids + confirmation only; the modal shows the exact shared config + per-company destination", () => {
@@ -887,8 +895,9 @@ describe("single global configuration (source contracts)", () => {
     expect(STEP7).not.toContain("recipientEmail");
     expect(STEP7).not.toContain("emailAccountId");
     expect(STEP7).not.toContain("renderAutoBewerbEmailBody");
-    // The confirmation shows the shared body VERBATIM + the resolved destination:
-    expect(STEP7).toContain("resolveAutoBewerbRecipient(s.recipient, r.recipient_email, r.ad_extracted)");
+    // The confirmation shows the shared body VERBATIM + the resolved
+    // per-company verified destination:
+    expect(STEP7).toContain('resolveAutoBewerbRecipient("", r.recipient_email, r.ad_extracted)');
     expect(STEP7).toContain("t(\"autoBewerb.globalPreviewTitle\")");
     expect(STEP7).toContain("t(\"autoBewerb.previewCount\"");
   });
@@ -910,7 +919,7 @@ describe("single global configuration (source contracts)", () => {
     expect(DICT).not.toContain("tokenPosition");
     expect(DICT).not.toContain("tokenContact");
     expect(DICT).toContain("emailSettingsTitle");
-    expect(DICT).toContain("globalRecipientHint");
+    expect(DICT).toContain("recipientVerified");
     expect(DICT).toContain("deliveryListTitle");
   });
 });
