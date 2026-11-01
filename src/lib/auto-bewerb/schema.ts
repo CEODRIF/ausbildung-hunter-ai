@@ -464,6 +464,18 @@ export interface AutoBewerbCapacity {
   available: number;
 }
 
+/** The daily SENDING WINDOW state (server-computed; IANA Europe/Berlin,
+ *  DST-aware). New batch STARTS only happen while `open`; in-flight batches
+ *  always drain to completion (safe batch boundary). */
+export interface AutoBewerbSendingWindow {
+  /** True iff now is in [07:30, 10:30) Europe/Berlin. */
+  open: boolean;
+  /** Display label, e.g. "07:30–10:30 Europe/Berlin". */
+  label: string;
+  /** The next moment the window opens (epoch ms); null while open. */
+  nextStartMs: number | null;
+}
+
 /** One sent / cancelled company retained for the sending history. Automatic
  *  removal hides it from the ACTIVE list but NEVER deletes it — this is the
  *  preserved audit record (name, recipient, position, result, timestamp,
@@ -575,6 +587,11 @@ export interface AutoBewerbWorkspace {
    *  The ACTIVE list (`companies`) excludes these; they are retained here so
    *  automatic removal never loses the audit record. */
   sendHistory?: AutoBewerbSendHistoryItem[];
+  /** The daily sending window state (server-computed, IANA Europe/Berlin,
+   *  DST-aware). `open` gates NEW batch starts; `nextStartMs` is the next
+   *  moment the window opens (null while open). Optional so pre-feature
+   *  fixtures remain valid. */
+  sendingWindow?: AutoBewerbSendingWindow | null;
 }
 
 /** All tables the AUTO BEWERB feature needs (the probe checks all seven). */

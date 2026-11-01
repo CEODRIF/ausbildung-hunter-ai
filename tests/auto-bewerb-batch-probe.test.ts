@@ -11,6 +11,14 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 vi.mock("@/lib/email-providers", () => ({ createEmailProvider: vi.fn() }));
+// The sending window is pinned OPEN for these engine tests so immediate-
+// batch behavior never depends on the wall clock; the window GATE itself is
+// covered by tests/auto-bewerb-sending-window-gate.test.ts (real logic + fake time).
+vi.mock("@/lib/auto-bewerb/sending-window", () => ({
+  isSendingWindowOpen: () => true,
+  nextWindowStartMs: () => null,
+  windowLabel: () => "07:30\u201310:30 Europe/Berlin",
+}));
 
 const { createAdminClient } = await import("@/lib/supabase/admin");
 const { createStudioDb } = await import("./helpers-studio");

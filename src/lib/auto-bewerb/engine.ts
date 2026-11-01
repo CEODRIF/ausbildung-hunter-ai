@@ -53,6 +53,7 @@ import {
   type AutoBewerbAppStatus,
 } from "./schema";
 import { reserveSenderSlot, SENDER_SLOT_WAIT_BUDGET_MS } from "../email-rate-limit";
+import { isSendingWindowOpen, nextWindowStartMs, windowLabel } from "./sending-window";
 import { generateCvPdf, cvPdfFilename } from "./cv-pdf";
 import { selectBestCoverLetterTemplate } from "./letter-template-match";
 import { parseAdDeadline } from "../studio/quality";
@@ -2102,6 +2103,10 @@ export interface AutoBewerbBatchResult {
   items?: AutoBewerbBatchItemResult[];
   /** Non-empty = NOTHING was created (pre-validation is all-or-nothing). */
   errors?: AutoBewerbBatchItemError[];
+  /** True = an IMMEDIATE batch was accepted but NOT started because the
+   *  sending window (07:30–10:30 Europe/Berlin) is closed — it stays
+   *  'waiting' and starts at the next eligible window (honest status). */
+  windowDeferred?: boolean;
 }
 
 /** Create a batch (immediate or scheduled) and prepare every company in it.
@@ -2286,24 +2291,34 @@ export async function createAutoBewerbBatch(
   //    within a bounded budget; the remainder completes via the cron tick /
   //    page-load catch-up (durable, browser-independent). Scheduled batches
   //    start ONLY at their time, via the same server-side machinery.
+  //    SENDING WINDOW (07:30–10:30 Europe/Berlin, IANA, DST-aware): while the
+  //    window is closed, an immediate batch is ACCEPTED but NOT started — it
+  //    stays 'waiting' in Supabase and starts automatically at the next
+  //    eligible window; the caller receives the honest windowDeferred status
+  //    (never a silent deferral, never an out-of-window start).
+  let windowDeferred = false;
   if (!scheduledAt) {
-    await startAutoBewerbBatchesForUser(userId, 5);
-    const { data: afterStart } = await admin.from("auto_bewerb_batches").select("status, started_at").eq("id", batch.id).maybeSingle();
-    const st = afterStart as { status?: AutoBewerbBatchStatus; started_at?: string | null } | null;
-    batch = { ...batch, status: st?.status ?? batch.status, started_at: st?.started_at ?? null };
-    if (batch.status === "sending") {
-      const deadline = Date.now() + BATCH_INLINE_DISPATCH_BUDGET_MS;
-      for (;;) {
-        const due = await dueBatchAttempts(admin, batch.id);
-        if (due.length === 0) break;
-        for (const a of due) {
-          const dispatch = await dispatchAutoBewerbAttempt(a.id, { slotBudgetMs: SENDER_SLOT_WAIT_BUDGET_MS });
-          const it = items.find((i) => i.companyId === a.company_id);
-          if (it && dispatch.status !== "skipped") it.dispatchStatus = dispatch.status === "sent" ? "sent" : "queued";
+    if (!isSendingWindowOpen()) {
+      windowDeferred = true;
+    } else {
+      await startAutoBewerbBatchesForUser(userId, 5);
+      const { data: afterStart } = await admin.from("auto_bewerb_batches").select("status, started_at").eq("id", batch.id).maybeSingle();
+      const st = afterStart as { status?: AutoBewerbBatchStatus; started_at?: string | null } | null;
+      batch = { ...batch, status: st?.status ?? batch.status, started_at: st?.started_at ?? null };
+      if (batch.status === "sending") {
+        const deadline = Date.now() + BATCH_INLINE_DISPATCH_BUDGET_MS;
+        for (;;) {
+          const due = await dueBatchAttempts(admin, batch.id);
+          if (due.length === 0) break;
+          for (const a of due) {
+            const dispatch = await dispatchAutoBewerbAttempt(a.id, { slotBudgetMs: SENDER_SLOT_WAIT_BUDGET_MS });
+            const it = items.find((i) => i.companyId === a.company_id);
+            if (it && dispatch.status !== "skipped") it.dispatchStatus = dispatch.status === "sent" ? "sent" : "queued";
+            if (Date.now() > deadline) break;
+          }
+          await settleAutoBewerbBatch(admin, batch.id);
           if (Date.now() > deadline) break;
         }
-        await settleAutoBewerbBatch(admin, batch.id);
-        if (Date.now() > deadline) break;
       }
     }
   }
@@ -2314,12 +2329,24 @@ export async function createAutoBewerbBatch(
 
   void logAutoBewerbActivity(
     userId,
-    scheduledAt ? "auto_bewerb_batch_scheduled" : "auto_bewerb_batch_started",
-    scheduledAt ? `AUTO BEWERB: Batch ${batchNo} geplant` : `AUTO BEWERB: Batch ${batchNo} gestartet`,
+    scheduledAt ? "auto_bewerb_batch_scheduled" : windowDeferred ? "auto_bewerb_batch_window_deferred" : "auto_bewerb_batch_started",
+    scheduledAt
+      ? `AUTO BEWERB: Batch ${batchNo} geplant`
+      : windowDeferred
+        ? `AUTO BEWERB: Batch ${batchNo} wartet auf das Versandfenster (${windowLabel()})`
+        : `AUTO BEWERB: Batch ${batchNo} gestartet`,
     undefined,
-    { batchId: batch.id, companies: okItems.length, accountEmail },
+    { batchId: batch.id, companies: okItems.length, accountEmail, windowDeferred },
   );
-  return { ok: true, batchId: batch.id, batchNo, status: batch.status, scheduledAt, items };
+  return {
+    ok: true,
+    batchId: batch.id,
+    batchNo,
+    status: batch.status,
+    scheduledAt,
+    items,
+    windowDeferred: windowDeferred || undefined,
+  };
 }
 
 /** The TS mirror of the claim_startable RPC (same rule, same conditional
@@ -2328,6 +2355,15 @@ export async function createAutoBewerbBatch(
  *  are still safe: the flip is conditional (status must still be
  *  scheduled/waiting), so exactly one wins. */
 export async function startAutoBewerbBatchesForUser(userId: string, limit = 5): Promise<AutoBewerbBatchRow[]> {
+  // SENDING WINDOW gate (07:30–10:30 Europe/Berlin, IANA, DST-aware): while
+  // the window is closed NO new batch starts — due batches stay
+  // scheduled/waiting in Supabase for the next eligible window. This is the
+  // single TS choke point for batch starts (immediate 'send now' + the
+  // page-load catch-up); the cron path is gated the same way in Postgres
+  // (auto_bewerb_sending_window_open). In-flight 'sending' batches are
+  // unaffected — their attempts drain via the ungated claim path (safe batch
+  // boundary: we finish what started, we start nothing new).
+  if (!isSendingWindowOpen()) return [];
   const admin = createAdminClient();
   const nowIso = new Date().toISOString();
   const { data: dueRows } = await admin
@@ -2608,6 +2644,9 @@ export interface AutoBewerbSweepResult {
   recovered: number;
   claimed: number;
   results: AutoBewerbDispatchResult[];
+  /** The sending window (07:30–10:30 Europe/Berlin) at sweep time — closed
+   *  sweeps never START new batches (they still drain in-flight ones). */
+  windowOpen: boolean;
 }
 
 /** Cron worker: recover stale rows, START due batches (3:30 gate), claim
@@ -2617,16 +2656,26 @@ export async function claimAndDispatchDueAutoBewerbAttempts(limit = 5, budgetMs 
   const admin = createAdminClient();
   const { data: recovered } = await admin.rpc("recover_stale_auto_bewerb_attempts");
   const recoveredCount = Number(recovered ?? 0) || 0;
-  // Batches: recover stale + start the due ones (the inter-batch gate is
-  // atomic inside the RPC — overlapping ticks can never double-start).
+  // Batches: recover stale (safe any time) + start the due ones (the
+  // inter-batch gate is atomic inside the RPC — overlapping ticks can never
+  // double-start). SENDING WINDOW: the app-level gate is authoritative even
+  // before the DB gate migration is applied — while the window is closed, NO
+  // new batch starts (due batches stay scheduled/waiting for the next
+  // window); in-flight 'sending' batches still drain below (safe batch
+  // boundary — nothing is interrupted).
   await admin.rpc("recover_stale_auto_bewerb_batches");
-  const { data: startedBatches } = await admin.rpc("claim_startable_auto_bewerb_batches", { p_limit: limit });
+  const windowOpen = isSendingWindowOpen();
+  let startedBatches: unknown = [];
+  if (windowOpen) {
+    const res = await admin.rpc("claim_startable_auto_bewerb_batches", { p_limit: limit });
+    startedBatches = res.data ?? [];
+  }
   const startedIds = ((startedBatches ?? []) as Array<{ id?: string }>).map((b) => b.id).filter(Boolean) as string[];
   // Attempts: the claim RPC only returns attempts of STARTED batches (or
   // legacy rows without a batch) — a batch's gate owns when they may fire.
   const { data: rows, error } = await admin.rpc("claim_due_auto_bewerb_attempts", { p_limit: limit });
   if (error || !Array.isArray(rows))
-    return { recovered: recoveredCount, claimed: 0, results: [] };
+    return { recovered: recoveredCount, claimed: 0, results: [], windowOpen };
   const results: AutoBewerbDispatchResult[] = [];
   const touchedBatches = new Set<string>(startedIds);
   for (const row of rows as Array<Pick<AutoBewerbSendAttemptRow, "id" | "batch_id">>) {
@@ -2657,7 +2706,7 @@ export async function claimAndDispatchDueAutoBewerbAttempts(limit = 5, budgetMs 
     if (Date.now() > deadline) break;
     await settleAutoBewerbBatch(admin, b.id);
   }
-  return { recovered: recoveredCount, claimed: rows.length, results };
+  return { recovered: recoveredCount, claimed: rows.length, results, windowOpen };
 }
 
 /** Best-effort page-load catch-up: start the visiting user's due batches
@@ -2689,11 +2738,14 @@ export async function processDueAutoBewerbAttemptsForUser(userId: string, limit 
     .filter((r) => due(r.scheduled_at) && due(r.next_attempt_at) && (!r.batch_id || sendingIds.has(r.batch_id)))
     .slice(0, limit);
   const results: AutoBewerbDispatchResult[] = [];
-  for (const r of dueRows) {
-    results.push(await dispatchAutoBewerbAttempt(r.id, { slotBudgetMs: 2_000 }));
-    if (r.batch_id) await settleAutoBewerbBatch(admin, r.batch_id);
-  }
-   return { recovered: 0, claimed: results.length, results };
+    for (const r of dueRows) {
+      results.push(await dispatchAutoBewerbAttempt(r.id, { slotBudgetMs: 2_000 }));
+      if (r.batch_id) await settleAutoBewerbBatch(admin, r.batch_id);
+    }
+    // The window gate lives in startAutoBewerbBatchesForUser (no new starts
+    // while closed); the drain above only touches already-'sending' batches
+    // (safe batch boundary).
+    return { recovered: 0, claimed: results.length, results, windowOpen: isSendingWindowOpen() };
 }
 
 // ---------------------------------------------------------------------------
@@ -2743,6 +2795,14 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
       ? "missing_tables"
       : "probe_error"
     : null;
+  // The daily sending window state (07:30–10:30 Europe/Berlin, IANA,
+  // DST-aware) — server-computed, independent of the database state.
+  const nowMs = Date.now();
+  const sendingWindow: AutoBewerbWorkspace["sendingWindow"] = {
+    open: isSendingWindowOpen(nowMs),
+    label: windowLabel(),
+    nextStartMs: nextWindowStartMs(nowMs),
+  };
   const empty: AutoBewerbWorkspace = {
     ready,
     setupIssue,
@@ -2761,6 +2821,7 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     sendStats: { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 },
     capacity: { reserved: 0, capacity: AUTO_BEWERB_COMPANY_LIMIT, available: AUTO_BEWERB_COMPANY_LIMIT },
     sendHistory: [],
+    sendingWindow,
   };
   if (!ready) return empty;
 
@@ -2934,5 +2995,6 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     sendStats,
     capacity,
     sendHistory,
+    sendingWindow,
   };
 }

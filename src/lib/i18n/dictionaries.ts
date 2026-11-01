@@ -2725,6 +2725,11 @@ const de = {
     historyCancelledAt: "Abgebrochen: {time}",
     historyAccount: "Versand-Konto",
     historyBatch: "Batch",
+    windowBannerOpen: "Versandfenster offen ({label}) — neue Batches können starten.",
+    windowBannerClosed:
+      "Versandfenster geschlossen ({label}) — wartende Batches starten automatisch im nächsten Fenster (nächster Start: {time}).",
+    windowDeferredNote:
+      "Das Versandfenster ({label}) ist gerade geschlossen: Der Batch wurde übernommen und startet automatisch im nächsten Fenster.",
     // Step 5 — 50 Original-Vorlagen (Bewerbungsvorlagen_50) + echte Signatur
     tplFoundationTitle: "Vorlagen-Grundlage (50 Original-Vorlagen)",
     tplFoundationDesc:
@@ -5427,6 +5432,11 @@ const en: Dict = {
     historyCancelledAt: "Cancelled: {time}",
     historyAccount: "Sending account",
     historyBatch: "Batch",
+    windowBannerOpen: "Sending window open ({label}) — new batches may start.",
+    windowBannerClosed:
+      "Sending window closed ({label}) — waiting batches start automatically in the next window (next start: {time}).",
+    windowDeferredNote:
+      "The sending window ({label}) is closed right now: the batch was accepted and will start automatically in the next window.",
     // Step 5 — the 50 original templates (Bewerbungsvorlagen_50) + signature
     tplFoundationTitle: "Template foundation (50 original templates)",
     tplFoundationDesc:
@@ -8139,6 +8149,11 @@ const fr: Dict = {
     historyCancelledAt: "Annulée : {time}",
     historyAccount: "Compte d'envoi",
     historyBatch: "Lot",
+    windowBannerOpen: "Fenêtre d'envoi ouverte ({label}) — de nouveaux lots peuvent démarrer.",
+    windowBannerClosed:
+      "Fenêtre d'envoi fermée ({label}) — les lots en attente démarrent automatiquement à la fenêtre suivante (prochain départ : {time}).",
+    windowDeferredNote:
+      "La fenêtre d'envoi ({label}) est actuellement fermée : le lot a été pris en charge et démarrera automatiquement à la fenêtre suivante.",
     // Step 5 — les 50 modèles d'origine (Bewerbungsvorlagen_50) + signature
     tplFoundationTitle: "Basis des modèles (50 modèles d'origine)",
     tplFoundationDesc:
@@ -10768,6 +10783,11 @@ const ar: Dict = {
     historyCancelledAt: "أُلغيت: {time}",
     historyAccount: "حساب الإرسال",
     historyBatch: "الدفعة",
+    windowBannerOpen: "نافذة الإرسال مفتوحة ({label}) — يمكن بدء الدفعات الجديدة.",
+    windowBannerClosed:
+      "نافذة الإرسال مغلقة ({label}) — تبدأ الدفعات المنتظرة تلقائيًا في النافذة التالية (البدء التالي: {time}).",
+    windowDeferredNote:
+      "نافذة الإرسال ({label}) مغلقة حاليًا: تم قبول الدفعة وستبدأ تلقائيًا في النافذة التالية.",
     // Step 5 — النماذج الأصلية الـ50 (Bewerbungsvorlagen_50) + التوقيع
     tplFoundationTitle: "أساس النماذج (50 نموذجًا أصليًا)",
     tplFoundationDesc:

@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { claimAndDispatchDueAutoBewerbAttempts } from "@/lib/auto-bewerb/engine";
+import { windowLabel } from "@/lib/auto-bewerb/sending-window";
 
 /**
  * AUTO BEWERB scheduler tick — durable, browser-independent dispatch of
@@ -45,17 +46,23 @@ export async function GET(request: Request) {
 
   const startedAt = Date.now();
   try {
-    const { recovered, claimed, results } = await claimAndDispatchDueAutoBewerbAttempts(MAX_ATTEMPTS, SOFT_BUDGET_MS);
+    const { recovered, claimed, results, windowOpen } = await claimAndDispatchDueAutoBewerbAttempts(MAX_ATTEMPTS, SOFT_BUDGET_MS);
     const sent = results.filter((r) => r.status === "sent").length;
     const failed = results.filter((r) => r.status === "failed").length;
     const retried = results.filter((r) => r.status === "queued").length;
     console.info(
-      `[AUTO_BEWERB_SCHEDULER] tick done recovered=${recovered} claimed=${claimed} sent=${sent} failed=${failed} retried=${retried} elapsed_ms=${
+      `[AUTO_BEWERB_SCHEDULER] tick done window_open=${windowOpen} recovered=${recovered} claimed=${claimed} sent=${sent} failed=${failed} retried=${retried} elapsed_ms=${
         Date.now() - startedAt
       }`,
     );
     return NextResponse.json({
       ok: true,
+      // The sending window (07:30–10:30 Europe/Berlin) is enforced HERE,
+      // server-side — window_open=false means this tick started NO new
+      // batches (in-flight batches still drained). The GH Actions schedule
+      // is a best-effort trigger only, never the enforcement.
+      window_open: windowOpen,
+      sending_window: windowLabel(),
       recovered,
       claimed,
       sent,
