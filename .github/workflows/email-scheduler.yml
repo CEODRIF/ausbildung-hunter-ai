@@ -114,25 +114,38 @@ jobs:
             -H "Authorization: Bearer $CRON_SECRET" \
             "$DEPLOY_URL/api/cron/bew-scheduler")"
           echo "Bew scheduler tick: $body"
-      - name: AUTO-Bewerb scheduler tick
-        env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          DEPLOY_URL: ${{ vars.EMAIL_SCHEDULER_URL || 'https://ausbildungsweg.net' }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CRON_SECRET:-}" ]; then
-            echo "::error::CRON_SECRET is not set in repository secrets."
-            exit 1
-          fi
-          : "${DEPLOY_URL:=https://ausbildungsweg.net}"
-          DEPLOY_URL="${DEPLOY_URL%/}"
-          # The AUTO BEWERB drain — SAME secret, SAME cadence, SAME
-          # concurrency group. Ticks /api/cron/auto-bewerb-scheduler, which
-          # recovers stale attempts and claims+dispatches due SCHEDULED
-          # application sends (atomic re-claim — nothing double-sends).
-          # Deploy the branch before enabling the variable if it is not yet
-          # live (a 404 fails the run on purpose).
-          body="$(curl -sS --fail-with-body --max-time 90 --retry 3 --retry-delay 10 \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            "$DEPLOY_URL/api/cron/auto-bewerb-scheduler")"
-          echo "AUTO-Bewerb scheduler tick: $body"
+       - name: AUTO-Bewerb scheduler tick
+         env:
+           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+           DEPLOY_URL: ${{ vars.EMAIL_SCHEDULER_URL || 'https://ausbildungsweg.net' }}
+         run: |
+           set -euo pipefail
+           if [ -z "${CRON_SECRET:-}" ]; then
+             echo "::error::CRON_SECRET is not set in repository secrets."
+             exit 1
+           fi
+           : "${DEPLOY_URL:=https://ausbildungsweg.net}"
+           DEPLOY_URL="${DEPLOY_URL%/}"
+           # The AUTO BEWERB drain — SAME secret, SAME cadence, SAME
+           # concurrency group. Ticks /api/cron/auto-bewerb-scheduler, which
+           # recovers stale attempts and claims+dispatches due SCHEDULED
+           # application sends (atomic re-claim — nothing double-sends).
+           # Deploy the branch before enabling the variable if it is not yet
+           # live (a 404 fails the run on purpose).
+           #
+           # SENDING WINDOW (07:30–10:30 Europe/Berlin, IANA, DST-aware):
+           # enforced SERVER-SIDE, not by this schedule. GitHub Actions cron
+           # expressions are UTC-only — no IANA-timezone support — so a
+           # timezone-aware cron is NOT possible here; this */5 UTC tick is a
+           # best-effort TRIGGER only. The endpoint (and Postgres'
+           # claim_startable_auto_bewerb_batches) start NO new batches while
+           # the window is closed (the response JSON reports window_open),
+           # which also makes DELAYED executions safe: a run that finally
+           # executes at 11:00 Berlin starts nothing. In-flight batches still
+           # drain (safe batch boundary). The schedule is intentionally not
+           # narrowed to UTC hours: this workflow also ticks the email- and
+           # bew-scheduler engines, which have no such window.
+           body="$(curl -sS --fail-with-body --max-time 90 --retry 3 --retry-delay 10 \
+             -H "Authorization: Bearer $CRON_SECRET" \
+             "$DEPLOY_URL/api/cron/auto-bewerb-scheduler")"
+           echo "AUTO-Bewerb scheduler tick: $body"

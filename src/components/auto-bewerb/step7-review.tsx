@@ -21,6 +21,7 @@ import type {
   AutoBewerbBatchResult,
   AutoBewerbScheduleInput,
 } from "@/lib/auto-bewerb/engine";
+import { windowLabel } from "@/lib/auto-bewerb/sending-window";
 import {
   approveCompanyAction,
   cancelBatchAction,
@@ -277,6 +278,12 @@ export function Step7Review() {
     setBatchErrors(null);
     setSelected(new Set()); // spec: accepted batch leaves the active selection
     void refresh();
+    if (res.windowDeferred) {
+      // Honest status: the batch was accepted but starts only inside the
+      // daily sending window (07:30–10:30 Europe/Berlin) — never "started".
+      notify("info", t("autoBewerb.windowDeferredNote", { label: ws.sendingWindow?.label ?? windowLabel() }));
+      return;
+    }
     notify(
       "success",
       res.scheduledAt
@@ -419,6 +426,20 @@ export function Step7Review() {
   return (
     <div className="space-y-5">
       <Note kind="info">{t("autoBewerb.draftNote")}</Note>
+
+      {/* Live sending-window state (server-computed, IANA Europe/Berlin,
+          DST-aware): new batch STARTS only happen while open; waiting
+          batches start automatically in the next window. */}
+      {ws.sendingWindow && (
+        <Note kind={ws.sendingWindow.open ? "success" : "info"}>
+          {ws.sendingWindow.open
+            ? t("autoBewerb.windowBannerOpen", { label: ws.sendingWindow.label })
+            : t("autoBewerb.windowBannerClosed", {
+                label: ws.sendingWindow.label,
+                time: ws.sendingWindow.nextStartMs ? fmtTime(new Date(ws.sendingWindow.nextStartMs).toISOString()) : "–",
+              })}
+        </Note>
+      )}
 
       {ws.emailAccounts.length === 0 && (
         <Note kind="error">
