@@ -56,6 +56,7 @@ const realGenerateCvPdf = (
 import { GET } from "@/app/api/auto-bewerb/export-pdf/route";
 import { AUTO_BEWERB_TABLES } from "@/lib/auto-bewerb/schema";
 import { cvEmpty, type CvDocument } from "@/lib/templates/cv";
+import { streamItems } from "./helpers-letter-content-stream";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative: string) => readFileSync(resolve(root, relative), "utf8");
@@ -281,6 +282,83 @@ describe("export-pdf route — the letter carries the owner's CURRENT signature 
     const pdfAfter = await PDFDocument.load(after);
     expect(pdfAfter.getPageCount()).toBe(1);
   });
+});
+
+describe("export-pdf route — the LETTER PREVIEW shows the signature at the enlarged size (preview == export)", () => {
+  /** The SAME 480 × 140 wide fixture the PDF layout suite uses. */
+  const WIDE_PNG = new Uint8Array(readFileSync(resolve(root, "tests", "fixtures", "signature-wide.png")));
+  const NAME = "Mustapha Drif";
+  const CLOSING = "Mit freundlichen Grüßen";
+  /** The new display box (src/lib/bew-letter-pdf.ts) — a uniform ×1.35 over 130 × 44 pt. */
+  const NEW_MAX_WIDTH = 175.5;
+  const NEW_MAX_HEIGHT = 59.4;
+
+  const LETTER_TEXT =
+    "Sehr geehrte Frau Schneider,\n\n" +
+    "hiermit bewerbe ich mich um den Ausbildungsplatz als Anlagenmechaniker. Ich bringe Erfahrung im Anlagenbau mit.\n\n" +
+    "Über eine Einladung zu einem persönlichen Gespräch würde ich mich sehr freuen.\n\n" +
+    "Mit freundlichen Grüßen\n\n" +
+    "Mustapha Drif";
+
+  it("preview=1 → inline PDF whose signature is BELOW the name at 175.5 × 51.19 pt, byte-identical to the export", async () => {
+    const db = seedWorkspace(sampleCv());
+    db.tables.auto_bewerb_documents.push({
+      id: "doc-letter",
+      user_id: USER_A,
+      company_id: "comp-a",
+      doc_type: "cover_letter",
+      version: 1,
+      content: { text: LETTER_TEXT, tone: "professional" },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    (createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(db.admin);
+
+    // The owner's GENUINE uploaded signature (the fixed owner path).
+    const { error: upErr } = await db.admin.storage
+      .from("application-attachments")
+      .upload(`${USER_A}/auto-bewerb/signature/signature.png`, WIDE_PNG, {
+        contentType: "image/png",
+        upsert: true,
+      });
+    expect(upErr).toBeNull();
+
+    const previewRes = await GET(new Request(`${BASE}?companyId=comp-a&doc=letter&preview=1`));
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.headers.get("content-type")).toBe("application/pdf");
+    expect((previewRes.headers.get("content-disposition") ?? "").startsWith("inline;")).toBe(true);
+    const previewBytes = new Uint8Array(await previewRes.arrayBuffer());
+    expect(isPdfBytes(Buffer.from(previewBytes))).toBe(true);
+
+    // The PREVIEW document itself carries the enlarged signature: exactly
+    // one image, the 480 × 140 source fitted by the width cap →
+    // 175.5 × (140/480) = 175.5 × 51.19 pt, aspect ratio intact, BELOW the
+    // printed name (which is below the closing), left-aligned with it.
+    const items = await streamItems(previewBytes);
+    const closing = items.find((i) => i.kind === "text" && i.text === CLOSING);
+    const name = items.find((i) => i.kind === "text" && i.text === NAME);
+    const images = items.filter((i) => i.kind === "image");
+    expect(closing, "closing line").toBeTruthy();
+    expect(name, "printed name line").toBeTruthy();
+    expect(images, "exactly one embedded image (the signature)").toHaveLength(1);
+    const img = images[0];
+    expect(img.width).toBeCloseTo(NEW_MAX_WIDTH, 2);
+    expect(img.height).toBeCloseTo(NEW_MAX_WIDTH * 140 / 480, 2);
+    expect(img.width).toBeLessThanOrEqual(NEW_MAX_WIDTH + 1e-6);
+    expect(img.height).toBeLessThanOrEqual(NEW_MAX_HEIGHT + 1e-6);
+    expect(img.width / img.height).toBeCloseTo(480 / 140, 4);
+    expect(img.y + img.height).toBeLessThan(name!.y);
+    expect(name!.y).toBeLessThan(closing!.y);
+    expect(img.x).toBeCloseTo(name!.x, 6);
+
+    // The preview and the explicit export are the SAME document (only the
+    // disposition differs) — the employer's PDF shows the same size.
+    const exportRes = await GET(new Request(`${BASE}?companyId=comp-a&doc=letter`));
+    expect(exportRes.status).toBe(200);
+    expect((exportRes.headers.get("content-disposition") ?? "").startsWith("attachment;")).toBe(true);
+    const exportBytes = new Uint8Array(await exportRes.arrayBuffer());
+    expect(Buffer.from(previewBytes).equals(Buffer.from(exportBytes))).toBe(true);
+  }, 20000);
 });
 
 describe("export-pdf route — authentication + ownership stay enforced", () => {

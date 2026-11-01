@@ -9,6 +9,9 @@ import sharp from "sharp";
 const W = 480;
 const H = 140;
 const W2 = 320; // second fixture: a less wide ratio (exercises the height cap)
+const W3 = 200; // third fixture: 1:1 square (height cap binds)
+const W4 = 140; // fourth fixture: portrait 0.44 ratio (height cap binds)
+const H4 = 320;
 
 // Cursive, hand-drawn looking signature strokes (viewBox 0 0 480 140).
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
@@ -23,7 +26,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" 
 const outDir = path.join("tests", "fixtures");
 mkdirSync(outDir, { recursive: true });
 
-const render = (w) => sharp(Buffer.from(svg), { density: 150 }).resize(w, H, { fit: "fill" });
+const render = (w, h = H) => sharp(Buffer.from(svg), { density: 150 }).resize(w, h, { fit: "fill" });
 await Promise.all([
   render(W).png().toFile(path.join(outDir, "signature-wide.png")),
   render(W)
@@ -31,11 +34,12 @@ await Promise.all([
     .jpeg({ quality: 92 })
     .toFile(path.join(outDir, "signature-wide.jpg")),
   render(W2).png().toFile(path.join(outDir, "signature-medium.png")),
+  render(W3, W3).png().toFile(path.join(outDir, "signature-square.png")),
+  render(W4, H4).png().toFile(path.join(outDir, "signature-tall.png")),
 ]);
-
 const meta = await Promise.all(
-  ["signature-wide.png", "signature-wide.jpg", "signature-medium.png"].map((f) =>
-    sharp(path.join(outDir, f)).metadata(),
+  ["signature-wide.png", "signature-wide.jpg", "signature-medium.png", "signature-square.png", "signature-tall.png"].map(
+    (f) => sharp(path.join(outDir, f)).metadata(),
   ),
 );
 for (const m of meta) console.log(`${m.format}:`, m.width, "x", m.height);
