@@ -53,8 +53,10 @@ describe("bulk CV generation contract (Step 4)", () => {
     expect(ROUTE).not.toContain("validateGeneratedCv(");
     expect(ROUTE).not.toContain("fact_violations");
     expect(ROUTE).not.toContain("422");
-    // ...while schema validation, sanitization and quota handling stay.
-    expect(ROUTE).toContain("sanitizeCvDocument(parseJsonObject(raw))");
+    // ...while schema validation, sanitization and quota handling stay —
+    // enforced inside the controlled transformation (whitelist merge).
+    expect(ROUTE).toContain("mergeTailoredCvDocument({");
+    expect(ROUTE).toContain("generated: parseJsonObject(raw)");
     expect(ROUTE).toContain("completeFeatureOp(user.id, \"resume_ai\", runId)");
     expect(ROUTE).toContain("checkRateLimit(\"auto_bewerb_ai\", user.id)");
   });

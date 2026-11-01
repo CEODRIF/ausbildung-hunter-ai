@@ -8,10 +8,16 @@
  * modern-template.tsx, the builder's professional sans-serif design):
  *
  *   - left-aligned header: steel-blue bold name, lighter-steel title,
- *     icon contact line (email, phone, location, website, LinkedIn) and
- *     an extra-facts line (nationality | Geburtsdatum | Verfügbarkeit)
+ *     icon contact line (email, phone, location, website, LinkedIn —
+ *     every icon optically centered on the same axis) and an
+ *     extra-facts line (nationality | Geburtsdatum | Verfügbarkeit);
+ *     when the photo is taller than the text block, the text is centered
+ *     against the photo band (no dead space beside the photo), and a
+ *     steel-blue divider rule separates header from body
  *   - the candidate's photograph (when available) in the header's
- *     upper-right, aspect preserved, never stretched
+ *     upper-right, aspect preserved, never stretched, with professional
+ *     rounded corners and a thin steel-blue frame (the template renders
+ *     the same 1px divider border)
  *   - steel-blue section headings (bold, thin blue rule underneath)
  *   - "Position, Unternehmen" entries (bold + italic), dates + location
  *     stacked top-right, bullet lists for responsibilities/achievements
@@ -128,6 +134,9 @@ interface Tier {
   photoW: number;
   photoH: number;
   photoGap: number;
+  photoRadius: number;
+  /** Space between the header band and its divider rule. */
+  headerRuleGap: number;
   skillsGap: number;
   langGap: number;
   descGap: number;
@@ -142,7 +151,7 @@ const COMFORTABLE: Tier = {
   sectionGap: 13, headingLh: 1.2, headingPadB: 3, sectionPadT: 6, ruleTh: 1.2,
   spaceBetween: 9, bulletTop: 1.5,
   iconSize: 8.25, iconTextGap: 3.75, contactItemGap: 12,
-  photoW: 96, photoH: 128, photoGap: 19.5,
+  photoW: 96, photoH: 128, photoGap: 19.5, photoRadius: 6.5, headerRuleGap: 8,
   skillsGap: 21, langGap: 18, descGap: 2, techGap: 1.5,
 };
 
@@ -154,7 +163,7 @@ const COMPACT: Tier = {
   sectionGap: 11, headingLh: 1.15, headingPadB: 2.5, sectionPadT: 5, ruleTh: 1.1,
   spaceBetween: 7, bulletTop: 1.2,
   iconSize: 7.5, iconTextGap: 3.5, contactItemGap: 10,
-  photoW: 90, photoH: 120, photoGap: 18,
+  photoW: 90, photoH: 120, photoGap: 18, photoRadius: 6, headerRuleGap: 7,
   skillsGap: 21, langGap: 18, descGap: 1.5, techGap: 1.5,
 };
 
@@ -166,7 +175,7 @@ const DENSE: Tier = {
   sectionGap: 9, headingLh: 1.12, headingPadB: 2, sectionPadT: 4, ruleTh: 1,
   spaceBetween: 5.5, bulletTop: 1,
   iconSize: 7, iconTextGap: 3, contactItemGap: 9,
-  photoW: 84, photoH: 112, photoGap: 16,
+  photoW: 84, photoH: 112, photoGap: 16, photoRadius: 5.5, headerRuleGap: 6,
   skillsGap: 16, langGap: 14, descGap: 1.5, techGap: 1,
 };
 
@@ -413,7 +422,8 @@ function buildLayout(cv: CvDocument, fonts: Fonts, photo: PhotoBox | null, tier:
       let x = left;
       const baseline = firstBaseline(yTop, tier.contact, tier.contactLh);
       for (const it of items) {
-        // Icons anchor to the text baseline (the original renderer's idiom).
+        // The icon item carries the contact line's baseline; drawContactIcon
+        // centers the glyph on the line's shared optical axis from it.
         plan.push({ kind: "icon", icon: it.kind, x, y: baseline, size: tier.iconSize });
         x += tier.iconSize + tier.iconTextGap;
         pushText(x, yTop, fonts.reg, tier.contact, META, it.text, tier.contactLh);
@@ -429,10 +439,25 @@ function buildLayout(cv: CvDocument, fonts: Fonts, photo: PhotoBox | null, tier:
       yTop += pushText(left, yTop, fonts.reg, tier.contact, META, line, tier.contactLh);
     }
   }
+  // USE THE SPACE BESIDE THE PHOTO: when the photo is taller than the
+  // header text block, the text is centered against the photo band
+  // (the modern template's `align-items: center` grid behavior) — no
+  // dead space accumulates under the text beside the photo. The plan
+  // holds ONLY header items at this point, so every one gets the shift.
+  const photoH = photo?.h ?? 0;
+  const headerShift = photo ? Math.max(0, (photoH - yTop) / 2) : 0;
+  if (headerShift > 0) {
+    for (const item of plan) item.y += headerShift;
+  }
   if (photo) {
     plan.push({ kind: "photo", x: right - photo.w, y: 0, w: photo.w, h: photo.h, img: photo.img });
   }
-  y = Math.max(yTop, photo?.h ?? 0);
+  y = Math.max(yTop + 2 * headerShift, photoH);
+  // Header divider rule — the header→body hierarchy line (the template's
+  // header carries the same 1.5px divider).
+  y += tier.headerRuleGap;
+  plan.push({ kind: "rule", y, thickness: 0.75, color: ACCENT, x0: left, x1: right });
+  y += 0.75;
 
   // ------------------------------------------------------------------
   // Sections — in the document's customization order & visibility
@@ -698,44 +723,105 @@ function scalePath(d: string, k: number): string {
     return Number.isInteger(v) ? String(v) : v.toFixed(2);
   });
 }
+/** 0.36 → the handset renders at ~7 × 7 icon units (the other icons are
+ *  6.2–8.4 wide), drawn with `scale: k` so it tracks the tier like the rest. */
 const ICON_PHONE_PATH = scalePath(
   "M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z",
-  0.29,
+  0.36,
 );
+/** Vertical extent of ICON_PHONE_PATH in icon units (handset top/bottom). */
+const ICON_PHONE_TOP = 2.1 * 0.36; // ≈ 0.76
+const ICON_PHONE_BOTTOM = 21.4 * 0.36; // ≈ 7.7
+const ICON_PHONE_CENTER = (ICON_PHONE_TOP + ICON_PHONE_BOTTOM) / 2;
 
-/** Draw a contact icon at (x, baseline) — baseline-anchored, scaled to
- *  `size`, the way the original renderer did. */
-function drawContactIcon(page: PDFPage, kind: IconKind, x: number, baseline: number, size: number, inFont: PDFFont): void {
+/**
+ * The optical center of a contact line: where EVERY icon is centered.
+ * The modern template centers its icons with flex `align-items: center`
+ * on a 1.5 em line box — for a 0.72-em ascent font that line-box center
+ * sits at baseline + 0.22 · contactSize (independent of the line height).
+ */
+export function contactIconAxis(baseline: number, contactSize: number): number {
+  return baseline + contactSize * 0.22;
+}
+
+/**
+ * Draw a contact icon at (x, baseline), scaled to `size`, with its
+ * optical center EXACTLY on the shared contact-line axis
+ * (contactIconAxis) — the previous renderer anchored each icon to a
+ * different point (and the handset did not scale with the tier at all),
+ * which is what made the icon row look misaligned.
+ */
+function drawContactIcon(page: PDFPage, kind: IconKind, x: number, baseline: number, size: number, inFont: PDFFont, contactSize: number): void {
   const k = size / 8.25;
+  const axis = contactIconAxis(baseline, contactSize);
+  const white = rgb(1, 1, 1);
   switch (kind) {
     case "pin":
-      page.drawCircle({ x: x + 3.5 * k, y: baseline - 0.5 * k + 4.1 * k, size: 3.1 * k * 2, color: BODY });
-      page.drawSvgPath(scalePath("M1.2 2.6 L5.8 2.6 L3.5 -0.1 Z", k), { x, y: baseline - 0.5 * k, color: BODY });
-      page.drawCircle({ x: x + 3.5 * k, y: baseline - 0.5 * k + 4.1 * k, size: 1.3 * k * 2, color: rgb(1, 1, 1) });
+      // Circle sits slightly above the axis; the tip extends below, so
+      // the whole glyph (circle + tip) is centered on the axis.
+      // (drawCircle's `size` is the RADIUS, not the diameter.)
+      page.drawCircle({ x: x + 3.5 * k, y: axis + 0.7 * k, size: 3.1 * k, color: BODY });
+      page.drawSvgPath("M1.2 0 L5.8 0 L3.5 3.2 Z", { x, y: axis - 2.4 * k, scale: k, color: BODY });
+      page.drawCircle({ x: x + 3.5 * k, y: axis + 0.7 * k, size: 1.3 * k, color: white });
       break;
     case "mail":
-      page.drawRectangle({ x, y: baseline + 0.2 * k, width: 8.4 * k, height: 5.8 * k, color: BODY });
-      page.drawLine({ start: { x: x + 0.7 * k, y: baseline + (0.2 + 5.1) * k }, end: { x: x + 4.2 * k, y: baseline + (0.2 + 2.4) * k }, thickness: 0.9 * k, color: rgb(1, 1, 1) });
-      page.drawLine({ start: { x: x + 4.2 * k, y: baseline + (0.2 + 2.4) * k }, end: { x: x + 7.7 * k, y: baseline + (0.2 + 5.1) * k }, thickness: 0.9 * k, color: rgb(1, 1, 1) });
+      page.drawRectangle({ x, y: axis - 2.9 * k, width: 8.4 * k, height: 5.8 * k, color: BODY });
+      page.drawLine({ start: { x: x + 0.7 * k, y: axis + 2.2 * k }, end: { x: x + 4.2 * k, y: axis - 0.5 * k }, thickness: 0.9 * k, color: white });
+      page.drawLine({ start: { x: x + 4.2 * k, y: axis - 0.5 * k }, end: { x: x + 7.7 * k, y: axis + 2.2 * k }, thickness: 0.9 * k, color: white });
       break;
     case "phone":
-      page.drawSvgPath(ICON_PHONE_PATH, { x, y: baseline - 0.3 * k, color: BODY });
+      // The anchor is the icon's TOP edge: the (scaled, y-flipped) path
+      // spans anchor − (0.76…7.7)·k, so centering on the axis puts the
+      // anchor at axis + center·k.
+      page.drawSvgPath(ICON_PHONE_PATH, { x, y: axis + ICON_PHONE_CENTER * k, scale: k, color: BODY });
       break;
     case "linkedin":
-      page.drawRectangle({ x, y: baseline - 0.4 * k, width: 7.4 * k, height: 7.4 * k, color: BODY });
+      page.drawRectangle({ x, y: axis - 3.7 * k, width: 7.4 * k, height: 7.4 * k, color: BODY });
       const w = inFont.widthOfTextAtSize("in", 5.4 * k);
-      page.drawText("in", { x: x + ((7.4 * k - w) / 2), y: baseline - 0.4 * k + 1.7 * k, size: 5.4 * k, font: inFont, color: rgb(1, 1, 1) });
+      page.drawText("in", { x: x + ((7.4 * k - w) / 2), y: axis - 1.9 * k, size: 5.4 * k, font: inFont, color: white });
       break;
     case "globe": {
       const c = 3.7 * k;
       const cx = x + c;
-      const cy = baseline + c - 0.5 * k;
-      page.drawCircle({ x: cx, y: cy, size: c * 2, color: BODY });
-      page.drawCircle({ x: cx, y: cy, size: c * 2 * 0.62, color: rgb(1, 1, 1) });
-      page.drawCircle({ x: cx, y: cy, size: c * 2 * 0.3, color: BODY });
+      const cy = axis;
+      page.drawCircle({ x: cx, y: cy, size: c, color: BODY });
+      page.drawCircle({ x: cx, y: cy, size: c * 0.62, color: white });
+      page.drawCircle({ x: cx, y: cy, size: c * 0.3, color: BODY });
       break;
     }
   }
+}
+
+/**
+ * Professional rounded corners for a drawn photo rectangle: four white
+ * corner notches (the CV page is white) + a 0.75pt steel-blue frame
+ * (the modern template renders the photo with the same 1px divider
+ * border). Each notch arc is a quarter circle of radius `rr` centered at
+ * the INSET corner — the arc midpoint therefore sits at
+ * rr · (1 − 1/√2) ≈ 0.293 · rr from each edge (the tests verify the
+ * emitted bezier midpoints, so an inverted sweep flag can never ship).
+ */
+function drawRoundedPhoto(page: PDFPage, x: number, bottomY: number, w: number, h: number, radius: number): void {
+  const rr = Math.min(radius, w / 2, h / 2);
+  const topY = bottomY + h;
+  // drawSvgPath anchors the SVG path's TOP-LEFT at (x, y) and draws it
+  // with y growing DOWNWARD on the page — each notch is anchored at its
+  // photo corner, so its arc data lives in the photo half of the plane.
+  // (Every sweep flag was verified numerically: an arc's bezier midpoint
+  // must sit rr·(1−1/√2) ≈ 0.293·rr from BOTH edges of the corner
+  // square, i.e. the arc is centered at the INSET corner.)
+  page.drawSvgPath(`M0 0 L${rr} 0 A${rr} ${rr} 0 0 0 0 ${rr} Z`, { x, y: topY, color: rgb(1, 1, 1) });
+  page.drawSvgPath(`M0 0 L${-rr} 0 A${rr} ${rr} 0 0 1 0 ${rr} Z`, { x: x + w, y: topY, color: rgb(1, 1, 1) });
+  page.drawSvgPath(`M0 0 L${rr} 0 A${rr} ${rr} 0 0 1 0 ${-rr} Z`, { x, y: bottomY, color: rgb(1, 1, 1) });
+  page.drawSvgPath(`M0 0 L${-rr} 0 A${rr} ${rr} 0 0 0 0 ${-rr} Z`, { x: x + w, y: bottomY, color: rgb(1, 1, 1) });
+  // The frame's path data spans the WHOLE photo rect in top-left-anchored
+  // coordinates — so it is anchored at the photo's TOP, not its bottom.
+  const frame =
+    `M${rr} 0 L${w - rr} 0 A${rr} ${rr} 0 0 1 ${w} ${rr} ` +
+    `L${w} ${h - rr} A${rr} ${rr} 0 0 1 ${w - rr} ${h} ` +
+    `L${rr} ${h} A${rr} ${rr} 0 0 1 0 ${h - rr} ` +
+    `L0 ${rr} A${rr} ${rr} 0 0 1 ${rr} 0 Z`;
+  page.drawSvgPath(frame, { x, y: topY, borderColor: ACCENT, borderWidth: 0.75 });
 }
 
 /* ------------------------------------------------------------------ */
@@ -861,13 +947,14 @@ export async function generateCvPdf(cv: CvDocument, options: GenerateCvPdfOption
         page.drawText(item.text, { x: item.x, y: Y, size: item.size, font: item.font, color: item.color });
         break;
       case "icon":
-        drawContactIcon(page, item.icon, item.x, Y, item.size, fonts.bold);
+        drawContactIcon(page, item.icon, item.x, Y, item.size, fonts.bold, t.contact);
         break;
       case "rule":
         page.drawLine({ start: { x: item.x0, y: Y }, end: { x: item.x1, y: Y }, thickness: item.thickness, color: item.color });
         break;
       case "photo":
         page.drawImage(item.img, { x: item.x, y: Y - item.h, width: item.w, height: item.h });
+        drawRoundedPhoto(page, item.x, Y - item.h, item.w, item.h, t.photoRadius);
         break;
     }
   }

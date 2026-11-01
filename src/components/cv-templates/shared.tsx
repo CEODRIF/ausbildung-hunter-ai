@@ -15,6 +15,7 @@ import {
   photoRadius,
   type CvCustomizationSettings,
   type CvFontId,
+  type CvPhotoShape,
 } from "@/lib/templates/cv-customization";
 
 export const CV_SHEET_WIDTH = 794; // 210mm @ 96dpi
@@ -121,6 +122,8 @@ export interface TemplateIdentity extends TemplatePalette {
   leftRightMarginMm: number;
   topBottomMarginMm: number;
   sectionSpacing: number;
+  /** Built-in photo shape (a user's explicit photo setting always wins). */
+  photoShape?: CvPhotoShape;
 }
 
 export function applyTemplateIdentity(
@@ -150,6 +153,14 @@ export function applyTemplateIdentity(
       ...s.header,
       titleSize: keep(s.header.titleSize, d.header.titleSize, identity.titleSize),
       contactSize: keep(s.header.contactSize, d.header.contactSize, identity.contactSize),
+    },
+    photo: {
+      ...s.photo,
+      // Optional template identity — undefined (most templates) keeps the
+      // current shape untouched.
+      shape: identity.photoShape
+        ? keep(s.photo.shape, d.photo.shape, identity.photoShape)
+        : s.photo.shape,
     },
     sections: {
       ...s.sections,

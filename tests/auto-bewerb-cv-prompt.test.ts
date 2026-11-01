@@ -190,8 +190,13 @@ describe("buildAutoBewerbCvPrompt — full company-specific context", () => {
     expect(promptA).toContain("parallele Formulierung aller Aufzählungspunkte");
   });
 
-  it("points the professional title at THIS ad's occupation", () => {
-    expect(promptA).toContain("„Anlagenmechaniker/in Sanitär-Heizung-Klima“");
+  it("hands the professional title to the platform (1:1 from the profile)", () => {
+    // The platform takes professionalTitle from the candidate profile — the
+    // model's value there is redundant safety, not a source.
+    expect(promptA).toContain(
+      "professionalTitle: wird von der Plattform 1:1 aus dem KANDIDATENPROFIL übernommen",
+    );
+    expect(promptA).toContain("PLATFORM-STEUERUNG");
   });
 });
 
@@ -250,14 +255,19 @@ describe("generate-cv route — company-specific inputs, frozen photo, no fact g
     expect(route).toContain("extract,");
     expect(route).toContain("analysis: bundle.company.ad_analysis");
     expect(route).toContain("adRaw: bundle.company.ad_raw");
-    expect(route).toContain("profileText: formatProfileForPrompt(profile.extracted)");
+    expect(route).toContain("const profileText = formatProfileForPrompt(profile.extracted);");
   });
 
   it("freezes the uploaded photo reference into the document (model's photo never trusted)", () => {
     expect(route).toContain("getAutoBewerbProfilePhotoRef(user.id)");
     expect(route).toContain("doc.personal.photo = photoRef");
     expect(route).toContain("doc.templateId = templateId");
-    expect(route).toContain("sanitizeCvDocument(parseJsonObject(raw))");
+    // The controlled transformation: the original CV is the base, the
+    // whitelist merge is the only way model output reaches the document.
+    expect(route).toContain("importCandidateProfileToCv(profile.extracted)");
+    expect(route).toContain("mergeTailoredCvDocument({");
+    expect(route).toContain("generated: parseJsonObject(raw)");
+    expect(route).toContain('code: "invalid_ai_output"');
   });
 
   it("keeps the quota metering + rate limit + single-flight duplicate prevention", () => {
