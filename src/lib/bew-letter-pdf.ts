@@ -235,11 +235,15 @@ function wrapLine(font: PDFFont, text: string, size: number, maxWidth: number): 
  *  is that every paragraph stays, just in slightly smaller type. */
 const SINGLE_PAGE_BODY_SIZES = [11, 10.5, 10, 9.5, 9];
 
-/** Display box for the uploaded signature image (≈ 4.6 × 1.6 cm — large enough
- *  to read clearly, bounded so it never pushes the letter off the page). The
- *  image is always fitted with aspect ratio preserved (never stretched). */
-const SIGNATURE_MAX_WIDTH = 130;
-const SIGNATURE_MAX_HEIGHT = 44;
+/** Display box for the uploaded signature image (≈ 6.2 × 2.1 cm — large
+ *  enough for the employer to read it clearly, bounded so it never pushes
+ *  the letter off the page). BOTH caps were scaled by the same factor
+ *  (×1.35) from the previous 130 × 44 pt box, so every source aspect ratio
+ *  renders exactly 1.35× larger than before. The image is always fitted
+ *  with aspect ratio preserved (never stretched); PNG alpha (transparency)
+ *  is kept by pdf-lib's native embedding. */
+const SIGNATURE_MAX_WIDTH = 175.5;
+const SIGNATURE_MAX_HEIGHT = 59.4;
 
 /** Gap between the printed name baseline and the signature image top. */
 const SIGNATURE_IMAGE_GAP = 6;
