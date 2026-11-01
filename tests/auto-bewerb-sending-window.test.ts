@@ -15,6 +15,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AUTO_BEWERB_SENDING_WINDOW,
+  formatWindowTime,
   isCampaignTimeInWindow,
   isSendingWindowOpen,
   isWithinSendingWindow,
@@ -140,5 +141,55 @@ describe("nextWindowStartMs", () => {
   it("after the window (same day) → tomorrow's 07:30 Berlin", () => {
     // 11:00 Berlin = 10:00 UTC → next start next day 07:30 Berlin = 06:30 UTC.
     expect(nextWindowStartMs(at(2026, 1, 15, 10, 0))).toBe(at(2026, 1, 16, 6, 30));
+  });
+
+  it("next-day transition, winter: 1 Nov 11:00 Berlin → 2 Nov 07:30 Berlin (the reported display case)", () => {
+    // 2026-11-01T10:00Z = 11:00 Berlin (CET, window closed) → next start is
+    // 2026-11-02T06:30Z, which IS 2 Nov 07:30 Germany time (CET).
+    expect(nextWindowStartMs(at(2026, 11, 1, 10, 0))).toBe(at(2026, 11, 2, 6, 30));
+  });
+
+  it("before the window (same day), summer CEST → today's 07:30 Berlin = 05:30 UTC", () => {
+    // 06:00 Berlin = 04:00 UTC (CEST) → next start 07:30 Berlin = 05:30 UTC.
+    expect(nextWindowStartMs(at(2026, 7, 15, 4, 0))).toBe(at(2026, 7, 15, 5, 30));
+  });
+
+  it("next-day transition, summer CEST: 15 Jul 11:00 Berlin → 16 Jul 07:30 Berlin (05:30 UTC)", () => {
+    expect(nextWindowStartMs(at(2026, 7, 15, 9, 0))).toBe(at(2026, 7, 16, 5, 30));
+  });
+
+  it("returns null while the window is open (summer)", () => {
+    // 08:00 Berlin = 06:00 UTC (CEST) → open.
+    expect(nextWindowStartMs(at(2026, 7, 15, 6, 0))).toBeNull();
+  });
+});
+
+describe("formatWindowTime — window timestamps display in Europe/Berlin (DST-aware)", () => {
+  // The scheduler stores correct UTC instants; the DISPLAY must render them
+  // in Germany local time — never UTC, never the browser's zone.
+  it("CET (winter): 2 Nov 06:30 UTC renders as 07:30, not 06:30", () => {
+    const ms = at(2026, 11, 2, 6, 30); // = 2 Nov 07:30 Berlin (CET)
+    expect(formatWindowTime(ms, "en-GB")).toContain("07:30");
+    expect(formatWindowTime(ms, "en-GB")).not.toContain("06:30");
+    // Negative control: the same instant formatted in UTC shows 06:30 —
+    // proving the zone argument is what makes the display correct.
+    const utc = new Date(ms).toLocaleString("en-GB", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" });
+    expect(utc).toContain("06:30");
+  });
+
+  it("CEST (summer): 2 Jul 05:30 UTC renders as 07:30, not 05:30", () => {
+    const ms = at(2026, 7, 2, 5, 30); // = 2 Jul 07:30 Berlin (CEST)
+    expect(formatWindowTime(ms, "en-GB")).toContain("07:30");
+    expect(formatWindowTime(ms, "en-GB")).not.toContain("05:30");
+  });
+
+  it("is locale-aware (de-DE renders the same 07:30 wall-clock time)", () => {
+    const ms = at(2026, 11, 2, 6, 30);
+    expect(formatWindowTime(ms, "de-DE")).toContain("07:30");
+  });
+
+  it("handles the next-day transition instants for both CET and CEST", () => {
+    expect(formatWindowTime(nextWindowStartMs(at(2026, 11, 1, 10, 0))!, "en-GB")).toContain("07:30"); // winter
+    expect(formatWindowTime(nextWindowStartMs(at(2026, 7, 15, 9, 0))!, "en-GB")).toContain("07:30"); // summer
   });
 });
