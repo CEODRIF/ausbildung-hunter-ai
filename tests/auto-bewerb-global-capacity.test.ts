@@ -185,6 +185,14 @@ function seedCompany(
 const reservedCount = (user: string) =>
   tCompanies().filter((c) => c.user_id === user && RESERVED_SET.includes(c.status)).length;
 
+/** Read the capacity through the HONEST result contract (a failed read is
+ *  `ok: false`, never a fake zero) and unwrap the numbers. */
+async function capacityOf(user: string): Promise<{ reserved: number; capacity: number; available: number }> {
+  const res = await getAutoBewerbCapacity(user);
+  expect(res.ok, `capacity for ${user.slice(0, 4)}… must be readable in this scenario`).toBe(true);
+  return (res as { ok: true; capacity: { reserved: number; capacity: number; available: number } }).capacity;
+}
+
 const sendEmail = vi.fn();
 const provider = { sendEmail };
 
@@ -284,7 +292,7 @@ describe("global 100-company capacity — reservation", () => {
     expect(tCompanies()).toHaveLength(100);
     const slots = tCompanies().map((c) => c.slot_no).sort((a, b) => a - b);
     expect(slots).toEqual(Array.from({ length: 100 }, (_, i) => i + 1)); // one unit each
-    const cap = await getAutoBewerbCapacity(USER);
+    const cap = await capacityOf(USER);
     expect(cap).toEqual({ reserved: 100, capacity: 100, available: 0 });
   });
 
@@ -326,7 +334,7 @@ describe("global 100-company capacity — reservation", () => {
     batchIds.push(first.batchId!, second.batchId!);
     expect(tBatches()).toHaveLength(2); // two batches coexist
     // Global capacity = the union over ALL batches (scheduled companies still reserve).
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 30, capacity: 100, available: 70 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 30, capacity: 100, available: 70 });
     // Exactly 70 more companies may be reserved — the 71st is refused.
     let added = 0;
     for (let i = 1; i <= 71; i += 1) {
@@ -341,7 +349,7 @@ describe("global 100-company capacity — reservation", () => {
     }
     expect(added).toBe(70);
     expect(tCompanies()).toHaveLength(100);
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 100, capacity: 100, available: 0 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 100, capacity: 100, available: 0 });
     // The batches' own snapshots are untouched by the capacity math:
     const views = await getAutoBewerbBatches(USER);
     expect(views.map((v) => v.id)).toContain(batchIds[0]);
@@ -356,7 +364,7 @@ describe("global 100-company capacity — reservation", () => {
     for (let i = 1; i <= 20; i += 1) seedCompany(USER, `Sending ${i} GmbH`, "sending");
     for (let i = 1; i <= 10; i += 1) seedCompany(USER, `Failed ${i} GmbH`, "failed");
     expect(reservedCount(USER)).toBe(70);
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 70, capacity: 100, available: 30 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 70, capacity: 100, available: 30 });
     let added = 0;
     for (let i = 1; i <= 31; i += 1) {
       const res = await createAutoBewerbCompany(USER, {
@@ -372,7 +380,7 @@ describe("global 100-company capacity — reservation", () => {
       }
     }
     expect(added).toBe(30);
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 100, capacity: 100, available: 0 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 100, capacity: 100, available: 0 });
   });
 
   it("(5) concurrent reservation requests cannot exceed 100 (unique slot arbiter)", async () => {
@@ -396,24 +404,46 @@ describe("global 100-company capacity — reservation", () => {
     expect(okCount).toBe(1);
     expect(fullCount).toBe(2);
     expect(reservedCount(USER)).toBe(100); // never 101
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 100, capacity: 100, available: 0 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 100, capacity: 100, available: 0 });
   });
 
-  it("counters come from PERSISTED server data (the ab_user_capacity RPC wins when present)", async () => {
+  it("counters come from PERSISTED server data — the ROW COUNT is canonical; an RPC disagreement is logged, never served", async () => {
     seedBase();
     seedCompany(USER, "Persisted GmbH", "ready");
-    // The migration's RPC is the source of truth once applied — the engine
-    // must report ITS numbers, not client-side state:
+    // A drifted/incorrect RPC (55) must NOT be served over the persisted rows
+    // (1) — the rows are exactly what the create path enforces. The
+    // disagreement is reported server-side (safe diagnostic), not silent.
     db.setRpc((fn) => {
       if (fn === "ab_user_capacity") {
         return { data: [{ reserved: 55, capacity: 100, available: 45 }], error: null };
       }
       return { data: null, error: null };
     });
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 55, capacity: 100, available: 45 });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await getAutoBewerbCapacity(USER);
+      expect(res).toEqual({ ok: true, source: "query", capacity: { reserved: 1, capacity: 100, available: 99 } });
+      expect(errSpy.mock.calls.some((c) => String(c[0]).includes("rpc_query_disagreement"))).toBe(true);
+      // … and when the ROW QUERY itself fails, the RPC is the honest
+      // fallback (still persisted server data, source: "rpc"):
+      db.failSelect("auto_bewerb_companies", "slot_no", "simulated transient outage");
+      expect(await getAutoBewerbCapacity(USER)).toEqual({
+        ok: true,
+        source: "rpc",
+        capacity: { reserved: 55, capacity: 100, available: 45 },
+      });
+      db.clearSelectFail();
+      expect(await getAutoBewerbCapacity(USER)).toEqual({
+        ok: true,
+        source: "query",
+        capacity: { reserved: 1, capacity: 100, available: 99 },
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
     // Without the RPC (pre-migration) the persisted count query has the same semantics:
     db.setRpc(() => ({ data: null, error: null }));
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
+    expect(await getAutoBewerbCapacity(USER)).toEqual({ ok: true, source: "query", capacity: { reserved: 1, capacity: 100, available: 99 } });
   });
 });
 
@@ -443,11 +473,11 @@ describe("global capacity — automatic removal + release", () => {
     seedBase();
     const a = seedCompany(USER, "Release A GmbH", "ready", { approved: true });
     const b = seedCompany(USER, "Release B GmbH", "ready", { approved: true });
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 2, capacity: 100, available: 98 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 2, capacity: 100, available: 98 });
     const res = await createAutoBewerbBatch(USER, { companyIds: [a.id], schedule: null });
     expect(res.ok).toBe(true);
     // One unit freed — the other company still reserves its slot:
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
     expect(tCompanies().find((c) => c.id === a.id)?.slot_no).toBe(0); // token released
     expect(tCompanies().find((c) => c.id === b.id)?.slot_no).toBeGreaterThan(0); // untouched
     // The freed slot is immediately reusable:
@@ -458,7 +488,7 @@ describe("global capacity — automatic removal + release", () => {
       analysis: null,
     });
     expect(again.ok).toBe(true);
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 2, capacity: 100, available: 98 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 2, capacity: 100, available: 98 });
   });
 
   it("(8) failed delivery preserves the company AND its reservation", async () => {
@@ -475,7 +505,7 @@ describe("global capacity — automatic removal + release", () => {
     expect(tCompanies().find((c) => c.id === a.id)?.status).toBe("failed");
     expect(tCompanies().find((c) => c.id === a.id)?.slot_no).toBeGreaterThan(0);
     // … and its reservation is NOT released:
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
   });
 
   it("(8b) a temporary (retryable) failure keeps company + reservation queued", async () => {
@@ -491,7 +521,7 @@ describe("global capacity — automatic removal + release", () => {
     expect(RESERVED_SET).toContain(row.status); // still reserved (sending or ready/failed)
     expect(row.slot_no).toBeGreaterThan(0);
     expect((await listAutoBewerbCompanies(USER)).map((c) => c.id)).toContain(a.id);
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
     // The attempt is re-queued (backoff) — the retry path below picks it up:
     const attempt = tAttempts().find((x) => x.company_id === a.id)!;
     expect(attempt.status).toBe("queued");
@@ -544,7 +574,7 @@ describe("global capacity — automatic removal + release", () => {
     expect(active).toEqual([badB.id]);
     expect(tCompanies().find((c) => c.id === badB.id)?.status).toBe("failed");
     // Capacity released exactly for the two successes:
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
     // The batch settled honestly as partially_failed:
     const views = await getAutoBewerbBatches(USER);
     expect(views[0].status).toBe("partially_failed");
@@ -582,7 +612,7 @@ describe("global capacity — scheduled protection + history integrity", () => {
     const b = seedCompany(USER, "CancelMe B GmbH", "ready", { approved: true });
     const res = await createAutoBewerbBatch(USER, { companyIds: [a.id, b.id], schedule: FUTURE });
     expect(res.ok).toBe(true);
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 2, capacity: 100, available: 98 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 2, capacity: 100, available: 98 });
     // Cancel the pending scheduled application:
     const cancel = await cancelAutoBewerbBatch(USER, res.batchId!);
     expect(cancel.ok).toBe(true);
@@ -590,12 +620,12 @@ describe("global capacity — scheduled protection + history integrity", () => {
     // their capacity is held as ACTIVE companies (no leak, and no double free):
     expect(tCompanies().find((c) => c.id === a.id)?.status).toBe("ready");
     expect(tCompanies().find((c) => c.id === b.id)?.status).toBe("ready");
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 2, capacity: 100, available: 98 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 2, capacity: 100, available: 98 });
     // … and are now safely deletable, releasing exactly one unit each:
     expect((await deleteAutoBewerbCompany(USER, a.id)).ok).toBe(true);
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
     expect((await deleteAutoBewerbCompany(USER, b.id)).ok).toBe(true);
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 0, capacity: 100, available: 100 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 0, capacity: 100, available: 100 });
   });
 
   it("(13) historical records remain available after active-list removal", async () => {
@@ -632,7 +662,7 @@ describe("global capacity — scheduled protection + history integrity", () => {
     const a = seedCompany(USER, "Once GmbH", "ready", { approved: true });
     const res = await createAutoBewerbBatch(USER, { companyIds: [a.id], schedule: null });
     expect(res.ok).toBe(true);
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 0, capacity: 100, available: 100 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 0, capacity: 100, available: 100 });
     const row = tCompanies().find((c) => c.id === a.id)!;
     expect(row.slot_no).toBe(0); // released exactly once
     // A STRAY second release into the same released state (the trigger fires on
@@ -645,13 +675,13 @@ describe("global capacity — scheduled protection + history integrity", () => {
       }).from(table);
     await harnessQuery("auto_bewerb_companies").update({ status: "sent", last_failure_code: null }).eq("id", a.id);
     expect(row.slot_no).toBe(0); // unchanged — nothing to release a second time
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 0, capacity: 100, available: 100 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 0, capacity: 100, available: 100 });
     // A stale duplicate dispatch is likewise a no-op (no double send, no double free):
     const attempt = tAttempts().find((x) => x.company_id === a.id)!;
     const stale = await dispatchAutoBewerbAttempt(attempt.id as string);
     expect(stale).toEqual({ ok: true, duplicate: true, status: "sent" });
     expect(sendEmail).toHaveBeenCalledTimes(1);
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 0, capacity: 100, available: 100 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 0, capacity: 100, available: 100 });
   });
 });
 
@@ -664,9 +694,9 @@ describe("global capacity — user isolation", () => {
     seedBase();
     // User A fills their own global limit (100 reserved):
     for (let i = 1; i <= 100; i += 1) seedCompany(USER, `Isolated A${i} GmbH`, "ready");
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 100, capacity: 100, available: 0 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 100, capacity: 100, available: 0 });
     // User B is completely unaffected:
-    expect(await getAutoBewerbCapacity(USER_B)).toEqual({ reserved: 0, capacity: 100, available: 100 });
+    expect(await capacityOf(USER_B)).toEqual({ reserved: 0, capacity: 100, available: 100 });
     const bAdd = await createAutoBewerbCompany(USER_B, {
       adRaw: AD_RAW,
       company: "Isolated B GmbH",
@@ -674,9 +704,9 @@ describe("global capacity — user isolation", () => {
       analysis: null,
     });
     expect(bAdd.ok).toBe(true);
-    expect(await getAutoBewerbCapacity(USER_B)).toEqual({ reserved: 1, capacity: 100, available: 99 });
+    expect(await capacityOf(USER_B)).toEqual({ reserved: 1, capacity: 100, available: 99 });
     // … and A is still exactly at the cap (B's add changed nothing for A):
-    expect(await getAutoBewerbCapacity(USER)).toEqual({ reserved: 100, capacity: 100, available: 0 });
+    expect(await capacityOf(USER)).toEqual({ reserved: 100, capacity: 100, available: 0 });
     const aOverflow = await createAutoBewerbCompany(USER, {
       adRaw: AD_RAW,
       company: "Isolated A-Overflow GmbH",

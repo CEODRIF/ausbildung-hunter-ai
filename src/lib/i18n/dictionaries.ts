@@ -2712,6 +2712,7 @@ const de = {
     statsFailed: "Fehlgeschlagen",
     capacityReserved: "{reserved} / {capacity} Unternehmen reserviert",
     capacityAvailable: "{count} Plätze frei",
+    capacityUnavailable: "Verfügbarkeit derzeit nicht lesbar — bitte die Seite neu laden.",
     scheduledProtectedNote:
       "Diese Bewerbung ist geplant und kann nicht gelöscht werden. Bitte zuerst den geplanten Versand stornieren.",
     sentAutoRemovedNote:
@@ -5423,6 +5424,7 @@ const en: Dict = {
     statsFailed: "Failed",
     capacityReserved: "{reserved} / {capacity} companies reserved",
     capacityAvailable: "{count} places available",
+    capacityUnavailable: "Availability currently unreadable — please reload the page.",
     scheduledProtectedNote:
       "This application is scheduled and cannot be deleted. Please cancel the scheduled send first.",
     sentAutoRemovedNote:
@@ -8144,6 +8146,7 @@ const fr: Dict = {
     statsFailed: "En échec",
     capacityReserved: "{reserved} / {capacity} entreprises réservées",
     capacityAvailable: "{count} places disponibles",
+    capacityUnavailable: "Disponibilité actuellement illisible — veuillez recharger la page.",
     scheduledProtectedNote:
       "Cette candidature est planifiée et ne peut pas être supprimée. Veuillez d'abord annuler l'envoi planifié.",
     sentAutoRemovedNote:
@@ -10782,6 +10785,7 @@ const ar: Dict = {
     statsFailed: "فشل",
     capacityReserved: "{reserved} / {capacity} شركة محجوزة",
     capacityAvailable: "{count} أماكن متاحة",
+    capacityUnavailable: "المتاح حاليًا غير قابل للقراءة — يُرجى إعادة تحميل الصفحة.",
     scheduledProtectedNote:
       "هذا الطلب مخطط ولا يمكن حذفه. يرجى إلغاء الإرسال المخطط أولًا.",
     sentAutoRemovedNote:

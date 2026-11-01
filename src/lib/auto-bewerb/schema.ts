@@ -580,8 +580,11 @@ export interface AutoBewerbWorkspace {
   batches: AutoBewerbBatchView[];
   /** Step 7 statistics, always derived from persisted queue data. */
   sendStats: AutoBewerbSendStats;
-  /** The GLOBAL 100-company capacity (persisted server counters). Optional so
-   *  pre-feature workspace snapshots and test fixtures remain valid. */
+  /** The GLOBAL 100-company capacity (persisted server counters — the SAME
+   *  rows the server enforces the limit on). Optional so pre-feature
+   *  workspace snapshots and test fixtures remain valid; explicitly NULL
+   *  when the counter could NOT be read (the UI shows an honest
+   *  "unavailable" state — never a fake "0 / 100"). */
   capacity?: AutoBewerbCapacity | null;
   /** Preserved sending history (sent + cancelled companies), newest first.
    *  The ACTIVE list (`companies`) excludes these; they are retained here so

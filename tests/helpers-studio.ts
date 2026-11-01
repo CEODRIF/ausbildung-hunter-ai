@@ -335,6 +335,8 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     failInsert: (table: string, message: string) => (insertErrors[table] = message),
     /** Force a select error for queries requesting `col` on `table`. */
     failSelect: (table: string, col: string, message: string) => (selectFail = { table, col, message }),
+    /** Clear a forced select error (restore normal reads). */
+    clearSelectFail: () => (selectFail = null),
     /** OPT-IN: model the (user_id, slot_no) partial unique index (slot_no > 0)
      *  + the release trigger for a table (capacity concurrency tests). */
     enableSlotUnique: (table: string) => void slotUnique.add(table),

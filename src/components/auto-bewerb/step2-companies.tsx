@@ -55,12 +55,18 @@ export function Step2Companies() {
 
   // GLOBAL capacity — PERSISTED server counters (the active list is the same
   // reserved set; the server value is the truth for the "X / 100" display and
-  // survives concurrent sessions). The active list length is only the
-  // pre-migration fallback.
-  const count = ws.companies.length;
+  // survives concurrent sessions). HONEST states:
+  //   - `ws.capacity` object  → the server's persisted counter (the truth);
+  //   - `ws.capacity === null`→ the counter could NOT be read → show "—" +
+  //     the unavailable note, NEVER a fake "0 / 100 · 100 places available"
+  //     (a failed read must not look like an empty workflow — the server
+  //     still enforces the limit on the real rows);
+  //   - `ws.capacity === undefined` → pre-feature snapshot → the active
+  //     list length is the fallback (same reserved set, same user).
   const capacity = ws.capacity?.capacity ?? AUTO_BEWERB_COMPANY_LIMIT;
-  const reserved = ws.capacity?.reserved ?? count;
-  const atLimit = reserved >= capacity;
+  const capacityUnknown = ws.capacity === null;
+  const reserved = ws.capacity ? ws.capacity.reserved : ws.companies.length;
+  const atLimit = !capacityUnknown && reserved >= capacity;
 
   const analyze = async () => {
     setAnalyzing(true);
@@ -125,6 +131,11 @@ export function Step2Companies() {
             ? t("autoBewerb.companyDuplicateNote")
             : t("autoBewerb.saveError"),
       );
+      // A rejected add proves the server sees state this UI does not (the
+      // counter is stale or was an unreadable fake) — re-read the workspace
+      // immediately so the counter shows the persisted truth next to the
+      // error, instead of the old false "0 / 100".
+      if (res.code === "workflow_full") await refresh();
     }
   };
 
@@ -154,8 +165,12 @@ export function Step2Companies() {
         title={t("autoBewerb.adInputTitle")}
         aside={
           <div className="flex flex-col items-end gap-0.5 text-xs">
-            <span className="font-semibold text-muted">{reserved} / {capacity}</span>
-            <span className="font-medium text-faint">{t("autoBewerb.capacityAvailable", { count: Math.max(0, capacity - reserved) })}</span>
+            <span className="font-semibold text-muted">{capacityUnknown ? "—" : `${reserved} / ${capacity}`}</span>
+            <span className="font-medium text-faint">
+              {capacityUnknown
+                ? t("autoBewerb.capacityUnavailable")
+                : t("autoBewerb.capacityAvailable", { count: Math.max(0, capacity - reserved) })}
+            </span>
           </div>
         }
       >
