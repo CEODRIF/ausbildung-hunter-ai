@@ -2730,6 +2730,10 @@ const de = {
       "Versandfenster geschlossen ({label}) — wartende Batches starten automatisch im nächsten Fenster (nächster Start: {time}).",
     windowDeferredNote:
       "Das Versandfenster ({label}) ist gerade geschlossen: Der Batch wurde übernommen und startet automatisch im nächsten Fenster.",
+    scheduleWindowInvalid: "Bitte wähle eine Versandzeit zwischen 07:30 und 10:30 deutscher Zeit.",
+    scheduleWindowZone: "Deutschland (Europe/Berlin)",
+    scheduleWindowStartNote: "Der Batch startet genau zur gewählten Zeit — nie früher.",
+    sendingUnavailableNote: "Der Versand ist gerade außerhalb des Versandfensters (07:30–10:30 Deutschland-Zeit) nicht verfügbar. Bitte später erneut versuchen.",
     // Step 5 — 50 Original-Vorlagen (Bewerbungsvorlagen_50) + echte Signatur
     tplFoundationTitle: "Vorlagen-Grundlage (50 Original-Vorlagen)",
     tplFoundationDesc:
@@ -5437,6 +5441,10 @@ const en: Dict = {
       "Sending window closed ({label}) — waiting batches start automatically in the next window (next start: {time}).",
     windowDeferredNote:
       "The sending window ({label}) is closed right now: the batch was accepted and will start automatically in the next window.",
+    scheduleWindowInvalid: "Please choose a sending time between 07:30 and 10:30 Germany time.",
+    scheduleWindowZone: "Germany (Europe/Berlin)",
+    scheduleWindowStartNote: "The batch starts exactly at the chosen time — never earlier.",
+    sendingUnavailableNote: "Sending is currently unavailable outside the sending window (07:30–10:30 Germany time). Please try again later.",
     // Step 5 — the 50 original templates (Bewerbungsvorlagen_50) + signature
     tplFoundationTitle: "Template foundation (50 original templates)",
     tplFoundationDesc:
@@ -8154,6 +8162,10 @@ const fr: Dict = {
       "Fenêtre d'envoi fermée ({label}) — les lots en attente démarrent automatiquement à la fenêtre suivante (prochain départ : {time}).",
     windowDeferredNote:
       "La fenêtre d'envoi ({label}) est actuellement fermée : le lot a été pris en charge et démarrera automatiquement à la fenêtre suivante.",
+    scheduleWindowInvalid: "Veuillez choisir une heure d'envoi entre 07:30 et 10:30 heure allemande.",
+    scheduleWindowZone: "Allemagne (Europe/Berlin)",
+    scheduleWindowStartNote: "Le lot démarre exactement à l'heure choisie — jamais avant.",
+    sendingUnavailableNote: "L'envoi est actuellement indisponible hors de la fenêtre d'envoi (07:30–10:30 heure allemande). Veuillez réessayer plus tard.",
     // Step 5 — les 50 modèles d'origine (Bewerbungsvorlagen_50) + signature
     tplFoundationTitle: "Basis des modèles (50 modèles d'origine)",
     tplFoundationDesc:
@@ -10788,6 +10800,10 @@ const ar: Dict = {
       "نافذة الإرسال مغلقة ({label}) — تبدأ الدفعات المنتظرة تلقائيًا في النافذة التالية (البدء التالي: {time}).",
     windowDeferredNote:
       "نافذة الإرسال ({label}) مغلقة حاليًا: تم قبول الدفعة وستبدأ تلقائيًا في النافذة التالية.",
+    scheduleWindowInvalid: "يرجى اختيار وقت إرسال بين 07:30 و10:30 بتوقيت ألمانيا.",
+    scheduleWindowZone: "ألمانيا (Europe/Berlin)",
+    scheduleWindowStartNote: "تبدأ الدفعة في الوقت المحدد بالضبط — ولا تبدأ أبدًا قبله.",
+    sendingUnavailableNote: "الإرسال غير متوفر حاليًا خارج نافذة الإرسال (07:30–10:30 بتوقيت ألمانيا). يرجى المحاولة مرة أخرى لاحقًا.",
     // Step 5 — النماذج الأصلية الـ50 (Bewerbungsvorlagen_50) + التوقيع
     tplFoundationTitle: "أساس النماذج (50 نموذجًا أصليًا)",
     tplFoundationDesc:

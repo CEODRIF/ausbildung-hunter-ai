@@ -21,7 +21,7 @@ import type {
   AutoBewerbBatchResult,
   AutoBewerbScheduleInput,
 } from "@/lib/auto-bewerb/engine";
-import { windowLabel } from "@/lib/auto-bewerb/sending-window";
+import { AUTO_BEWERB_SENDING_WINDOW, windowLabel } from "@/lib/auto-bewerb/sending-window";
 import {
   approveCompanyAction,
   cancelBatchAction,
@@ -254,6 +254,7 @@ export function Step7Review() {
       case "missing_cv": return t("autoBewerb.missingCv");
       case "missing_letter": return t("autoBewerb.missingLetter");
       case "schedule_after_deadline": return t("autoBewerb.scheduleAfterDeadline");
+      case "schedule_outside_window": return t("autoBewerb.scheduleWindowInvalid");
       case "send_in_progress": return t("autoBewerb.sendInProgress");
       case "not_found": return t("autoBewerb.companyNotFound");
       default: return t("autoBewerb.resultFailed", { code });
@@ -266,6 +267,8 @@ export function Step7Review() {
       case "incomplete_settings": return t("autoBewerb.emailSettingsIncomplete");
       case "no_email_account": return t("autoBewerb.emailAccountNoneBody");
       case "invalid_schedule": return t("autoBewerb.invalidScheduleNote");
+      case "schedule_outside_window": return t("autoBewerb.scheduleWindowInvalid");
+      case "sending_unavailable": return t("autoBewerb.sendingUnavailableNote");
       case "batch_too_large": return t("autoBewerb.currentBatchMaxHint");
       case "schema_pending": return t("autoBewerb.batchesPendingNote");
       default: return t("autoBewerb.resultFailed", { code });
@@ -324,6 +327,12 @@ export function Step7Review() {
         setBatchErrors(null);
         setSelected(new Set());
         await refresh();
+        // Honest status: an out-of-window "Send Now" is accepted but HELD at
+        // the next window start — never falsely reported as sent.
+        const deferred =
+          res.value.some((r) => r.dispatchStatus === "queued" && r.scheduledAt) &&
+          !res.value.some((r) => r.dispatchStatus === "sent");
+        if (deferred) notify("info", t("autoBewerb.windowDeferredNote", { label: ws.sendingWindow?.label ?? windowLabel() }));
       } else {
         notify("error", t("autoBewerb.saveError"));
       }
@@ -591,6 +600,11 @@ export function Step7Review() {
               action={onSchedule}
               submitLabel={scheduling ? t("autoBewerb.scheduling") : t("autoBewerb.scheduleSubmit", { count: selectedViews.length })}
               pendingLabel={t("autoBewerb.scheduling")}
+              window={{
+                timeZone: AUTO_BEWERB_SENDING_WINDOW.timeZone,
+                startMinute: AUTO_BEWERB_SENDING_WINDOW.startHour * 60 + AUTO_BEWERB_SENDING_WINDOW.startMinute,
+                endMinute: AUTO_BEWERB_SENDING_WINDOW.endHour * 60 + AUTO_BEWERB_SENDING_WINDOW.endMinute,
+              }}
             />
           </SectionCard>
         </div>

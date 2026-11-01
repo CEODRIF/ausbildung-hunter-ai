@@ -4,8 +4,11 @@
 -- The window gates BATCH STARTS (scheduled/waiting → sending) — everywhere:
 --   * public.auto_bewerb_sending_window_open() — the single DB predicate:
 --     IANA 'Europe/Berlin' via AT TIME ZONE (daylight saving is respected
---     automatically — NEVER a hardcoded UTC offset), [07:30, 10:30) local,
---     every day. STABLE ⇒ a tick sees one consistent window state.
+--     automatically — NEVER a hardcoded UTC offset), 07:30–10:30 local
+--     (start inclusive; the END is inclusive at minute granularity — the
+--     10:30 minute may still start a batch, i.e. a campaign scheduled for
+--     exactly 10:30 starts on the 10:30 tick; nothing starts at 10:31 or
+--     later), every day. STABLE ⇒ a tick sees one consistent window state.
 --   * claim_startable_auto_bewerb_batches (recreated below — identical rules
 --     from 20261218000000_auto_bewerb_batches.sql, ONE new condition): while
 --     the window is closed it returns no rows — the CRON path can never start
@@ -36,7 +39,9 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- The window predicate: [07:30, 10:30) local Berlin time, every day.
+-- The window predicate: 07:30–10:30 local Berlin time (the 10:30 minute
+-- INCLUSIVE — a batch scheduled for exactly 10:30 may start on the 10:30
+-- tick; 10:31 or later is closed), every day.
 -- ----------------------------------------------------------------------------
 create or replace function public.auto_bewerb_sending_window_open()
 returns boolean
@@ -47,7 +52,7 @@ as $$
     select (extract(hour from (now() at time zone 'Europe/Berlin'))::integer * 60
             + extract(minute from (now() at time zone 'Europe/Berlin'))::integer) as m
   )
-  select m >= 7 * 60 + 30 and m < 10 * 60 + 30
+  select m >= 7 * 60 + 30 and m <= 10 * 60 + 30
     from local;
 $$;
 

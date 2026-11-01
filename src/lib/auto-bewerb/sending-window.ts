@@ -7,7 +7,10 @@
  * migration `auto_bewerb_sending_window.sql` → `auto_bewerb_sending_window_open()`),
  * which is the authoritative gate for the cron path. The two MUST stay in sync.
  *
- *  - Window: 07:30 → 10:30 (start inclusive, end exclusive), EVERY day.
+ *  - Window: 07:30 → 10:30, EVERY day. Start is inclusive (07:30:00).
+ *    The end is inclusive at MINUTE granularity: the 10:30 minute (10:30:00–
+ *    10:30:59) is still inside, so a campaign scheduled for exactly 10:30
+ *    starts on the 10:30 tick; NOTHING starts at 10:31 or later.
  *  - Timezone: IANA `Europe/Berlin` — NEVER a hardcoded UTC offset.
  *  - Daylight saving is respected automatically: the wall-clock window is
  *    evaluated in the IANA zone via `Intl`, so 07:30–10:30 Berlin always maps
@@ -36,11 +39,29 @@ export const AUTO_BEWERB_SENDING_WINDOW = {
 
 /** Minute-of-day for the window start (07:30 → 450). */
 const WINDOW_START_MIN = AUTO_BEWERB_SENDING_WINDOW.startHour * 60 + AUTO_BEWERB_SENDING_WINDOW.startMinute;
-/** Minute-of-day for the window end (10:30 → 630), exclusive. */
+/** Minute-of-day for the window end (10:30 → 630), INCLUSIVE at minute
+ *  granularity — the 10:30 minute may still start a batch (a campaign
+ *  scheduled for exactly 10:30 starts on the 10:30 tick); 10:31 is closed. */
 const WINDOW_END_MIN = AUTO_BEWERB_SENDING_WINDOW.endHour * 60 + AUTO_BEWERB_SENDING_WINDOW.endMinute;
 
+/** The single source of truth for the window's minute-of-day range.
+ *  Start (07:30) inclusive, end (10:30) INCLUSIVE at minute granularity — the
+ *  10:30 minute may still start a batch (a campaign scheduled for exactly
+ *  10:30 starts on the 10:30 tick); 10:31 and later are closed. */
+function minuteOpen(m: number): boolean {
+  return m >= WINDOW_START_MIN && m <= WINDOW_END_MIN;
+}
+
+/** Pure, timezone-independent boundary check on a Berlin wall-clock
+ *  (hour, minute). This is the exact rule the scheduling form and the
+ *  boundary tests assert: 07:29 ✗, 07:30 ✓, 08:00 ✓, 09:00 ✓, 10:00 ✓,
+ *  10:30 ✓, 10:31 ✗, 11:00 ✗, 20:00 ✗. */
+export function isWithinSendingWindow(hour: number, minute: number): boolean {
+  return minuteOpen(hour * 60 + minute);
+}
+
 export interface SendingWindowState {
-  /** True iff the instant falls in [07:30, 10:30) local Berlin time. */
+  /** True iff the instant falls in 07:30:00–10:30:59 local Berlin time. */
   open: boolean;
   /** The local wall-clock hour (0–23) at the instant. */
   hour: number;
@@ -94,7 +115,7 @@ export function sendingWindowState(instantMs: number, timeZone: string = AUTO_BE
   }
   const m = hm.hour * 60 + hm.minute;
   return {
-    open: m >= WINDOW_START_MIN && m < WINDOW_END_MIN,
+    open: minuteOpen(m),
     hour: hm.hour,
     minute: hm.minute,
     timeZone,
@@ -105,6 +126,20 @@ export function sendingWindowState(instantMs: number, timeZone: string = AUTO_BE
 /** Convenience: is the sending window open at `nowMs` (default: wall clock now)? */
 export function isSendingWindowOpen(nowMs: number = Date.now(), timeZone: string = AUTO_BEWERB_SENDING_WINDOW.timeZone): boolean {
   return sendingWindowState(nowMs, timeZone).open;
+}
+
+/**
+ * Server-side validation of a requested campaign start instant: true iff the
+ * instant's Berlin wall-clock lies inside the window (07:30–10:30 inclusive
+ * at minute granularity). The check is on the INSTANT (not on the client's
+ * stated timezone), so any timezone a caller posts is evaluated honestly in
+ * Europe/Berlin. Fails CLOSED on an unresolvable instant/zone.
+ */
+export function isCampaignTimeInWindow(utcMs: number): boolean {
+  if (!Number.isFinite(utcMs)) return false;
+  const parts = utcToLocalParts(new Date(utcMs).toISOString(), AUTO_BEWERB_SENDING_WINDOW.timeZone);
+  if (!parts) return false;
+  return minuteOpen(parts.hour * 60 + parts.minute);
 }
 
 /**
