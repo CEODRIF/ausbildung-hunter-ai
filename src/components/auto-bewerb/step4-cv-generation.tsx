@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
 import type { CvDocument } from "@/lib/templates/cv";
 import { isPhotoRef } from "@/lib/auto-bewerb/profile-photo";
+import { verifyCvAgainstAd, type CvVerificationReport } from "@/lib/auto-bewerb/cv-verification";
 import type { AutoBewerbCompanyView } from "@/lib/auto-bewerb/schema";
 import {
   markDocumentReviewedAction,
@@ -367,14 +368,24 @@ export function Step4CvGeneration() {
                     <Check size={13} /> {t("autoBewerb.docReviewMark")}
                   </Button>
                 )}
+                </div>
               </div>
-            </div>
 
-            {/* A4 document view — the ACTUAL PDF (same bytes as the export),
-                white pages on the dark app, pdf.js-rendered onto canvases
-                (zoom + scroll + all pages). CvPdfPreview fetches through
-                the SAME session, verifies the bytes, draws them itself —
-                never downloaded, never dependent on the native viewer. */}
+              {/* Requirement coverage — the deterministic pre-export check:
+                  every requirement of THIS ad vs. this CV (present / in
+                  which section / auto-added from the ad). Shown in both
+                  document view and edit view, before the Export button. */}
+              {previewView.company.ad_extracted && (
+                <RequirementVerificationPanel
+                  report={verifyCvAgainstAd({ cv: previewDoc, extract: previewView.company.ad_extracted })}
+                />
+              )}
+
+              {/* A4 document view — the ACTUAL PDF (same bytes as the export),
+                  white pages on the dark app, pdf.js-rendered onto canvases
+                  (zoom + scroll + all pages). CvPdfPreview fetches through
+                  the SAME session, verifies the bytes, draws them itself —
+                  never downloaded, never dependent on the native viewer. */}
             {previewView.cv && viewMode === "doc" && !previewDraft ? (
               <div className="flex min-h-0 flex-1 flex-col gap-2">
                 {/* The dark stage fills the modal height — the CV is the
@@ -402,6 +413,108 @@ export function Step4CvGeneration() {
           </div>
         )}
       </Modal>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The deterministic REQUIREMENT-COVERAGE panel (Step 4, before export):
+ * every requirement of THIS company's ad vs. THIS CV — present in which
+ * section, auto-added from the ad (flagged for the user's confirmation),
+ * or a visible gap. Pure client-side computation over the stored data
+ * (verifyCvAgainstAd) — no AI, no network, no state.
+ */
+function RequirementVerificationPanel({ report }: { report: CvVerificationReport }) {
+  const { t } = useI18n();
+  if (report.total === 0) return null;
+  const allCovered = report.allCovered;
+  const gaps = report.items.filter((i) => i.status === "missing" || i.status === "partial");
+  const added = report.items.filter((i) => i.addedFromAd);
+  const categoryLabel = (c: string): string =>
+    c === "technical"
+      ? t("autoBewerb.cvVerifyCategoryTechnical")
+      : c === "soft"
+        ? t("autoBewerb.cvVerifyCategorySoft")
+        : c === "qualification"
+          ? t("autoBewerb.cvVerifyCategoryQualification")
+          : c === "language"
+            ? t("autoBewerb.cvVerifyCategoryLanguage")
+            : c === "education"
+              ? t("autoBewerb.cvVerifyCategoryEducation")
+              : t("autoBewerb.cvVerifyCategoryDocument");
+
+  return (
+    <div className={`shrink-0 rounded-2xl border px-4 py-3 ${allCovered ? "border-success/25 bg-success-soft/60" : "border-danger/25 bg-danger-soft/60"}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        {allCovered ? (
+          <CheckCircle2 size={15} className="shrink-0 text-success" />
+        ) : (
+          <AlertTriangle size={15} className="shrink-0 text-danger" />
+        )}
+        <span className={`text-sm font-semibold ${allCovered ? "text-success" : "text-danger"}`}>
+          {t("autoBewerb.cvVerifyTitle")}
+        </span>
+        <span className="text-xs font-semibold text-muted">
+          {t("autoBewerb.cvVerifyCovered", { covered: report.covered, total: report.total })}
+        </span>
+      </div>
+      <p className="mt-1 text-xs leading-5 text-muted">
+        {allCovered ? t("autoBewerb.cvVerifyAllCovered") : t("autoBewerb.cvVerifyGaps", { count: gaps.length })}
+      </p>
+
+      {/* Auto-added ad requirements — explicitly flagged for the user. */}
+      {added.length > 0 && (
+        <div className="mt-2 rounded-xl border border-accent/30 bg-surface-2/60 px-3 py-2">
+          <p className="text-xs font-semibold text-ink">{t("autoBewerb.cvVerifyAddedTitle", { count: added.length })}</p>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {added.map((i) => (
+              <span key={`${i.category}:${i.requirement}`} className="rounded-full border border-line bg-surface px-2 py-0.5 text-[11px] font-medium text-muted">
+                {i.requirement}
+              </span>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[11px] leading-4 text-muted">{t("autoBewerb.cvVerifyAddedHint")}</p>
+        </div>
+      )}
+
+      {/* Full per-requirement report (expanded while gaps exist). */}
+      <details className="mt-2" open={!allCovered}>
+        <summary className="cursor-pointer select-none text-xs font-semibold text-muted hover:text-ink">
+          {t("autoBewerb.cvVerifyShowAll", { total: report.total })}
+        </summary>
+        <ul className="mt-2 max-h-44 space-y-1 overflow-y-auto pr-1">
+          {report.items.map((i) => (
+            <li key={`${i.category}:${i.requirement}`} className="flex items-start gap-1.5 text-[11px] leading-4">
+              <span
+                aria-hidden
+                className={`mt-px shrink-0 font-bold ${
+                  i.status === "covered" ? "text-success" : i.status === "info" ? "text-muted" : "text-danger"
+                }`}
+              >
+                {i.status === "covered" ? "✓" : i.status === "info" ? "ℹ" : "✗"}
+              </span>
+              <span className="min-w-0 flex-1 break-words text-ink-soft">
+                <span className="font-medium">{i.requirement}</span>
+                <span className="text-muted"> · {categoryLabel(i.category)}</span>
+                {i.section ? (
+                  <span className="text-muted">
+                    {" "}
+                    · {t("autoBewerb.cvVerifySection")} {i.section}
+                  </span>
+                ) : null}
+                {i.addedFromAd ? (
+                  <span className="ml-1 rounded-full border border-accent/30 bg-surface px-1.5 py-px text-[10px] font-semibold text-accent">
+                    {t("autoBewerb.cvVerifyAddedBadge")}
+                  </span>
+                ) : null}
+                {i.detail ? <span className="block text-muted">{i.detail}</span> : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </details>
     </div>
   );
 }

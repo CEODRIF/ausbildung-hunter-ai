@@ -136,6 +136,15 @@ export interface CvDocument {
    * document looks identical to the current template.
    */
   customization?: CvCustomizationSettings;
+  /**
+   * Optional AUTO BEWERB tailoring trace (only on tailored documents).
+   * `addedFromAd`: the job-ad requirements that were missing from the
+   * candidate's original CV and got auto-added to the skills list — the
+   * Step-4 UI flags them explicitly (the user confirms or removes them;
+   * they are never silently presented as original candidate data).
+   * Absent on CV Builder documents.
+   */
+  tailoring?: { addedFromAd: string[] };
 }
 
 export type CvListSection =
@@ -410,6 +419,19 @@ export function sanitizeCvDocument(raw: unknown): CvDocument | null {
     technologies: str(p.technologies),
   })) as CvProject[];
 
+  // The AUTO BEWERB tailoring trace (platform-owned metadata): kept only
+  // in its exact, bounded shape — anything else drops to undefined
+  // (legacy documents never gain it).
+  let tailoring: CvDocument["tailoring"];
+  if (typeof data.tailoring === "object" && data.tailoring !== null) {
+    const added = strList((data.tailoring as UnknownRecord).addedFromAd)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 50)
+      .map((s) => s.slice(0, 200));
+    if (added.length > 0) tailoring = { addedFromAd: added };
+  }
+
   return {
     version: 1,
     // Legacy documents (stored before the template system existed) and
@@ -437,6 +459,7 @@ export function sanitizeCvDocument(raw: unknown): CvDocument | null {
     projects,
     interests: strList(data.interests),
     customization: sanitizeCvCustomization(data.customization),
+    tailoring,
   };
 }
 

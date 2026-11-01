@@ -10,6 +10,7 @@ import { parseJsonObject } from "@/lib/studio/prompts";
 import { formatProfileForPrompt } from "@/lib/templates/cover-letter";
 import { createClient } from "@/lib/supabase/server";
 import { importCandidateProfileToCv, resolveCvTemplateId } from "@/lib/templates/cv";
+import { collectAddableSkillTerms, verifyCvAgainstAd } from "@/lib/auto-bewerb/cv-verification";
 import { mergeTailoredCvDocument } from "@/lib/auto-bewerb/tailored-cv";
 import {
   AUTO_BEWERB_CV_SYSTEM_PROMPT,
@@ -164,10 +165,29 @@ export async function POST(request: Request) {
     // candidate's own facts, de-duplicated, complete — and keeps every
     // other field 1:1 (see tailored-cv.ts).
     const original = importCandidateProfileToCv(profile.extracted);
+    // AD-SIDE TAILORING INPUT (all values from the stored, zod-validated
+    // extraction of THIS company's ad — never from the model):
+    //  - skillTerms: the skill-like requirements (technical + soft +
+    //    skill-like qualifications; education/experience/language claims
+    //    filtered out) — every one missing from the CV is auto-added and
+    //    flagged in `cv.tailoring.addedFromAd`,
+    //  - summaryContext: the position identity (job title, occupation,
+    //    company, location, start) — the only ad content the PROFIL may
+    //    name (grounded by the ad, not by the candidate profile).
     const doc = mergeTailoredCvDocument({
       original,
       generated: parseJsonObject(raw),
       profileText,
+      ad: {
+        skillTerms: collectAddableSkillTerms(extract),
+        summaryContext: {
+          jobTitle: extract.jobTitle,
+          occupation: extract.occupation,
+          company: extract.company,
+          location: extract.location,
+          startDate: extract.startDate,
+        },
+      },
     });
     if (!doc) {
       await releaseFeatureOp(user.id, "resume_ai", runId);
@@ -182,8 +202,15 @@ export async function POST(request: Request) {
     // PLATFORM (server-owned reference, ownership-resolved at render time) —
     // the model's answer for personal.photo is never trusted.
     doc.personal.photo = photoRef;
+    // FINAL VERIFICATION (deterministic, no LLM): the per-requirement
+    // coverage report of THIS final document — the Step-4 preview shows it
+    // before any export (the export path renders the same stored document).
+    const verification = verifyCvAgainstAd({ cv: doc, extract });
     await completeFeatureOp(user.id, "resume_ai", runId);
-    return NextResponse.json({ cv: doc, photo: photoRef }, { headers: rateLimitHeaders(limited) });
+    return NextResponse.json(
+      { cv: doc, photo: photoRef, verification },
+      { headers: rateLimitHeaders(limited) },
+    );
   } catch (error) {
     await releaseFeatureOp(user.id, "resume_ai", runId);
     return NextResponse.json(

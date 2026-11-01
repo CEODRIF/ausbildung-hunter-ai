@@ -56,7 +56,7 @@ export const adExtractSchema = z.object({
   technicalSkills: z.array(shortText(120)).max(40).default([]),
   softSkills: z.array(shortText(120)).max(40).default([]),
   /** Language requirements ("Deutsch C1", "Englisch fließend"). */
-  languageRequirements: z.array(shortText(200)).max(10).default([]),
+  languageRequirements: z.array(shortText(200)).max(20).default([]),
   educationRequirement: shortText(300).default(""),
   responsibilities: z.array(shortText(400)).max(30).default([]),
   /** Documents the employer explicitly asks for ("Bewerbung mit Zeugnissen"). */
