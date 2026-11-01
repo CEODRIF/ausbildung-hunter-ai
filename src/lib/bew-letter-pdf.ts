@@ -41,9 +41,9 @@ export const BEW_ATTACHMENT_BUCKET = "application-attachments";
 
 /**
  * The user's GENUINE handwritten signature as raw image bytes (PNG or JPEG —
- * pdf-lib's two natively-embeddable rasters). Embedded in the PDF between the
- * closing ("Mit freundlichen Grüßen") and the verified name. NEVER invented:
- * it is the uploaded image bytes, or null when the user has none.
+ * pdf-lib's two natively-embeddable rasters). Embedded in the PDF BELOW the
+ * verified name: closing ("Mit freundlichen Grüßen") → printed name → image.
+ * NEVER invented: it is the uploaded image bytes, or null when the user has none.
  */
 export interface LetterSignatureImage {
   bytes: Uint8Array;
@@ -109,9 +109,11 @@ export interface LetterFolio {
   greeting: string;
   bodyParagraphs: string[];
   closing: string;
-  /** The verified candidate name (drawn as text under the signature image). */
+  /** The verified candidate name (printed text; the signature image, when
+   *  present, is drawn BELOW it — never above or between closing and name). */
   signature: string;
-  /** The genuine uploaded signature image (null = none → only the name line). */
+  /** The genuine uploaded signature image (null = none → classic blank
+   *  signature space above the printed name, as before). */
   signatureImage?: LetterSignatureImage | null;
 }
 
@@ -233,17 +235,21 @@ function wrapLine(font: PDFFont, text: string, size: number, maxWidth: number): 
  *  is that every paragraph stays, just in slightly smaller type. */
 const SINGLE_PAGE_BODY_SIZES = [11, 10.5, 10, 9.5, 9];
 
-/** Display box for the uploaded signature image (≈ 2.5 × 0.9 cm, kept within
- *  the existing signature space so it never pushes the letter off the page). */
-const SIGNATURE_MAX_WIDTH = 72;
-const SIGNATURE_MAX_HEIGHT = 26;
+/** Display box for the uploaded signature image (≈ 4.6 × 1.6 cm — large enough
+ *  to read clearly, bounded so it never pushes the letter off the page). The
+ *  image is always fitted with aspect ratio preserved (never stretched). */
+const SIGNATURE_MAX_WIDTH = 130;
+const SIGNATURE_MAX_HEIGHT = 44;
+
+/** Gap between the printed name baseline and the signature image top. */
+const SIGNATURE_IMAGE_GAP = 6;
 
 /**
  * Render the folio at a given body font size into a fresh A4 document.
  * `bodySize` scales the letter text (subject / greeting / body / closing /
  * name) — the compact sender + recipient headers keep their reference sizes.
  * When `folio.signatureImage` is set, the genuine signature image is embedded
- * between the closing ("Mit freundlichen Grüßen") and the name.
+ * BELOW the printed name (closing → name → image), left-aligned with it.
  */
 async function renderLetterDoc(folio: LetterFolio, bodySize: number): Promise<PDFDocument> {
   const lineH = bodySize + 4.5; // 15.5 at the reference 11 pt
@@ -392,30 +398,36 @@ async function renderLetterDoc(folio: LetterFolio, bodySize: number): Promise<PD
   };
   for (const paragraph of folio.bodyParagraphs) drawJustified(paragraph);
 
-  // ---- closing + signature image + name (kept together — the reference's
-  //      awkward page split is deliberately not reproduced) ----------------
+  // ---- closing + printed name + signature image (kept together — the
+  //      reference's awkward page split is deliberately not reproduced) ----
+  // FIXED vertical order: closing → printed name → genuine image BELOW the
+  // name. The image never appears above the name or between closing and name.
+  // With no image, the classic 34 pt blank signature space stays above the
+  // printed name (that layout is unchanged).
   const closingLines = wrapLine(regular, folio.closing, bodySize, CONTENT_WIDTH);
   const sigLines = folio.signature ? wrapLine(regular, folio.signature, bodySize, CONTENT_WIDTH) : [];
-  // Reserve room for the signature block: the genuine image (when present) or
-  // the classic 34 pt blank signature space (when absent).
-  const sigBlockHeight = sigImg ? sigH + 8 : 34;
-  const closingHeight = closingLines.length * lineH + sigBlockHeight + sigLines.length * lineH;
+  // Reserve room for the signature block: gap + image + trailing space when
+  // the genuine image exists, or the classic 34 pt blank space when absent.
+  const sigBlockHeight = sigImg ? SIGNATURE_IMAGE_GAP + sigH + 8 : 34;
+  // +10: the leading gap under the last body line — kept inside the ensured
+  // block so the closing group can never dip past the bottom margin.
+  const closingHeight = 10 + closingLines.length * lineH + sigLines.length * lineH + sigBlockHeight;
   ensure(closingHeight);
   y -= 10;
   for (const line of closingLines) {
     page.drawText(line, { x: MARGIN_X, y, size: bodySize, font: regular, color: INK });
     y -= lineH;
   }
-  if (sigImg) {
-    // Bottom-align the image in its reserved space, above the name line.
-    page.drawImage(sigImg, { x: MARGIN_X, y: y - sigH, width: sigW, height: sigH });
-    y -= sigH + 8;
-  } else {
-    y -= 34; // signature space (no image → the verified name line sits below)
-  }
+  if (!sigImg) y -= 34; // blank signature space above the printed name
   for (const line of sigLines) {
     page.drawText(line, { x: MARGIN_X, y, size: bodySize, font: regular, color: INK });
     y -= lineH;
+  }
+  if (sigImg) {
+    // The genuine image BELOW the printed name, left-aligned with it
+    // (aspect ratio already preserved at embed time — never stretched).
+    page.drawImage(sigImg, { x: MARGIN_X, y: y - SIGNATURE_IMAGE_GAP - sigH, width: sigW, height: sigH });
+    y -= SIGNATURE_IMAGE_GAP + sigH + 8;
   }
 
   return doc;
