@@ -763,12 +763,21 @@ export async function createAutoBewerbCompany(
   // to "workflow full" by classifyInsertError, never an 101st company).
   const { data: slotRows, error: slotErr } = await admin
     .from("auto_bewerb_companies")
-    .select("slot_no")
+    .select("slot_no, status")
     .eq("user_id", userId)
     .in("status", [...AUTO_BEWERB_RESERVED_STATUSES]);
   if (slotErr) return classifyInsertError(slotErr);
-  const active = (slotRows ?? []) as Array<{ slot_no?: number | null }>;
+  const active = (slotRows ?? []) as Array<{ slot_no?: number | null; status?: string }>;
   if (active.length >= AUTO_BEWERB_COMPANY_LIMIT) {
+    // Safe diagnostic: the PERSISTED ROW PROOF (per-status distribution,
+    // counts only) — distinguishes "the user really has 100 reserved rows"
+    // from any counting bug, without logging a single name or ad fragment.
+    const byStatus: Record<string, number> = {};
+    for (const r of active) {
+      const s = r.status ?? "unknown";
+      byStatus[s] = (byStatus[s] ?? 0) + 1;
+    }
+    logCapacityDiagnostic(userId, "workflow_full", { reserved: active.length, limit: AUTO_BEWERB_COMPANY_LIMIT, ...byStatus });
     return fail(
       "workflow_full",
       `Ihr globales Limit von ${AUTO_BEWERB_COMPANY_LIMIT} Unternehmen ist erreicht. Bitte erst Unternehmen entfernen oder abwarten, bis versendete Bewerbungen abgeschlossen sind, um Platz zu schaffen.`,
@@ -782,7 +791,14 @@ export async function createAutoBewerbCompany(
   if (slotNo > AUTO_BEWERB_COMPANY_LIMIT) {
     // Defensive: the count check above should have caught this, but the slot
     // range is the final arbiter — surface a clean capacity error, never an
-    // out-of-range slot.
+    // out-of-range slot. A hit here means rows and slots disagree (status/
+    // slot inconsistency) — the diagnostic carries both numbers.
+    logCapacityDiagnostic(userId, "workflow_full", {
+      reserved: active.length,
+      distinctSlots: usedSlots.size,
+      limit: AUTO_BEWERB_COMPANY_LIMIT,
+      note: "slot_range_exhausted",
+    });
     return fail(
       "workflow_full",
       `Ihr globales Limit von ${AUTO_BEWERB_COMPANY_LIMIT} Unternehmen ist erreicht.`,
@@ -809,7 +825,13 @@ export async function createAutoBewerbCompany(
     })
     .select("*")
     .single();
-  if (error || !data) return classifyInsertError(error);
+  if (error || !data) {
+    const result = classifyInsertError(error);
+    // The unique slot index refused a concurrent grab — a status/slot
+    // race signal (the count was under the limit a moment ago).
+    if (!result.ok && result.code === "workflow_full") logCapacityDiagnostic(userId, "slot_conflict", { concurrent: true });
+    return result;
+  }
   void logAutoBewerbActivity(userId, "auto_bewerb_company_created", "Bewerbungszentrale: Unternehmen hinzugefügt", undefined, { company });
   return { ok: true, value: data as unknown as AutoBewerbCompanyRow };
 }
@@ -2589,37 +2611,128 @@ export async function getAutoBewerbSendStats(userId: string): Promise<AutoBewerb
   }
 }
 
-/** The GLOBAL 100-company capacity as PERSISTED server-side counters. The
- *  Supabase RPC `ab_user_capacity` is the source of truth when available
- *  (migration applied); the count query fallback keeps the same semantics on
- *  a pre-migration database and in the in-memory test harness. */
-export async function getAutoBewerbCapacity(userId: string): Promise<AutoBewerbCapacity> {
-  const admin = createAdminClient();
+/** The GLOBAL 100-company capacity as PERSISTED server-side counters.
+ *
+ *  ONE consistent definition of "reserved" — the exact rule the server
+ *  enforces in createAutoBewerbCompany(): persisted rows of THIS user in a
+ *  RESERVED status (draft/ready/scheduled/sending/failed). The ROW COUNT is
+ *  canonical; the `ab_user_capacity` RPC is a cross-check and the fallback
+ *  for a transiently failing row query (pre-migration databases have no
+ *  RPC at all).
+ *
+ *  A read that cannot be completed is reported as such (`ok: false`) — a
+ *  failed read is NEVER presented as "0 reserved". (The old code swallowed
+ *  both the RPC error and the fallback query error and returned
+ *  `{reserved: 0}` on a broken read — the UI then showed "0 / 100 · 100
+ *  places available" while the next add was refused with the real count.)
+ */
+export type AutoBewerbCapacityResult =
+  | { ok: true; capacity: AutoBewerbCapacity; source: "query" | "rpc" }
+  | { ok: false; code: "capacity_unavailable"; failed: ("rpc" | "query")[] };
+
+/** Safe server-side capacity diagnostics: NUMBERS, a per-status
+ *  distribution and error classes only — never ad text, company names,
+ *  e-mail addresses or document content. */
+export function logCapacityDiagnostic(
+  userId: string,
+  kind: "rpc_error" | "query_error" | "rpc_query_disagreement" | "capacity_unavailable" | "workflow_full" | "slot_conflict",
+  fields: Record<string, number | string | boolean>,
+): void {
+  const extra = Object.entries(fields)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(" ");
+  console.error(`[auto-bewerb][capacity] ${kind} user=${userId} ${extra}`.trimEnd());
+}
+
+/** PostgREST error detail for logs: error code + first message words,
+ *  length-capped (relation names are fine — they are schema identifiers,
+ *  not user content). */
+function rpcErrorDetail(error: { message?: string } | null | undefined): string {
+  return (error?.message ?? "unknown").replace(/\s+/g, " ").slice(0, 160);
+}
+
+export async function getAutoBewerbCapacity(userId: string): Promise<AutoBewerbCapacityResult> {
   try {
-    const { data } = await admin.rpc("ab_user_capacity", { p_user: userId });
-    const row = (Array.isArray(data) ? data[0] : data) as
-      | { reserved?: number; capacity?: number; available?: number }
-      | null
-      | undefined;
-    if (row && Number.isFinite(row.reserved) && Number.isFinite(row.capacity)) {
+    const admin = createAdminClient();
+    // Both persisted sources, read in parallel; each failure is detected and
+    // logged on its OWN so "RPC missing" vs "RPC error" vs "row query error"
+    // are distinguishable in the server logs.
+    const [rpcRes, queryRes] = await Promise.all([
+      (async () => {
+        try {
+          const { data, error } = await admin.rpc("ab_user_capacity", { p_user: userId });
+          const row = (Array.isArray(data) ? data[0] : data) as
+            | { reserved?: unknown; capacity?: unknown }
+            | null
+            | undefined;
+          const reserved = typeof row?.reserved === "number" ? (row.reserved as number) : NaN;
+          if (!Number.isFinite(reserved)) {
+            if (error) logCapacityDiagnostic(userId, "rpc_error", { detail: rpcErrorDetail(error) });
+            return { reserved: NaN };
+          }
+          return { reserved, capacity: typeof row?.capacity === "number" ? (row.capacity as number) : NaN };
+        } catch (e) {
+          logCapacityDiagnostic(userId, "rpc_error", { detail: rpcErrorDetail(e instanceof Error ? { message: e.message } : null) });
+          return { reserved: NaN };
+        }
+      })(),
+      (async () => {
+        try {
+          const { data, error } = await admin
+            .from("auto_bewerb_companies")
+            .select("slot_no")
+            .eq("user_id", userId)
+            .in("status", [...AUTO_BEWERB_RESERVED_STATUSES]);
+          if (error) {
+            logCapacityDiagnostic(userId, "query_error", { detail: rpcErrorDetail(error) });
+            return { reserved: NaN };
+          }
+          return { reserved: (data ?? []).length };
+        } catch (e) {
+          logCapacityDiagnostic(userId, "query_error", { detail: rpcErrorDetail(e instanceof Error ? { message: e.message } : null) });
+          return { reserved: NaN };
+        }
+      })(),
+    ]);
+    // The persisted ROW COUNT is the canonical definition (it is exactly
+    // what the create path enforces). The RPC is cross-checked — a
+    // disagreement is logged and the rows are served, never the other way
+    // around (an old/drifted RPC must not silently misreport capacity).
+    if (Number.isFinite(queryRes.reserved)) {
+      if (Number.isFinite(rpcRes.reserved) && rpcRes.reserved !== queryRes.reserved) {
+        logCapacityDiagnostic(userId, "rpc_query_disagreement", {
+          rpc: rpcRes.reserved,
+          rpcCapacity: typeof rpcRes.capacity === "number" && Number.isFinite(rpcRes.capacity) ? rpcRes.capacity : -1,
+          rows: queryRes.reserved,
+          limit: AUTO_BEWERB_COMPANY_LIMIT,
+        });
+      }
+      const reserved = queryRes.reserved;
       return {
-        reserved: row.reserved as number,
-        capacity: row.capacity as number,
-        available: Number.isFinite(row.available)
-          ? (row.available as number)
-          : Math.max(0, (row.capacity as number) - (row.reserved as number)),
+        ok: true,
+        source: "query",
+        capacity: { reserved, capacity: AUTO_BEWERB_COMPANY_LIMIT, available: Math.max(0, AUTO_BEWERB_COMPANY_LIMIT - reserved) },
       };
     }
-  } catch {
-    // Fall through to the count query (RPC missing / pre-migration).
+    // Row query failed — the RPC is the honest fallback (still persisted
+    // server data, never client state):
+    if (Number.isFinite(rpcRes.reserved)) {
+      const reserved = rpcRes.reserved;
+      return {
+        ok: true,
+        source: "rpc",
+        capacity: { reserved, capacity: AUTO_BEWERB_COMPANY_LIMIT, available: Math.max(0, AUTO_BEWERB_COMPANY_LIMIT - reserved) },
+      };
+    }
+    logCapacityDiagnostic(userId, "capacity_unavailable", { failed: "rpc+query" });
+    return { ok: false, code: "capacity_unavailable", failed: ["rpc", "query"] };
+  } catch (e) {
+    logCapacityDiagnostic(userId, "capacity_unavailable", {
+      failed: "rpc+query",
+      detail: rpcErrorDetail(e instanceof Error ? { message: e.message } : null),
+    });
+    return { ok: false, code: "capacity_unavailable", failed: ["rpc", "query"] };
   }
-  const { data: rows } = await admin
-    .from("auto_bewerb_companies")
-    .select("id")
-    .eq("user_id", userId)
-    .in("status", [...AUTO_BEWERB_RESERVED_STATUSES]);
-  const reserved = (rows ?? []).length;
-  return { reserved, capacity: AUTO_BEWERB_COMPANY_LIMIT, available: Math.max(0, AUTO_BEWERB_COMPANY_LIMIT - reserved) };
 }
 
 /** The preserved SENDING HISTORY: sent + cancelled companies, newest first.
@@ -2859,7 +2972,9 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     batchesSupported: false,
     batches: [],
     sendStats: { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 },
-    capacity: { reserved: 0, capacity: AUTO_BEWERB_COMPANY_LIMIT, available: AUTO_BEWERB_COMPANY_LIMIT },
+    // Not readable while the schema is not ready — honest "unavailable",
+    // never a fake zero.
+    capacity: null,
     sendHistory: [],
     sendingWindow,
   };
@@ -2986,13 +3101,11 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
   // GLOBAL capacity + preserved sending history (persisted server counters;
   // never client state). Computed independently of the batch-queue probe so a
   // pre-batch database still shows honest capacity + history.
-  let capacity: AutoBewerbCapacity = { reserved: 0, capacity: AUTO_BEWERB_COMPANY_LIMIT, available: AUTO_BEWERB_COMPANY_LIMIT };
-  let sendHistory: AutoBewerbSendHistoryItem[] = [];
-  try {
-    [capacity, sendHistory] = await Promise.all([getAutoBewerbCapacity(userId), getAutoBewerbSendHistory(userId)]);
-  } catch {
-    /* keep the honest defaults */
-  }
+  // `capacity` is NULL when it could not be read — the UI shows an honest
+  // "unavailable" state instead of a fake "0 / 100 · 100 places available"
+  // (a failed read used to masquerade as zero reserved companies).
+  const [capRes, sendHistory] = await Promise.all([getAutoBewerbCapacity(userId), getAutoBewerbSendHistory(userId)]);
+  const capacity: AutoBewerbCapacity | null = capRes.ok ? capRes.capacity : null;
   // Step 7 — batch queue + statistics (graceful: pre-migration DB →
   // unsupported, everything else keeps working).
   let batches: AutoBewerbBatchView[] = [];
