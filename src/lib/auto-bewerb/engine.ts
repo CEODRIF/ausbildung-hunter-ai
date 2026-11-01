@@ -841,7 +841,15 @@ export async function createAutoBewerbCompany(
  *  moment it is sent (or safely cancelled): its row is never deleted (history
  *  is preserved), but it no longer reserves capacity and is filtered out here.
  *  See getAutoBewerbSendHistory() for the retained sent/cancelled records. */
-export async function listAutoBewerbCompanies(userId: string): Promise<AutoBewerbCompanyRow[]> {
+/** HONEST list result: a failed query is reported as such — NEVER
+ *  disguised as an empty list. (A failed list masquerading as "0
+ *  companies" next to a stale RPC counter was the last hole that could
+ *  still display "0 / 100" while the add was refused on the real rows.) */
+export type AutoBewerbCompanyListResult =
+  | { ok: true; companies: AutoBewerbCompanyRow[] }
+  | { ok: false; code: "companies_unavailable" };
+
+export async function listAutoBewerbCompanies(userId: string): Promise<AutoBewerbCompanyListResult> {
   const { data, error } = await createAdminClient()
     .from("auto_bewerb_companies")
     .select("*")
@@ -849,8 +857,8 @@ export async function listAutoBewerbCompanies(userId: string): Promise<AutoBewer
     .in("status", [...AUTO_BEWERB_RESERVED_STATUSES])
     .order("slot_no", { ascending: true })
     .limit(AUTO_BEWERB_COMPANY_LIMIT);
-  if (error) return [];
-  return revalidateCompanies(data ?? []);
+  if (error) return { ok: false, code: "companies_unavailable" };
+  return { ok: true, companies: revalidateCompanies(data ?? []) };
 }
 
 function revalidateCompanies(rows: unknown[]): AutoBewerbCompanyRow[] {
@@ -2645,6 +2653,7 @@ export function logCapacityDiagnostic(
     | "query_error"
     | "rpc_query_disagreement"
     | "capacity_unavailable"
+    | "companies_list_unavailable"
     | "capacity_list_mismatch"
     | "workflow_full"
     | "slot_conflict",
@@ -2979,6 +2988,9 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     photoSupported: false,
     photo: null,
     companies: [],
+    // The list was never read (schema not ready / probe error) — honest
+    // "unavailable", never a fake empty workflow.
+    companiesStatus: "unavailable",
     attachments: [],
     emailTemplate: "",
     emailSettings: null,
@@ -2997,7 +3009,7 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
   if (!ready) return empty;
 
   const admin = createAdminClient();
-  const [profileRow, templateRes, companies, attachments, emailAccounts, photoProbe, photoRow, settingsProbe, letterhead] =
+  const [profileRow, templateRes, listResult, attachments, emailAccounts, photoProbe, photoRow, settingsProbe, letterhead] =
     await Promise.all([
       getAutoBewerbProfile(userId),
       admin.from("auto_bewerb_email_templates").select("*").eq("user_id", userId).maybeSingle(),
@@ -3025,6 +3037,9 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
         attachLetter: templateRow?.attach_letter === null || templateRow?.attach_letter === undefined ? true : Boolean(templateRow.attach_letter),
       }
     : null;
+  // HONEST list state (a failed read is NOT an empty workflow):
+  const companiesListOk = listResult.ok;
+  const companies = companiesListOk ? listResult.companies : [];
   const photoExtByMime: Record<string, "jpg" | "png" | "webp"> = {
     "image/jpeg": "jpg",
     "image/png": "png",
@@ -3121,14 +3136,28 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
   // "unavailable" state instead of a fake "0 / 100 · 100 places available"
   // (a failed read used to masquerade as zero reserved companies).
   const [capRes, sendHistory] = await Promise.all([getAutoBewerbCapacity(userId), getAutoBewerbSendHistory(userId)]);
-  const capacity: AutoBewerbCapacity | null = capRes.ok ? capRes.capacity : null;
+  let capacity: AutoBewerbCapacity | null = capRes.ok ? capRes.capacity : null;
+  // A FAILED LIST QUERY must not masquerade as an empty workflow (diagnostic
+  // below), and a stale RPC zero must not be proof that capacity is empty:
+  // when the list is unavailable, the RPC-fallback counter (its canonical row
+  // query FAILED — the RPC may be stale) is unreliable and is dropped to
+  // NULL → the UI shows the honest "—" state, never a fake "0 / 100".
+  // (A "query"-source counter stays: it IS the enforcement definition.)
+  if (capacity && capRes.ok && capRes.source === "rpc" && !companiesListOk) capacity = null;
+  if (!companiesListOk) {
+    logCapacityDiagnostic(userId, "companies_list_unavailable", {
+      source: capRes.ok ? capRes.source : "none",
+      reserved: capacity ? capacity.reserved : -1,
+      limit: AUTO_BEWERB_COMPANY_LIMIT,
+    });
+  }
   // CROSS-CHECK (server-side): the capacity counter and the active list count
   // the SAME persisted reserved set, so the counter can never legitimately be
   // BELOW the list length. A divergence means the response carries a
   // degraded/stale counter next to a healthy list — the exact state behind the
   // "0 / 100 while the add is refused" report. The UI applies the same
   // invariant (it shows the list length); this log names the source + build.
-  if (capacity && capacity.reserved < companies.length) {
+  if (companiesListOk && capacity && capacity.reserved < companies.length) {
     logCapacityDiagnostic(userId, "capacity_list_mismatch", {
       source: capRes.ok ? capRes.source : "none",
       reserved: capacity.reserved,
@@ -3167,6 +3196,10 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     photoSupported,
     photo,
     companies: views,
+    // HONEST list state: "ok" = the query succeeded (the list may be
+    // genuinely empty); "unavailable" = the query FAILED (a failed read is
+    // never presented as an empty workflow — see listAutoBewerbCompanies).
+    companiesStatus: companiesListOk ? "ok" : "unavailable",
     attachments,
     emailTemplate,
     emailSettings,

@@ -558,6 +558,12 @@ export interface AutoBewerbWorkspace {
     uploadedAt: string;
   } | null;
   companies: AutoBewerbCompanyView[];
+  /** HONEST list state — "ok" = the query succeeded (the list may be
+   *  genuinely empty); "unavailable" = the query FAILED. A failed read is
+   *  never presented as an empty workflow (which, next to a stale RPC
+   *  counter, could still display a fake "0 / 100"). Optional so
+   *  pre-feature workspace snapshots and test fixtures remain valid. */
+  companiesStatus?: "ok" | "unavailable";
   attachments: AutoBewerbAttachmentRow[];
   /** The shared e-mail body (always — also the legacy mode's template). */
   emailTemplate: string;

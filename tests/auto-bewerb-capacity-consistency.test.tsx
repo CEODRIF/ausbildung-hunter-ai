@@ -30,6 +30,10 @@
  *        (workflow_full), which proves the server sees state the UI lacks.
  *   (4)  The hard 100-company limit stays server-enforced and race-proof
  *        (no 101st reservation, ever).
+ *   (5)  A failed company-LIST query is "unavailable", never an empty list —
+ *        and when the list is unavailable, a stale-RPC counter (the canonical
+ *        row query failed) must not be displayed as fact either: the counter
+ *        is null and the UI shows "—".
  *
  * Real engine, in-memory Supabase-style DB (tests/helpers-studio) with the
  * OPT-IN slot-unique enforcement (the database arbiter) and the release
@@ -757,6 +761,85 @@ describe("capacity — the actual response-to-UI path", () => {
     await screen.findByText("100 / 100");
     expect(screen.queryByText("0 / 100")).not.toBeInTheDocument();
     expect(tCompanies()).toHaveLength(100); // still no 101st row
+  });
+
+  it("(20) DOUBLE FAILURE: capacity query fails + stale RPC 0 + list query fails → honest '—', never '0 / 100'", async () => {
+    seedBase();
+    for (let i = 1; i <= 100; i += 1) seedCompany(USER, `Real ${i} GmbH`, "ready");
+    // A stale RPC reports 0 while BOTH persisted reads fail — the capacity
+    // row query (select "slot_no") AND the company list query (select "*").
+    // The CREATE query (select "slot_no, status") stays healthy, exactly like
+    // in production:
+    db.setRpc((fn) =>
+      fn === "ab_user_capacity" ? { data: [{ reserved: 0, capacity: 100, available: 100 }], error: null } : { data: null, error: null },
+    );
+    db.failSelect("auto_bewerb_companies", "slot_no", "simulated outage A");
+    db.addSelectFail("auto_bewerb_companies", "*", "simulated outage B");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let ws: AutoBewerbWorkspace;
+    let logs: string[] = [];
+    try {
+      ws = await getAutoBewerbWorkspace(USER);
+      logs = capacityLogs(errSpy);
+    } finally {
+      errSpy.mockRestore();
+      db.clearSelectFail();
+    }
+    // The response preserves the THREE-way distinction: the list FAILED
+    // (not "empty"), and the stale RPC zero is NOT proof of empty capacity —
+    // the counter is null (honest), the rows are untouched:
+    expect(ws.companiesStatus).toBe("unavailable");
+    expect(ws.companies).toHaveLength(0);
+    expect(ws.capacity).toBeNull();
+    expect(logs.some((l) => l.includes("companies_list_unavailable") && l.includes("source=rpc") && l.includes("build="))).toBe(true);
+    // The actual response → UI path (serialization round-trip + real render):
+    const wire = JSON.parse(JSON.stringify(ws)) as AutoBewerbWorkspace;
+    expect(wire.companiesStatus).toBe("unavailable");
+    expect(wire.capacity).toBeNull();
+    renderStep2(wire);
+    expect(screen.queryByText("0 / 100")).not.toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+    // Enforcement is unchanged: the add is still refused on the FRESH rows —
+    // and no 101st company can be created:
+    const next = await createAutoBewerbCompany(USER, {
+      adRaw: AD_RAW,
+      company: "OneTooMany GmbH",
+      extract: extractFor("OneTooMany GmbH", "jobs@onetoomany.de", "Ausbildung Overflow"),
+      analysis: null,
+    });
+    expect(next).toMatchObject({ ok: false, code: "workflow_full" });
+    expect(tCompanies()).toHaveLength(100);
+    // … and once the reads recover, the persisted truth is displayed:
+    const ws2 = await getAutoBewerbWorkspace(USER);
+    expect(ws2.companiesStatus).toBe("ok");
+    expect(ws2.companies).toHaveLength(100);
+    expect(ws2.capacity).toEqual({ reserved: 100, capacity: 100, available: 0 });
+  });
+
+  it("(21) stale RPC 0 + list query SUCCEEDS with a genuinely empty list → '0 / 100' stays honest and the add succeeds", async () => {
+    seedBase(); // 0 persisted rows
+    // The RPC (a fallback, possibly stale) reports 0; the capacity row query
+    // fails; the LIST query succeeds and independently PROVES the zero:
+    db.setRpc((fn) =>
+      fn === "ab_user_capacity" ? { data: [{ reserved: 0, capacity: 100, available: 100 }], error: null } : { data: null, error: null },
+    );
+    db.failSelect("auto_bewerb_companies", "slot_no", "simulated outage");
+    const ws = await getAutoBewerbWorkspace(USER);
+    db.clearSelectFail();
+    expect(ws.companiesStatus).toBe("ok");
+    expect(ws.companies).toHaveLength(0);
+    expect(ws.capacity).toEqual({ reserved: 0, capacity: 100, available: 100 }); // confirmed by the list
+    const wire = JSON.parse(JSON.stringify(ws)) as AutoBewerbWorkspace;
+    renderStep2(wire);
+    expect(screen.getByText("0 / 100")).toBeInTheDocument();
+    expect(screen.getByText(translate("de", "autoBewerb.capacityAvailable", { count: 100 }))).toBeInTheDocument();
+    const add = await createAutoBewerbCompany(USER, {
+      adRaw: AD_RAW,
+      company: "First GmbH",
+      extract: extractFor("First GmbH", "jobs@first.de", "Ausbildung First"),
+      analysis: null,
+    });
+    expect(add.ok).toBe(true); // a genuine zero is not over-masked
   });
 });
 
