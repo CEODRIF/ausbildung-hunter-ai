@@ -117,6 +117,11 @@ export type AutoBewerbErrorCode =
   | "schedule_after_deadline"
   | "not_cancellable"
   | "workflow_full"
+  /** A slot-unique conflict that survived the bounded retry budget — the
+   *  reserved row count does NOT confirm the 100 limit, so this is a
+   *  transient/stale-state conflict the user can safely retry, never a
+   *  fabricated "limit reached". */
+  | "slot_conflict"
   | "company_duplicate"
   | "not_deletable"
   | "scheduled_protected"
@@ -154,6 +159,12 @@ const ATTACHMENT_MIME: Record<string, string> = {
 const ATTACHMENT_BUCKET = "application-attachments";
 const ATTACHMENT_HARD_CAP_BYTES = 10 * 1024 * 1024;
 const MAX_SEND_ATTEMPTS = 3;
+/** Bounded retry budget for the slot allocator when the insert loses a
+ *  slot-unique race: reload the occupied RESERVED slots, pick another free
+ *  slot, re-insert. Never infinite — after the budget the rows are re-read
+ *  and the user gets the truth (confirmed ≥ 100 reserved ⇒ workflow_full,
+ *  otherwise a distinct slot_conflict). */
+const SLOT_ALLOC_MAX_ATTEMPTS = 3;
 const DOC_CATEGORIES_SET = new Set<string>(AUTO_BEWERB_DOC_CATEGORIES);
 
 /** Storage paths for the server-rendered per-company PDFs (private bucket). */
@@ -758,82 +769,134 @@ export async function createAutoBewerbCompany(
   }
   // GLOBAL 100-company cap (server-enforced). Only RESERVED companies count —
   // sent + cancelled campaigns have released their capacity, so a user with 90
-  // already-sent companies still has 100 places for new ones. The slot unique
-  // index is the database race arbiter (the losing concurrent insert is mapped
-  // to "workflow full" by classifyInsertError, never an 101st company).
-  const { data: slotRows, error: slotErr } = await admin
-    .from("auto_bewerb_companies")
-    .select("slot_no, status")
-    .eq("user_id", userId)
-    .in("status", [...AUTO_BEWERB_RESERVED_STATUSES]);
-  if (slotErr) return classifyInsertError(slotErr);
-  const active = (slotRows ?? []) as Array<{ slot_no?: number | null; status?: string }>;
-  if (active.length >= AUTO_BEWERB_COMPANY_LIMIT) {
-    // Safe diagnostic: the PERSISTED ROW PROOF (per-status distribution,
-    // counts only) — distinguishes "the user really has 100 reserved rows"
-    // from any counting bug, without logging a single name or ad fragment.
-    const byStatus: Record<string, number> = {};
-    for (const r of active) {
-      const s = r.status ?? "unknown";
-      byStatus[s] = (byStatus[s] ?? 0) + 1;
+  // already-sent companies still has 100 places for new ones.
+  //
+  // The slot unique index is the database race arbiter. Since migration
+  // 20261222000000 its predicate EXACTLY matches the reserved set above, so a
+  // released row (sent/cancelled — even a stale one still holding a positive
+  // slot_no) can never block a slot. The only remaining collision source is a
+  // genuine concurrent grab (two requests computing the same smallest free
+  // slot), handled by a BOUNDED retry: reload the occupied reserved slots,
+  // pick another free slot, re-insert (SLOT_ALLOC_MAX_ATTEMPTS, never
+  // infinite). If the budget is exhausted the rows are re-read and the user
+  // gets the TRUTH: only a confirmed count of ≥ 100 reserved rows yields
+  // "workflow full" — anything else is a distinct slot_conflict, never a
+  // fabricated limit message (the 2026-11-01 incident).
+  for (let attempt = 1; attempt <= SLOT_ALLOC_MAX_ATTEMPTS; attempt++) {
+    const { data: slotRows, error: slotErr } = await admin
+      .from("auto_bewerb_companies")
+      .select("slot_no, status")
+      .eq("user_id", userId)
+      .in("status", [...AUTO_BEWERB_RESERVED_STATUSES]);
+    if (slotErr) return classifyInsertError(slotErr);
+    const active = (slotRows ?? []) as Array<{ slot_no?: number | null; status?: string }>;
+    if (active.length >= AUTO_BEWERB_COMPANY_LIMIT) {
+      // Safe diagnostic: the PERSISTED ROW PROOF (per-status distribution,
+      // counts only) — distinguishes "the user really has 100 reserved rows"
+      // from any counting bug, without logging a single name or ad fragment.
+      const byStatus: Record<string, number> = {};
+      for (const r of active) {
+        const s = r.status ?? "unknown";
+        byStatus[s] = (byStatus[s] ?? 0) + 1;
+      }
+      logCapacityDiagnostic(userId, "workflow_full", { reserved: active.length, limit: AUTO_BEWERB_COMPANY_LIMIT, ...byStatus });
+      return fail(
+        "workflow_full",
+        `Ihr globales Limit von ${AUTO_BEWERB_COMPANY_LIMIT} Unternehmen ist erreicht. Bitte erst Unternehmen entfernen oder abwarten, bis versendete Bewerbungen abgeschlossen sind, um Platz zu schaffen.`,
+      );
     }
-    logCapacityDiagnostic(userId, "workflow_full", { reserved: active.length, limit: AUTO_BEWERB_COMPANY_LIMIT, ...byStatus });
-    return fail(
-      "workflow_full",
-      `Ihr globales Limit von ${AUTO_BEWERB_COMPANY_LIMIT} Unternehmen ist erreicht. Bitte erst Unternehmen entfernen oder abwarten, bis versendete Bewerbungen abgeschlossen sind, um Platz zu schaffen.`,
+    const usedSlots = new Set(
+      active.map((r) => r.slot_no).filter((s): s is number => typeof s === "number" && s >= 1 && s <= AUTO_BEWERB_COMPANY_LIMIT),
     );
-  }
-  const usedSlots = new Set(
-    active.map((r) => r.slot_no).filter((s): s is number => typeof s === "number" && s >= 1 && s <= AUTO_BEWERB_COMPANY_LIMIT),
-  );
-  let slotNo = 1;
-  while (usedSlots.has(slotNo)) slotNo += 1;
-  if (slotNo > AUTO_BEWERB_COMPANY_LIMIT) {
-    // Defensive: the count check above should have caught this, but the slot
-    // range is the final arbiter — surface a clean capacity error, never an
-    // out-of-range slot. A hit here means rows and slots disagree (status/
-    // slot inconsistency) — the diagnostic carries both numbers.
-    logCapacityDiagnostic(userId, "workflow_full", {
-      reserved: active.length,
-      distinctSlots: usedSlots.size,
-      limit: AUTO_BEWERB_COMPANY_LIMIT,
-      note: "slot_range_exhausted",
-    });
-    return fail(
-      "workflow_full",
-      `Ihr globales Limit von ${AUTO_BEWERB_COMPANY_LIMIT} Unternehmen ist erreicht.`,
-    );
-  }
+    let slotNo = 1;
+    while (usedSlots.has(slotNo)) slotNo += 1;
+    if (slotNo > AUTO_BEWERB_COMPANY_LIMIT) {
+      // Defensive: with < 100 reserved rows at most 99 distinct slots are
+      // occupied, so a free slot in 1..100 always exists — a hit here means
+      // rows and slots disagree (status/slot inconsistency). Surface a clean
+      // capacity error, never an out-of-range slot.
+      logCapacityDiagnostic(userId, "workflow_full", {
+        reserved: active.length,
+        distinctSlots: usedSlots.size,
+        limit: AUTO_BEWERB_COMPANY_LIMIT,
+        note: "slot_range_exhausted",
+      });
+      return fail(
+        "workflow_full",
+        `Ihr globales Limit von ${AUTO_BEWERB_COMPANY_LIMIT} Unternehmen ist erreicht.`,
+      );
+    }
 
-  const { data, error } = await admin
-    .from("auto_bewerb_companies")
-    .insert({
-      user_id: userId,
-      company,
-      company_key: companyKey,
-      slot_no: slotNo,
-      ad_raw: adRaw,
-      ad_extracted: input.extract ?? null,
-      ad_analysis: input.analysis ?? null,
-      profile_snapshot: input.profileSnapshot ?? null,
-      status: "draft",
-      // AUTO-CONFIRMATION: the ad text was pasted + analyzed by the user and
-      // is persisted by this very write — the server stamps the confirmation
-      // inside the successful insert. A failed insert creates no row, so a
-      // company can never be "confirmed" without existing.
-      ad_confirmed_at: new Date().toISOString(),
-    })
-    .select("*")
-    .single();
-  if (error || !data) {
-    const result = classifyInsertError(error);
-    // The unique slot index refused a concurrent grab — a status/slot
-    // race signal (the count was under the limit a moment ago).
-    if (!result.ok && result.code === "workflow_full") logCapacityDiagnostic(userId, "slot_conflict", { concurrent: true });
-    return result;
+    const { data, error } = await admin
+      .from("auto_bewerb_companies")
+      .insert({
+        user_id: userId,
+        company,
+        company_key: companyKey,
+        slot_no: slotNo,
+        ad_raw: adRaw,
+        ad_extracted: input.extract ?? null,
+        ad_analysis: input.analysis ?? null,
+        profile_snapshot: input.profileSnapshot ?? null,
+        status: "draft",
+        // AUTO-CONFIRMATION: the ad text was pasted + analyzed by the user and
+        // is persisted by this very write — the server stamps the confirmation
+        // inside the successful insert. A failed insert creates no row, so a
+        // company can never be "confirmed" without existing.
+        ad_confirmed_at: new Date().toISOString(),
+      })
+      .select("*")
+      .single();
+    if (error || !data) {
+      const slotConflict = /auto_bewerb_companies_user_slot_unique/i.test(error?.message ?? "");
+      if (slotConflict) {
+        if (attempt < SLOT_ALLOC_MAX_ATTEMPTS) {
+          // A concurrent request claimed our slot between the read and the
+          // insert — reload the occupied reserved slots and pick another
+          // free one. Bounded: the next iteration re-runs the full count
+          // check, so a retry can never create a 101st company.
+          logCapacityDiagnostic(userId, "slot_conflict", { concurrent: true, attempt });
+          continue;
+        }
+        // Budget exhausted: re-read the rows and tell the TRUTH — only a
+        // confirmed ≥ 100 reserved count is "workflow full".
+        const fresh = await admin
+          .from("auto_bewerb_companies")
+          .select("slot_no, status")
+          .eq("user_id", userId)
+          .in("status", [...AUTO_BEWERB_RESERVED_STATUSES]);
+        const activeNow = (fresh.data ?? []) as Array<{ status?: string }>;
+        const byStatus: Record<string, number> = {};
+        for (const r of activeNow) {
+          const s = r.status ?? "unknown";
+          byStatus[s] = (byStatus[s] ?? 0) + 1;
+        }
+        if (!fresh.error && activeNow.length >= AUTO_BEWERB_COMPANY_LIMIT) {
+          logCapacityDiagnostic(userId, "workflow_full", {
+            reserved: activeNow.length,
+            limit: AUTO_BEWERB_COMPANY_LIMIT,
+            note: "after_slot_conflict",
+            ...byStatus,
+          });
+          return fail(
+            "workflow_full",
+            `Ihr globales Limit von ${AUTO_BEWERB_COMPANY_LIMIT} Unternehmen ist erreicht. Bitte erst Unternehmen entfernen oder abwarten, bis versendete Bewerbungen abgeschlossen sind, um Platz zu schaffen.`,
+          );
+        }
+        logCapacityDiagnostic(userId, "slot_conflict", { exhausted: true, reserved: fresh.error ? -1 : activeNow.length, limit: AUTO_BEWERB_COMPANY_LIMIT });
+        return fail(
+          "slot_conflict",
+          "Ein vorübergehender Datenbankkonflikt ist beim Speichern aufgetreten — nichts wurde gespeichert. Bitte erneut versuchen.",
+        );
+      }
+      return classifyInsertError(error);
+    }
+    void logAutoBewerbActivity(userId, "auto_bewerb_company_created", "Bewerbungszentrale: Unternehmen hinzugefügt", undefined, { company });
+    return { ok: true, value: data as unknown as AutoBewerbCompanyRow };
   }
-  void logAutoBewerbActivity(userId, "auto_bewerb_company_created", "Bewerbungszentrale: Unternehmen hinzugefügt", undefined, { company });
-  return { ok: true, value: data as unknown as AutoBewerbCompanyRow };
+  // Unreachable — every loop iteration returns (success or a classified
+  // error). Kept for exhaustiveness.
+  return fail("storage_error", "Speichern fehlgeschlagen. Bitte erneut versuchen.");
 }
 
 /** The user's ACTIVE working list — only RESERVED companies (draft / ready /
