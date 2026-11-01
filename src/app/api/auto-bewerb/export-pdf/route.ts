@@ -79,24 +79,30 @@ export async function GET(request: Request) {
       const photoDataUrl = await resolveAutoBewerbPhotoDataUrl(user.id, cv.personal.photo).catch(
         () => null,
       );
-      try {
-        const bytes = await generateCvPdf(cv, { photoDataUrl });
-        return new NextResponse(Buffer.from(bytes), {
-          status: 200,
-          headers: {
-            "Content-Type": BEW_LETTER_PDF_MIME,
-            "Content-Disposition": disposition(cvPdfFilename(cv.personal.fullName)),
-            "Cache-Control": "no-store",
-          },
-        });
-      } catch (error) {
-        // ONE-PAGE POLICY: an overflowing CV is an explicit, actionable
-        // validation error — never a silent multi-page document.
-        if (error instanceof CvPdfOverflowError) {
-          return NextResponse.json({ error: error.message, code: error.code }, { status: 502 });
-        }
-        throw error;
-      }
+       const cvFilename = cvPdfFilename(cv.personal.fullName);
+       const cvHeaders = (status: number) => ({
+         status,
+         headers: {
+           "Content-Type": BEW_LETTER_PDF_MIME,
+           "Content-Disposition": disposition(cvFilename),
+           "Cache-Control": "no-store",
+         },
+       });
+       try {
+         const bytes = await generateCvPdf(cv, { photoDataUrl });
+         return new NextResponse(Buffer.from(bytes), cvHeaders(200));
+       } catch (error) {
+         // OVERFLOW POLICY (completeness over one page): when the densest
+         // readable tier still overflows, NOTHING is deleted or shortened —
+         // the renderer's EXISTING multi-page mode (running header + page
+         // numbers, every section rendered) takes over. Preview and export
+         // stay byte-identical (same document, same renderer call).
+         if (error instanceof CvPdfOverflowError) {
+           const bytes = await generateCvPdf(cv, { photoDataUrl, allowMultiPage: true });
+           return new NextResponse(Buffer.from(bytes), cvHeaders(200));
+         }
+         throw error;
+       }
     }
 
     // letter

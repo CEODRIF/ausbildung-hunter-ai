@@ -2777,6 +2777,23 @@ const de = {
     signatureErrorSize: "Die Signatur ist zu groß (max. 5 MB).",
     signatureErrorUpload: "Die Signatur konnte nicht hochgeladen werden. Bitte erneut versuchen.",
     signatureErrorRemove: "Die Signatur konnte nicht entfernt werden. Bitte erneut versuchen.",
+    // Requirement coverage (Step 4 preview — before export)
+    cvVerifyTitle: "Anforderungs-Abgleich",
+    cvVerifyCovered: "{covered} von {total} Anforderungen abgedeckt",
+    cvVerifyAllCovered: "Alle Anforderungen der Anzeige sind im Lebenslauf enthalten.",
+    cvVerifyGaps: "{count} Anforderung(en) sind nicht vollständig abgedeckt — bitte vor dem Export prüfen.",
+    cvVerifyAddedTitle: "{count} Anforderung(en) aus der Anzeige ergänzt",
+    cvVerifyAddedHint:
+      "Diese Anforderungen standen nicht in Ihrem ursprünglichen Lebenslauf und wurden automatisch ergänzt. Bitte prüfen, ob sie bei Ihnen zutreffen — andernfalls im Editor entfernen.",
+    cvVerifyShowAll: "Alle {total} Anforderungen anzeigen",
+    cvVerifySection: "im Abschnitt",
+    cvVerifyAddedBadge: "aus der Anzeige ergänzt",
+    cvVerifyCategoryTechnical: "Technisch",
+    cvVerifyCategorySoft: "Persönliche Anforderung",
+    cvVerifyCategoryQualification: "Qualifikation",
+    cvVerifyCategoryLanguage: "Sprache",
+    cvVerifyCategoryEducation: "Bildung",
+    cvVerifyCategoryDocument: "Unterlagen",
   },
 };
 
@@ -5491,6 +5508,23 @@ const en: Dict = {
     signatureErrorSize: "The signature is too large (max. 5 MB).",
     signatureErrorUpload: "The signature could not be uploaded. Please try again.",
     signatureErrorRemove: "The signature could not be removed. Please try again.",
+    // Requirement coverage (Step 4 preview — before export)
+    cvVerifyTitle: "Requirements check",
+    cvVerifyCovered: "{covered} of {total} requirements covered",
+    cvVerifyAllCovered: "Every requirement from the job ad is included in the CV.",
+    cvVerifyGaps: "{count} requirement(s) are not fully covered — please review before exporting.",
+    cvVerifyAddedTitle: "{count} requirement(s) added from the job ad",
+    cvVerifyAddedHint:
+      "These requirements were not in your original CV and were added automatically. Please check whether they apply to you — otherwise remove them in the editor.",
+    cvVerifyShowAll: "Show all {total} requirements",
+    cvVerifySection: "in section",
+    cvVerifyAddedBadge: "added from ad",
+    cvVerifyCategoryTechnical: "Technical",
+    cvVerifyCategorySoft: "Personal requirement",
+    cvVerifyCategoryQualification: "Qualification",
+    cvVerifyCategoryLanguage: "Language",
+    cvVerifyCategoryEducation: "Education",
+    cvVerifyCategoryDocument: "Documents",
   },
 };
 
@@ -8215,6 +8249,23 @@ const fr: Dict = {
     signatureErrorSize: "La signature est trop grande (max. 5 Mo).",
     signatureErrorUpload: "La signature n'a pas pu être téléversée. Veuillez réessayer.",
     signatureErrorRemove: "La signature n'a pas pu être supprimée. Veuillez réessayer.",
+    // Couverture des exigences (aperçu Étape 4 — avant l'export)
+    cvVerifyTitle: "Vérification des exigences",
+    cvVerifyCovered: "{covered} exigences sur {total} couvertes",
+    cvVerifyAllCovered: "Toutes les exigences de l'offre d'emploi sont reprises dans le CV.",
+    cvVerifyGaps: "{count} exigence(s) non entièrement couvertes — à vérifier avant l'export.",
+    cvVerifyAddedTitle: "{count} exigence(s) ajoutée(s) depuis l'offre",
+    cvVerifyAddedHint:
+      "Ces exigences n'étaient pas dans votre CV d'origine et ont été ajoutées automatiquement. Vérifiez si elles vous concernent — sinon supprimez-les dans l'éditeur.",
+    cvVerifyShowAll: "Afficher les {total} exigences",
+    cvVerifySection: "dans la section",
+    cvVerifyAddedBadge: "ajouté depuis l'offre",
+    cvVerifyCategoryTechnical: "Technique",
+    cvVerifyCategorySoft: "Exigence personnelle",
+    cvVerifyCategoryQualification: "Qualification",
+    cvVerifyCategoryLanguage: "Langue",
+    cvVerifyCategoryEducation: "Formation",
+    cvVerifyCategoryDocument: "Documents",
   },
 };
 
@@ -10856,6 +10907,23 @@ const ar: Dict = {
     signatureErrorSize: "التوقيع كبير جدًا (بحد أقصى 5 م.ب.).",
     signatureErrorUpload: "تعذّر رفع التوقيع. يرجى المحاولة مجددًا.",
     signatureErrorRemove: "تعذّرت إزالة التوقيع. يرجى المحاولة مجددًا.",
+    // مطابقة المتطلبات (معاينة الخطوة 4 — قبل التصدير)
+    cvVerifyTitle: "مطابقة المتطلبات",
+    cvVerifyCovered: "تمت تغطية {covered} من أصل {total} متطلبات",
+    cvVerifyAllCovered: "جميع متطلبات الإعلان مدرجة في السيرة الذاتية.",
+    cvVerifyGaps: "{count} من المتطلبات غير مغطاة تمامًا — يرجى المراجعة قبل التصدير.",
+    cvVerifyAddedTitle: "تمت إضافة {count} متطلبات من الإعلان",
+    cvVerifyAddedHint:
+      "هذه المتطلبات لم تكن في سيرتك الذاتية الأصلية وأُضيفت تلقائيًا. يرجى التحقق من أنها تنطبق عليك — وإلا احذفها من المحرر.",
+    cvVerifyShowAll: "عرض جميع المتطلبات ({total})",
+    cvVerifySection: "في قسم",
+    cvVerifyAddedBadge: "أُضيف من الإعلان",
+    cvVerifyCategoryTechnical: "تقنية",
+    cvVerifyCategorySoft: "متطلب شخصي",
+    cvVerifyCategoryQualification: "مؤهلات",
+    cvVerifyCategoryLanguage: "لغة",
+    cvVerifyCategoryEducation: "تعليم",
+    cvVerifyCategoryDocument: "مستندات",
   },
 };
 

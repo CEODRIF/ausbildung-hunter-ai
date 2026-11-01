@@ -25,13 +25,30 @@
  *    the candidate's own profile text (the only candidate facts the
  *    model ever sees) — see the traceability rules below. Anything
  *    unverifiable is dropped (lists) or the ORIGINAL section is kept
- *    (PROFIL);
+ *    (PROFIL). For the free-text PROFIL the grounding corpus is extended
+ *    with the AD CONTEXT (exact job title / occupation / company of
+ *    THIS ad) — mentioning the applied-for position is ad-grounded,
+ *    not an invention;
  *  - COMPLETENESS: every verified skill/interest of the original CV
  *    stays in the document even if the model omits it (appended after
  *    the model's relevance-ordered list);
- *  - NO DUPLICATES: normalized de-duplication (case/diacritic/
- *    punctuation-insensitive, German-compound-aware);
- *  - LAYOUT SAFETY: the PROFIL (summary) is capped in length.
+ *  - AD COVERAGE: every skill-like requirement of the ad (technical,
+ *    soft, skill-like qualification) that is not present ANYWHERE in
+ *    the CV yet is appended to the skills list and flagged in
+ *    `tailoring.addedFromAd` — the user sees it explicitly and can
+ *    remove it in the editor if it does not apply (see
+ *    cv-verification.ts). Education/experience claims and language
+ *    levels are NEVER auto-added (they would be fabricated facts);
+ *    they are reported by the verification instead;
+ *  - NO DUPLICATES: symbol-aware normalized de-duplication
+ *    (case/diacritic/punctuation-insensitive, German-compound-aware;
+ *    "C" ≠ "C++" ≠ "C#");
+ *  - LAYOUT SAFETY: the generated PROFIL (summary) is capped at the
+ *    last sentence boundary below the limit (the original summary is
+ *    NEVER capped or cut — it is the candidate's own data).
+ *  - PROFIL FALLBACK: when the original CV has no profile paragraph at
+ *    all, a minimal deterministic summary is constructed from verified
+ *    facts + the ad context — the section is never left empty.
  *
  * GROUNDING MODEL — deliberately stricter than substring matching:
  *  A token is "traceable" when it is
@@ -58,11 +75,14 @@
  * layer — no DOM, no network, no Supabase.
  */
 import { sanitizeCvDocument, type CvDocument } from "@/lib/templates/cv";
+import { isTermCoveredInCv, termDedupeKey } from "./cv-verification";
 
 /** The ONLY content fields the tailoring model may change. */
 export const TAILORABLE_CV_FIELDS = ["summary", "skills", "interests"] as const;
 
-/** Hard layout cap for the PROFIL section (keeps the one-page fit honest). */
+/** Hard layout cap for the GENERATED PROFIL (summary) — the candidate's
+ *  own original summary is never capped (their data is rendered in
+ *  full; the renderer's overflow policy handles very long documents). */
 export const TAILORED_SUMMARY_MAX_CHARS = 900;
 
 /**
@@ -121,28 +141,34 @@ export function buildProfileVocabulary(profileText: string): ProfileVocabulary {
 /* Exempt vocabulary for the free-text PROFIL                          */
 /* ------------------------------------------------------------------ */
 
-/** Pure function words / framing — never carry a verifiable claim. */
-const STOPWORDS = new Set([
-  "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem", "einer", "eines",
-  "man", "ich", "du", "er", "sie", "es", "wir", "mein", "meine", "meinem", "meinen", "meiner",
-  "unser", "unsere", "ihr", "ihre", "seine", "seiner", "seines", "seinen", "euer", "eure",
-  "und", "oder", "aber", "sowie", "als", "auch", "nur", "wenn", "weil", "dass", "damit",
-  "durch", "per", "via", "mit", "ohne", "für", "bei", "nach", "aus", "in", "an", "auf",
-  "über", "unter", "vor", "von", "zu", "um", "im", "am", "vom", "zum", "zur", "beim", "bis",
-  "ab", "seit", "gegen", "innerhalb", "außerhalb", "während", "trotz", "wegen", "laut", "gemäß",
-  "ins", "dieses", "diese", "dieser", "diesen", "diesem", "solche", "solcher", "solchen", "solches",
-  "andere", "anderer", "anderen", "anderes", "alle", "aller", "allen", "genau", "einfach",
-  "eigentlich", "entsprechend", "entsprechende", "entsprechenden", "entsprechendes", "teilweise",
-  "sehr", "ganz", "noch", "schon", "immer", "oft", "häufig", "manchmal", "gelegentlich", "gerne",
-  "heute", "jetzt", "dort", "hier", "dann", "deshalb", "darum", "somit", "daher", "also", "zudem",
-  "außerdem", "insbesondere", "besonders", "vorneweg", "trotzdem", "dennoch", "wieder", "weiter",
-  "neu", "neue", "neuen", "neues",
-  "gut", "gute", "guten", "gutes", "guter", "besser", "bessere", "besseren", "besseres", "beste", "besten",
-  "bin", "war", "wäre", "werde", "wird", "wurde", "werden", "will", "wollen", "wollte", "kann",
-  "können", "konnte", "mag", "mochte", "muss", "müssen", "musste", "soll", "sollen", "sollte",
-  "darf", "dürfen", "dürfte", "habe", "haben", "hatte", "hat", "bekomme", "bekommen", "bekam",
-  "ja", "nein", "bitte", "danke",
-]);
+/** Pure function words / framing — never carry a verifiable claim.
+ *  Stored NORMALIZED (NFD-stripped, lowercase, punctuation-free) — the
+ *  tokens checked against this set are always normalized too, so umlaut
+ *  entries ("für", "außerdem", …) must be added in their normalized form
+ *  ("fur", "außerdem" → "außerhalb", …) or they can never match. */
+const STOPWORDS = new Set(
+  [
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem", "einer", "eines",
+    "man", "ich", "du", "er", "sie", "es", "wir", "mein", "meine", "meinem", "meinen", "meiner",
+    "unser", "unsere", "ihr", "ihre", "seine", "seiner", "seines", "seinen", "euer", "eure",
+    "und", "oder", "aber", "sowie", "als", "auch", "nur", "wenn", "weil", "dass", "damit",
+    "durch", "per", "via", "mit", "ohne", "für", "bei", "nach", "aus", "in", "an", "auf",
+    "über", "unter", "vor", "von", "zu", "um", "im", "am", "vom", "zum", "zur", "beim", "bis",
+    "ab", "seit", "gegen", "innerhalb", "außerhalb", "während", "trotz", "wegen", "laut", "gemäß",
+    "ins", "dieses", "diese", "dieser", "diesen", "diesem", "solche", "solcher", "solchen", "solches",
+    "andere", "anderer", "anderen", "anderes", "alle", "aller", "allen", "genau", "einfach",
+    "eigentlich", "entsprechend", "entsprechende", "entsprechenden", "entsprechendes", "teilweise",
+    "sehr", "ganz", "noch", "schon", "immer", "oft", "häufig", "manchmal", "gelegentlich", "gerne",
+    "heute", "jetzt", "dort", "hier", "dann", "deshalb", "darum", "somit", "daher", "also", "zudem",
+    "außerdem", "insbesondere", "besonders", "vorneweg", "trotzdem", "dennoch", "wieder", "weiter",
+    "neu", "neue", "neuen", "neues",
+    "gut", "gute", "guten", "gutes", "guter", "besser", "bessere", "besseren", "besseres", "beste", "besten",
+    "bin", "war", "wäre", "werde", "wird", "wurde", "werden", "will", "wollen", "wollte", "kann",
+    "können", "konnte", "mag", "mochte", "muss", "müssen", "musste", "soll", "sollen", "sollte",
+    "darf", "dürfen", "dürfte", "habe", "haben", "hatte", "hat", "bekomme", "bekommen", "bekam",
+    "ja", "nein", "bitte", "danke",
+  ].map(normalizeSkillTerm).filter(Boolean),
+);
 
 /**
  * Generic CV framing vocabulary (normalized stems): words that structure a
@@ -177,7 +203,8 @@ const GENERIC_VERB_STEMS = [
  */
 const ADJ_ENDINGS = [
   "isch", "lich", "bar", "sam", "los", "ig", "haft", "iert", "isiert",
-  "orientiert", "bereit", "willig", "sicher", "fähig", "stark", "schwach", "klar", "voll", "frei",
+  // normalized form ("fahig" — tokens are NFD-stripped before matching)
+  "orientiert", "bereit", "willig", "sicher", "fahig", "stark", "schwach", "klar", "voll", "frei",
 ];
 
 /**
@@ -308,8 +335,20 @@ export interface SummaryGroundingResult {
  * words, inflected adjectives, generic framing, re-worded compounds)
  * passes. When in doubt: NOT grounded → the original summary is kept.
  */
-export function checkSummaryGrounding(summary: string, profileText: string): SummaryGroundingResult {
-  const vocab = buildProfileVocabulary(profileText);
+export function checkSummaryGrounding(
+  summary: string,
+  profileText: string,
+  /**
+   * Optional AD-CONTEXT text (this ad's exact job title, occupation,
+   * company, location, start). Fact-carrying tokens from it are grounded
+   * by the AD, not the profile — a tailored PROFIL may and should name
+   * the applied-for position and company; candidate facts still must
+   * come from the profile.
+   */
+  adContextText?: string,
+): SummaryGroundingResult {
+  const corpus = [profileText, adContextText ?? ""].filter(Boolean).join(" ");
+  const vocab = buildProfileVocabulary(corpus);
   for (const tok of normalizeSkillTerm(summary).split(" ")) {
     if (!tok) continue;
     if (/^[0-9]+$/.test(tok)) {
@@ -333,17 +372,13 @@ export function isSummaryGrounded(summary: string, profileText: string): boolean
 /* ------------------------------------------------------------------ */
 
 /**
- * De-duplication key: the normalized term WITHOUT spaces, so German
- * compound variants count as one skill ("Netzwerktechnik" ≡
- * "Netzwerk-Technik" ≡ "Netzwerk Technik").
- */
-const dedupeKey = (value: string): string => normalizeSkillTerm(value).replace(/ /g, "");
-
-/**
  * Relevance-ordered merge of one list section (skills or interests):
  * the model's GROUNDED items first (its order = its relevance ranking
  * for THIS job), then every verified original item the model did not
- * surface. De-duplicated by the space-stripped normalized term.
+ * surface. De-duplicated by the symbol-aware, space-stripped normalized
+ * term (German compounds count as one skill: "Netzwerktechnik" ≡
+ * "Netzwerk-Technik" — while distinct terms that differ only in symbols
+ * never collide: "C" ≠ "C++" ≠ "C#").
  */
 function mergeGroundedList(
   originalItems: string[],
@@ -355,7 +390,7 @@ function mergeGroundedList(
   const push = (value: string): void => {
     const v = value.trim();
     if (!v) return;
-    const key = dedupeKey(v);
+    const key = termDedupeKey(v);
     if (!key || seen.has(key)) return;
     seen.add(key);
     out.push(v);
@@ -370,6 +405,83 @@ function mergeGroundedList(
 }
 
 /**
+ * Cap a GENERATED summary at the layout-safe length, cut at the LAST
+ * sentence boundary below the cap (never mid-word; a single run-on
+ * sentence is cut at the cap). The candidate's ORIGINAL summary is never
+ * passed through here.
+ */
+function capSummaryAtSentenceBoundary(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const cut = text.slice(0, maxChars);
+  const lastEnd = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+  if (lastEnd > maxChars * 0.4) return cut.slice(0, lastEnd + 1);
+  return cut.replace(/[.,;:\s]+$/, "");
+}
+
+/** The exact position-identity facts of THIS ad (never requirements):
+ *  naming the applied-for position/company in the PROFIL is ad-grounded. */
+export interface AdSummaryContext {
+  jobTitle?: string;
+  occupation?: string;
+  company?: string;
+  location?: string;
+  startDate?: string;
+}
+
+/**
+ * Deterministic PROFIL fallback: constructed ONLY from verified CV data
+ * (original skills / experience / education) and the ad's position
+ * identity — no claim, number, level or credential is ever invented.
+ * Returns "" when the candidate data is empty enough that even a
+ * minimal sentence would not be truthful.
+ */
+export function buildFallbackSummary(cv: CvDocument, ctx: AdSummaryContext): string {
+  const target = (ctx.occupation ?? "").trim() || (ctx.jobTitle ?? "").trim();
+  const company = (ctx.company ?? "").trim();
+  const parts: string[] = [];
+
+  if (target) {
+    const name = cv.personal.fullName.trim();
+    const what = ctx.occupation?.trim() ? `eine Ausbildung als ${ctx.occupation.trim()}` : `eine Stelle als ${ctx.jobTitle?.trim()}`;
+    parts.push(`Motivierte:r Bewerber:in${name ? ` (${name})` : ""} für ${what}${company ? ` bei ${company}` : ""}.`);
+  }
+
+  const expTitles = cv.experience.map((x) => x.jobTitle.trim()).filter(Boolean);
+  const topSkills = cv.skills.map((s) => s.trim()).filter(Boolean).slice(0, 3);
+  const bits: string[] = [];
+  if (expTitles.length > 0) bits.push(`praktischer Erfahrung als ${expTitles[0]}`);
+  if (topSkills.length > 0) bits.push(`Fähigkeiten in ${topSkills.join(", ")}`);
+  if (bits.length > 0) {
+    parts.push(`Mit ${bits.join(" und ")} bringe ich solide Voraussetzungen für diese Position mit.`);
+  }
+
+  const edu = cv.education.find((e) => e.degree.trim());
+  if (edu) {
+    parts.push(`Wesentlicher Abschluss: ${edu.degree.trim()}${edu.end.trim() ? ` (${edu.end.trim()})` : ""}.`);
+  }
+
+  return parts.join(" ");
+}
+
+/**
+ * The ad-side tailoring input (all values come from the stored,
+ * zod-validated AdExtract of THIS company's ad — never from the model):
+ *  - `skillTerms`: the skill-like requirements (technical, soft,
+ *    skill-like qualifications; education/experience/language claims are
+ *    filtered out by collectAddableSkillTerms). Every term that is not
+ *    present anywhere in the CV yet is appended to the skills list and
+ *    flagged in `tailoring.addedFromAd` (surfaced to the user for
+ *    confirmation — never presented as original candidate data).
+ *  - `summaryContext`: the ad's position identity (job title, occupation,
+ *    company, location, start) — the ONLY ad content the PROFIL may
+ *    mention (a tailored profile names the applied-for position).
+ */
+export interface AdTailoringInput {
+  skillTerms: string[];
+  summaryContext: AdSummaryContext;
+}
+
+/**
  * The controlled transformation (see module header).
  *
  * @param original    the candidate's original CV as CvDocument (the
@@ -380,13 +492,17 @@ function mergeGroundedList(
  *                    result is null (the route maps that to its existing
  *                    `invalid_ai_output` error).
  * @param profileText the formatted candidate profile the model saw — the
- *                    only allowed source for new content in the
+ *                    only allowed source for candidate FACTS in the
  *                    whitelisted sections.
+ * @param ad          the ad-side requirements (optional: omitted = the
+ *                    legacy profile-only behavior, used by pre-feature
+ *                    callers and tests).
  */
 export function mergeTailoredCvDocument(input: {
   original: CvDocument;
   generated: unknown;
   profileText: string;
+  ad?: AdTailoringInput;
 }): CvDocument | null {
   const generated = sanitizeCvDocument(input.generated);
   if (!generated) return null;
@@ -398,22 +514,62 @@ export function mergeTailoredCvDocument(input: {
   if (!merged) return null;
 
   const vocab = buildProfileVocabulary(input.profileText);
+  const ctx = input.ad?.summaryContext;
+  const contextText = ctx
+    ? [ctx.jobTitle, ctx.occupation, ctx.company, ctx.location, ctx.startDate]
+        .map((v) => (v ?? "").trim())
+        .filter(Boolean)
+        .join(" ")
+    : "";
 
   // 1) PROFIL — verified per token (see checkSummaryGrounding): a
   //    generated statement that cannot be reliably traced back to the
-  //    candidate's own profile is NEVER adopted — the original summary
-  //    stays. The FULL text is checked (a mid-word cut could not hide a
-  //    claim), then capped for the one-page layout.
+  //    candidate's own profile (plus the ad's position identity) is NEVER
+  //    adopted — the original summary stays. The FULL text is checked (a
+  //    mid-word cut could not hide a claim), then capped at the last
+  //    sentence boundary (layout safety).
   const summaryFull = generated.summary.trim();
-  if (summaryFull && checkSummaryGrounding(summaryFull, input.profileText).grounded) {
-    merged.summary = summaryFull.slice(0, TAILORED_SUMMARY_MAX_CHARS);
+  if (summaryFull && checkSummaryGrounding(summaryFull, input.profileText, contextText || undefined).grounded) {
+    merged.summary = capSummaryAtSentenceBoundary(summaryFull, TAILORED_SUMMARY_MAX_CHARS);
+  }
+
+  // 1b) PROFIL FALLBACK — the candidate's original CV has no profile
+  //     paragraph (the scanner profile does not store one) and no
+  //     grounded generated text: construct a minimal, fully verifiable
+  //     summary from original CV data + the ad's position identity, so
+  //     the section is never left empty.
+  if (!merged.summary.trim() && ctx && ((ctx.occupation ?? "").trim() || (ctx.jobTitle ?? "").trim())) {
+    merged.summary = buildFallbackSummary(merged, ctx).trim();
   }
 
   // 2) KENNTNISSE + EDV-KENNTNISSE (the model's single skills list).
   merged.skills = mergeGroundedList(input.original.skills, generated.skills, vocab);
 
-  // 3) HOBBYS.
+  // 3) AD COVERAGE — every skill-like requirement of THIS ad that is not
+  //    present anywhere in the CV yet (skills, PROFIL, languages,
+  //    certificates, education, experience) is appended to the skills
+  //    list and flagged for the user. Terms already covered elsewhere are
+  //    NOT duplicated into the list.
+  const addedFromAd: string[] = [];
+  const addedKeys = new Set<string>();
+  for (const term of input.ad?.skillTerms ?? []) {
+    const t = term.trim();
+    if (!t) continue;
+    const key = termDedupeKey(t);
+    if (!key || addedKeys.has(key)) continue;
+    if (isTermCoveredInCv(t, merged)) continue; // already in the CV — no duplicate
+    merged.skills.push(t);
+    addedFromAd.push(t);
+    addedKeys.add(key);
+  }
+
+  // 4) HOBBYS.
   merged.interests = mergeGroundedList(input.original.interests, generated.interests, vocab);
+
+  // The tailoring trace (platform-owned metadata, never model output):
+  // which skills were auto-added from the ad (the UI flags them so the
+  // user confirms or removes them — honesty stays visible).
+  merged.tailoring = addedFromAd.length > 0 ? { addedFromAd } : undefined;
 
   // Everything else (personal incl. photo, education, experience,
   // languages, certificates, projects, templateId, customization) is the

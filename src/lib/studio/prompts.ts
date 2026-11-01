@@ -93,11 +93,21 @@ export function buildAdAnalysisPrompt(input: AdAnalysisPromptInput): string {
     "weaknesses": string[], "recommendations": string[], "questions": string[]
   }
 }`,
-     "Felder, die die Anzeige nicht nennt, bleiben leer (\"\" bzw. []). contactPerson/applicationEmail nur, wenn die Anzeige sie EXPLIZIT enthält. Alle Texte auf Deutsch, wörtlich aus der Anzeige dort, wo Zitate sinnvoll sind.",
-     "KÜRZE-DISZIPLIN (wichtigste Einträge zuerst):",
-     "- max. 10 Einträge pro Liste (requiredQualifications, preferredQualifications, technicalSkills, softSkills, languageRequirements, responsibilities, requestedDocuments, companyNotes, missingOrAmbiguous, matched, missing, transferable).",
-     "- max. 5 Einträge in weaknesses, recommendations und questions.",
-     "- notes: max. 120 Zeichen, präzise und ohne Füllwörter.",
+      "Felder, die die Anzeige nicht nennt, bleiben leer (\"\" bzw. []). contactPerson/applicationEmail nur, wenn die Anzeige sie EXPLIZIT enthält. Alle Texte auf Deutsch, wörtlich aus der Anzeige dort, wo Zitate sinnvoll sind.",
+      "VOLLSTÄNDIGKEIT (wichtigste Regel): Extrahiere JEDER einzelnen Anforderung aus der Anzeige — keine wird weggelassen, auch keine, die ‚selbstverständlich' erscheint oder nur als Teil eines Satzes formuliert ist. Reihenfolge innerhalb jeder Liste: wichtigste zuerst.",
+      "- softSkills = ALLE persönlichen und sozialen Anforderungen (Soft Skills), wörtlich: z. B. Teamfähigkeit, Kommunikationsstärke/-fähigkeit, Eigeninitiative, Organisationstalent, analytisches Denken, Verantwortungsbewusstsein, Zuverlässigkeit, Sorgfalt, Belastbarkeit, Lernbereitschaft, Kundenorientierung, selbstständiges Arbeiten, Pünktlichkeit — JEDER genannte persönliche/charakterliche Aspekt.",
+      "- technicalSkills = ALLE fachlichen und technischen Anforderungen, Programme, Werkzeuge und Hard-Skills, wörtlich (z. B. Excel, SEO, Google Ads, SAP, Leseverstehen von Schaltplänen).",
+      "- requiredQualifications = alle weiteren Pflichtanforderungen: Bildungsabschlüsse, Berufserfahrung, Führerscheine, Zertifikate, Verfügbarkeit, andere Bedingungen — jede einzelne.",
+      "- languageRequirements = JEDE genannte Sprache zusammen mit ihrem Niveau, wörtlich (z. B. 'Deutsch C1', 'Englisch mind. B1').",
+      "- responsibilities = alle genannten Tätigkeitsbereiche; requestedDocuments = alle angeforderten Bewerbungsunterlagen; companyNotes = alle wörtlich genannten, prüfbaren Unternehmens-Fakten.",
+      "- analysis (matched/missing/transferable): klassifiziere ALLE extrahierten Anforderungen — jede Zeile der Listen oben erhält genau einen Eintrag, nicht nur eine Auswahl.",
+      "Obergrenzen (greifen nur bei sehr langen Anzeigen — darunter steht JEDER Eintrag in der Anzeige in den Listen):",
+      "- max. 30 Einträge: requiredQualifications, preferredQualifications, responsibilities.",
+      "- max. 40 Einträge: technicalSkills, softSkills.",
+      "- max. 20 Einträge: languageRequirements, requestedDocuments, companyNotes, missingOrAmbiguous.",
+      "- max. 50 Einträge: matched, missing, transferable.",
+      "- max. 5 Einträge in weaknesses, recommendations und questions.",
+      "- notes: max. 120 Zeichen, präzise und ohne Füllwörter.",
     input.prefillText
       ? `MANUELL VOM NUTZER VORGEGEBENE WERTE (vertrauenswürdig — bei Konflikt mit der Anzeige: Anzeige gewinnt, Konflikte in missingOrAmbiguous vermerken):\n${input.prefillText}`
       : "",

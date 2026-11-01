@@ -285,12 +285,16 @@ describe("PROFIL (summary) verification — no invented statements, legitimate p
     expect(result!.interests).toEqual(base.interests);
   });
 
-  it("caps the PROFIL section at the layout-safe length", () => {
+  it("caps the GENERATED PROFIL at the layout-safe length, cut at the last sentence boundary", () => {
     const unit = "Motivierter Auszubildender Fachinformatiker mit Erfahrung in Systemintegration. ";
     const generated = { ...hostileGenerated(), summary: unit.repeat(20) }; // far beyond 900
     const result = mergeTailoredCvDocument({ original: ORIGINAL_CV, generated, profileText: PROFILE_TEXT })!;
-    expect(result.summary.length).toBe(TAILORED_SUMMARY_MAX_CHARS);
     expect(TAILORED_SUMMARY_MAX_CHARS).toBe(900);
+    expect(result.summary.length).toBeLessThanOrEqual(TAILORED_SUMMARY_MAX_CHARS);
+    // Cut at a sentence boundary (never mid-word / mid-sentence).
+    expect(result.summary.endsWith(".")).toBe(true);
+    // And not cut far below the cap (a run of full sentences fits closely).
+    expect(result.summary.length).toBeGreaterThanOrEqual(700);
   });
 });
 
