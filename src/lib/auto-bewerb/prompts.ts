@@ -261,15 +261,12 @@ export function buildAutoBewerbCvPrompt(input: {
     "",
     "ZUSCHNEIDUNG AUF DIESE ANZEIGE (entscheidend für die Qualität):",
     "1. Lies ZIELSTELLE, PROFIL-ABGLEICH und die VOLLSTÄNDIGE STELLENANZEIGE: Ausbildungsberuf, Anforderungen, Tätigkeiten, Erwartungen.",
-    "2. skills: die für DIESER Stelle relevantesten vorhandenen Fähigkeiten VORAN (Reihenfolge = Relevanz für diese Anzeige); jede vorhandene Fähigkeit bleibt enthalten (nichts streichen).",
-    "3. experience: die Einträge, die zu den Anforderungen dieser Anzeige passen, VORAN; danach die verbleibenden nach Datum (neueste zuerst). responsibilities und achievements dürfen im WORTLAUT auf diese Stelle zugeschnitten werden (gleiche Fakten, präzise Berufsbegriffe). Alle verifizierten Punkte bleiben erhalten — je Punkt knapp und präzise (Nennform), keine leeren Punkte, keine erfundenen Tätigkeiten.",
+    "2. skills (KENNTNISSE + EDV-KENNTNISSE): die für DIESER Stelle relevantesten vorhandenen Fähigkeiten VORAN (Reihenfolge = Relevanz für diese Anzeige); jede vorhandene Fähigkeit bleibt enthalten (nichts streichen). NUR Begriffe, die im KANDIDATENPROFIL vorkommen (auch in anderen Abschnitten, z. B. Tätigkeiten oder Ausbildung — relevante vorhandene Begriffe dort HERAUSZIEHEN ist erlaubt und erwünscht). Begriffe ohne Beleg im KANDIDATENPROFIL werden von der Plattform automatisch entfernt — erfinde keine.",
+    "3. experience: die Plattform übernimmt experience (einschließlich aller Daten und Tätigkeitspunkte) 1:1 aus dem KANDIDATENPROFIL — die Zuschneidung konzentriert sich auf skills und summary. Gib experience trotzdem vollständig und korrekt aus (gleiche Fakten wie im Profil, nichts streichen, nichts erfinden).",
     "4. summary (Kurzprofil): 3–4 Sätze. Nenne die EXAKTE Berufsbezeichnung wie in dieser Anzeige (und das Unternehmen), beschreibe mit wem es zu tun hat (aus dem Profil, verifiziert) und welche vorhandenen Qualifikationen zu DIESER Stelle passen. Keine Superlative ohne Grundlage, keine leeren Floskeln.",
-    `5. professionalTitle: ${
-      e.occupation || e.jobTitle
-        ? `die Ausbildungs-/Stellenbezeichnung dieser Anzeige („${e.occupation || e.jobTitle}“), wenn sie zu den Zielen des Kandidaten passt`
-        : "die passende vorhandene Bezeichnung aus dem Profil"
-    }; ansonsten die passende vorhandene Bezeichnung aus dem Profil.`,
+    "5. professionalTitle: wird von der Plattform 1:1 aus dem KANDIDATENPROFIL übernommen (Zielerwartung) — gib die passende vorhandene Bezeichnung aus dem Profil aus.",
     "6. Nicht abgedeckte Anforderungen (missing): NUR weglassen — niemals durch erfundene Angaben füllen.",
+    "7. interests (HOBBYS): NUR Hobbys/Interessen, die im KANDIDATENPROFIL ausdrücklich stehen; fehlt die Angabe → leeres Array (niemals erfinden — die Plattform entfernt Einträge ohne Profilbeleg automatisch).",
     "",
     "DEUTSCHE QUALITÄT (Ausbildungsbewerbungs-Standard — professionelles, hochwertiges Deutsch):",
     "- Professionelles, poliertes, NATÜRLICHES Deutsch auf hohem Geschäftsniveau: korrekte Grammatik, Rechtschreibung und Zeichensetzung; klare, präzise, durchdacht aufgebaute Sätze; durchgängig einheitliche Fach- und Funktionsbegriffe (keine Synonym-Sprünke, keine umgangssprachlichen Wendungen).",
@@ -280,9 +277,11 @@ export function buildAutoBewerbCvPrompt(input: {
     "- education: absteigend (neueste zuerst).",
     "",
     "DATEN-INTEGRITÄT (strikt):",
+    "- PLATFORM-STEUERUNG: Aus deiner Ausgabe übernimmt die Plattform NUR summary (PROFIL), skills (KENNTNISSE/EDV-KENNTNISSE) und interests (HOBBYS). Alle übrigen Felder (personal inkl. professionalTitle, education, experience, languages, certificates, projects) werden 1:1 aus dem KANDIDATENPROFIL übernommen — deine Werte dort sind redundante Sicherheit und ändern nichts am Ergebnis. Gib das JSON trotzdem vollständig aus.",
     "- personal (fullName/email/phone/location/linkedin/website/nationality/dateOfBirth/availability): EXAKT aus dem KANDIDATENPROFIL; fehlt ein Wert → leere Zeichenkette.",
     "- Datumsangaben WÖRTLICH aus dem KANDIDATENPROFIL übernehmen — niemals umrechnen, korrigieren, vervollständigen oder umdeuten. Unklare/ungültige Daten bleiben unverändert (die Nutzerprüfung korrigiert sie sichtbar).",
-    "- education/experience/skills/languages/certificates/projects/interests: NUR und ALLE Einträge aus dem KANDIDATENPROFIL (training → certificates, education → education, experience → experience, alle Skill-Gruppen → skills, languages mit exaktem Niveau) — vollständig, ohne Erfindung und ohne weggelassene Einträge.",
+    "- education/experience/languages/certificates/projects: NUR und ALLE Einträge aus dem KANDIDATENPROFIL (training → certificates, education → education, experience → experience, languages mit exaktem Niveau) — vollständig, ohne Erfindung und ohne weggelassene Einträge.",
+    "- skills/interests: NUR Einträge mit Beleg im KANDIDATENPROFIL (siehe ZUSCHNEIDUNG 2 und 7) — die Plattform entfernt ungegründete Einträge automatisch.",
     "- photo: IMMER null — die Plattform setzt das hochgeladene Bewerbungsfoto automatisch ein; das Modell sieht kein Bild und darf keines erfinden.",
     "- Gib NUR das JSON-Objekt zurück.",
   ].join("\n");

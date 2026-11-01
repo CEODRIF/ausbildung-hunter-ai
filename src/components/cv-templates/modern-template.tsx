@@ -27,11 +27,13 @@ import {
 
 /**
  * The "modern" template — left-aligned header with a prominent steel-blue
- * name, lighter-blue title and an icon contact line; steel-blue section
- * headings with thin blue rules; "Role, Company" entries with dates +
- * location stacked top-right; two-column skills, three-column languages,
- * two-column certificates. Modern corporate look; ATS-friendly (real text,
- * icons are decorative inline SVGs).
+ * name, lighter-blue title and an icon contact line (the text block is
+ * centered against the photograph, which has rounded corners and a thin
+ * frame, and a divider rule separates the header from the body);
+ * steel-blue section headings with thin blue rules; "Role, Company" entries
+ * with dates + location stacked top-right; two-column skills, three-column
+ * languages, two-column certificates. Modern corporate look; ATS-friendly
+ * (real text, icons are decorative inline SVGs).
  */
 
 const IDENTITY: TemplateIdentity = {
@@ -53,6 +55,7 @@ const IDENTITY: TemplateIdentity = {
   leftRightMarginMm: 10,
   topBottomMarginMm: 12,
   sectionSpacing: 16,
+  photoShape: "rounded-portrait", // the PDF twin draws the photo rounded
 };
 
 type C = ReturnType<typeof resolveTemplateColors>;
@@ -208,8 +211,11 @@ export function ModernCvTemplate({ cv, labels }: TemplateProps) {
             display: "grid",
             gridTemplateColumns: hasPhoto ? `1fr ${s.photo.size}px` : "1fr",
             columnGap: 26,
-            alignItems: "start",
-            paddingBottom: s.header.headerSpacing,
+            // The text block centers against the photo band (the PDF does
+            // the same) — no dead space beside the photograph.
+            alignItems: "center",
+            paddingBottom: 10 + s.header.headerSpacing,
+            borderBottom: `1px solid ${c.divider}`,
           }}
         >
           <div style={{ minWidth: 0 }}>

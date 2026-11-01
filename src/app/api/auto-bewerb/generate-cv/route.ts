@@ -9,7 +9,8 @@ import { checkRateLimit, rateLimitHeaders, tooManyRequests } from "@/lib/rate-li
 import { parseJsonObject } from "@/lib/studio/prompts";
 import { formatProfileForPrompt } from "@/lib/templates/cover-letter";
 import { createClient } from "@/lib/supabase/server";
-import { resolveCvTemplateId, sanitizeCvDocument } from "@/lib/templates/cv";
+import { importCandidateProfileToCv, resolveCvTemplateId } from "@/lib/templates/cv";
+import { mergeTailoredCvDocument } from "@/lib/auto-bewerb/tailored-cv";
 import {
   AUTO_BEWERB_CV_SYSTEM_PROMPT,
   buildAutoBewerbCvPrompt,
@@ -36,11 +37,15 @@ export const dynamic = "force-dynamic";
  *  1. prompt contract (only verified facts; dates verbatim; photo always
  *     null — the PLATFORM freezes the uploaded profile-photo reference
  *     into the document after generation, the model never sees an image);
- *  2. `sanitizeCvDocument` — the output must parse into a valid CvDocument
- *     (schema validation + input sanitization stay mandatory).
- * The strict fact-validation guard (`validateGeneratedCv`) was removed:
- * generated CVs are saved and shown as-is; provider/quota/network failures
- * still surface their real error.
+ *  2. `mergeTailoredCvDocument` — the CONTROLLED TRANSFORMATION: the
+ *     candidate's original CV (deterministic import of the parsed upload)
+ *     is the base, and ONLY the four tailored sections (PROFIL → summary,
+ *     KENNTNISSE + EDV-KENNTNISSE → skills, HOBBYS → interests) are taken
+ *     from the model output — grounded to the candidate's own facts,
+ *     de-duplicated, complete. Every other field is copied 1:1 from the
+ *     original, so the non-tailored sections are protected in CODE, not
+ *     only by the prompt (see tailored-cv.ts).
+ * Provider/quota/network failures still surface their real error.
  *
  * SINGLE-FLIGHT per (user, company): identical concurrent requests
  * (double click, two tabs) share ONE paid provider call (same pattern as
@@ -119,11 +124,15 @@ export async function POST(request: Request) {
     );
   }
 
+  // The verified candidate facts, formatted exactly as the model sees
+  // them — also the ONLY allowed source the platform accepts for new
+  // skills/hobbies in the controlled transformation below.
+  const profileText = formatProfileForPrompt(profile.extracted);
   const prompt = buildAutoBewerbCvPrompt({
     extract,
     analysis: bundle.company.ad_analysis,
     adRaw: bundle.company.ad_raw,
-    profileText: formatProfileForPrompt(profile.extracted),
+    profileText,
     templateId,
   });
 
@@ -147,7 +156,19 @@ export async function POST(request: Request) {
 
   try {
     const raw = await work;
-    const doc = sanitizeCvDocument(parseJsonObject(raw));
+    // CONTROLLED TRANSFORMATION (defense in depth — the prompt alone never
+    // protected the non-tailored fields): the candidate's ORIGINAL CV
+    // (deterministic import of the parsed upload) is the base; the
+    // platform copies ONLY the four tailored sections (PROFIL / KENNTNISSE
+    // / EDV-KENNTNISSE / HOBBYS) from the model output — grounded to the
+    // candidate's own facts, de-duplicated, complete — and keeps every
+    // other field 1:1 (see tailored-cv.ts).
+    const original = importCandidateProfileToCv(profile.extracted);
+    const doc = mergeTailoredCvDocument({
+      original,
+      generated: parseJsonObject(raw),
+      profileText,
+    });
     if (!doc) {
       await releaseFeatureOp(user.id, "resume_ai", runId);
       return NextResponse.json(

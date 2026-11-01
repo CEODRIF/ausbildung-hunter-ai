@@ -9,7 +9,7 @@ import { emailBodyToHtml } from "@/lib/studio";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { autoBewerbLetterSchema } from "@/lib/auto-bewerb/schema";
-import { generateCvPdf, cvPdfFilename } from "@/lib/auto-bewerb/cv-pdf";
+import { CvPdfOverflowError, cvPdfFilename, generateCvPdf } from "@/lib/auto-bewerb/cv-pdf";
 import {
   getAutoBewerbCompany,
   getAutoBewerbSignatureImage,
@@ -79,15 +79,24 @@ export async function GET(request: Request) {
       const photoDataUrl = await resolveAutoBewerbPhotoDataUrl(user.id, cv.personal.photo).catch(
         () => null,
       );
-      const bytes = await generateCvPdf(cv, { photoDataUrl });
-      return new NextResponse(Buffer.from(bytes), {
-        status: 200,
-        headers: {
-          "Content-Type": BEW_LETTER_PDF_MIME,
-          "Content-Disposition": disposition(cvPdfFilename(cv.personal.fullName)),
-          "Cache-Control": "no-store",
-        },
-      });
+      try {
+        const bytes = await generateCvPdf(cv, { photoDataUrl });
+        return new NextResponse(Buffer.from(bytes), {
+          status: 200,
+          headers: {
+            "Content-Type": BEW_LETTER_PDF_MIME,
+            "Content-Disposition": disposition(cvPdfFilename(cv.personal.fullName)),
+            "Cache-Control": "no-store",
+          },
+        });
+      } catch (error) {
+        // ONE-PAGE POLICY: an overflowing CV is an explicit, actionable
+        // validation error — never a silent multi-page document.
+        if (error instanceof CvPdfOverflowError) {
+          return NextResponse.json({ error: error.message, code: error.code }, { status: 502 });
+        }
+        throw error;
+      }
     }
 
     // letter

@@ -10,11 +10,13 @@
  * top-right, two-column skills, three-column languages (level under the
  * language), two-column certificates and project entries.
  *
- * The ONE-PAGE CONTRACT: the renderer measures the whole document and picks
+ * The ONE-PAGE POLICY: the renderer measures the whole document and picks
  * the most comfortable density tier that fits exactly one A4 page — nothing
- * is ever removed to save space. Only a pathologically long profile (the
- * longCv fixture: 14 jobs × 5 bullets) overflows to further pages, where it
- * keeps a running header + subtle page numbers and renders EVERY entry.
+ * is ever removed to save space. If even the densest readable tier
+ * overflows (the longCv fixture: 14 jobs × 5 bullets), the render throws
+ * CvPdfOverflowError — an explicit, actionable validation error. Only
+ * callers that opt in with `allowMultiPage: true` get the legacy overflow
+ * rendering (running header + subtle page numbers, EVERY entry kept).
  *
  * The preview and the PDF export serve the SAME bytes, so the document
  * contract verified here holds for both: true A4 page size, exactly one page
@@ -26,10 +28,11 @@
  * exact x/y positions, fonts, fill colors, and the image placement matrix)
  * — they verify the actual geometry, not just the presence of text.
  */
+import { readFileSync } from "node:fs";
 import { deflateSync, inflateSync } from "node:zlib";
 import { beforeAll, describe, expect, it } from "vitest";
 import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
-import { cvPdfFilename, generateCvPdf } from "@/lib/auto-bewerb/cv-pdf";
+import { CvPdfOverflowError, contactIconAxis, cvPdfFilename, generateCvPdf } from "@/lib/auto-bewerb/cv-pdf";
 import {
   cvEmpty,
   emptyEducation,
@@ -389,9 +392,19 @@ describe("AUTO BEWERB — one-page A4 CV renderer (modern template design)", () 
     expect(name.size).toBeCloseTo(21, 0);
   });
 
-  it("flows to further pages ONLY when the content cannot fit one page — and loses nothing", async () => {
+  it("ONE-PAGE POLICY: an overflowing document is an explicit, actionable error (never a silent multi-page file)", async () => {
     const cv = longCv();
-    const pdf = await PDFDocument.load(await generateCvPdf(cv));
+    await expect(generateCvPdf(cv)).rejects.toBeInstanceOf(CvPdfOverflowError);
+    await expect(generateCvPdf(cv)).rejects.toMatchObject({ code: "cv_overflow" });
+    // actionable: tells the user WHAT to do (trim the source content)
+    await expect(generateCvPdf(cv)).rejects.toThrow(/A4-Seite/);
+    // …and only for content that genuinely cannot fit one readable page.
+    expect((await PDFDocument.load(await generateCvPdf(richCv()))).getPageCount()).toBe(1);
+  });
+
+  it("flows to further pages ONLY on EXPLICIT opt-in (allowMultiPage) — and loses nothing", async () => {
+    const cv = longCv();
+    const pdf = await PDFDocument.load(await generateCvPdf(cv, { allowMultiPage: true }));
     expect(pdf.getPageCount()).toBeGreaterThanOrEqual(2);
     // every page is A4
     for (let i = 0; i < pdf.getPageCount(); i += 1) {
@@ -719,8 +732,8 @@ describe("AUTO BEWERB — candidate-information preservation", () => {
     for (const fact of ["IT-Projekte", "Fußball", "Musik"]) expect(text).toContain(fact);
   });
 
-  it("keeps every entry of an overflowing profile (nothing deleted, no clipping)", async () => {
-    const pdf = await PDFDocument.load(await generateCvPdf(longCv()));
+  it("keeps every entry of an overflowing profile (nothing deleted, no clipping, explicit opt-in)", async () => {
+    const pdf = await PDFDocument.load(await generateCvPdf(longCv(), { allowMultiPage: true }));
     const text = fullText(pdf);
     for (let i = 1; i <= 14; i += 1) {
       expect(text).toContain(`Systemadministrator (${i})`);
@@ -809,8 +822,8 @@ describe("AUTO BEWERB — candidate-information preservation", () => {
     }
   });
 
-  it("numbers multi-page documents subtly and leaves single-page documents unnumbered", async () => {
-    const pdf = await PDFDocument.load(await generateCvPdf(longCv()));
+  it("numbers multi-page documents subtly and leaves single-page documents unnumbered (opt-in overflow)", async () => {
+    const pdf = await PDFDocument.load(await generateCvPdf(longCv(), { allowMultiPage: true }));
     const n = pdf.getPageCount();
     expect(n).toBeGreaterThanOrEqual(2);
     for (let i = 0; i < n; i += 1) {
@@ -821,9 +834,396 @@ describe("AUTO BEWERB — candidate-information preservation", () => {
     expect(pageText(single, 0)).not.toContain("Seite 1 von 1");
   });
 
-  it("continuation pages carry a running header with the candidate's name", async () => {
-    const pdf = await PDFDocument.load(await generateCvPdf(longCv()));
+  it("continuation pages carry a running header with the candidate's name (opt-in overflow)", async () => {
+    const pdf = await PDFDocument.load(await generateCvPdf(longCv(), { allowMultiPage: true }));
     expect(pdf.getPageCount()).toBeGreaterThanOrEqual(2);
     expect(pageText(pdf, 1)).toContain("Mustapha Drif — Lebenslauf");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Round-11 design: header hierarchy, icon alignment, rounded photo    */
+/* ------------------------------------------------------------------ */
+
+/** A drawSvgPath group: anchor (translate), flip, color, width, path data. */
+interface SvgGroup {
+  x: number;
+  y: number;
+  flip: boolean;
+  fill: [number, number, number] | null;
+  stroke: [number, number, number] | null;
+  width: number | null;
+  d: string;
+  close: string;
+}
+
+/** `(?:(?!Q)[\s\S])*` = any run that never crosses a group boundary (Q). */
+function svgGroups(stream: string): SvgGroup[] {
+  const out: SvgGroup[] = [];
+  // q [color/width ops] 1 0 0 1 X Y cm [more cm] path-ops (f|S|B) Q —
+  // the anchor cm is the FIRST translate in the group (the flip cm has −1).
+  const re = /q(?:(?!Q)[\s\S])*?1 0 0 1 ([\d.]+) ([\d.]+) cm(?:(?!Q)[\s\S])*?\b(f|S|B)\b\s*Q/g;
+  for (const m of stream.matchAll(re)) {
+    const body = m[0];
+    const fill = body.match(/([\d.]+) ([\d.]+) ([\d.]+) rg/);
+    const stroke = body.match(/([\d.]+) ([\d.]+) ([\d.]+) RG/);
+    const width = body.match(/([\d.]+) w/);
+    out.push({
+      x: Number(m[1]),
+      y: Number(m[2]),
+      flip: body.includes("1 0 0 -1 0 0 cm"),
+      fill: fill ? [Number(fill[1]), Number(fill[2]), Number(fill[3])] : null,
+      stroke: stroke ? [Number(stroke[1]), Number(stroke[2]), Number(stroke[3])] : null,
+      width: width ? Number(width[1]) : null,
+      d: body,
+      close: m[3],
+    });
+  }
+  return out;
+}
+
+/** Absolute-coordinate circle groups (drawCircle): `q <color> rg 0 w [] 0 d q m + 4 cubics Q f Q`. */
+interface CircleGroup {
+  cx: number;
+  cy: number;
+  r: number;
+  fill: [number, number, number] | null;
+}
+
+function circleGroups(stream: string): CircleGroup[] {
+  const out: CircleGroup[] = [];
+  const re = /q\s*([\d.]+) ([\d.]+) ([\d.]+) rg\s*0 w\s*\[\] 0 d\s*q\s*([\d.]+) ([\d.]+) m([\s\S]*?)Q\s*f\s*Q/g;
+  for (const m of stream.matchAll(re)) {
+    const first = m[6].match(/[\d.]+ [\d.]+ [\d.]+ [\d.]+ ([\d.]+) ([\d.]+) c/);
+    if (!first) continue;
+    const mx = Number(m[4]);
+    const my = Number(m[5]);
+    const r = Number(first[1]) - mx; // first bezier ends at (cx, cy − r)
+    out.push({ cx: mx + r, cy: my, r, fill: [Number(m[1]), Number(m[2]), Number(m[3])] });
+  }
+  return out;
+}
+
+/** Bezier midpoint (t = 0.5) of one cubic. */
+const cubicMid = (p0: [number, number], c1: [number, number], c2: [number, number], p3: [number, number]): [number, number] => [
+  (p0[0] + 3 * c1[0] + 3 * c2[0] + p3[0]) / 8,
+  (p0[1] + 3 * c1[1] + 3 * c2[1] + p3[1]) / 8,
+];
+
+describe("AUTO BEWERB — header hierarchy, icon alignment, rounded photo", () => {
+  it("separates the header from the body with a full-width steel-blue divider rule", async () => {
+    const cv = baseCv();
+    cv.personal.photo = photoPngDataUrl(300, 400);
+    const pdf = await PDFDocument.load(await generateCvPdf(cv));
+    const runs = pageTextRuns(pdf, 0);
+    const name = runs.find((r) => r.text === "Mustapha Drif")!;
+    expect(name.size).toBeCloseTo(21, 0); // comfortable tier (lean profile)
+    const stream = pageStream(pdf, 0);
+    const placement = imagePlacement(stream)!;
+    // The header rule: an ACCENT stroke, 0.75pt wide, spanning the full content width.
+    const rule = stream.match(
+      /0\.1843137254901961 0\.3607843137254902 0\.6 RG\s*0\.75 w\s*\[\] 0 d\s*([\d.]+) ([\d.]+) m\s*[\d.]+ [\d.]+ m\s*([\d.]+) ([\d.]+) l\s*S/,
+    );
+    expect(rule, "header divider rule missing").toBeTruthy();
+    expect(Number(rule![1])).toBeCloseTo(MARGIN_X, 1); // full width: left margin …
+    expect(Number(rule![3])).toBeCloseTo(A4_WIDTH - MARGIN_X, 1); // … to right margin
+    // … directly below the photo's bottom edge (comfortable headerRuleGap = 8pt).
+    expect(Number(rule![2])).toBeCloseTo(placement.y - 8, 1);
+    // and below every header text line.
+    const other = runs.find((r) => r.text === "deutscher")!;
+    expect(Number(rule![2])).toBeLessThan(other.y - 4);
+  });
+
+  it("vertically centers the header text block against the photo band (no dead space beside the photo)", async () => {
+    const cv = baseCv();
+    cv.personal.photo = photoPngDataUrl(300, 400);
+    const pdf = await PDFDocument.load(await generateCvPdf(cv));
+    const runs = pageTextRuns(pdf, 0);
+    const name = runs.find((r) => r.text === "Mustapha Drif")!;
+    const other = runs.find((r) => r.text === "deutscher")!;
+    // Name top / other-facts bottom via the renderer's line-box math
+    // (firstBaseline: (size·lh − size)/2 + 0.72·size; descent 0.28·size).
+    const nameTop = name.y + ((21 * 1.15 - 21) / 2 + 21 * 0.72);
+    const otherBottom = other.y - other.size * 0.28;
+    const textCenter = (nameTop + otherBottom) / 2;
+    const placement = imagePlacement(pageStream(pdf, 0))!;
+    const photoCenter = placement.y + placement.h / 2;
+    expect(Math.abs(textCenter - photoCenter), `text ${textCenter} vs photo ${photoCenter}`).toBeLessThan(1.5);
+  });
+
+  it("applies NO header shift without a photo, and none when the text is taller than the photo", async () => {
+    const contentTop = A4_HEIGHT - 12 * MM; // comfortable tier
+    const nameTopOf = (pdf: PDFDocument): number => {
+      const name = pageTextRuns(pdf, 0).find((r) => r.text === "Mustapha Drif")!;
+      return name.y + ((21 * 1.15 - 21) / 2 + 21 * 0.72);
+    };
+    // (a) without a photo: the name starts at the very top.
+    const a = await PDFDocument.load(await generateCvPdf(baseCv()));
+    expect(nameTopOf(a)).toBeCloseTo(contentTop, 0.5);
+    // (b) photo + a header text block TALLER than the 128pt photo band: no shift.
+    const cv = baseCv();
+    cv.personal.photo = photoPngDataUrl(300, 400);
+    cv.personal.professionalTitle =
+      "Fachinformatiker für Systemintegration und Vernetzte Systeme — Bewerbung als Auszubildender in der Fachrichtung " +
+      "Informaticstechniker für Daten- und Systemanalyse bei der sehr sehr sehr sehr sehr langen Unternehmensname " +
+      "GmbH & Co. KG mit Sitz in einem überregional bedeutenden Wirtschaftsstandort";
+    const b = await PDFDocument.load(await generateCvPdf(cv));
+    const titleRuns = pageTextRuns(b, 0).filter((r) => r.size === 13);
+    expect(titleRuns.length).toBeGreaterThanOrEqual(4); // the title really wraps into several lines
+    expect(nameTopOf(b)).toBeGreaterThanOrEqual(contentTop - 0.5);
+  });
+
+  it("contactIconAxis: every icon shares one optical axis per contact line (baseline + 0.22·size)", () => {
+    // Matches the template's flex centering (1.5em line box, 0.72em ascent).
+    expect(contactIconAxis(731.0093, 9.5)).toBeCloseTo(733.0993, 4);
+    expect(contactIconAxis(0, 10)).toBeCloseTo(2.2, 6);
+    expect(contactIconAxis(100, 8)).toBeCloseTo(101.76, 6);
+  });
+
+  it("centers EVERY icon glyph (mail, phone, pin, globe, linkedin) on its line's axis", async () => {
+    const cv = baseCv();
+    cv.personal.photo = photoPngDataUrl(300, 400);
+    cv.personal.website = "www.mustapha-drif.de";
+    cv.personal.linkedin = "linkedin.com/in/mustapha-drif";
+    const pdf = await PDFDocument.load(await generateCvPdf(cv));
+    const stream = pageStream(pdf, 0);
+    const runs = pageTextRuns(pdf, 0);
+    const groups = svgGroups(stream);
+    const circles = circleGroups(stream);
+
+    // Line 1: mail / phone / pin — axis from the email baseline.
+    const email = runs.find((r) => r.text === "mustapha.drif@example.de")!;
+    const axis1 = contactIconAxis(email.y, email.size);
+    const mail = groups.find(
+      (g) => !g.flip && g.fill && closeColor(g.fill, C_BODY) && g.close === "f" && /0 0 m\s*0 5\.8 l\s*8\.4 5\.8 l\s*8\.4 0 l\s*h/.test(g.d),
+    );
+    expect(mail, "mail envelope rect missing").toBeTruthy();
+    expect(mail!.y + 2.9).toBeCloseTo(axis1, 1); // rect center on the axis
+    const phone = groups.find((g) => g.flip && g.fill && closeColor(g.fill, C_BODY) && g.d.includes("2.38 3.88 m"));
+    expect(phone, "phone handset missing").toBeTruthy();
+    expect(phone!.y).toBeCloseTo(axis1 + 4.23, 1); // scaled handset center on the axis
+    const pinOuter = circles.find((c) => closeColor(c.fill, C_BODY) && Math.abs(c.cy - (axis1 + 0.7)) < 0.5 && c.r > 1 && c.r < 4);
+    expect(pinOuter, "pin circle missing").toBeTruthy();
+    expect(pinOuter!.r).toBeCloseTo(3.1, 1);
+    const pinTip = groups.find((g) => g.flip && g.fill && closeColor(g.fill, C_BODY) && g.d.includes("1.2 0 m"));
+    expect(pinTip, "pin tip triangle missing").toBeTruthy();
+    expect(pinTip!.y).toBeCloseTo(axis1 - 2.4, 1);
+    // All three glyphs agree on the SAME axis.
+    expect(mail!.y + 2.9).toBeCloseTo(phone!.y - 4.23, 1);
+    expect(pinOuter!.cy - 0.7).toBeCloseTo(axis1, 1);
+
+    // Line 2: globe / linkedin — axis from the website baseline.
+    const web = runs.find((r) => r.text === "www.mustapha-drif.de")!;
+    const axis2 = contactIconAxis(web.y, web.size);
+    const globe = circles.find((c) => closeColor(c.fill, C_BODY) && Math.abs(c.cy - axis2) < 0.3 && Math.abs(c.r - 3.7) < 0.3);
+    expect(globe, "globe circle missing").toBeTruthy();
+    const linkedin = groups.find(
+      (g) => !g.flip && g.fill && closeColor(g.fill, C_BODY) && g.close === "f" && /0 0 m\s*0 7\.4 l\s*7\.4 7\.4 l\s*7\.4 0 l\s*h/.test(g.d),
+    );
+    expect(linkedin, "linkedin rect missing").toBeTruthy();
+    expect(linkedin!.y + 3.7).toBeCloseTo(axis2, 1);
+    // …and the white "in" glyph sits inside the box.
+    const inRun = runs.find((r) => r.text === "in")!;
+    expect(closeColor(inRun.color, [1, 1, 1])).toBe(true);
+  });
+
+  it("gives the photograph professionally rounded corners: four white arc notches + a 0.75pt accent frame", async () => {
+    const cv = baseCv();
+    cv.personal.photo = photoPngDataUrl(300, 400);
+    const pdf = await PDFDocument.load(await generateCvPdf(cv));
+    const stream = pageStream(pdf, 0);
+    const placement = imagePlacement(stream)!;
+    const { x, y, w, h } = placement; // y = bottom edge
+    const top = y + h;
+    const rr = 6.5; // comfortable-tier photoRadius
+    const groups = svgGroups(stream);
+
+    // Exactly four white-filled, y-flipped, arc-closed groups (the notches).
+    const notches = groups.filter(
+      (g) => g.flip && g.fill && closeColor(g.fill, [1, 1, 1]) && g.close === "f" && /0 0 m\s*[-\d.]+ 0 l\s*[-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ c\s*h/.test(g.d),
+    );
+    expect(notches.length, "expected exactly 4 corner notches").toBe(4);
+
+    // Each notch: anchored at one photo corner, line along one edge, quarter-arc
+    // whose bezier midpoint sits rr·(1−1/√2) ≈ 0.2929·rr from BOTH edges —
+    // an inverted sweep flag would put the midpoint near the corner itself
+    // (≈ 0.7071·rr) and fail this check.
+    const expected: [number, number, number, number][] = [
+      [x, top, +1, +1], // TL: line right, arc down — midpoint (+, +)
+      [x + w, top, -1, +1], // TR: line left, arc down — midpoint (−, +)
+      [x, y, +1, -1], // BL: line right, arc up — midpoint (+, −)
+      [x + w, y, -1, -1], // BR: line left, arc up — midpoint (−, −)
+    ];
+    for (const [ax, ay, sx, sy] of expected) {
+      const notch = notches.find((g) => Math.abs(g.x - ax) < 0.05 && Math.abs(g.y - ay) < 0.05);
+      expect(notch, `notch at (${ax}, ${ay}) missing`).toBeTruthy();
+      const m = notch!.d.match(/0 0 m\s*([-\d.]+) 0 l\s*([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+) c/)!;
+      const p0: [number, number] = [Number(m[1]), 0];
+      const c1: [number, number] = [Number(m[2]), Number(m[3])];
+      const c2: [number, number] = [Number(m[4]), Number(m[5])];
+      const p3: [number, number] = [Number(m[6]), Number(m[7])];
+      expect(Math.abs(p0[0]), "notch line length = radius").toBeCloseTo(rr, 1);
+      expect(Math.sign(p0[0])).toBe(sx);
+      expect(Math.sign(p3[1])).toBe(sy);
+      const [mx, my] = cubicMid(p0, c1, c2, p3);
+      expect(Math.abs(mx), "arc midpoint x").toBeCloseTo(0.2929 * rr, 1);
+      expect(Math.abs(my), "arc midpoint y").toBeCloseTo(0.2929 * rr, 1);
+    }
+
+    // The frame: stroked (not filled), 0.75pt, ACCENT, anchored at the photo's
+    // TOP-LEFT and spanning exactly the photo rect (0..w × 0..h local).
+    const frame = groups.find(
+      (g) => g.flip && g.stroke && closeColor(g.stroke, C_ACCENT) && g.width !== null && Math.abs(g.width - 0.75) < 0.01 && g.close === "S",
+    );
+    expect(frame, "accent frame missing").toBeTruthy();
+    expect(frame!.x).toBeCloseTo(x, 1);
+    expect(frame!.y).toBeCloseTo(top, 1); // the frame sits ON the photo, not below it
+    expect(frame!.d).toContain("6.5 0 m"); // bottom edge
+    expect(frame!.d).toContain("89.5 0 l");
+    expect(frame!.d).toContain("96 121.5 l"); // right edge
+    expect(frame!.d).toContain("6.5 128 l"); // top edge
+    expect(frame!.d).toContain("0 6.5 l"); // left edge
+  });
+
+  it("renders a SQUARE photo with rounded corners too (notches follow the placed image)", async () => {
+    const cv = baseCv();
+    cv.personal.photo = photoPngDataUrl(300, 300); // 1:1 → placed 96×96
+    const pdf = await PDFDocument.load(await generateCvPdf(cv));
+    const stream = pageStream(pdf, 0);
+    const placement = imagePlacement(stream)!;
+    expect(placement!.w).toBeCloseTo(placement!.h, 1); // aspect preserved (square)
+    const groups = svgGroups(stream);
+    const notches = groups.filter(
+      (g) => g.flip && g.fill && closeColor(g.fill, [1, 1, 1]) && g.close === "f" && /0 0 m\s*[-\d.]+ 0 l\s*[-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ c\s*h/.test(g.d),
+    );
+    expect(notches.length).toBe(4);
+    const corners = notches.map((g) => [g.x, g.y]);
+    const top = placement!.y + placement!.h;
+    for (const [cx, cy] of [
+      [placement!.x, top],
+      [placement!.x + placement!.w, top],
+      [placement!.x, placement!.y],
+      [placement!.x + placement!.w, placement!.y],
+    ]) {
+      expect(corners.some(([gx, gy]) => Math.abs(gx - cx) < 0.05 && Math.abs(gy - cy) < 0.05), `notch at (${cx}, ${cy})`).toBe(true);
+    }
+  });
+});
+
+describe("AUTO BEWERB — exact page count: normal, long, stress, oversized (one-page policy)", () => {
+  it("normal, long-but-realistic and photo variants render EXACTLY one page; oversized input errors explicitly", async () => {
+    // normal
+    expect((await PDFDocument.load(await generateCvPdf(baseCv()))).getPageCount()).toBe(1);
+    // content-rich (every section filled)
+    expect((await PDFDocument.load(await generateCvPdf(richCv()))).getPageCount()).toBe(1);
+    // long-but-realistic (near-max PROFIL, all sections, 3:4 photo)
+    const cv = richCv();
+    cv.personal.photo = photoPngDataUrl(300, 400);
+    cv.summary = "Langer, aber realistischer Profiltext. ".repeat(12);
+    expect((await PDFDocument.load(await generateCvPdf(cv))).getPageCount()).toBe(1);
+    // oversized (pathologically long): an explicit, actionable validation
+    // error — NEVER a silent second page.
+    await expect(generateCvPdf(longCv())).rejects.toBeInstanceOf(CvPdfOverflowError);
+    await expect(generateCvPdf(longCv())).rejects.toMatchObject({ code: "cv_overflow" });
+    await expect(generateCvPdf(longCv())).rejects.toThrow(/A4-Seite/);
+  });
+});
+
+describe("AUTO BEWERB — one-page contract under long content (round 11)", () => {
+  /**
+   * Long-but-realistic profile: a ~4-line PROFIL (the 900-char cap keeps
+   * longer ones honest), every contact field, 2 jobs × 3-4 bullets +
+   * achievement, 2 educations, 8 skills, 3 languages, 3 certificates,
+   * 2 projects with descriptions, 3 interests + a 3:4 photo.
+   */
+  function stressCv(): CvDocument {
+    const cv = richCv();
+    cv.personal.photo = photoPngDataUrl(300, 400);
+    cv.summary =
+      "Motivierter und zuverlässiger Fachinformatiker für Systemintegration mit Erfahrung im Aufbau und Betrieb " +
+      "kleiner Netzwerke: Systemintegration, Netzwerktechnik, Linux-Betriebssysteme und Kubernetes-Administration. " +
+      "Gewohnt, strukturiert und eigenständig zu arbeiten, komplexe Zusammenhänge verständlich zu dokumentieren " +
+      "und technische Lösungen sorgfältig zu planen, umzusetzen und abzunehmen — möchte die eigene Erfahrung " +
+      "jetzt in einem engagierten Team einbringen und Verantwortung übernehmen.";
+    cv.skills = ["Java", "Netzwerktechnik", "Systemintegration", "Kubernetes", "Linux", "Bewerbung", "Schaltpläne lesen", "Teamarbeit"];
+    return cv;
+  }
+
+  it("fits long-but-realistic content on EXACTLY one A4 page", async () => {
+    const pdf = await PDFDocument.load(await generateCvPdf(stressCv()));
+    expect(pdf.getPageCount(), "the one-page contract must hold for realistic content").toBe(1);
+    // …and nothing is lost: every fact of the stress profile is present.
+    const text = fullText(pdf);
+    for (const fact of [
+      "Mustapha Drif",
+      "Praktikant Kältetechnik",
+      "Auszubildender Fachinformatiker",
+      "Abitur — Gymnasium",
+      "Schulvorbereitung",
+      "Java",
+      "Netzwerktechnik",
+      "Schaltpläne lesen",
+      "Deutsch",
+      "verhandlungssicher",
+      "Arabisch",
+      "IT-Support-Zertifikat",
+      "Erste Hilfe — DRK — 2024",
+      "Heimnetzwerk",
+      "Schul-Wiki",
+      "IT-Projekte",
+      "Fußball",
+      "Musik",
+      "Verantwortung übernehmen", // end of the long PROFIL
+    ]) {
+      expect(text, `missing: ${fact}`).toContain(fact);
+    }
+  });
+
+  it("long words and long text wrap without clipping the page or overlapping the photo", async () => {
+    const cv = stressCv();
+    // A word far longer than any line width (character-level wrap kicks in).
+    cv.personal.website = "www.unser-sehr-langes-unternehmens-webportal-mit-einem-sehr-langem-domain-namen.example";
+    const pdf = await PDFDocument.load(await generateCvPdf(cv));
+    expect(pdf.getPageCount()).toBe(1);
+    const placement = imagePlacement(pageStream(pdf, 0));
+    for (let i = 0; i < pdf.getPageCount(); i += 1) {
+      const runs = pageTextRuns(pdf, i);
+      expect(runs.length).toBeGreaterThan(0);
+      for (const run of runs) {
+        const w = runWidth(run);
+        expect(run.x, `p${i + 1} "${run.text}" left of page`).toBeGreaterThanOrEqual(OUTER_LEFT);
+        expect(run.x + w, `p${i + 1} "${run.text}" right of page`).toBeLessThanOrEqual(OUTER_RIGHT);
+        expect(run.y - run.size * 0.28, `p${i + 1} "${run.text}" clipped below`).toBeGreaterThanOrEqual(9 * MM - 1.5);
+        expect(run.y + run.size * 0.72, `p${i + 1} "${run.text}" clipped above`).toBeLessThanOrEqual(A4_HEIGHT - 9 * MM + 1.5);
+        // No text run may intersect the photograph.
+        if (placement) {
+          const topEdge = run.y + run.size * 0.72;
+          const bottomEdge = run.y - run.size * 0.28;
+          const intersects =
+            run.x < placement.x + placement.w + 1 &&
+            run.x + w > placement.x - 1 &&
+            topEdge > placement.y + 1 &&
+            bottomEdge < placement.y + placement.h - 1;
+          expect(intersects, `p${i + 1} "${run.text}" overlaps the photo`).toBe(false);
+        }
+      }
+    }
+  });
+});
+
+describe("AUTO BEWERB — preview/PDF design consistency (builder template twin)", () => {
+  const readSource = (p: string): string =>
+    readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
+  const modern = readSource("src/components/cv-templates/modern-template.tsx");
+  const shared = readSource("src/components/cv-templates/shared.tsx");
+
+  it("the modern template (the PDF's design twin) carries the rounded photo + header divider identity", () => {
+    expect(modern).toContain('photoShape: "rounded-portrait"');
+    expect(modern).toContain('alignItems: "center"'); // header text vertically centered against the photo band
+    expect(modern).toContain("borderBottom"); // the header divider (1px, like the PDF's 0.75pt rule)
+  });
+
+  it("the template identity honors an explicit user photo shape (keep() guard)", () => {
+    expect(shared).toMatch(/identity\.photoShape\s*\?\s*keep\(s\.photo\.shape, d\.photo\.shape, identity\.photoShape\)\s*:\s*s\.photo\.shape/);
   });
 });
