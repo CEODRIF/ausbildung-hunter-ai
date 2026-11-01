@@ -10,7 +10,7 @@ import { BewerbungAutomation } from "@/components/bewerbung-automation/client";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Bewerbung-Automatisierung",
+  title: "Bewerbungs Studio",
 };
 
 /**
