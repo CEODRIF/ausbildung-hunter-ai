@@ -2727,7 +2727,7 @@ const de = {
     historyBatch: "Batch",
     windowBannerOpen: "Versandfenster offen ({label}) — neue Batches können starten.",
     windowBannerClosed:
-      "Versandfenster geschlossen ({label}) — wartende Batches starten automatisch im nächsten Fenster (nächster Start: {time}).",
+      "Versandfenster geschlossen ({label}) — wartende Batches starten automatisch im nächsten Fenster (nächster Start: {time}, deutsche Zeit).",
     windowDeferredNote:
       "Das Versandfenster ({label}) ist gerade geschlossen: Der Batch wurde übernommen und startet automatisch im nächsten Fenster.",
     scheduleWindowInvalid: "Bitte wähle eine Versandzeit zwischen 07:30 und 10:30 deutscher Zeit.",
@@ -5438,7 +5438,7 @@ const en: Dict = {
     historyBatch: "Batch",
     windowBannerOpen: "Sending window open ({label}) — new batches may start.",
     windowBannerClosed:
-      "Sending window closed ({label}) — waiting batches start automatically in the next window (next start: {time}).",
+      "Sending window closed ({label}) — waiting batches start automatically in the next window (next start: {time}, Germany time).",
     windowDeferredNote:
       "The sending window ({label}) is closed right now: the batch was accepted and will start automatically in the next window.",
     scheduleWindowInvalid: "Please choose a sending time between 07:30 and 10:30 Germany time.",
@@ -8159,7 +8159,7 @@ const fr: Dict = {
     historyBatch: "Lot",
     windowBannerOpen: "Fenêtre d'envoi ouverte ({label}) — de nouveaux lots peuvent démarrer.",
     windowBannerClosed:
-      "Fenêtre d'envoi fermée ({label}) — les lots en attente démarrent automatiquement à la fenêtre suivante (prochain départ : {time}).",
+      "Fenêtre d'envoi fermée ({label}) — les lots en attente démarrent automatiquement à la fenêtre suivante (prochain départ : {time}, heure allemande).",
     windowDeferredNote:
       "La fenêtre d'envoi ({label}) est actuellement fermée : le lot a été pris en charge et démarrera automatiquement à la fenêtre suivante.",
     scheduleWindowInvalid: "Veuillez choisir une heure d'envoi entre 07:30 et 10:30 heure allemande.",
@@ -10797,7 +10797,7 @@ const ar: Dict = {
     historyBatch: "الدفعة",
     windowBannerOpen: "نافذة الإرسال مفتوحة ({label}) — يمكن بدء الدفعات الجديدة.",
     windowBannerClosed:
-      "نافذة الإرسال مغلقة ({label}) — تبدأ الدفعات المنتظرة تلقائيًا في النافذة التالية (البدء التالي: {time}).",
+      "نافذة الإرسال مغلقة ({label}) — تبدأ الدفعات المنتظرة تلقائيًا في النافذة التالية (البدء التالي: {time} بتوقيت ألمانيا).",
     windowDeferredNote:
       "نافذة الإرسال ({label}) مغلقة حاليًا: تم قبول الدفعة وستبدأ تلقائيًا في النافذة التالية.",
     scheduleWindowInvalid: "يرجى اختيار وقت إرسال بين 07:30 و10:30 بتوقيت ألمانيا.",

@@ -21,7 +21,7 @@ import type {
   AutoBewerbBatchResult,
   AutoBewerbScheduleInput,
 } from "@/lib/auto-bewerb/engine";
-import { AUTO_BEWERB_SENDING_WINDOW, windowLabel } from "@/lib/auto-bewerb/sending-window";
+import { AUTO_BEWERB_SENDING_WINDOW, formatWindowTime, windowLabel } from "@/lib/auto-bewerb/sending-window";
 import {
   approveCompanyAction,
   cancelBatchAction,
@@ -445,7 +445,9 @@ export function Step7Review() {
             ? t("autoBewerb.windowBannerOpen", { label: ws.sendingWindow.label })
             : t("autoBewerb.windowBannerClosed", {
                 label: ws.sendingWindow.label,
-                time: ws.sendingWindow.nextStartMs ? fmtTime(new Date(ws.sendingWindow.nextStartMs).toISOString()) : "–",
+                // The instant is correct; format it in the window's OWN zone
+                // (Europe/Berlin, DST-aware) — never browser-local or UTC.
+                time: ws.sendingWindow.nextStartMs ? formatWindowTime(ws.sendingWindow.nextStartMs, locale) : "–",
               })}
         </Note>
       )}

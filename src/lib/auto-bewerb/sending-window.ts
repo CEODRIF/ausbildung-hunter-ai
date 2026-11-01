@@ -82,6 +82,21 @@ export function windowLabel(timeZone: string = AUTO_BEWERB_SENDING_WINDOW.timeZo
   return `${pad2(w.startHour)}:${pad2(w.startMinute)}–${pad2(w.endHour)}:${pad2(w.endMinute)} ${timeZone}`;
 }
 
+/**
+ * Format an instant in the window's OWN IANA zone for display — CET/CEST
+ * aware, because `Intl` applies the current UTC offset at that instant.
+ * Window timestamps must NEVER be rendered in UTC or in the browser's zone:
+ * 2026-11-02T06:30Z IS "2 Nov 2026, 07:30" Germany time (CET), not 06:30.
+ * (The stored instant is correct — only the presentation must match the zone.)
+ */
+export function formatWindowTime(utcMs: number, locale = "en-GB"): string {
+  return new Date(utcMs).toLocaleString(locale, {
+    timeZone: AUTO_BEWERB_SENDING_WINDOW.timeZone,
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 /** The local wall-clock (hour, minute) of an instant in an IANA zone. */
 function localHourMinute(instantMs: number, timeZone: string): { hour: number; minute: number } | null {
   try {
