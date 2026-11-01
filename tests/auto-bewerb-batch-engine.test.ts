@@ -33,6 +33,8 @@ vi.mock("@/lib/auto-bewerb/sending-window", () => ({
   isSendingWindowOpen: () => true,
   nextWindowStartMs: () => null,
   windowLabel: () => "07:30\u201310:30 Europe/Berlin",
+  isCampaignTimeInWindow: () => true,
+  AUTO_BEWERB_SENDING_WINDOW: { timeZone: "Europe/Berlin", startHour: 7, startMinute: 30, endHour: 10, endMinute: 30 },
 }));
 
 const { createAdminClient } = await import("@/lib/supabase/admin");

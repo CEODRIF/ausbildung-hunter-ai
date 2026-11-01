@@ -15,12 +15,15 @@
 import { describe, expect, it } from "vitest";
 import {
   AUTO_BEWERB_SENDING_WINDOW,
+  isCampaignTimeInWindow,
   isSendingWindowOpen,
+  isWithinSendingWindow,
   nextWindowStartMs,
   sendingWindowState,
 } from "@/lib/auto-bewerb/sending-window";
 
 const at = (y: number, mo: number, d: number, h: number, mi: number) => Date.UTC(y, mo - 1, d, h, mi, 0);
+const atS = (y: number, mo: number, d: number, h: number, mi: number, s: number) => Date.UTC(y, mo - 1, d, h, mi, s);
 
 describe("window definition", () => {
   it("uses IANA Europe/Berlin (never a fixed offset), 07:30–10:30", () => {
@@ -35,8 +38,12 @@ describe("winter day (CET, UTC+1) — 2026-01-15", () => {
   it("07:29 → closed", () => expect(isSendingWindowOpen(at(2026, 1, 15, 6, 29))).toBe(false));
   it("07:30 → open (start inclusive)", () => expect(isSendingWindowOpen(at(2026, 1, 15, 6, 30))).toBe(true));
   it("10:29 → open", () => expect(isSendingWindowOpen(at(2026, 1, 15, 9, 29))).toBe(true));
-  it("10:30 → closed (end exclusive)", () => expect(isSendingWindowOpen(at(2026, 1, 15, 9, 30))).toBe(false));
-  it("10:31 → closed", () => expect(isSendingWindowOpen(at(2026, 1, 15, 9, 31))).toBe(false));
+  it("10:30 → open (end inclusive: a campaign scheduled for exactly 10:30 starts on the 10:30 tick)", () =>
+    expect(isSendingWindowOpen(at(2026, 1, 15, 9, 30))).toBe(true));
+  it("the whole 10:30 minute is open (10:30:59), 10:31:00 is closed", () => {
+    expect(isSendingWindowOpen(atS(2026, 1, 15, 9, 30, 59))).toBe(true);
+    expect(isSendingWindowOpen(at(2026, 1, 15, 9, 31))).toBe(false);
+  });
 });
 
 describe("summer day (CEST, UTC+2) — 2026-07-15", () => {
@@ -44,7 +51,7 @@ describe("summer day (CEST, UTC+2) — 2026-07-15", () => {
   it("07:29 → closed", () => expect(isSendingWindowOpen(at(2026, 7, 15, 5, 29))).toBe(false));
   it("07:30 → open (start inclusive)", () => expect(isSendingWindowOpen(at(2026, 7, 15, 5, 30))).toBe(true));
   it("10:29 → open", () => expect(isSendingWindowOpen(at(2026, 7, 15, 8, 29))).toBe(true));
-  it("10:30 → closed (end exclusive)", () => expect(isSendingWindowOpen(at(2026, 7, 15, 8, 30))).toBe(false));
+  it("10:30 → open (end inclusive)", () => expect(isSendingWindowOpen(at(2026, 7, 15, 8, 30))).toBe(true));
   it("10:31 → closed", () => expect(isSendingWindowOpen(at(2026, 7, 15, 8, 31))).toBe(false));
 });
 
@@ -53,7 +60,8 @@ describe("spring-forward transition 2026-03-29 (CET→CEST at 01:00 UTC)", () =>
   it("07:29 Berlin (05:29 UTC) → closed", () => expect(isSendingWindowOpen(at(2026, 3, 29, 5, 29))).toBe(false));
   it("07:30 Berlin (05:30 UTC) → open", () => expect(isSendingWindowOpen(at(2026, 3, 29, 5, 30))).toBe(true));
   it("10:29 Berlin (08:29 UTC) → open", () => expect(isSendingWindowOpen(at(2026, 3, 29, 8, 29))).toBe(true));
-  it("10:30 Berlin (08:30 UTC) → closed", () => expect(isSendingWindowOpen(at(2026, 3, 29, 8, 30))).toBe(false));
+  it("10:30 Berlin (08:30 UTC) → open (end inclusive)", () => expect(isSendingWindowOpen(at(2026, 3, 29, 8, 30))).toBe(true));
+  it("10:31 Berlin (08:31 UTC) → closed", () => expect(isSendingWindowOpen(at(2026, 3, 29, 8, 31))).toBe(false));
 });
 
 describe("fall-back transition 2026-10-25 (CEST→CET at 02:00 UTC)", () => {
@@ -61,16 +69,57 @@ describe("fall-back transition 2026-10-25 (CEST→CET at 02:00 UTC)", () => {
   it("07:29 Berlin (06:29 UTC) → closed", () => expect(isSendingWindowOpen(at(2026, 10, 25, 6, 29))).toBe(false));
   it("07:30 Berlin (06:30 UTC) → open", () => expect(isSendingWindowOpen(at(2026, 10, 25, 6, 30))).toBe(true));
   it("10:29 Berlin (09:29 UTC) → open", () => expect(isSendingWindowOpen(at(2026, 10, 25, 9, 29))).toBe(true));
-  it("10:30 Berlin (09:30 UTC) → closed", () => expect(isSendingWindowOpen(at(2026, 10, 25, 9, 30))).toBe(false));
+  it("10:30 Berlin (09:30 UTC) → open (end inclusive)", () => expect(isSendingWindowOpen(at(2026, 10, 25, 9, 30))).toBe(true));
+  it("10:31 Berlin (09:31 UTC) → closed", () => expect(isSendingWindowOpen(at(2026, 10, 25, 9, 31))).toBe(false));
+});
+
+describe("isWithinSendingWindow — the scheduling validation matrix (Berlin wall-clock)", () => {
+  it("accepts every valid start time", () => {
+    expect(isWithinSendingWindow(7, 30)).toBe(true);
+    expect(isWithinSendingWindow(8, 0)).toBe(true);
+    expect(isWithinSendingWindow(9, 0)).toBe(true);
+    expect(isWithinSendingWindow(10, 0)).toBe(true);
+    expect(isWithinSendingWindow(10, 30)).toBe(true);
+  });
+  it("rejects every out-of-window time", () => {
+    expect(isWithinSendingWindow(7, 29)).toBe(false);
+    expect(isWithinSendingWindow(10, 31)).toBe(false);
+    expect(isWithinSendingWindow(11, 0)).toBe(false);
+    expect(isWithinSendingWindow(20, 0)).toBe(false);
+  });
+});
+
+describe("isCampaignTimeInWindow — server validation of a requested start instant", () => {
+  // Winter (CET, UTC+1): 08:00 Berlin = 07:00 UTC; 10:30 Berlin = 09:30 UTC.
+  it("accepts instants whose Berlin wall-clock is in-window (winter)", () => {
+    expect(isCampaignTimeInWindow(at(2026, 1, 15, 7, 0))).toBe(true); // 08:00 Berlin
+    expect(isCampaignTimeInWindow(at(2026, 1, 15, 9, 30))).toBe(true); // 10:30 Berlin
+  });
+  it("rejects instants outside the window (winter)", () => {
+    expect(isCampaignTimeInWindow(at(2026, 1, 15, 6, 29))).toBe(false); // 07:29 Berlin
+    expect(isCampaignTimeInWindow(at(2026, 1, 15, 9, 31))).toBe(false); // 10:31 Berlin
+    expect(isCampaignTimeInWindow(at(2026, 1, 15, 20, 0))).toBe(false); // 20:00 Berlin
+  });
+  // Summer (CEST, UTC+2): 09:00 Berlin = 07:00 UTC — the SAME UTC instant as
+  // 08:00 Berlin in winter, correctly evaluated in Berlin wall-clock time.
+  it("evaluates the instant in Europe/Berlin, not a fixed offset (summer)", () => {
+    expect(isCampaignTimeInWindow(at(2026, 7, 15, 7, 0))).toBe(true); // 09:00 Berlin
+    expect(isCampaignTimeInWindow(at(2026, 7, 15, 8, 31))).toBe(false); // 10:31 Berlin
+  });
+  it("fails closed on non-finite instants", () => {
+    expect(isCampaignTimeInWindow(NaN)).toBe(false);
+    expect(isCampaignTimeInWindow(Infinity)).toBe(false);
+  });
 });
 
 describe("window state shape + duration", () => {
-  it("reports the local wall-clock time and the 3h duration boundary", () => {
+  it("reports the local wall-clock time and the boundary", () => {
     const s = sendingWindowState(at(2026, 1, 15, 6, 45)); // 07:45 Berlin
     expect(s).toMatchObject({ open: true, hour: 7, minute: 45, timeZone: "Europe/Berlin" });
-    // 07:30 open, 10:30 closed ⇒ exactly 3 hours of local time.
+    // 07:30 open, 10:30 open (end inclusive), 10:31 closed.
     expect(isSendingWindowOpen(at(2026, 1, 15, 6, 30))).toBe(true);
-    expect(isSendingWindowOpen(at(2026, 1, 15, 9, 30))).toBe(false);
+    expect(isSendingWindowOpen(at(2026, 1, 15, 9, 30))).toBe(true);
+    expect(isSendingWindowOpen(at(2026, 1, 15, 9, 31))).toBe(false);
   });
 
   it("fails closed for an unknown timezone", () => {

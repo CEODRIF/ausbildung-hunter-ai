@@ -42,7 +42,27 @@ const BERLIN = {
   "11:00": Date.UTC(2026, 0, 15, 10, 0, 0), // outside (after)
   "07:31": Date.UTC(2026, 0, 15, 6, 31, 0), // inside (just opened)
   "10:45": Date.UTC(2026, 0, 15, 9, 45, 0), // outside (drain case)
+  "10:30:30": Date.UTC(2026, 0, 15, 9, 30, 30), // last minute of the window (end inclusive)
+  "10:31:00": Date.UTC(2026, 0, 15, 9, 31, 0), // first minute after the window
 };
+
+/** A batch scheduled for EXACTLY 10:30 Berlin (09:30 UTC) + its attempt. */
+function batchDueAt1030() {
+  return {
+    id: "batch-1030", user_id: USER, batch_no: 1,
+    snapshot: { items: [], subject: "s", accountId: ACCT, accountEmail: "mail@example.de", attachCv: true, attachLetter: true, sharedDocs: [] },
+    account_id: ACCT, status: "scheduled", scheduled_at: "2026-01-15T09:30:00.000Z",
+    started_at: null, completed_at: null, created_at: TS, updated_at: TS,
+  };
+}
+function attemptOf1030(companyId: string) {
+  return {
+    id: "att-1030", company_id: companyId, user_id: USER, batch_id: "batch-1030", idempotency_key: "ik-1030",
+    recipient_email: "jobs@held.de", subject: "s", payload: { html: "", text: "", attachments: [] },
+    status: "queued", scheduled_at: "2026-01-15T09:30:00.000Z", attempt_count: 0, next_attempt_at: null,
+    provider_message_id: null, failure_code: null, failure_message: null, sent_at: null, created_at: TS, updated_at: TS,
+  };
+}
 
 let db: StudioDb;
 const sendEmail = vi.fn();
@@ -241,6 +261,46 @@ describe("cron tick + sending window", () => {
     expect(tBatches()[0].started_at).toBeTruthy();
     expect(tBatches()[0].status).toBe("completed");
     expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// End-of-window rule: a batch scheduled for EXACTLY 10:30 starts on the
+// 10:30 tick; NOTHING starts at 10:31 or later.
+// ---------------------------------------------------------------------------
+
+describe("end-of-window (10:30 boundary)", () => {
+  it("10:30:30 Berlin (last minute of the window): a batch scheduled for exactly 10:30 STARTS", async () => {
+    seed([{ id: "h1", name: "Held GmbH", email: "jobs@held.de", job: "Ausbildung H" }]);
+    vi.useFakeTimers();
+    (db.tables.auto_bewerb_batches as Record<string, unknown>[]).push(batchDueAt1030());
+    (db.tables.auto_bewerb_send_attempts as Record<string, unknown>[]).push(attemptOf1030("h1"));
+    vi.setSystemTime(BERLIN["10:30:30"]);
+
+    const sweep = await claimAndDispatchDueAutoBewerbAttempts(5, 45_000);
+
+    expect(sweep.windowOpen).toBe(true); // 10:30 minute is still inside the window
+    expect(rpcCalls).toContain("claim_startable_auto_bewerb_batches");
+    expect(tBatches()[0].status).toBe("completed"); // started at 10:30 → drained + settled
+    expect(tBatches()[0].started_at).toBe("2026-01-15T09:30:30.000Z"); // the 10:30 tick, not earlier
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("10:31:00 Berlin (window closed): the same due batch is NOT started — it stays queued for the next window", async () => {
+    seed([{ id: "h1", name: "Held GmbH", email: "jobs@held.de", job: "Ausbildung H" }]);
+    vi.useFakeTimers();
+    (db.tables.auto_bewerb_batches as Record<string, unknown>[]).push(batchDueAt1030());
+    (db.tables.auto_bewerb_send_attempts as Record<string, unknown>[]).push(attemptOf1030("h1"));
+    vi.setSystemTime(BERLIN["10:31:00"]);
+
+    const sweep = await claimAndDispatchDueAutoBewerbAttempts(5, 45_000);
+
+    expect(sweep.windowOpen).toBe(false);
+    expect(rpcCalls).not.toContain("claim_startable_auto_bewerb_batches");
+    expect(tBatches()[0].status).toBe("scheduled"); // held in Supabase for the next window
+    expect(tBatches()[0].started_at).toBeNull();
+    expect(tAttempts()[0].status).toBe("queued");
+    expect(sendEmail).not.toHaveBeenCalled();
   });
 });
 

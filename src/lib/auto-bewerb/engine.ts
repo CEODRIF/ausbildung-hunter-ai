@@ -53,7 +53,7 @@ import {
   type AutoBewerbAppStatus,
 } from "./schema";
 import { reserveSenderSlot, SENDER_SLOT_WAIT_BUDGET_MS } from "../email-rate-limit";
-import { isSendingWindowOpen, nextWindowStartMs, windowLabel } from "./sending-window";
+import { AUTO_BEWERB_SENDING_WINDOW, isCampaignTimeInWindow, isSendingWindowOpen, nextWindowStartMs, windowLabel } from "./sending-window";
 import { generateCvPdf, cvPdfFilename } from "./cv-pdf";
 import { selectBestCoverLetterTemplate } from "./letter-template-match";
 import { parseAdDeadline } from "../studio/quality";
@@ -110,6 +110,10 @@ export type AutoBewerbErrorCode =
   | "invalid_file_type"
   | "file_too_large"
   | "invalid_schedule"
+  /** The selected campaign time is outside 07:30–10:30 Europe/Berlin. */
+  | "schedule_outside_window"
+  /** Fail-closed: an out-of-window send could not be held for the next window. */
+  | "sending_unavailable"
   | "schedule_after_deadline"
   | "not_cancellable"
   | "workflow_full"
@@ -1695,6 +1699,11 @@ export async function prepareAutoBewerbSend(
     );
     if (utcMs === null)
       return { ok: false, code: "invalid_schedule", message: "Ungültiges Datum, Uhrzeit oder Zeitzone." };
+    // SENDING WINDOW (07:30–10:30 Europe/Berlin): same authoritative rule as
+    // the batch path — a scheduled send may only be set for a time inside the
+    // window (rejected, never silently moved).
+    if (!isCampaignTimeInWindow(utcMs))
+      return { ok: false, code: "schedule_outside_window", message: `Der Versandzeitpunkt muss zwischen 07:30 und 10:30 Deutschland-Zeit liegen (${windowLabel()}).` };
     if (utcMs <= Date.now() + 60_000)
       return { ok: false, code: "invalid_schedule", message: "Der Versandzeitpunkt muss in der Zukunft liegen." };
     const deadline = parseAdDeadline(app.ad_extracted?.applicationDeadline ?? null);
@@ -1783,6 +1792,31 @@ export async function prepareAutoBewerbSend(
   //    batch's settle step with no due attempts (stuck "sending") and would
   //    interleave sends with the still-running per-company preparation.
   if (!scheduledAt && input.batchId == null) {
+    // SENDING WINDOW (07:30–10:30 Europe/Berlin): an immediate legacy send
+    // must NEVER initiate an e-mail outside the window. The attempt is held
+    // at the NEXT window start (company + attempt become 'scheduled'; the
+    // cron claims it at/after the window opens — never before its due
+    // instant). The result reports the honest held time, never "sent".
+    if (!isSendingWindowOpen()) {
+      const next = nextWindowStartMs(Date.now());
+      const attemptId = (attempt as unknown as AutoBewerbSendAttemptRow).id;
+      if (next === null) {
+        // Fail closed: window closed AND the next start uncomputable —
+        // release the claim + cancel the attempt, send nothing.
+        await admin.from("auto_bewerb_send_attempts").update({ status: "cancelled", failure_code: "window_closed" }).eq("id", attemptId).eq("status", "queued");
+        await patchCompany(userId, app.id, { status: "ready", idempotency_key: null, scheduled_at: null, schedule_timezone: null });
+        return { ok: false, code: "sending_unavailable", message: `Der Versand ist gerade außerhalb des Versandfensters (${windowLabel()}) nicht verfügbar.` };
+      }
+      const heldAt = new Date(next).toISOString();
+      await admin.from("auto_bewerb_send_attempts").update({ scheduled_at: heldAt }).eq("id", attemptId).eq("status", "queued");
+      await patchCompany(userId, app.id, { status: "scheduled", scheduled_at: heldAt, schedule_timezone: AUTO_BEWERB_SENDING_WINDOW.timeZone });
+      void logAutoBewerbActivity(userId, "auto_bewerb_send_window_deferred", `AUTO BEWERB: Versand wartet auf das Versandfenster (${windowLabel()})`, undefined, {
+        companyId: app.id,
+        company: app.company,
+        heldAt,
+      });
+      return { ok: true, attemptId, scheduledAt: heldAt, dispatchStatus: "queued" };
+    }
     const result = await dispatchAutoBewerbAttempt((attempt as unknown as AutoBewerbSendAttemptRow).id);
     return {
       ok: true,
@@ -2169,6 +2203,12 @@ export async function createAutoBewerbBatch(
       input.schedule.hour, input.schedule.minute, input.schedule.timeZone,
     );
     if (utcMs === null) return { ok: false, code: "invalid_schedule", message: "Ungültiges Datum, Uhrzeit oder Zeitzone." };
+    // SENDING WINDOW (07:30–10:30 Europe/Berlin, IANA, DST-aware): a campaign
+    // may only be SCHEDULED for a time INSIDE the window — it starts at its
+    // exact selected time (never normalized to 07:30), so an out-of-window
+    // time is rejected here, not silently moved to another day/window.
+    if (!isCampaignTimeInWindow(utcMs))
+      return { ok: false, code: "schedule_outside_window", message: `Der Versandzeitpunkt muss zwischen 07:30 und 10:30 Deutschland-Zeit liegen (${windowLabel()}).` };
     if (utcMs <= Date.now() + 60_000) return { ok: false, code: "invalid_schedule", message: "Der Versandzeitpunkt muss in der Zukunft liegen." };
     scheduledAt = new Date(utcMs).toISOString();
   }
