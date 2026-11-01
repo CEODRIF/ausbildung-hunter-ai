@@ -144,7 +144,9 @@ export function Step2Companies() {
           ? t("autoBewerb.companyLimitNote")
           : res.code === "company_duplicate"
             ? t("autoBewerb.companyDuplicateNote")
-            : t("autoBewerb.saveError"),
+            : res.code === "slot_conflict"
+              ? t("autoBewerb.slotConflictNote")
+              : t("autoBewerb.saveError"),
       );
       // A rejected add proves the server sees state this UI does not (the
       // counter is stale or was an unreadable fake) — re-read the workspace

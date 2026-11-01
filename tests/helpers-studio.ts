@@ -92,10 +92,20 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     if (table === "studio_applications" && typeof vals.slot_no === "number" && vals.slot_no > 0) {
       return rows(table).some((r) => r.user_id === vals.user_id && r.slot_no === vals.slot_no);
     }
-    // OPT-IN mirror of auto_bewerb_companies_user_slot_unique (the same
-    // index shape): concurrent slot grabs cannot both win.
+    // OPT-IN mirror of auto_bewerb_companies_user_slot_unique. The predicate
+    // EXACTLY matches migration 20261222000000: (user_id, slot_no) WHERE
+    // slot_no > 0 AND status IN the reserved set — only RESERVED rows occupy
+    // a slot, so a stale released row (sent/cancelled with slot_no > 0) can
+    // never block slot reuse. Concurrent grabs of a RESERVED slot cannot
+    // both win.
     if (slotUnique.has(table) && typeof vals.slot_no === "number" && vals.slot_no > 0) {
-      return rows(table).some((r) => r.user_id === vals.user_id && r.slot_no === vals.slot_no);
+      return rows(table).some(
+        (r) =>
+          r.user_id === vals.user_id &&
+          r.slot_no === vals.slot_no &&
+          typeof r.status === "string" &&
+          ["draft", "ready", "scheduled", "sending", "failed"].includes(r.status),
+      );
     }
     if (table === "studio_send_attempts" && vals.idempotency_key != null) {
       return rows(table).some((r) => r.idempotency_key === vals.idempotency_key && r.id !== vals.id);
@@ -233,22 +243,17 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
         calls.push({ table, op: "update", filters: filterMap(st), args: [st.pending.vals] });
         for (const r of matched) {
           const vals = { ...st.pending.vals };
-          // OPT-IN mirror of the ab_companies_release_slot trigger
-          // (migration 20261220000000): any transition OUT of the reserved
-          // set (draft/ready/scheduled/sending/failed) INTO a released state
-          // (sent/cancelled) frees the capacity token. BEFORE-UPDATE
-          // semantics — it rewrites the outgoing row, idempotent on rows that
-          // never held a slot (already released), so a release can never
-          // happen twice.
-          if (
-            slotUnique.has(table) &&
-            typeof vals.status === "string" &&
-            (vals.status === "sent" || vals.status === "cancelled") &&
-            typeof r.status === "string" &&
-            ["draft", "ready", "scheduled", "sending", "failed"].includes(r.status) &&
-            typeof r.slot_no === "number" &&
-            r.slot_no > 0
-          ) {
+          // OPT-IN mirror of the ab_companies_release_slot trigger as
+          // REPLACED by migration 20261222000000: BEFORE-UPDATE semantics on
+          // the EFFECTIVE new status (the updated value, or the row's current
+          // status when this update doesn't touch it). ANY update whose NEW
+          // status is released (sent/cancelled) forces slot_no = 0 —
+          // independent of OLD.status, so a stale released row (sent with
+          // slot_no > 0) repairs itself on its next update. Idempotent: an
+          // already-released row stays at 0, a release can never happen
+          // twice.
+          const effStatus = typeof vals.status === "string" ? vals.status : (r.status as string | undefined);
+          if (slotUnique.has(table) && (effStatus === "sent" || effStatus === "cancelled")) {
             vals.slot_no = 0;
           }
           Object.assign(r, vals, { updated_at: new Date().toISOString() });

@@ -2395,6 +2395,8 @@ const de = {
     companyLimitNote:
       "Ihr globales Limit von 100 Unternehmen ist erreicht. Bitte zuerst Unternehmen entfernen oder warten, bis laufende Versände abgeschlossen sind.",
     companyDuplicateNote: "Dieses Unternehmen ist bereits in der Liste.",
+    slotConflictNote:
+      "Beim Speichern dieses Unternehmens ist ein vorübergehender Datenbankkonflikt aufgetreten — nichts wurde gespeichert. Bitte erneut versuchen.",
     noExtract: "Noch keine Analyse dieser Anzeige vorhanden.",
     detailsToggle: "Details anzeigen",
     detailsHide: "Details ausblenden",
@@ -5108,6 +5110,8 @@ const en: Dict = {
     companyLimitNote:
       "Your global limit of 100 companies is reached. Please remove companies first or wait until in-flight sends complete.",
     companyDuplicateNote: "This company is already in your list.",
+    slotConflictNote:
+      "A temporary database conflict occurred while saving this company — nothing was saved. Please try again.",
     noExtract: "This ad has not been analyzed yet.",
     detailsToggle: "Show details",
     detailsHide: "Hide details",
@@ -7831,6 +7835,8 @@ const fr: Dict = {
     companyLimitNote:
       "Votre limite globale de 100 entreprises est atteinte. Supprimez d'abord des entreprises ou attendez la fin des envois en cours.",
     companyDuplicateNote: "Cette entreprise est déjà dans votre liste.",
+    slotConflictNote:
+      "Un conflit de base de données temporaire s'est produit lors de l'enregistrement — rien n'a été enregistré. Veuillez réessayer.",
     noExtract: "Cette offre n'a pas encore été analysée.",
     detailsToggle: "Afficher les détails",
     detailsHide: "Masquer les détails",
@@ -10470,6 +10476,8 @@ const ar: Dict = {
     companyLimitNote:
       "تم بلوغ الحد العالمي الأقصى 100 شركات. يرجى حذف شركات أولًا أو انتظار اكتمال الإرسالات الجارية.",
     companyDuplicateNote: "هذه الشركة موجودة بالفعل في قائمتك.",
+    slotConflictNote:
+      "حدث تعارض مؤقت في قاعدة البيانات أثناء حفظ هذه الشركة — لم يتم الحفظ. يرجى المحاولة مرة أخرى.",
     noExtract: "لم يُحلَّل هذا الإعلان بعد.",
     detailsToggle: "عرض التفاصيل",
     detailsHide: "إخفاء التفاصيل",
