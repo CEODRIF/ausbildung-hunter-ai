@@ -263,7 +263,7 @@ const de = {
     // `pages.templates.*` (the on-page heading) is deliberately untouched.
     templates: "Lebenslauf",
     coverLetter: "Anschreiben",
-    bewerbungAutomation: "Bewerbung-Automatisierung",
+    bewerbungAutomation: "Bewerbungs Studio",
     deckblatt: "Deckblatt AI",
     settings: "Einstellungen",
     billing: "Abonnement",
@@ -305,7 +305,7 @@ const de = {
     settingsBilling: { title: "Abrechnung", subtitle: "Abonnement und Zahlungen" },
     templates: { title: "Vorlagen", subtitle: "Lebenslauf erstellen und exportieren" },
     coverLetter: { title: "Anschreiben", subtitle: "Professionellen Bewerbungsbrief erstellen und exportieren" },
-    bewerbungAutomation: { title: "Bewerbung-Automatisierung", subtitle: "Bis zu 100 personalisierte Bewerbungen pro Tag erstellen, prüfen und über dein E-Mail-Konto versenden" },
+    bewerbungAutomation: { title: "Bewerbungs Studio", subtitle: "Bis zu 100 personalisierte Bewerbungen pro Tag erstellen, prüfen und über dein E-Mail-Konto versenden" },
     faq: { title: "FAQ", subtitle: "Hilfe und Antworten" },
     deckblatt: {
       title: "AI Deckblatt Generator",
@@ -1842,7 +1842,7 @@ const de = {
   },
   /* ---------------- Bewerbung Automation (/bewerbung-automation) ---------------- */
   bewauto: {
-    title: "Bewerbung-Automatisierung",
+    title: "Bewerbungs Studio",
     schemaPending:
       "Diese Funktion wartet noch auf eine Datenbank-Aktualisierung (Migration). Bitte die Seite später neu laden.",
     setupBody:
@@ -3028,7 +3028,7 @@ const en: Dict = {
     // Sidebar label only (see the de locale note).
     templates: "Resume",
     coverLetter: "Cover Letter",
-    bewerbungAutomation: "Application Automation",
+    bewerbungAutomation: "Application Studio",
     deckblatt: "Deckblatt AI",
     settings: "Settings",
     billing: "Subscription",
@@ -3066,7 +3066,7 @@ const en: Dict = {
     settingsBilling: { title: "Billing", subtitle: "Subscription and payments" },
     templates: { title: "Templates", subtitle: "Build and export your CV" },
     coverLetter: { title: "Cover Letter", subtitle: "Build and export your professional application letter" },
-    bewerbungAutomation: { title: "Application Automation", subtitle: "Create, review and send up to 100 personalized applications per day from your connected mailbox" },
+    bewerbungAutomation: { title: "Application Studio", subtitle: "Create, review and send up to 100 personalized applications per day from your connected mailbox" },
     faq: { title: "FAQ", subtitle: "Help and answers" },
     deckblatt: {
       title: "AI Deckblatt Generator",
@@ -4556,7 +4556,7 @@ const en: Dict = {
   },
   /* ---------------- Bewerbung Automation (/bewerbung-automation) ---------------- */
   bewauto: {
-    title: "Application Automation",
+    title: "Application Studio",
     schemaPending:
       "This feature is waiting for a database update (migration). Please reload the page later.",
     setupBody:
@@ -5737,7 +5737,7 @@ const fr: Dict = {
     // Sidebar label only (see the de locale note).
     templates: "CV",
     coverLetter: "Lettre de motivation",
-    bewerbungAutomation: "Automatisation des candidatures",
+    bewerbungAutomation: "Studio de candidature",
     deckblatt: "Deckblatt IA",
     settings: "Réglages",
     billing: "Abonnement",
@@ -5775,7 +5775,7 @@ const fr: Dict = {
     settingsBilling: { title: "Facturation", subtitle: "Abonnement et paiements" },
     templates: { title: "Modèles", subtitle: "Créer et exporter votre CV" },
     coverLetter: { title: "Lettre de motivation", subtitle: "Créer et exporter votre lettre de motivation professionnelle" },
-    bewerbungAutomation: { title: "Automatisation des candidatures", subtitle: "Créer, relire et envoyer jusqu'à 100 candidatures personnalisées par jour depuis votre boîte connectée" },
+    bewerbungAutomation: { title: "Studio de candidature", subtitle: "Créer, relire et envoyer jusqu'à 100 candidatures personnalisées par jour depuis votre boîte connectée" },
     faq: { title: "FAQ", subtitle: "Aide et réponses" },
     deckblatt: {
       title: "Générateur de Deckblatt IA",
@@ -7277,7 +7277,7 @@ const fr: Dict = {
   },
   /* ---------------- Bewerbung Automation (/bewerbung-automation) ---------------- */
   bewauto: {
-    title: "Automatisation des candidatures",
+    title: "Studio de candidature",
     schemaPending:
       "Cette fonction attend une mise à jour de la base de données (migration). Veuillez recharger la page plus tard.",
     setupBody:
@@ -8453,7 +8453,7 @@ const ar: Dict = {
     // Sidebar label only (see the de locale note).
     templates: "السيرة الذاتية",
     coverLetter: "خطاب تقديم الطلب",
-    bewerbungAutomation: "أتمتة الطلبات",
+    bewerbungAutomation: "استوديو الطلبات",
     deckblatt: "صفحة الغلاف AI",
     settings: "الإعدادات",
     billing: "الاشتراك",
@@ -8491,7 +8491,7 @@ const ar: Dict = {
     settingsBilling: { title: "الفوترة", subtitle: "الاشتراك والمدفوعات" },
     templates: { title: "القوالب", subtitle: "إنشاء سيرتك الذاتية وتصديرها" },
     coverLetter: { title: "خطاب تقديم الطلب", subtitle: "إنشاء خطاب تقديم احترافي وتصديره" },
-    bewerbungAutomation: { title: "أتمتة الطلبات", subtitle: "إنشاء حتى 100 طلب مخصص يوميًا ومراجعته وإرساله من بريدك المرتبط" },
+    bewerbungAutomation: { title: "استوديو الطلبات", subtitle: "إنشاء حتى 100 طلب مخصص يوميًا ومراجعته وإرساله من بريدك المرتبط" },
     faq: { title: "الأسئلة الشائعة", subtitle: "مساعدة وإجابات" },
     deckblatt: {
       title: "مولّد صفحة الغلاف",
@@ -9937,7 +9937,7 @@ const ar: Dict = {
   },
   /* ---------------- Bewerbung Automation (/bewerbung-automation) ---------------- */
   bewauto: {
-    title: "أتمتة الطلبات",
+    title: "استوديو الطلبات",
     schemaPending:
       "هذا الموضع في انتظار تحديث قاعدة البيانات (ترحيل). يرجى إعادة تحميل الصفحة لاحقًا.",
     setupBody: "حدد عدد الطلبات المخصصة التي تريد إنشاءها وإرسالها يوميًا.",
