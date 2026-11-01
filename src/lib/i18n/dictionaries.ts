@@ -243,7 +243,7 @@ const de = {
   },
   // ---- Shell: sidebar sections + navigation ------------------------------
   nav: {
-    autoBewerb: "AUTO BEWERB",
+    autoBewerb: "Bewerbungszentrale",
 
 
     profile: "Profil",
@@ -290,7 +290,7 @@ const de = {
 
   // ---- Page titles (global header, per route) ----------------------------
   pages: {
-    autoBewerb: { title: "AUTO BEWERB", subtitle: "Bewerbungen für mehrere Unternehmen in einem Workflow vorbereiten" },
+    autoBewerb: { title: "Bewerbungszentrale", subtitle: "Bewerbungen für mehrere Unternehmen in einem Workflow vorbereiten" },
     settingsProfile: { title: "Profil", subtitle: "Name, Foto und verknüpfte Konten" },
     dashboard: { title: "Dashboard", subtitle: "Ihr zentraler Überblick" },
     aiAssistant: { title: "KI-Assistent", subtitle: "Ihr KI-Partner für Bewerbungen" },
@@ -2258,14 +2258,14 @@ const de = {
   },
   autoBewerb: {
     // Page / shell
-    navLabel: "AUTO BEWERB-Ablauf",
+    navLabel: "Ablauf der Bewerbungszentrale",
     retry: "Erneut versuchen",
     refreshError: "Aktualisierung fehlgeschlagen. Bitte erneut versuchen.",
     setupPendingTitle: "Setup ausstehend",
     setupPendingBody:
-      "Die Datenbank-Tabellen für AUTO BEWERB wurden noch nicht angelegt. Bitte die Migration supabase/migrations/20261215000000_auto_bewerb.sql manuell anwenden und diese Seite neu laden.",
+      "Die Datenbank-Tabellen für die Bewerbungszentrale wurden noch nicht angelegt. Bitte die Migration supabase/migrations/20261215000000_auto_bewerb.sql manuell anwenden und diese Seite neu laden.",
     setupProbeErrorBody:
-      "Die Prüfung des Datenbankschemas konnte die AUTO-Bewerb-Tabellen nicht erreichen (Berechtigungs- oder Verbindungsfehler). Das bedeutet nicht, dass Tabellen fehlen — bitte erneut versuchen oder den Datenbankzugriff prüfen.",
+      "Die Prüfung des Datenbankschemas konnte die Tabellen der Bewerbungszentrale nicht erreichen (Berechtigungs- oder Verbindungsfehler). Das bedeutet nicht, dass Tabellen fehlen — bitte erneut versuchen oder den Datenbankzugriff prüfen.",
     step1: "Lebenslauf",
     step2: "Unternehmen",
     step3: "Dokumente",
@@ -3010,7 +3010,7 @@ const en: Dict = {
     },
   },
   nav: {
-    autoBewerb: "AUTO BEWERB",
+    autoBewerb: "Application Hub",
 
 
     profile: "Profile",
@@ -3051,7 +3051,7 @@ const en: Dict = {
     
   },
   pages: {
-    autoBewerb: { title: "AUTO BEWERB", subtitle: "Prepare applications for multiple companies in one workflow" },
+    autoBewerb: { title: "Application Hub", subtitle: "Prepare applications for multiple companies in one workflow" },
     settingsProfile: { title: "Profile", subtitle: "Name, photo and connected accounts" },
     dashboard: { title: "Dashboard", subtitle: "Your central overview" },
     aiAssistant: { title: "AI Assistant", subtitle: "Your AI partner for applications" },
@@ -4970,14 +4970,14 @@ const en: Dict = {
   },
   autoBewerb: {
     // Page / shell
-    navLabel: "AUTO BEWERB workflow",
+    navLabel: "Application Hub workflow",
     retry: "Retry",
     refreshError: "Refresh failed. Please try again.",
     setupPendingTitle: "Setup pending",
     setupPendingBody:
-      "The database tables for AUTO BEWERB have not been created yet. Please apply the migration supabase/migrations/20261215000000_auto_bewerb.sql manually and reload this page.",
+      "The database tables for the Application Hub have not been created yet. Please apply the migration supabase/migrations/20261215000000_auto_bewerb.sql manually and reload this page.",
     setupProbeErrorBody:
-      "The database schema check could not reach the AUTO BEWERB tables (permission or connection error). This does not mean the tables are missing — please retry, or check database access.",
+      "The database schema check could not reach the Application Hub tables (permission or connection error). This does not mean the tables are missing — please retry, or check database access.",
     step1: "CV",
     step2: "Companies",
     step3: "Documents",
@@ -5719,7 +5719,7 @@ const fr: Dict = {
     },
   },
   nav: {
-    autoBewerb: "AUTO BEWERB",
+    autoBewerb: "Centre de candidatures",
 
 
     profile: "Profil",
@@ -5760,7 +5760,7 @@ const fr: Dict = {
     
   },
   pages: {
-    autoBewerb: { title: "AUTO BEWERB", subtitle: "Préparez vos candidatures pour plusieurs entreprises en un seul flux" },
+    autoBewerb: { title: "Centre de candidatures", subtitle: "Préparez vos candidatures pour plusieurs entreprises en un seul flux" },
     settingsProfile: { title: "Profil", subtitle: "Nom, photo et comptes liés" },
     dashboard: { title: "Tableau de bord", subtitle: "Votre vue d'ensemble" },
     aiAssistant: { title: "Assistant IA", subtitle: "Votre partenaire IA pour les candidatures" },
@@ -7692,14 +7692,14 @@ const fr: Dict = {
   },
   autoBewerb: {
     // Page / shell
-    navLabel: "Flux AUTO BEWERB",
+    navLabel: "Flux du Centre de candidatures",
     retry: "Réessayer",
     refreshError: "Échec du rafraîchissement. Veuillez réessayer.",
     setupPendingTitle: "Configuration en attente",
     setupPendingBody:
-      "Les tables de base de données d'AUTO BEWERB n'ont pas encore été créées. Veuillez appliquer manuellement la migration supabase/migrations/20261215000000_auto_bewerb.sql puis recharger cette page.",
+      "Les tables de base de données du Centre de candidatures n'ont pas encore été créées. Veuillez appliquer manuellement la migration supabase/migrations/20261215000000_auto_bewerb.sql puis recharger cette page.",
     setupProbeErrorBody:
-      "La vérification du schéma de base de données n'a pas pu accéder aux tables AUTO BEWERB (erreur d'autorisation ou de connexion). Cela ne signifie pas que les tables manquent — veuillez réessayer ou vérifier l'accès à la base de données.",
+      "La vérification du schéma de base de données n'a pas pu accéder aux tables du Centre de candidatures (erreur d'autorisation ou de connexion). Cela ne signifie pas que les tables manquent — veuillez réessayer ou vérifier l'accès à la base de données.",
     step1: "CV",
     step2: "Entreprises",
     step3: "Documents",
@@ -8435,7 +8435,7 @@ const ar: Dict = {
     },
   },
   nav: {
-    autoBewerb: "AUTO BEWERB",
+    autoBewerb: "مركز طلبات التوظيف",
 
 
     profile: "الملف الشخصي",
@@ -8476,7 +8476,7 @@ const ar: Dict = {
     
   },
   pages: {
-    autoBewerb: { title: "AUTO BEWERB", subtitle: "جهّز طلباتك لعدة شركات في مسار واحد" },
+    autoBewerb: { title: "مركز طلبات التوظيف", subtitle: "جهّز طلباتك لعدة شركات في مسار واحد" },
     settingsProfile: { title: "الملف الشخصي", subtitle: "الاسم والصورة والحسابات المرتبطة" },
     dashboard: { title: "لوحة التحكم", subtitle: "نظرتك المركزية" },
     aiAssistant: { title: "المساعد الذكي", subtitle: "شريكك الذكي للطلبات" },
@@ -10330,14 +10330,14 @@ const ar: Dict = {
   },
   autoBewerb: {
     // Page / shell
-    navLabel: "مسار AUTO BEWERB",
+    navLabel: "مسار مركز طلبات التوظيف",
     retry: "إعادة المحاولة",
     refreshError: "فشل التحديث. يرجى المحاولة مرة أخرى.",
     setupPendingTitle: "الإعداد قيد الانتظار",
     setupPendingBody:
-      "لم يتم إنشاء جداول قاعدة بيانات AUTO BEWERB بعد. يرجى تطبيق الترحيل supabase/migrations/20261215000000_auto_bewerb.sql يدويًا ثم إعادة تحميل هذه الصفحة.",
+      "لم يتم إنشاء جداول قاعدة بيانات مركز طلبات التوظيف بعد. يرجى تطبيق الترحيل supabase/migrations/20261215000000_auto_bewerb.sql يدويًا ثم إعادة تحميل هذه الصفحة.",
     setupProbeErrorBody:
-      "تعذّر على فحص مخطط قاعدة البيانات الوصول إلى جداول AUTO BEWERB (خطأ في الصلاحيات أو الاتصال). هذا لا يعني أن الجداول مفقودة — يرجى إعادة المحاولة أو التحقق من الوصول إلى قاعدة البيانات.",
+      "تعذّر على فحص مخطط قاعدة البيانات الوصول إلى جداول مركز طلبات التوظيف (خطأ في الصلاحيات أو الاتصال). هذا لا يعني أن الجداول مفقودة — يرجى إعادة المحاولة أو التحقق من الوصول إلى قاعدة البيانات.",
     step1: "السيرة الذاتية",
     step2: "الشركات",
     step3: "المستندات",

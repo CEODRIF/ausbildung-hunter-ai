@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { AutoBewerbClient } from "@/components/auto-bewerb/auto-bewerb-client";
 import { getCurrentUserAndProfile } from "@/lib/auth";
@@ -5,6 +6,12 @@ import { getAutoBewerbWorkspace } from "@/lib/auto-bewerb/engine";
 import type { AutoBewerbWorkspace } from "@/lib/auto-bewerb/schema";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Bewerbungszentrale",
+  description:
+    "A professional system for managing, personalizing, scheduling, and automating job applications.",
+};
 
 /**
  * AUTO BEWERB — the guided, multi-company application workflow.

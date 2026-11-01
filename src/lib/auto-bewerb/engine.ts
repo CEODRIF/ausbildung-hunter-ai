@@ -255,19 +255,19 @@ function classifyInsertError(error: { message?: string } | null | undefined): Au
   const raw = error?.message ?? "";
   const msg = raw.replace(/^\d{5}: /, "");
   if (/could not find the table|pgrst205|relation "public\.auto_bewerb_companies" does not exist/i.test(msg)) {
-    return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+    return fail("schema_pending", "Die Datenbank der Bewerbungszentrale wird vorbereitet.");
   }
   const col = msg.match(/^column "([a-z0-9_]+)" does not exist/i);
   if (col) {
     return fail(
       "storage_error",
-      `Das Datenbank-Schema ist veraltet (Feld "${col[1]}" fehlt) — bitte die AUTO BEWERB Migration neu anwenden.`,
+      `Das Datenbank-Schema ist veraltet (Feld "${col[1]}" fehlt) — bitte die Bewerbungszentrale-Migration neu anwenden.`,
     );
   }
   if (/value too long for type/i.test(msg)) {
     return fail(
       "storage_error",
-      "Das Datenbank-Schema ist veraltet (Spaltentyp zu kurz) — bitte die AUTO BEWERB Migration neu anwenden.",
+      "Das Datenbank-Schema ist veraltet (Spaltentyp zu kurz) — bitte die Bewerbungszentrale-Migration neu anwenden.",
     );
   }
   // Two concurrent creates that both computed the same smallest free slot:
@@ -328,7 +328,7 @@ export async function saveAutoBewerbProfile(
   userId: string,
   input: SaveAutoBewerbProfileInput,
 ): Promise<AutoBewerbOpResult<AutoBewerbProfileRow>> {
-  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "Die Datenbank der Bewerbungszentrale wird vorbereitet.");
   const parsed = candidateProfileSchema.safeParse(input.extracted);
   if (!parsed.success) return fail("invalid_document", "Das extrahierte Profil ist ungültig.");
   const extracted = { ...parsed.data, goal: "ausbildung" as const };
@@ -367,7 +367,7 @@ export async function saveAutoBewerbProfile(
       .select("*")
       .maybeSingle();
     if (error || !data) return fail("storage_error", "Profil konnte nicht gespeichert werden.");
-    void logAutoBewerbActivity(userId, "auto_bewerb_profile_replaced", "AUTO BEWERB: Lebenslauf ersetzt");
+    void logAutoBewerbActivity(userId, "auto_bewerb_profile_replaced", "Bewerbungszentrale: Lebenslauf ersetzt");
     return { ok: true, value: data as unknown as AutoBewerbProfileRow };
   }
 
@@ -389,7 +389,7 @@ export async function saveAutoBewerbProfile(
     console.error(`[auto-bewerb] profile insert failed: ${error?.message ?? "unknown"}`);
     return fail("storage_error", "Profil konnte nicht gespeichert werden.");
   }
-  void logAutoBewerbActivity(userId, "auto_bewerb_profile_created", "AUTO BEWERB: Lebenslauf analysiert");
+  void logAutoBewerbActivity(userId, "auto_bewerb_profile_created", "Bewerbungszentrale: Lebenslauf analysiert");
   return { ok: true, value: data as unknown as AutoBewerbProfileRow };
 }
 
@@ -430,7 +430,7 @@ export async function deleteAutoBewerbProfile(userId: string): Promise<AutoBewer
     .catch(() => undefined);
   const { error } = await admin.from("auto_bewerb_profiles").delete().eq("user_id", userId);
   if (error) return fail("storage_error", "Löschen fehlgeschlagen.");
-  void logAutoBewerbActivity(userId, "auto_bewerb_profile_deleted", "AUTO BEWERB: Lebenslauf gelöscht");
+  void logAutoBewerbActivity(userId, "auto_bewerb_profile_deleted", "Bewerbungszentrale: Lebenslauf gelöscht");
   return { ok: true };
 }
 
@@ -582,7 +582,7 @@ export async function uploadAutoBewerbProfilePhoto(
     console.error(`[auto-bewerb] photo upsert failed: ${error.message}`);
     return fail("storage_error", "Foto konnte nicht gespeichert werden. Bitte erneut versuchen.");
   }
-  void logAutoBewerbActivity(userId, "auto_bewerb_profile_photo_uploaded", "AUTO BEWERB: Bewerbungsfoto hochgeladen");
+  void logAutoBewerbActivity(userId, "auto_bewerb_profile_photo_uploaded", "Bewerbungszentrale: Bewerbungsfoto hochgeladen");
   return {
     ok: true,
     value: { ref: buildPhotoRef(fileHash, processed.ext), hash: fileHash, mime: processed.mime, sizeBytes: processed.buffer.length },
@@ -598,7 +598,7 @@ export async function deleteAutoBewerbProfilePhoto(userId: string): Promise<Auto
     .delete()
     .eq("user_id", userId);
   if (error) return fail("storage_error", "Das Foto konnte nicht entfernt werden. Bitte erneut versuchen.");
-  void logAutoBewerbActivity(userId, "auto_bewerb_profile_photo_removed", "AUTO BEWERB: Bewerbungsfoto entfernt");
+  void logAutoBewerbActivity(userId, "auto_bewerb_profile_photo_removed", "Bewerbungszentrale: Bewerbungsfoto entfernt");
   return { ok: true };
 }
 
@@ -670,7 +670,7 @@ export async function uploadAutoBewerbSignature(
   if (uploadError) return fail("storage_error", "Signatur-Upload fehlgeschlagen. Bitte erneut versuchen.");
   // Drop the opposite-format object: only ONE signature may exist per owner.
   await admin.storage.from(ATTACHMENT_BUCKET).remove([other]).catch(() => undefined);
-  void logAutoBewerbActivity(userId, "auto_bewerb_signature_uploaded", "AUTO BEWERB: Signatur hochgeladen");
+  void logAutoBewerbActivity(userId, "auto_bewerb_signature_uploaded", "Bewerbungszentrale: Signatur hochgeladen");
   return { ok: true, value: { mime: SIGNATURE_MIME[validation.type], sizeBytes: buffer.length } };
 }
 
@@ -681,7 +681,7 @@ export async function deleteAutoBewerbSignature(userId: string): Promise<AutoBew
   const { png, jpg } = signatureStoragePaths(userId);
   const { error } = await admin.storage.from(ATTACHMENT_BUCKET).remove([png, jpg]);
   if (error) return fail("storage_error", "Die Signatur konnte nicht entfernt werden. Bitte erneut versuchen.");
-  void logAutoBewerbActivity(userId, "auto_bewerb_signature_removed", "AUTO BEWERB: Signatur entfernt");
+  void logAutoBewerbActivity(userId, "auto_bewerb_signature_removed", "Bewerbungszentrale: Signatur entfernt");
   return { ok: true };
 }
 
@@ -733,7 +733,7 @@ export async function createAutoBewerbCompany(
   userId: string,
   input: CreateAutoBewerbCompanyInput,
 ): Promise<AutoBewerbOpResult<AutoBewerbCompanyRow>> {
-  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "Die Datenbank der Bewerbungszentrale wird vorbereitet.");
   const adRaw = input.adRaw.trim().slice(0, 30_000);
   if (adRaw.length < 1) return fail("invalid_recipient", "Bitte einen Anzeigentext eingeben.");
   const displayName = (input.company ?? input.extract?.company ?? input.extract?.jobTitle ?? "").trim().slice(0, 200);
@@ -810,7 +810,7 @@ export async function createAutoBewerbCompany(
     .select("*")
     .single();
   if (error || !data) return classifyInsertError(error);
-  void logAutoBewerbActivity(userId, "auto_bewerb_company_created", "AUTO BEWERB: Unternehmen hinzugefügt", undefined, { company });
+  void logAutoBewerbActivity(userId, "auto_bewerb_company_created", "Bewerbungszentrale: Unternehmen hinzugefügt", undefined, { company });
   return { ok: true, value: data as unknown as AutoBewerbCompanyRow };
 }
 
@@ -983,7 +983,7 @@ export async function approveAutoBewerbCompany(
     status: current === "draft" ? "ready" : (current as AutoBewerbAppStatus),
   });
   if (!app) return fail("not_found", "Unternehmen nicht gefunden.");
-  void logAutoBewerbActivity(userId, "auto_bewerb_company_approved", "AUTO BEWERB: Bewerbung genehmigt");
+  void logAutoBewerbActivity(userId, "auto_bewerb_company_approved", "Bewerbungszentrale: Bewerbung genehmigt");
   return { ok: true, value: app };
 }
 
@@ -1056,7 +1056,7 @@ export async function deleteAutoBewerbCompany(
     .eq("id", companyId)
     .eq("user_id", userId);
   if (delError) return fail("storage_error", "Löschen fehlgeschlagen.");
-  void logAutoBewerbActivity(userId, "auto_bewerb_company_deleted", "AUTO BEWERB: Unternehmen entfernt", undefined, {
+  void logAutoBewerbActivity(userId, "auto_bewerb_company_deleted", "Bewerbungszentrale: Unternehmen entfernt", undefined, {
     company: app.company,
   });
   return { ok: true };
@@ -1078,7 +1078,7 @@ export async function saveAutoBewerbDocument(
   docType: AutoBewerbDocType,
   content: unknown,
 ): Promise<AutoBewerbOpResult<AutoBewerbDocumentRow>> {
-  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "Die Datenbank der Bewerbungszentrale wird vorbereitet.");
   const admin = createAdminClient();
   const { data: app } = await admin
     .from("auto_bewerb_companies")
@@ -1178,7 +1178,7 @@ export async function uploadAutoBewerbAttachment(
   userId: string,
   input: { name: string; buffer: Buffer; category: string },
 ): Promise<AutoBewerbOpResult<UploadAutoBewerbAttachmentResult>> {
-  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "Die Datenbank der Bewerbungszentrale wird vorbereitet.");
   const admin = createAdminClient();
 
   const detected = detectFileType(input.buffer);
@@ -1239,7 +1239,7 @@ export async function uploadAutoBewerbAttachment(
     }
     return fail("storage_error", "Upload konnte nicht abgeschlossen werden.");
   }
-  void logAutoBewerbActivity(userId, "auto_bewerb_document_uploaded", "AUTO BEWERB: Dokument hochgeladen", undefined, {
+  void logAutoBewerbActivity(userId, "auto_bewerb_document_uploaded", "Bewerbungszentrale: Dokument hochgeladen", undefined, {
     name: displayName,
   });
   return { ok: true, value: { row: data as unknown as AutoBewerbAttachmentRow, reused: false } };
@@ -1301,7 +1301,7 @@ export async function deleteAutoBewerbAttachment(
     .eq("id", attachmentId)
     .eq("user_id", userId);
   if (error) return fail("storage_error", "Löschen fehlgeschlagen.");
-  void logAutoBewerbActivity(userId, "auto_bewerb_document_deleted", "AUTO BEWERB: Dokument gelöscht");
+  void logAutoBewerbActivity(userId, "auto_bewerb_document_deleted", "Bewerbungszentrale: Dokument gelöscht");
   return { ok: true };
 }
 
@@ -1323,7 +1323,7 @@ export async function saveAutoBewerbEmailTemplate(
   userId: string,
   body: string,
 ): Promise<AutoBewerbOpResult<string>> {
-  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "Die Datenbank der Bewerbungszentrale wird vorbereitet.");
   const normalized = body.trim().slice(0, 6_000);
   const { error } = await createAdminClient()
     .from("auto_bewerb_email_templates")
@@ -1399,7 +1399,7 @@ export async function saveAutoBewerbEmailSettings(
   userId: string,
   s: AutoBewerbEmailSettings,
 ): Promise<AutoBewerbOpResult> {
-  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "AUTO BEWERB Datenbank wird vorbereitet.");
+  if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "Die Datenbank der Bewerbungszentrale wird vorbereitet.");
   const probe = await getAutoBewerbEmailSettingsProbe();
   if (!probe.available)
     return fail("storage_error", "E-Mail-Einstellungen: Datenbank-Migration ausstehend (20261217000000_auto_bewerb_email_settings.sql).");
@@ -1479,7 +1479,7 @@ export async function prepareAutoBewerbSend(
   input: AutoBewerbSendInput,
 ): Promise<AutoBewerbSendResult> {
   if (!(await hasAutoBewerbSchema()))
-    return { ok: false, code: "schema_pending", message: "AUTO BEWERB Datenbank wird vorbereitet." };
+    return { ok: false, code: "schema_pending", message: "Die Datenbank der Bewerbungszentrale wird vorbereitet." };
   const admin = createAdminClient();
 
   const { data: appData, error: appError } = await admin
@@ -1778,7 +1778,7 @@ export async function prepareAutoBewerbSend(
   void logAutoBewerbActivity(
     userId,
     scheduledAt ? "auto_bewerb_send_scheduled" : "auto_bewerb_send_requested",
-    scheduledAt ? "AUTO BEWERB: Versand geplant" : "AUTO BEWERB: Versand gestartet",
+    scheduledAt ? "Bewerbungszentrale: Versand geplant" : "Bewerbungszentrale: Versand gestartet",
     undefined,
     { companyId: app.id, recipient, company: app.company },
   );
@@ -1810,7 +1810,7 @@ export async function prepareAutoBewerbSend(
       const heldAt = new Date(next).toISOString();
       await admin.from("auto_bewerb_send_attempts").update({ scheduled_at: heldAt }).eq("id", attemptId).eq("status", "queued");
       await patchCompany(userId, app.id, { status: "scheduled", scheduled_at: heldAt, schedule_timezone: AUTO_BEWERB_SENDING_WINDOW.timeZone });
-      void logAutoBewerbActivity(userId, "auto_bewerb_send_window_deferred", `AUTO BEWERB: Versand wartet auf das Versandfenster (${windowLabel()})`, undefined, {
+      void logAutoBewerbActivity(userId, "auto_bewerb_send_window_deferred", `Bewerbungszentrale: Versand wartet auf das Versandfenster (${windowLabel()})`, undefined, {
         companyId: app.id,
         company: app.company,
         heldAt,
@@ -1859,7 +1859,7 @@ export async function cancelAutoBewerbSend(
     scheduled_at: null,
     schedule_timezone: null,
   });
-  void logAutoBewerbActivity(userId, "auto_bewerb_send_cancelled", "AUTO BEWERB: Versand abgebrochen");
+  void logAutoBewerbActivity(userId, "auto_bewerb_send_cancelled", "Bewerbungszentrale: Versand abgebrochen");
   return { ok: true };
 }
 
@@ -1996,7 +1996,7 @@ export async function dispatchAutoBewerbAttempt(
       .from("auto_bewerb_companies")
       .update({ status: "sent", slot_no: 0, sent_at: sentAt, provider_message_id: result.providerMessageId, last_failure_code: null })
       .eq("id", app.id);
-    void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_application_sent", "AUTO BEWERB: Bewerbung versendet", undefined, {
+    void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_application_sent", "Bewerbungszentrale: Bewerbung versendet", undefined, {
       recipient: attempt.recipient_email,
       providerMessageId: result.providerMessageId,
     });
@@ -2022,7 +2022,7 @@ export async function dispatchAutoBewerbAttempt(
         .from("auto_bewerb_companies")
         .update({ status: "failed", last_failure_code: code })
         .eq("id", app.id);
-      void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_send_failed", "AUTO BEWERB: Versand fehlgeschlagen", message, { code });
+      void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_send_failed", "Bewerbungszentrale: Versand fehlgeschlagen", message, { code });
       return { ok: false, duplicate: false, status: "failed", failureCode: code };
     }
     // Temporary provider hiccup → retry with backoff. The row goes back to
@@ -2033,7 +2033,7 @@ export async function dispatchAutoBewerbAttempt(
       .from("auto_bewerb_send_attempts")
       .update({ status: "queued", next_attempt_at: next, failure_code: code, failure_message: message, attempt_count: executedCount })
       .eq("id", attempt.id);
-    void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_send_retry", "AUTO BEWERB: Versand wird wiederholt", message, { code, next });
+    void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_send_retry", "Bewerbungszentrale: Versand wird wiederholt", message, { code, next });
     return { ok: false, duplicate: false, status: "queued", failureCode: code };
   }
 }
@@ -2053,7 +2053,7 @@ async function terminalAttempt(
     .from("auto_bewerb_companies")
     .update({ status: "failed", last_failure_code: code })
     .eq("id", attempt.company_id);
-  void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_send_failed", "AUTO BEWERB: Versand nicht möglich", message, { code });
+  void logAutoBewerbActivity(attempt.user_id, "auto_bewerb_send_failed", "Bewerbungszentrale: Versand nicht möglich", message, { code });
   return { ok: false, duplicate: false, status: "failed", failureCode: code };
 }
 
@@ -2156,7 +2156,7 @@ export async function createAutoBewerbBatch(
   userId: string,
   input: { companyIds: string[]; schedule: AutoBewerbScheduleInput | null },
 ): Promise<AutoBewerbBatchResult> {
-  if (!(await hasAutoBewerbSchema())) return { ok: false, code: "schema_pending", message: "AUTO BEWERB Datenbank wird vorbereitet." };
+  if (!(await hasAutoBewerbSchema())) return { ok: false, code: "schema_pending", message: "Die Datenbank der Bewerbungszentrale wird vorbereitet." };
   if (!(await getAutoBewerbBatchesProbe()).available) return { ok: false, code: "schema_pending", message: "Die Batch-Warteschlange wird vorbereitet (Migration ausstehend)." };
   const ids = Array.from(new Set((input.companyIds ?? []).filter(Boolean)));
   if (ids.length < 1) return { ok: false, code: "empty_selection", message: "Bitte mindestens ein Unternehmen auswählen." };
@@ -2371,10 +2371,10 @@ export async function createAutoBewerbBatch(
     userId,
     scheduledAt ? "auto_bewerb_batch_scheduled" : windowDeferred ? "auto_bewerb_batch_window_deferred" : "auto_bewerb_batch_started",
     scheduledAt
-      ? `AUTO BEWERB: Batch ${batchNo} geplant`
+      ? `Bewerbungszentrale: Batch ${batchNo} geplant`
       : windowDeferred
-        ? `AUTO BEWERB: Batch ${batchNo} wartet auf das Versandfenster (${windowLabel()})`
-        : `AUTO BEWERB: Batch ${batchNo} gestartet`,
+        ? `Bewerbungszentrale: Batch ${batchNo} wartet auf das Versandfenster (${windowLabel()})`
+        : `Bewerbungszentrale: Batch ${batchNo} gestartet`,
     undefined,
     { batchId: batch.id, companies: okItems.length, accountEmail, windowDeferred },
   );
@@ -2509,7 +2509,7 @@ export async function cancelAutoBewerbBatch(userId: string, batchId: string): Pr
       .eq("user_id", userId)
       .in("status", ["scheduled", "sending"]);
   }
-  void logAutoBewerbActivity(userId, "auto_bewerb_batch_cancelled", `AUTO BEWERB: Batch ${batch.batch_no} storniert`, undefined, { batchId });
+  void logAutoBewerbActivity(userId, "auto_bewerb_batch_cancelled", `Bewerbungszentrale: Batch ${batch.batch_no} storniert`, undefined, { batchId });
   return { ok: true };
 }
 
