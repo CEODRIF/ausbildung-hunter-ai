@@ -65,7 +65,22 @@ export function Step2Companies() {
   //     list length is the fallback (same reserved set, same user).
   const capacity = ws.capacity?.capacity ?? AUTO_BEWERB_COMPANY_LIMIT;
   const capacityUnknown = ws.capacity === null;
-  const reserved = ws.capacity ? ws.capacity.reserved : ws.companies.length;
+  const listCount = ws.companies.length;
+  // CROSS-CHECK INVARIANT: the counter and the active list count the SAME
+  // persisted reserved set (same user, same reserved statuses, list capped at
+  // the same 100), so the counter can never legitimately be BELOW the list
+  // length. When the workspace response is internally inconsistent (a
+  // degraded read served a stale/zero counter next to the full list — the
+  // production symptom "0 / 100" while the add is refused), the LIST is the
+  // server-confirmed truth: show the maximum, never a fake "0 / 100".
+  const reserved = ws.capacity ? Math.max(ws.capacity.reserved, listCount) : listCount;
+  if (ws.capacity && ws.capacity.reserved < listCount) {
+    // Safe client-side signal (counts only — no names or ad text); the
+    // server logs the same divergence with source + build id.
+    console.warn(
+      `[auto-bewerb][capacity] UI cross-check: server counter ${ws.capacity.reserved} < active list ${listCount} — showing the list length (stale/degraded counter in the workspace response)`,
+    );
+  }
   const atLimit = !capacityUnknown && reserved >= capacity;
 
   const analyze = async () => {

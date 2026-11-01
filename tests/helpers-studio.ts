@@ -67,7 +67,7 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
   /** Inject a PostgREST-style select error for queries that REQUEST A
    *  SPECIFIC COLUMN (e.g. a stale schema missing slot_no). Column-aware so
    *  unrelated selects on the same table (schema probe selects "id") pass. */
-  let selectFail: { table: string; col: string; message: string } | null = null;
+  let selectFails: { table: string; col: string; message: string }[] = [];
 
   function rows(table: string): Record<string, unknown>[] {
     return tables[table] ?? [];
@@ -153,8 +153,9 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
       if (failTables.has(table)) {
         return { data: null, error: { message: `relation "public.${table}" does not exist` } };
       }
-      if (selectFail && selectFail.table === table && st.selectCols?.includes(selectFail.col)) {
-        return { data: null, error: { message: selectFail.message } };
+      const fail = selectFails.find((f) => f.table === table && st.selectCols?.includes(f.col));
+      if (fail) {
+        return { data: null, error: { message: fail.message } };
       }
       const ts = rows(table);
       const matched = ts.filter((r) => matches(r, st.filters));
@@ -333,10 +334,14 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     failTables: (names: string[]) => (failTables = new Set(names)),
     /** Force a specific PostgREST insert error on the next inserts for a table. */
     failInsert: (table: string, message: string) => (insertErrors[table] = message),
-    /** Force a select error for queries requesting `col` on `table`. */
-    failSelect: (table: string, col: string, message: string) => (selectFail = { table, col, message }),
-    /** Clear a forced select error (restore normal reads). */
-    clearSelectFail: () => (selectFail = null),
+    /** Force a select error for queries requesting `col` on `table` (REPLACES
+     *  all previously forced select errors). */
+    failSelect: (table: string, col: string, message: string) => (selectFails = [{ table, col, message }]),
+    /** ADD another forced select error (several can be active at once — e.g.
+     *  the capacity row query AND the company list query failing together). */
+    addSelectFail: (table: string, col: string, message: string) => selectFails.push({ table, col, message }),
+    /** Clear all forced select errors (restore normal reads). */
+    clearSelectFail: () => (selectFails = []),
     /** OPT-IN: model the (user_id, slot_no) partial unique index (slot_no > 0)
      *  + the release trigger for a table (capacity concurrency tests). */
     enableSlotUnique: (table: string) => void slotUnique.add(table),

@@ -193,6 +193,14 @@ async function capacityOf(user: string): Promise<{ reserved: number; capacity: n
   return (res as { ok: true; capacity: { reserved: number; capacity: number; available: number } }).capacity;
 }
 
+/** Read the active list through the HONEST result contract (a failed read is
+ *  `ok: false`, never a disguised empty list) and unwrap the rows. */
+async function activeCompanies(user: string): Promise<Array<{ id: string }>> {
+  const res = await listAutoBewerbCompanies(user);
+  expect(res.ok, "the active list must be readable in this scenario").toBe(true);
+  return (res as { ok: true; companies: Array<{ id: string }> }).companies;
+}
+
 const sendEmail = vi.fn();
 const provider = { sendEmail };
 
@@ -456,12 +464,12 @@ describe("global capacity — automatic removal + release", () => {
     seedBase();
     const a = seedCompany(USER, "AutoRemove A GmbH", "ready", { approved: true });
     const b = seedCompany(USER, "AutoRemove B GmbH", "ready", { approved: true });
-    expect((await listAutoBewerbCompanies(USER)).map((c) => c.id)).toEqual([a.id, b.id]);
+    expect((await activeCompanies(USER)).map((c) => c.id)).toEqual([a.id, b.id]);
     // Send ONLY company A (immediate batch of one — inline dispatch):
     const res = await createAutoBewerbBatch(USER, { companyIds: [a.id], schedule: null });
     expect(res.ok).toBe(true);
     // A is GONE from the active list, B remains — no reload, no batch finish:
-    const active = (await listAutoBewerbCompanies(USER)).map((c) => c.id);
+    const active = (await activeCompanies(USER)).map((c) => c.id);
     expect(active).not.toContain(a.id);
     expect(active).toEqual([b.id]);
     // The row is preserved (history), only its status changed:
@@ -500,7 +508,7 @@ describe("global capacity — automatic removal + release", () => {
     const res = await createAutoBewerbBatch(USER, { companyIds: [a.id], schedule: null });
     expect(res.ok).toBe(true);
     // Terminal failure: the company STAYS in the active list as retryable …
-    const active = (await listAutoBewerbCompanies(USER)).map((c) => c.id);
+    const active = (await activeCompanies(USER)).map((c) => c.id);
     expect(active).toEqual([a.id]);
     expect(tCompanies().find((c) => c.id === a.id)?.status).toBe("failed");
     expect(tCompanies().find((c) => c.id === a.id)?.slot_no).toBeGreaterThan(0);
@@ -520,7 +528,7 @@ describe("global capacity — automatic removal + release", () => {
     const row = tCompanies().find((c) => c.id === a.id)!;
     expect(RESERVED_SET).toContain(row.status); // still reserved (sending or ready/failed)
     expect(row.slot_no).toBeGreaterThan(0);
-    expect((await listAutoBewerbCompanies(USER)).map((c) => c.id)).toContain(a.id);
+    expect((await activeCompanies(USER)).map((c) => c.id)).toContain(a.id);
     expect(await capacityOf(USER)).toEqual({ reserved: 1, capacity: 100, available: 99 });
     // The attempt is re-queued (backoff) — the retry path below picks it up:
     const attempt = tAttempts().find((x) => x.company_id === a.id)!;
@@ -570,7 +578,7 @@ describe("global capacity — automatic removal + release", () => {
     });
     expect(res.ok).toBe(true);
     // Exactly the two successes left the active list; the failure stayed:
-    const active = (await listAutoBewerbCompanies(USER)).map((c) => c.id);
+    const active = (await activeCompanies(USER)).map((c) => c.id);
     expect(active).toEqual([badB.id]);
     expect(tCompanies().find((c) => c.id === badB.id)?.status).toBe("failed");
     // Capacity released exactly for the two successes:
@@ -634,7 +642,7 @@ describe("global capacity — scheduled protection + history integrity", () => {
     const res = await createAutoBewerbBatch(USER, { companyIds: [a.id], schedule: null });
     expect(res.ok).toBe(true);
     // Gone from the active list:
-    expect((await listAutoBewerbCompanies(USER)).map((c) => c.id)).not.toContain(a.id);
+    expect((await activeCompanies(USER)).map((c) => c.id)).not.toContain(a.id);
     // The preserved record carries every required audit field:
     const history = await getAutoBewerbSendHistory(USER);
     expect(history).toHaveLength(1);
