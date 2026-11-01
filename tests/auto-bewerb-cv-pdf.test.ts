@@ -10,11 +10,13 @@
  * top-right, two-column skills, three-column languages (level under the
  * language), two-column certificates and project entries.
  *
- * The ONE-PAGE CONTRACT: the renderer measures the whole document and picks
+ * The ONE-PAGE POLICY: the renderer measures the whole document and picks
  * the most comfortable density tier that fits exactly one A4 page — nothing
- * is ever removed to save space. Only a pathologically long profile (the
- * longCv fixture: 14 jobs × 5 bullets) overflows to further pages, where it
- * keeps a running header + subtle page numbers and renders EVERY entry.
+ * is ever removed to save space. If even the densest readable tier
+ * overflows (the longCv fixture: 14 jobs × 5 bullets), the render throws
+ * CvPdfOverflowError — an explicit, actionable validation error. Only
+ * callers that opt in with `allowMultiPage: true` get the legacy overflow
+ * rendering (running header + subtle page numbers, EVERY entry kept).
  *
  * The preview and the PDF export serve the SAME bytes, so the document
  * contract verified here holds for both: true A4 page size, exactly one page
@@ -30,7 +32,7 @@ import { readFileSync } from "node:fs";
 import { deflateSync, inflateSync } from "node:zlib";
 import { beforeAll, describe, expect, it } from "vitest";
 import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
-import { contactIconAxis, cvPdfFilename, generateCvPdf } from "@/lib/auto-bewerb/cv-pdf";
+import { CvPdfOverflowError, contactIconAxis, cvPdfFilename, generateCvPdf } from "@/lib/auto-bewerb/cv-pdf";
 import {
   cvEmpty,
   emptyEducation,
@@ -390,9 +392,19 @@ describe("AUTO BEWERB — one-page A4 CV renderer (modern template design)", () 
     expect(name.size).toBeCloseTo(21, 0);
   });
 
-  it("flows to further pages ONLY when the content cannot fit one page — and loses nothing", async () => {
+  it("ONE-PAGE POLICY: an overflowing document is an explicit, actionable error (never a silent multi-page file)", async () => {
     const cv = longCv();
-    const pdf = await PDFDocument.load(await generateCvPdf(cv));
+    await expect(generateCvPdf(cv)).rejects.toBeInstanceOf(CvPdfOverflowError);
+    await expect(generateCvPdf(cv)).rejects.toMatchObject({ code: "cv_overflow" });
+    // actionable: tells the user WHAT to do (trim the source content)
+    await expect(generateCvPdf(cv)).rejects.toThrow(/A4-Seite/);
+    // …and only for content that genuinely cannot fit one readable page.
+    expect((await PDFDocument.load(await generateCvPdf(richCv()))).getPageCount()).toBe(1);
+  });
+
+  it("flows to further pages ONLY on EXPLICIT opt-in (allowMultiPage) — and loses nothing", async () => {
+    const cv = longCv();
+    const pdf = await PDFDocument.load(await generateCvPdf(cv, { allowMultiPage: true }));
     expect(pdf.getPageCount()).toBeGreaterThanOrEqual(2);
     // every page is A4
     for (let i = 0; i < pdf.getPageCount(); i += 1) {
@@ -720,8 +732,8 @@ describe("AUTO BEWERB — candidate-information preservation", () => {
     for (const fact of ["IT-Projekte", "Fußball", "Musik"]) expect(text).toContain(fact);
   });
 
-  it("keeps every entry of an overflowing profile (nothing deleted, no clipping)", async () => {
-    const pdf = await PDFDocument.load(await generateCvPdf(longCv()));
+  it("keeps every entry of an overflowing profile (nothing deleted, no clipping, explicit opt-in)", async () => {
+    const pdf = await PDFDocument.load(await generateCvPdf(longCv(), { allowMultiPage: true }));
     const text = fullText(pdf);
     for (let i = 1; i <= 14; i += 1) {
       expect(text).toContain(`Systemadministrator (${i})`);
@@ -810,8 +822,8 @@ describe("AUTO BEWERB — candidate-information preservation", () => {
     }
   });
 
-  it("numbers multi-page documents subtly and leaves single-page documents unnumbered", async () => {
-    const pdf = await PDFDocument.load(await generateCvPdf(longCv()));
+  it("numbers multi-page documents subtly and leaves single-page documents unnumbered (opt-in overflow)", async () => {
+    const pdf = await PDFDocument.load(await generateCvPdf(longCv(), { allowMultiPage: true }));
     const n = pdf.getPageCount();
     expect(n).toBeGreaterThanOrEqual(2);
     for (let i = 0; i < n; i += 1) {
@@ -822,8 +834,8 @@ describe("AUTO BEWERB — candidate-information preservation", () => {
     expect(pageText(single, 0)).not.toContain("Seite 1 von 1");
   });
 
-  it("continuation pages carry a running header with the candidate's name", async () => {
-    const pdf = await PDFDocument.load(await generateCvPdf(longCv()));
+  it("continuation pages carry a running header with the candidate's name (opt-in overflow)", async () => {
+    const pdf = await PDFDocument.load(await generateCvPdf(longCv(), { allowMultiPage: true }));
     expect(pdf.getPageCount()).toBeGreaterThanOrEqual(2);
     expect(pageText(pdf, 1)).toContain("Mustapha Drif — Lebenslauf");
   });
@@ -1095,6 +1107,25 @@ describe("AUTO BEWERB — header hierarchy, icon alignment, rounded photo", () =
     ]) {
       expect(corners.some(([gx, gy]) => Math.abs(gx - cx) < 0.05 && Math.abs(gy - cy) < 0.05), `notch at (${cx}, ${cy})`).toBe(true);
     }
+  });
+});
+
+describe("AUTO BEWERB — exact page count: normal, long, stress, oversized (one-page policy)", () => {
+  it("normal, long-but-realistic and photo variants render EXACTLY one page; oversized input errors explicitly", async () => {
+    // normal
+    expect((await PDFDocument.load(await generateCvPdf(baseCv()))).getPageCount()).toBe(1);
+    // content-rich (every section filled)
+    expect((await PDFDocument.load(await generateCvPdf(richCv()))).getPageCount()).toBe(1);
+    // long-but-realistic (near-max PROFIL, all sections, 3:4 photo)
+    const cv = richCv();
+    cv.personal.photo = photoPngDataUrl(300, 400);
+    cv.summary = "Langer, aber realistischer Profiltext. ".repeat(12);
+    expect((await PDFDocument.load(await generateCvPdf(cv))).getPageCount()).toBe(1);
+    // oversized (pathologically long): an explicit, actionable validation
+    // error — NEVER a silent second page.
+    await expect(generateCvPdf(longCv())).rejects.toBeInstanceOf(CvPdfOverflowError);
+    await expect(generateCvPdf(longCv())).rejects.toMatchObject({ code: "cv_overflow" });
+    await expect(generateCvPdf(longCv())).rejects.toThrow(/A4-Seite/);
   });
 });
 

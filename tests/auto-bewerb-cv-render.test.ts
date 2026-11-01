@@ -18,7 +18,7 @@
 import { inflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
-import { generateCvPdf } from "@/lib/auto-bewerb/cv-pdf";
+import { CvPdfOverflowError, generateCvPdf } from "@/lib/auto-bewerb/cv-pdf";
 import { cvEmpty, emptyExperience, type CvDocument } from "@/lib/templates/cv";
 
 /** Smallest valid 1×1 PNG (data-URI) — stands in for the resolved photo. */
@@ -119,7 +119,11 @@ describe("tailored CV renderer — profile photo contract", () => {
       ];
       return e;
     });
-    const bytes = await generateCvPdf(cv, { photoDataUrl: TINY_PNG });
+    // ONE-PAGE POLICY: the default render of an overflowing document is an
+    // explicit, actionable error — never a silent multi-page file.
+    await expect(generateCvPdf(cv, { photoDataUrl: TINY_PNG })).rejects.toBeInstanceOf(CvPdfOverflowError);
+    // …and with the explicit opt-in the legacy overflow render applies.
+    const bytes = await generateCvPdf(cv, { photoDataUrl: TINY_PNG, allowMultiPage: true });
     const pdf = await PDFDocument.load(bytes);
     expect(pdf.getPageCount()).toBeGreaterThanOrEqual(2);
     for (let i = 0; i < pdf.getPageCount(); i += 1) {
@@ -144,7 +148,7 @@ describe("tailored CV renderer — multi-page continuation", () => {
       e.responsibilities = Array.from({ length: 4 }, (_, j) => `Tätigkeit ${j + 1}: Wartung, Betrieb und Ausbau der Anlagen.`);
       return e;
     });
-    const pdf = await PDFDocument.load(await generateCvPdf(cv, { photoDataUrl: TINY_PNG }));
+    const pdf = await PDFDocument.load(await generateCvPdf(cv, { photoDataUrl: TINY_PNG, allowMultiPage: true }));
     const pages = pdf.getPageCount();
     expect(pages).toBeGreaterThanOrEqual(2);
     // Page 1: the header block + sections, NO running header line.

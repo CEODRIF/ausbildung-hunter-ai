@@ -481,7 +481,8 @@ export function Step7Review() {
                 const label = v ? companyLabel(v.company).name : e.companyId;
                 return (
                   <li key={e.companyId} className="rounded-2xl border border-danger/25 bg-danger-soft/50 px-4 py-3 text-sm text-danger">
-                    <span className="font-bold">{label}:</span> {itemErrorText(e.code)}
+                    {/* cv_overflow carries the actionable guidance in its message */}
+                    <span className="font-bold">{label}:</span> {e.code === "cv_overflow" ? e.message : itemErrorText(e.code)}
                   </li>
                 );
               })}

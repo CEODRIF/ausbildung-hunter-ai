@@ -54,7 +54,7 @@ import {
 } from "./schema";
 import { reserveSenderSlot, SENDER_SLOT_WAIT_BUDGET_MS } from "../email-rate-limit";
 import { AUTO_BEWERB_SENDING_WINDOW, isCampaignTimeInWindow, isSendingWindowOpen, nextWindowStartMs, windowLabel } from "./sending-window";
-import { generateCvPdf, cvPdfFilename } from "./cv-pdf";
+import { CvPdfOverflowError, cvPdfFilename, generateCvPdf } from "./cv-pdf";
 import { selectBestCoverLetterTemplate } from "./letter-template-match";
 import { parseAdDeadline } from "../studio/quality";
 import { zonedTimeToUtc } from "../studio/timezone";
@@ -129,6 +129,7 @@ export type AutoBewerbErrorCode =
   | "no_subject"
   | "missing_cv"
   | "missing_letter"
+  | "cv_overflow"
   | "cv_render_failed"
   | "cv_upload_failed"
   | "letter_render_failed"
@@ -1709,6 +1710,12 @@ export async function prepareAutoBewerbSend(
       const photoDataUrl = await resolveAutoBewerbPhotoDataUrl(userId, cv.personal.photo);
       cvBytes = await generateCvPdf(cv, { photoDataUrl });
     } catch (error) {
+      // ONE-PAGE POLICY: an overflowing CV is an explicit, actionable
+      // validation error — the email is never sent with a multi-page or
+      // clipped CV attached.
+      if (error instanceof CvPdfOverflowError) {
+        return { ok: false, code: "cv_overflow", message: error.message };
+      }
       console.error("[auto-bewerb] CV PDF rendering failed:", error instanceof Error ? error.message : error);
       return { ok: false, code: "cv_render_failed", message: "Das CV-PDF für dieses Unternehmen konnte nicht erstellt werden." };
     }

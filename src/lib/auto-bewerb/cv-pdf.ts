@@ -33,14 +33,18 @@
  * sans-serif stack (WinAnsiEncoding — reliable ä ö ü ß in every viewer,
  * no binary font files to ship).
  *
- * One-page discipline: the document is first fully MEASURED (exact
- * word-wrap + every block's height) and the largest of three density
- * tiers (comfortable → compact → dense) that fits ONE A4 page is chosen.
+ * ONE-PAGE POLICY: the document is first fully MEASURED (exact word-wrap +
+ * every block's height) and the largest of three density tiers
+ * (comfortable → compact → dense) that fits ONE A4 page is chosen.
  * Nothing is ever removed or shortened to save space — only sizes and
- * spacing adapt, and the densest tier stays comfortably readable. If even
- * the densest tier overflows (pathologically long profiles), the document
- * flows to further pages (running header + subtle page numbers) instead of
- * clipping or deleting verified facts — the conflict stays visible.
+ * spacing adapt, and the densest tier stays comfortably readable. A
+ * generated (tailored) CV is a one-A4-page document: if even the densest
+ * readable tier overflows, `generateCvPdf` throws `CvPdfOverflowError` —
+ * an explicit, actionable validation error — instead of silently emitting
+ * a multi-page file or shrinking text until it is unreadable. Callers that
+ * genuinely need multi-page overflow (legacy/edge workflows) must opt in
+ * with `options.allowMultiPage: true` (running header + subtle page
+ * numbers, everything still rendered).
  *
  * Section ORDER and VISIBILITY follow the document's customization
  * (sanitizeCvCustomization defaults) — the same organization logic the CV
@@ -836,9 +840,36 @@ export interface GenerateCvPdfOptions {
    * fall back to an inline data URL stored in `personal.photo`.
    */
   photoDataUrl?: string | null;
+  /**
+   * ONE-PAGE POLICY escape hatch: when the densest readable tier still
+   * overflows, the render throws `CvPdfOverflowError` (the default,
+   * required for generated CVs). Opt in explicitly to fall back to
+   * multi-page overflow rendering instead.
+   */
+  allowMultiPage?: boolean;
 }
 
-/** Render the given (already user-reviewed) CV document to A4 PDF bytes. */
+/**
+ * The document cannot fit ONE A4 page even at the densest readable tier.
+ * The caller must surface this (actionable message + code `cv_overflow`)
+ * — a generated CV is never silently emitted as multiple pages.
+ */
+export class CvPdfOverflowError extends Error {
+  readonly code = "cv_overflow" as const;
+  constructor() {
+    super(
+      "Der Lebenslauf ist zu umfangreich für eine A4-Seite (selbst im kompaktesten, gut lesbaren Layout). " +
+        "Bitte kürzen Sie ältere Tätigkeiten oder einzelne Angaben in Ihrem Lebenslauf und erzeugen Sie das Dokument neu.",
+    );
+    this.name = "CvPdfOverflowError";
+  }
+}
+
+/**
+ * Render the given (already user-reviewed) CV document to A4 PDF bytes.
+ * ONE A4 page by policy: overflow throws `CvPdfOverflowError` unless
+ * `options.allowMultiPage` is explicitly set.
+ */
 export async function generateCvPdf(cv: CvDocument, options: GenerateCvPdfOptions = {}): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.setTitle("Lebenslauf");
@@ -873,8 +904,6 @@ export async function generateCvPdf(cv: CvDocument, options: GenerateCvPdfOption
   }
 
   // Measure every tier, then draw the largest one that fits a single page.
-  // The densest tier is the fallback for overflowing profiles (all content
-  // is still rendered — nothing is deleted, nothing is clipped).
   let layout: Layout | null = null;
   for (const tier of TIERS) {
     const box = img
@@ -893,9 +922,15 @@ export async function generateCvPdf(cv: CvDocument, options: GenerateCvPdfOption
   }
   const chosen = layout!;
 
+  // ONE-PAGE POLICY: an overflowing document is a validation error, not a
+  // silent multi-page file (nothing is deleted, nothing clipped, nothing
+  // shrunk unreadable — the content must be trimmed at the source instead).
+  if (!chosen.fits && !options.allowMultiPage) throw new CvPdfOverflowError();
+
   // ------------------------------------------------------------------
-  // Draw the plan (page 1 = the header page; further pages only on
-  // overflow, with a running header + subtle page numbers).
+  // Draw the plan (page 1 = the header page; further pages only when
+  // `allowMultiPage` was explicitly opted in, with a running header +
+  // subtle page numbers).
   // ------------------------------------------------------------------
   let page = doc.addPage([A4_WIDTH, A4_HEIGHT]);
   const t = chosen.tier;
