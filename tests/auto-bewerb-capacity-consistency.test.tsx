@@ -37,6 +37,7 @@
  */
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { useCallback, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StudioDb } from "./helpers-studio";
 import type { AutoBewerbWorkspace } from "@/lib/auto-bewerb/schema";
@@ -588,6 +589,178 @@ describe("failed reads are honest (the production regression)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// (15)–(19) THE RESPONSE → UI PATH (the post-merge validation the report
+// requires): real engine workspace response → serialization round-trip →
+// rendered Step 2 → enforcement. Not a mock-of-a-mock: the ws object is the
+// actual getAutoBewerbWorkspace() result, JSON round-tripped exactly like
+// the server-action response, rendered into the real Step2Companies.
+// ---------------------------------------------------------------------------
+
+describe("capacity — the actual response-to-UI path", () => {
+  it("(15) server count = 100 → workspace response = 100 → Step 2 shows '100 / 100' → add remains rejected → no 101st row", async () => {
+    seedBase();
+    for (let i = 1; i <= 100; i += 1) seedCompany(USER, `Full ${i} GmbH`, "ready");
+    expect(reservedCount(USER)).toBe(100); // server count = 100
+    const ws = await getAutoBewerbWorkspace(USER);
+    expect(ws.capacity).toEqual({ reserved: 100, capacity: 100, available: 0 }); // response = 100
+    expect(ws.companies).toHaveLength(100);
+    // The server-action serialization hop (plain-data round trip):
+    const wire = JSON.parse(JSON.stringify(ws)) as AutoBewerbWorkspace;
+    expect(wire.capacity).toEqual({ reserved: 100, capacity: 100, available: 0 });
+    // … and the RENDERED Step 2 (the user-visible value):
+    renderStep2(wire);
+    expect(screen.getByText("100 / 100")).toBeInTheDocument();
+    expect(screen.getByText(translate("de", "autoBewerb.capacityAvailable", { count: 0 }))).toBeInTheDocument();
+    // Add company remains rejected — and no 101st company can be created:
+    const next = await createAutoBewerbCompany(USER, {
+      adRaw: AD_RAW,
+      company: "OneTooMany GmbH",
+      extract: extractFor("OneTooMany GmbH", "jobs@onetoomany.de", "Ausbildung Overflow"),
+      analysis: null,
+    });
+    expect(next).toMatchObject({ ok: false, code: "workflow_full" });
+    expect(tCompanies()).toHaveLength(100);
+  });
+
+  it("(16) THE PRODUCTION RESIDUAL: a degraded counter (0) shipped next to the full list (100) → the UI shows '100 / 100', never '0 / 100'", async () => {
+    seedBase();
+    for (let i = 1; i <= 100; i += 1) seedCompany(USER, `Real ${i} GmbH`, "ready");
+    // The capacity row query is out while the LIST query (select "*") and the
+    // create query stay healthy; a drifted RPC reports 0 — so ONE server
+    // response carries a stale counter next to the full, server-confirmed
+    // list (exactly the state behind "0 / 100" + "limit reached"):
+    db.setRpc((fn) =>
+      fn === "ab_user_capacity" ? { data: [{ reserved: 0, capacity: 100, available: 100 }], error: null } : { data: null, error: null },
+    );
+    db.failSelect("auto_bewerb_companies", "slot_no", "simulated transient outage");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let ws: AutoBewerbWorkspace;
+    let logs: string[] = [];
+    try {
+      ws = await getAutoBewerbWorkspace(USER);
+      logs = capacityLogs(errSpy); // capture BEFORE restore resets the calls
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(ws.companies).toHaveLength(100);
+    expect(ws.capacity).toEqual({ reserved: 0, capacity: 100, available: 100 }); // the degraded counter
+    // The SERVER saw the divergence (source named, build id present, counts only):
+    const mismatch = logs.find((l) => l.includes("capacity_list_mismatch"));
+    expect(mismatch).toBeTruthy();
+    expect(mismatch).toContain("source=rpc");
+    expect(mismatch).toContain("reserved=0");
+    expect(mismatch).toContain("activeList=100");
+    expect(mismatch).toContain("build=");
+    expect(mismatch).toContain(`user=${USER.slice(0, 8)}`);
+    db.clearSelectFail();
+    // … but the RENDERED counter cannot be the fake zero — the list is the
+    // server-confirmed truth (the invariant closes the residual):
+    const wire = JSON.parse(JSON.stringify(ws)) as AutoBewerbWorkspace;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let warned = false;
+    try {
+      renderStep2(wire);
+      warned = warnSpy.mock.calls.some((c) => String(c[0]).includes("UI cross-check"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(screen.queryByText("0 / 100")).not.toBeInTheDocument();
+    expect(screen.getByText("100 / 100")).toBeInTheDocument();
+    expect(warned).toBe(true);
+    // … and enforcement is unchanged: the add is still refused on the real
+    // rows — no 101st company:
+    const next = await createAutoBewerbCompany(USER, {
+      adRaw: AD_RAW,
+      company: "OneTooMany GmbH",
+      extract: extractFor("OneTooMany GmbH", "jobs@onetoomany.de", "Ausbildung Overflow"),
+      analysis: null,
+    });
+    expect(next).toMatchObject({ ok: false, code: "workflow_full" });
+    expect(tCompanies()).toHaveLength(100);
+  });
+
+  it("(17) a GENUINE zero renders '0 / 100 · 100 places available' (allowed) and the add succeeds", async () => {
+    seedBase(); // 0 persisted rows
+    const ws = await getAutoBewerbWorkspace(USER);
+    expect(ws.capacity).toEqual({ reserved: 0, capacity: 100, available: 100 });
+    expect(ws.companies).toHaveLength(0);
+    const wire = JSON.parse(JSON.stringify(ws)) as AutoBewerbWorkspace;
+    renderStep2(wire);
+    expect(screen.getByText("0 / 100")).toBeInTheDocument();
+    expect(screen.getByText(translate("de", "autoBewerb.capacityAvailable", { count: 100 }))).toBeInTheDocument();
+    const add = await createAutoBewerbCompany(USER, {
+      adRaw: AD_RAW,
+      company: "First GmbH",
+      extract: extractFor("First GmbH", "jobs@first.de", "Ausbildung First"),
+      analysis: null,
+    });
+    expect(add.ok).toBe(true);
+  });
+
+  it("(18) an UNAVAILABLE counter renders '—' (never '0 / 100')", async () => {
+    seedBase();
+    db.setRpc((fn) => (fn === "ab_user_capacity" ? { data: null, error: { message: "500: error" } } : { data: null, error: null }));
+    db.failSelect("auto_bewerb_companies", "slot_no", "outage");
+    const ws = await getAutoBewerbWorkspace(USER);
+    expect(ws.capacity).toBeNull();
+    const wire = JSON.parse(JSON.stringify(ws)) as AutoBewerbWorkspace;
+    expect(wire.capacity).toBeNull(); // the null survives serialization
+    renderStep2(wire);
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.getByText(/nicht lesbar/i)).toBeInTheDocument();
+    expect(screen.queryByText("0 / 100")).not.toBeInTheDocument();
+  });
+
+  it("(19) a rejected add refreshes from the SAME canonical server function and the refreshed truth reaches the render", async () => {
+    seedBase();
+    for (let i = 1; i <= 100; i += 1) seedCompany(USER, `Real ${i} GmbH`, "ready");
+    (addCompanyAction as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      code: "workflow_full",
+      message: "limit",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            extract: { company: "Limit GmbH", jobTitle: "Ausbildung Limit", occupation: "Ausbildung Limit", applicationEmail: "jobs@limit.de" },
+            analysis: { matchScore: 50, matched: [], missing: [], questions: [] },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    // The tab's snapshot is STALE — the screenshot state (fake zero, empty
+    // list). The host mirrors AutoBewerbClient.refresh(): the refresh calls
+    // the SAME canonical server function the workspace uses (
+    // refreshWorkspaceAction → getAutoBewerbWorkspace) and setWs(res.value).
+    const stale = wsFixture({ capacity: { reserved: 0, capacity: 100, available: 100 } });
+    render(
+      <StatefulStep2Host initial={stale} load={() => getAutoBewerbWorkspace(USER)} />,
+    );
+    // The stale render is the exact reported symptom:
+    expect(screen.getByText("0 / 100")).toBeInTheDocument();
+    // … then: analyze → add → REJECTED → the failed-add refresh path:
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    const setNativeValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!;
+    setNativeValue.call(textarea, AD_RAW);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    await userClick(await screen.findByRole("button", { name: translate("de", "autoBewerb.analyzeButton") }));
+    await screen.findByText(translate("de", "autoBewerb.analysisPreviewTitle"));
+    await userClick(screen.getByRole("button", { name: translate("de", "autoBewerb.addCompanyButton") }));
+    // The limit note appears (the add-error note — and, once the refresh has
+    // landed, also the at-limit banner, which is correct: the counter IS full):
+    const limitNotes = await screen.findAllByText(new RegExp(translate("de", "autoBewerb.companyLimitNote").slice(0, 30)));
+    expect(limitNotes.length).toBeGreaterThanOrEqual(1);
+    // The refreshed value (100) must REACH the rendered component:
+    await screen.findByText("100 / 100");
+    expect(screen.queryByText("0 / 100")).not.toBeInTheDocument();
+    expect(tCompanies()).toHaveLength(100); // still no 101st row
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Component render helpers
 // ---------------------------------------------------------------------------
 
@@ -639,6 +812,23 @@ function renderStep2(ws: AutoBewerbWorkspace) {
         <Step2Companies />
       </AutoBewerbContext.Provider>
     </I18nProvider>,
+  );
+}
+
+/** Mirrors AutoBewerbClient's refresh loop: refresh() = call the canonical
+ *  server function (as refreshWorkspaceAction does) + setWs(res.value). */
+function StatefulStep2Host({ initial, load }: { initial: AutoBewerbWorkspace; load: () => Promise<AutoBewerbWorkspace> }) {
+  const [ws, setWs] = useState(initial);
+  const refresh = useCallback(async () => {
+    const next = await load();
+    setWs(next);
+  }, [load]);
+  return (
+    <I18nProvider>
+      <AutoBewerbContext.Provider value={step2Context(ws, refresh)}>
+        <Step2Companies />
+      </AutoBewerbContext.Provider>
+    </I18nProvider>
   );
 }
 
