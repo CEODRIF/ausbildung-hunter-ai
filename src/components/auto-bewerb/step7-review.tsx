@@ -2,7 +2,7 @@
 
 import { Fragment, useState } from "react";
 import Link from "next/link";
-import { CalendarClock, CheckCircle2, FileText, List, ListPlus, Paperclip, Send, XCircle } from "lucide-react";
+import { Ban, Building2, CalendarClock, CheckCircle2, Clock, FileText, List, Paperclip, Send, ShieldCheck, XCircle } from "lucide-react";
 import { Button, Modal } from "@/components/ui";
 import { EmptyState, StatusPill, type StatusTone } from "@/components/ui/feedback";
 import { ScheduleForm } from "@/components/schedule-form";
@@ -28,7 +28,7 @@ import {
   scheduleCompaniesAction,
   sendCompaniesAction,
 } from "@/app/auto-bewerb/actions";
-import { Note, SectionCard, companyLabel, statusPill, useAutoBewerb } from "./shared";
+import { Note, companyLabel, statusPill, useAutoBewerb } from "./shared";
 
 /**
  * Step 7 — final review, explicit confirmation, multi-batch send / schedule.
@@ -98,6 +98,9 @@ export function Step7Review() {
   const [batchErrors, setBatchErrors] = useState<AutoBewerbBatchItemError[] | null>(null);
   // Versand-Historie: which row's details expansion is open (client-only).
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
+  // Section 2 mode switch — "Jetzt senden" (explicit confirmation flow) vs.
+  // "Zeitlich planen" (validated future datetime form). UI state only.
+  const [sendMode, setSendMode] = useState<"now" | "schedule">("now");
 
   const s = ws.emailSettings; // null = legacy database (per-company rows)
   const globalComplete = Boolean(s && s.body.trim() && s.subject.trim() && s.accountId);
@@ -207,6 +210,14 @@ export function Step7Review() {
   const readyViews = selectedViews.filter(sendable);
   const allReady = selectedViews.length > 0 && readyViews.length === selectedViews.length;
   const atCap = selection.size >= AUTO_BEWERB_COMPANY_LIMIT;
+  // Select-all (section 1 header row): toggles every SELECTABLE company in
+  // one gesture, still bounded by the global 100-company cap.
+  const selectableViews = ws.companies.filter(selectable);
+  const allSelected = selectableViews.length > 0 && selectableViews.every((v) => selection.has(v.company.id));
+  const toggleAll = () => {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(selectableViews.slice(0, AUTO_BEWERB_COMPANY_LIMIT).map((v) => v.company.id)));
+  };
 
   // Versand-Historie summary — derived from the EXACT persisted rows shown
   // below (never hardcoded, never demo numbers).
@@ -423,306 +434,391 @@ export function Step7Review() {
         </Note>
       )}
 
-      {/* Results of the last accepted batch (honest, per company) */}
-      {(results || batchErrors) && (
-        <SectionCard
-          title={t("autoBewerb.resultsTitle")}
-          aside={
-            batchMeta && batchMeta.status ? (
-              <span className="flex items-center gap-2 text-xs font-semibold text-muted">
-                {t("autoBewerb.queueBatchNo", { no: batchMeta.batchNo ?? "" })}
-                <StatusPill tone={BATCH_TONE[batchMeta.status]} label={batchStatusLabel(batchMeta.status)} />
-              </span>
-            ) : undefined
-          }
-        >
-          {batchErrors && batchErrors.length > 0 && (
-            <ul className="mb-3 space-y-2">
-              {batchErrors.map((e) => {
-                const v = ws.companies.find((c) => c.company.id === e.companyId);
-                const label = v ? companyLabel(v.company).name : e.companyId;
-                return (
-                  <li key={e.companyId} className="rounded-2xl border border-danger/25 bg-danger-soft/50 px-4 py-3 text-sm text-danger">
-                    {/* cv_overflow carries the actionable guidance in its message */}
-                    <span className="font-bold">{label}:</span> {e.code === "cv_overflow" ? e.message : itemErrorText(e.code)}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {results && results.length > 0 && (
-            <ul className="space-y-2">
-              {results.map((r) => {
-                const v = ws.companies.find((c) => c.company.id === r.companyId);
-                const label = v ? companyLabel(v.company).name : r.companyId;
-                const tone = r.ok ? "success" : "error";
-                const text = resultText(r);
-                return (
-                  <li key={r.companyId} className={`rounded-2xl border px-4 py-3 text-sm ${tone === "success" ? "border-success/25 bg-success-soft/50 text-success" : "border-danger/25 bg-danger-soft/50 text-danger"}`}>
-                    <span className="font-bold">{label}:</span> {text}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </SectionCard>
-      )}
+      {/* A. Versand-Regeln — the SERVER-enforced rules with their REAL values.
+          The system has no per-hour or per-day e-mail counters (verified in
+          email-rate-limit.ts / engine.ts) — only the fixed 5–6 s per-account
+          interval, the daily 07:30–10:30 Europe/Berlin window and the
+          server-side dedupe. Those three are displayed; no fake limits. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-accent/40 bg-accent-soft/25 px-4 py-3">
+        <span className="flex items-center gap-2 text-sm font-bold text-ink">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-soft/70 text-accent">
+            <ShieldCheck size={15} />
+          </span>
+          {t("autoBewerb.rulesTitle")}
+        </span>
+        <span className="flex items-center gap-1.5 text-xs font-semibold text-muted">
+          <Clock size={14} aria-hidden="true" />
+          {t("autoBewerb.rulesInterval", { n: `${HARD_MIN_SEND_INTERVAL_MS / 1000}–${MAX_SEND_INTERVAL_MS / 1000}` })}
+        </span>
+        <span className="hidden text-line-strong sm:inline" aria-hidden="true">|</span>
+        <span className="flex items-center gap-1.5 text-xs font-semibold text-muted">
+          <CalendarClock size={14} aria-hidden="true" />
+          {t("autoBewerb.rulesWindow", { label: windowLabel() })}
+        </span>
+        <span className="hidden text-line-strong sm:inline" aria-hidden="true">|</span>
+        <span className="flex items-center gap-1.5 text-xs font-semibold text-muted">
+          <Ban size={14} aria-hidden="true" />
+          {t("autoBewerb.rulesNoDuplicates")}
+        </span>
+      </div>
 
-      {/* A. Current batch — the companies that will form the next batch */}
-      <SectionCard
-        title={t("autoBewerb.currentBatchTitle", { count: selectedViews.length })}
-        aside={
-          <div className="flex flex-wrap items-center gap-2">
-            {selectedViews.length > 0 && (
-              <span
-                className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${
-                  allReady ? "border-success/30 bg-success-soft/50 text-success" : "border-warning/40 bg-warning-soft/50 text-warning"
-                }`}
-              >
-                {t("autoBewerb.currentBatchReady", { ready: readyViews.length, total: selectedViews.length })}
+      {/* B. The two adjacent sections (reference layout): company selection
+          (wider, left) + the sending & schedule panel (right). Stacks
+          vertically on mobile; no horizontal overflow. */}
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
+        {/* 1. Unternehmen auswählen — selection + full per-company review
+            data (status, recipient, subject, attachments, gaps, scheduled
+            time, legacy per-attempt cancel) — nothing dropped, compact rows. */}
+        <section className="rounded-3xl border border-line bg-surface p-5 shadow-[var(--shadow-card)] sm:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent-soft/70 text-accent">
+                <Building2 size={18} />
               </span>
-            )}
-            <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())} disabled={selection.size === 0}>
-              <ListPlus size={14} />
-              {t("autoBewerb.addAnotherList")}
-            </Button>
+              <div>
+                <h2 className="text-base font-bold text-ink">{t("autoBewerb.section1Title")}</h2>
+                <p className="mt-0.5 text-xs text-muted">{t("autoBewerb.section1Subtitle")}</p>
+              </div>
+            </div>
+            <span className="rounded-full border border-accent/40 bg-accent-soft/50 px-3 py-1 text-xs font-bold text-accent">
+              {t("autoBewerb.selectedBadge", { x: selection.size, y: ws.companies.length })}
+            </span>
           </div>
-        }
-      >
-        <p className="mb-3 text-xs leading-5 text-muted">{t("autoBewerb.currentBatchBody")}</p>
-        {selectedViews.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-line-strong px-4 py-6 text-center text-sm text-muted">
-            {t("autoBewerb.currentBatchEmpty")}
-          </p>
-        ) : (
-          <>
-            <ul className="divide-y divide-line">
-              {selectedViews.map((v) => {
-                const r = v.company;
-                const { name, job } = companyLabel(r);
-                const cfg = emailCfg(v);
-                const isReady = sendable(v);
-                return (
-                  <li key={r.id} className="flex flex-wrap items-center gap-3 py-2.5">
+
+          {/* Select-all row + live counter (selection state unchanged — the
+              derived `selection` + the 100-company cap still apply). */}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-line bg-surface-2/40 px-3 py-2">
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-ink">
+              <input
+                type="checkbox"
+                aria-label={t("autoBewerb.selectAll")}
+                checked={allSelected}
+                disabled={selectableViews.length === 0}
+                onChange={toggleAll}
+                className="h-4 w-4 accent-[var(--color-accent)]"
+              />
+              {t("autoBewerb.selectAll")}
+            </label>
+            <span className="text-xs font-semibold text-muted">
+              {t("autoBewerb.selectedCountLine", { x: selection.size, y: ws.companies.length })}
+            </span>
+          </div>
+
+          <ul className="mt-1 divide-y divide-line">
+            {ws.companies.map((v) => {
+              const r = v.company;
+              const { name, job } = companyLabel(r);
+              const canSelect = selectable(v);
+              const gaps = missing(v);
+              const cfg = emailCfg(v);
+              const res = resultFor(r.id);
+              const isReady = sendable(v);
+              return (
+                <li key={r.id} className="py-3">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      aria-label={name}
+                      checked={selection.has(r.id)}
+                      disabled={!canSelect || (!selection.has(r.id) && atCap)}
+                      onChange={() => toggle(r.id)}
+                      className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-accent)]"
+                    />
+                    {/* Monogram tile — the data carries no logo, so the
+                        company initial is the neutral visual anchor (same
+                        convention as the Versand-Historie table). */}
+                    <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-line bg-surface-2/60 text-sm font-bold text-muted">
+                      {(name.trim().charAt(0) || "?").toUpperCase()}
+                    </span>
                     <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
                         <span className="truncate text-sm font-bold text-ink">{name}</span>
                         {job && <span className="truncate text-xs text-muted">{job}</span>}
-                      </div>
-                      <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted">
-                        <span>
-                          {t("autoBewerb.recipientLabel")}:{" "}
-                          <span className={`font-medium ${cfg.dest && isValidEmail(cfg.dest) ? "text-ink-soft" : "text-warning"}`}>
-                            {cfg.dest || t("autoBewerb.unavailable")}
-                          </span>
+                        <span className={`ml-auto min-w-0 truncate text-xs ${cfg.dest && isValidEmail(cfg.dest) ? "text-muted" : "text-warning"}`}>
+                          {cfg.dest || t("autoBewerb.unavailable")}
                         </span>
-                        <span className="text-faint">·</span>
-                        <span className="inline-flex items-center gap-1">
-                          <Paperclip size={11} />
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
+                        {statusPill(r.status, t)}
+                        {selection.has(r.id) &&
+                          (isReady ? (
+                            <span className="rounded-full border border-success/30 bg-success-soft/50 px-2 py-0.5 text-[10px] font-bold text-success">
+                              {t("autoBewerb.currentBatchReadyChip")}
+                            </span>
+                          ) : (
+                            <span className="rounded-full border border-warning/40 bg-warning-soft/50 px-2 py-0.5 text-[10px] font-bold text-warning">
+                              {t("autoBewerb.currentBatchNotReady")}
+                            </span>
+                          ))}
+                        {res && (
+                          <span className={`font-semibold ${res.ok ? "text-success" : "text-danger"}`}>
+                            {res.ok ? (res.dispatchStatus === "queued" || res.dispatchStatus === "skipped" || res.scheduledAt ? t("autoBewerb.resultQueued") : t("autoBewerb.resultSent")) : resultText(res)}
+                          </span>
+                        )}
+                        <span className="flex items-center gap-1">
+                          <Paperclip size={11} aria-hidden="true" />
                           {attachmentCount(v)}
                         </span>
-                      </p>
-                    </div>
-                    {isReady ? (
-                      <span className="rounded-full border border-success/30 bg-success-soft/50 px-2 py-0.5 text-[10px] font-bold text-success">
-                        {t("autoBewerb.currentBatchReadyChip")}
-                      </span>
-                    ) : (
-                      <span className="rounded-full border border-warning/40 bg-warning-soft/50 px-2 py-0.5 text-[10px] font-bold text-warning">
-                        {t("autoBewerb.currentBatchNotReady")}
-                      </span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-            {!allReady && (
-              <p className="mt-2 text-xs text-warning">
-                {t("autoBewerb.partialBatchWarning", { ready: readyViews.length, total: selectedViews.length })}
-              </p>
-            )}
-            {atCap && <p className="mt-2 text-xs text-faint">{t("autoBewerb.currentBatchMaxHint")}</p>}
-            <div className="mt-4 flex flex-wrap gap-2">
-              {/* Partial-exclusion contract: at least ONE send-ready company
-                  is enough to start — the server drops the rest with reasons. */}
-              <Button variant="primary" size="sm" onClick={() => setConfirmOpen(true)} disabled={readyViews.length === 0 || sending}>
-                <Send size={14} />
-                {sending ? t("autoBewerb.sendingNote") : t("autoBewerb.sendNowButton", { count: readyViews.length })}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => document.getElementById("schedule-form")?.scrollIntoView({ behavior: "smooth" })}
-                disabled={readyViews.length === 0 || scheduling}
-              >
-                <CalendarClock size={14} />
-                {t("autoBewerb.scheduleButton", { count: readyViews.length })}
-              </Button>
-            </div>
-          </>
-        )}
-      </SectionCard>
-
-      {/* B. Schedule automatically — validated future datetime, persistent */}
-      {selectedViews.length > 0 && (
-        <div id="schedule-form">
-          <SectionCard title={t("autoBewerb.scheduleTitle")}>
-            <ScheduleForm
-              action={onSchedule}
-              submitLabel={scheduling ? t("autoBewerb.scheduling") : t("autoBewerb.scheduleSubmit", { count: selectedViews.length })}
-              pendingLabel={t("autoBewerb.scheduling")}
-              window={{
-                timeZone: AUTO_BEWERB_SENDING_WINDOW.timeZone,
-                startMinute: AUTO_BEWERB_SENDING_WINDOW.startHour * 60 + AUTO_BEWERB_SENDING_WINDOW.startMinute,
-                endMinute: AUTO_BEWERB_SENDING_WINDOW.endHour * 60 + AUTO_BEWERB_SENDING_WINDOW.endMinute,
-              }}
-            />
-          </SectionCard>
-        </div>
-      )}
-
-      {/* Company review list — build the batch (up to 100, bounded by the global capacity).
-          Scheduled/sending companies stay here with their scheduled time — this
-          list + the statistics + the Versand-Historie below are the tracking
-          surface (the former "Versand-Warteschlange" panel was removed). */}
-      <SectionCard title={t("autoBewerb.reviewHeading")}>
-        <ul className="divide-y divide-line">
-          {ws.companies.map((v) => {
-            const r = v.company;
-            const { name, job } = companyLabel(r);
-            const canSelect = selectable(v);
-            const gaps = missing(v);
-            const cfg = emailCfg(v);
-            const res = resultFor(r.id);
-            return (
-              <li key={r.id} className="flex flex-wrap items-start gap-3 py-4">
-                <input
-                  type="checkbox"
-                  aria-label={name}
-                  checked={selection.has(r.id)}
-                  disabled={!canSelect || (!selection.has(r.id) && atCap)}
-                  onChange={() => toggle(r.id)}
-                  className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="truncate text-sm font-bold text-ink">{name}</span>
-                    {job && <span className="truncate text-xs text-muted">{job}</span>}
-                    {statusPill(r.status, t)}
-                    {res && (
-                      <span className={`text-xs font-semibold ${res.ok ? "text-success" : "text-danger"}`}>
-                        {res.ok ? (res.dispatchStatus === "queued" || res.dispatchStatus === "skipped" || res.scheduledAt ? t("autoBewerb.resultQueued") : t("autoBewerb.resultSent")) : resultText(res)}
-                      </span>
-                    )}
-                  </div>
-                  <dl className="mt-1.5 grid gap-x-4 gap-y-0.5 text-xs text-muted sm:grid-cols-2">
-                    <div>
-                      <dt className="inline text-faint">{t("autoBewerb.recipientLabel")}: </dt>
-                      <dd className={`inline font-medium ${cfg.dest && isValidEmail(cfg.dest) ? "text-ink-soft" : "text-warning"}`}>
-                        {cfg.dest || t("autoBewerb.unavailable")}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="inline text-faint">{t("autoBewerb.subjectLabel")}: </dt>
-                      <dd className={`inline font-medium ${cfg.subject ? "text-ink-soft" : "text-warning"}`}>{cfg.subject || t("autoBewerb.unavailable")}</dd>
-                    </div>
-                    <div className="flex items-center gap-1 sm:col-span-2">
-                      <Paperclip size={12} />
-                      <span className="font-medium text-ink-soft">
-                        {[cfg.attachCv && v.cv ? v.cvPdfName : null, cfg.attachLetter && v.letter ? v.letterPdfName : null]
-                          .filter(Boolean)
-                          .join(", ") || t("autoBewerb.noAttachments")}
-                      </span>
-                    </div>
-                    {ws.attachments.length > 0 && (
-                      <div className="sm:col-span-2">
-                        <span className="text-faint">{t("autoBewerb.attachSharedDocs")} </span>
-                        <span className="font-medium text-ink-soft">{ws.attachments.map((a) => a.display_name).join(", ")}</span>
+                        <span className="min-w-0 truncate">
+                          <span className="text-faint">{t("autoBewerb.subjectLabel")}: </span>
+                          <span className={cfg.subject ? "text-ink-soft" : "text-warning"}>{cfg.subject || t("autoBewerb.unavailable")}</span>
+                        </span>
+                        {ws.attachments.length > 0 && (
+                          <span className="min-w-0 truncate">
+                            <span className="text-faint">{t("autoBewerb.attachSharedDocs")} </span>
+                            <span className="text-ink-soft">{ws.attachments.map((a) => a.display_name).join(", ")}</span>
+                          </span>
+                        )}
+                        {r.scheduled_at && (
+                          <span className="text-ink-soft">
+                            {t("autoBewerb.scheduledAtLabel")}: {new Date(r.scheduled_at).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" })}
+                          </span>
+                        )}
+                        {/* Legacy per-attempt cancel (batch mode: the batch
+                            cancel API remains server-side). */}
+                        {!batchMode && r.status === "scheduled" && v.latestAttempt && (
+                          <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={() => void cancelScheduled(v.latestAttempt!.id)}>
+                            <XCircle size={12} />
+                            {t("autoBewerb.cancelSchedule")}
+                          </Button>
+                        )}
                       </div>
-                    )}
-                  </dl>
-                   {gaps.length > 0 && (
-                    <p className="mt-1 text-xs text-warning">
-                      {gaps.join(" · ")}
-                      {" — "}
-                      <button type="button" className="font-semibold underline underline-offset-2" onClick={() => goToStep(6)}>
-                        {t("autoBewerb.fixInStep6")}
-                      </button>
-                    </p>
-                  )}
-                  {r.scheduled_at && (
-                    <p className="mt-1 text-xs text-ink-soft">
-                      {t("autoBewerb.scheduledAtLabel")}: {new Date(r.scheduled_at).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" })}
-                    </p>
-                  )}
-                </div>
-                 {/* Legacy per-attempt cancel (batch mode: the batch cancel API
-                     remains server-side; the queue panel with its button was
-                     removed for UI simplification). */}
-                 {!batchMode && r.status === "scheduled" && v.latestAttempt && (
-                   <Button variant="ghost" size="sm" onClick={() => void cancelScheduled(v.latestAttempt!.id)}>
-                     <XCircle size={14} />
-                     {t("autoBewerb.cancelSchedule")}
-                   </Button>
-                 )}
-               </li>
-            );
-          })}
-        </ul>
-        {selectedViews.length === 0 && <p className="mt-3 text-xs text-muted">{t("autoBewerb.noneSelectable")}</p>}
-      </SectionCard>
+                      {gaps.length > 0 && (
+                        <p className="mt-1 text-xs text-warning">
+                          {gaps.join(" · ")}
+                          {" — "}
+                          <button type="button" className="font-semibold underline underline-offset-2" onClick={() => goToStep(6)}>
+                            {t("autoBewerb.fixInStep6")}
+                          </button>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {selectedViews.length === 0 && <p className="mt-3 text-xs text-muted">{t("autoBewerb.noneSelectable")}</p>}
+        </section>
 
-      {/* E. Smart Sending — the actual server-enforced policy (no bypass UI) */}
-      <SectionCard
-        title={t("autoBewerb.smartSendingTitle")}
-        aside={
-          <span className="rounded-full border border-success/40 bg-success-soft/50 px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider text-success">
-            {t("autoBewerb.smartSendingAlwaysOn")}
-          </span>
-        }
-      >
-        <div className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-full bg-success" aria-hidden="true" />
-          <span className="text-sm font-bold text-success">{t("autoBewerb.smartSendingEnabled")}</span>
-        </div>
-        <p className="mt-2 text-sm leading-6 text-muted">{t("autoBewerb.smartSendingDesc")}</p>
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {(
-            [
-              [t("autoBewerb.smartSendingMinInterval"), t("autoBewerb.smartSendingSeconds", { n: `${HARD_MIN_SEND_INTERVAL_MS / 1000}–${MAX_SEND_INTERVAL_MS / 1000}` })],
-              [t("autoBewerb.smartSendingRecommended"), t("autoBewerb.smartSendingSeconds", { n: String(MIN_SEND_INTERVAL_MS / 1000) })],
-              [t("autoBewerb.smartSendingAllowedMin"), t("autoBewerb.smartSendingSeconds", { n: String(HARD_MIN_SEND_INTERVAL_MS / 1000) })],
-            ] as Array<[string, string]>
-          ).map(([label, value]) => (
-            <div key={label} className="rounded-2xl border border-line bg-surface-2/50 px-4 py-3">
-              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-faint">{label}</p>
-              <p className="mt-1 text-sm font-bold text-ink">{value}</p>
+        {/* 2. Versand & Zeitplan — mode switch (send now / schedule), the
+            single primary action, the REAL enforced sending settings
+            (read-only), the persisted statistics, the Smart Sending policy
+            and the results of the last accepted batch. Every flow below is
+            the pre-existing logic — only its container changed. */}
+        <section className="rounded-3xl border border-line bg-surface p-5 shadow-[var(--shadow-card)] sm:p-6">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent-soft/70 text-accent">
+              <CalendarClock size={18} />
+            </span>
+            <div>
+              <h2 className="text-base font-bold text-ink">{t("autoBewerb.section2Title")}</h2>
+              <p className="mt-0.5 text-xs text-muted">{t("autoBewerb.section2Subtitle")}</p>
             </div>
-          ))}
-        </div>
-        <p className="mt-3 text-xs leading-5 text-faint">{t("autoBewerb.smartSendingFootnote")}</p>
-        <p className="mt-1.5 text-xs leading-5 text-faint">{t("autoBewerb.smartSendingInterBatch")}</p>
-      </SectionCard>
+          </div>
 
-      {/* F. Capacity + sending statistics — always derived from PERSISTED
-          server counters (never client state, never demo numbers) */}
-      <SectionCard title={t("autoBewerb.statsTitle")}>
-        {ws.companies.length === 0 && (ws.sendHistory?.length ?? 0) > 0 && (
-          <p className="mb-3 text-xs leading-5 text-muted">{t("autoBewerb.sentAutoRemovedNote")}</p>
-        )}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          <StatTile
-            label={t("autoBewerb.statsReserved")}
-            value={`${cap.reserved} / ${cap.capacity}`}
-            hint={t("autoBewerb.capacityAvailable", { count: Math.max(0, cap.available) })}
-          />
-          <StatTile label={t("autoBewerb.statsSentToday")} value={ws.sendStats.sentToday} />
-          <StatTile label={t("autoBewerb.statsScheduled")} value={ws.sendStats.scheduled} />
-          <StatTile label={t("autoBewerb.statsProcessing")} value={ws.sendStats.processing} />
-          <StatTile label={t("autoBewerb.statsFailed")} value={ws.sendStats.failed} />
-          <StatTile label={t("autoBewerb.statsTotalToday")} value={ws.sendStats.totalToday} />
-        </div>
-      </SectionCard>
+          {/* Mode switch — both flows are the pre-existing ones (explicit
+              confirmation for now; validated future datetime for schedule). */}
+          <div className="mt-4 grid grid-cols-2 gap-1 rounded-2xl border border-line bg-surface-2/40 p-1">
+            <button
+              type="button"
+              aria-pressed={sendMode === "now"}
+              onClick={() => setSendMode("now")}
+              className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-sm font-bold transition-colors ${
+                sendMode === "now" ? "bg-accent text-white" : "text-muted hover:text-ink"
+              }`}
+            >
+              <Send size={14} />
+              {t("autoBewerb.sendModeNow")}
+            </button>
+            <button
+              type="button"
+              aria-pressed={sendMode === "schedule"}
+              onClick={() => setSendMode("schedule")}
+              className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-sm font-bold transition-colors ${
+                sendMode === "schedule" ? "bg-accent text-white" : "text-muted hover:text-ink"
+              }`}
+            >
+              <CalendarClock size={14} />
+              {t("autoBewerb.sendModeSchedule")}
+            </button>
+          </div>
+
+          {sendMode === "schedule" &&
+            (selectedViews.length > 0 ? (
+              <div id="schedule-form" className="mt-4">
+                <p className="mb-2 text-xs font-bold uppercase tracking-wide text-faint">{t("autoBewerb.scheduleTitle")}</p>
+                <ScheduleForm
+                  action={onSchedule}
+                  submitLabel={scheduling ? t("autoBewerb.scheduling") : t("autoBewerb.scheduleSubmit", { count: selectedViews.length })}
+                  pendingLabel={t("autoBewerb.scheduling")}
+                  window={{
+                    timeZone: AUTO_BEWERB_SENDING_WINDOW.timeZone,
+                    startMinute: AUTO_BEWERB_SENDING_WINDOW.startHour * 60 + AUTO_BEWERB_SENDING_WINDOW.startMinute,
+                    endMinute: AUTO_BEWERB_SENDING_WINDOW.endHour * 60 + AUTO_BEWERB_SENDING_WINDOW.endMinute,
+                  }}
+                />
+              </div>
+            ) : (
+              <p className="mt-4 rounded-2xl border border-dashed border-line-strong px-4 py-4 text-center text-xs text-muted">
+                {t("autoBewerb.currentBatchEmpty")}
+              </p>
+            ))}
+
+          {sendMode === "now" && (
+            <div className="mt-4 space-y-2">
+              {selectedViews.length === 0 ? (
+                <p className="rounded-2xl border border-dashed border-line-strong px-4 py-4 text-center text-xs text-muted">
+                  {t("autoBewerb.currentBatchEmpty")}
+                </p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${
+                        allReady ? "border-success/30 bg-success-soft/50 text-success" : "border-warning/40 bg-warning-soft/50 text-warning"
+                      }`}
+                    >
+                      {t("autoBewerb.currentBatchReady", { ready: readyViews.length, total: selectedViews.length })}
+                    </span>
+                    {atCap && <span className="text-[11px] text-faint">{t("autoBewerb.currentBatchMaxHint")}</span>}
+                  </div>
+                  {!allReady && (
+                    <p className="text-xs text-warning">
+                      {t("autoBewerb.partialBatchWarning", { ready: readyViews.length, total: selectedViews.length })}
+                    </p>
+                  )}
+                  <Button variant="primary" className="w-full" onClick={() => setConfirmOpen(true)} disabled={readyViews.length === 0 || sending}>
+                    <Send size={14} />
+                    {sending ? t("autoBewerb.sendingNote") : t("autoBewerb.sendNowConfirm", { count: readyViews.length })}
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Versand-Einstellungen — read-only mirror of the REAL enforced
+              values (the engine clamps the interval server-side; the window
+              and the dedupe are enforced in Postgres / the worker). */}
+          <div className="mt-5">
+            <p className="text-xs font-bold uppercase tracking-wide text-faint">{t("autoBewerb.settingsTitle")}</p>
+            <dl className="mt-2 divide-y divide-line rounded-2xl border border-line bg-surface-2/30 px-4 text-xs">
+              <div className="flex items-center justify-between gap-3 py-2.5">
+                <dt className="shrink-0 text-muted">{t("autoBewerb.settingsInterval")}</dt>
+                <dd className="text-right font-bold text-ink">
+                  {t("autoBewerb.settingsIntervalValue", { n: String(MIN_SEND_INTERVAL_MS / 1000), range: `${HARD_MIN_SEND_INTERVAL_MS / 1000}–${MAX_SEND_INTERVAL_MS / 1000}` })}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-3 py-2.5">
+                <dt className="shrink-0 text-muted">{t("autoBewerb.settingsWindow")}</dt>
+                <dd className="text-right font-bold text-ink">{windowLabel()}</dd>
+              </div>
+              <div className="flex items-center justify-between gap-3 py-2.5">
+                <dt className="shrink-0 text-muted">{t("autoBewerb.settingsDedup")}</dt>
+                <dd className="text-right font-bold text-ink">{t("autoBewerb.settingsDedupValue")}</dd>
+              </div>
+            </dl>
+          </div>
+
+          {/* Results of the last accepted batch (honest, per company) — the
+              pre-existing results panel, relocated into this column. */}
+          {(results || batchErrors) && (
+            <div className="mt-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-bold uppercase tracking-wide text-faint">{t("autoBewerb.resultsTitle")}</p>
+                {batchMeta && batchMeta.status && (
+                  <span className="flex items-center gap-2 text-xs font-semibold text-muted">
+                    {t("autoBewerb.queueBatchNo", { no: batchMeta.batchNo ?? "" })}
+                    <StatusPill tone={BATCH_TONE[batchMeta.status]} label={batchStatusLabel(batchMeta.status)} />
+                  </span>
+                )}
+              </div>
+              {batchErrors && batchErrors.length > 0 && (
+                <ul className="mt-2 space-y-2">
+                  {batchErrors.map((e) => {
+                    const v = ws.companies.find((c) => c.company.id === e.companyId);
+                    const label = v ? companyLabel(v.company).name : e.companyId;
+                    return (
+                      <li key={e.companyId} className="rounded-2xl border border-danger/25 bg-danger-soft/50 px-4 py-3 text-sm text-danger">
+                        {/* cv_overflow carries the actionable guidance in its message */}
+                        <span className="font-bold">{label}:</span> {e.code === "cv_overflow" ? e.message : itemErrorText(e.code)}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {results && results.length > 0 && (
+                <ul className="mt-2 space-y-2">
+                  {results.map((r) => {
+                    const v = ws.companies.find((c) => c.company.id === r.companyId);
+                    const label = v ? companyLabel(v.company).name : r.companyId;
+                    const tone = r.ok ? "success" : "error";
+                    const text = resultText(r);
+                    return (
+                      <li key={r.companyId} className={`rounded-2xl border px-4 py-3 text-sm ${tone === "success" ? "border-success/25 bg-success-soft/50 text-success" : "border-danger/25 bg-danger-soft/50 text-danger"}`}>
+                        <span className="font-bold">{label}:</span> {text}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {/* Versand-Statistik — always derived from PERSISTED server
+              counters (never client state, never demo numbers). */}
+          <div className="mt-5">
+            <p className="text-xs font-bold uppercase tracking-wide text-faint">{t("autoBewerb.statsTitle")}</p>
+            {ws.companies.length === 0 && (ws.sendHistory?.length ?? 0) > 0 && (
+              <p className="mt-1 text-[11px] leading-4 text-muted">{t("autoBewerb.sentAutoRemovedNote")}</p>
+            )}
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <StatTile
+                label={t("autoBewerb.statsReserved")}
+                value={`${cap.reserved} / ${cap.capacity}`}
+                hint={t("autoBewerb.capacityAvailable", { count: Math.max(0, cap.available) })}
+              />
+              <StatTile label={t("autoBewerb.statsSentToday")} value={ws.sendStats.sentToday} />
+              <StatTile label={t("autoBewerb.statsScheduled")} value={ws.sendStats.scheduled} />
+              <StatTile label={t("autoBewerb.statsProcessing")} value={ws.sendStats.processing} />
+              <StatTile label={t("autoBewerb.statsFailed")} value={ws.sendStats.failed} />
+              <StatTile label={t("autoBewerb.statsTotalToday")} value={ws.sendStats.totalToday} />
+            </div>
+          </div>
+
+          {/* Smart Sending — the actual server-enforced policy (no bypass
+              UI), compact: status + real interval constants + footnotes. */}
+          <div className="mt-5 rounded-2xl border border-line bg-surface-2/30 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-bold uppercase tracking-wide text-faint">{t("autoBewerb.smartSendingTitle")}</p>
+              <span className="rounded-full border border-success/40 bg-success-soft/50 px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider text-success">
+                {t("autoBewerb.smartSendingAlwaysOn")}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" />
+              <span className="text-xs font-bold text-success">{t("autoBewerb.smartSendingEnabled")}</span>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-4 text-muted">{t("autoBewerb.smartSendingDesc")}</p>
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {(
+                [
+                  [t("autoBewerb.smartSendingMinInterval"), t("autoBewerb.smartSendingSeconds", { n: `${HARD_MIN_SEND_INTERVAL_MS / 1000}–${MAX_SEND_INTERVAL_MS / 1000}` })],
+                  [t("autoBewerb.smartSendingRecommended"), t("autoBewerb.smartSendingSeconds", { n: String(MIN_SEND_INTERVAL_MS / 1000) })],
+                  [t("autoBewerb.smartSendingAllowedMin"), t("autoBewerb.smartSendingSeconds", { n: String(HARD_MIN_SEND_INTERVAL_MS / 1000) })],
+                ] as Array<[string, string]>
+              ).map(([label, value]) => (
+                <div key={label} className="rounded-2xl border border-line bg-surface-2/50 px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-faint">{label}</p>
+                  <p className="mt-1 text-xs font-bold text-ink">{value}</p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] leading-4 text-faint">{t("autoBewerb.smartSendingFootnote")}</p>
+            <p className="mt-1 text-[11px] leading-4 text-faint">{t("autoBewerb.smartSendingInterBatch")}</p>
+          </div>
+        </section>
+      </div>
 
       {/* G. Versand-Ergebnisse (Versand-Historie) — the preserved audit
           records of companies that auto-left the active list (sent / safely
