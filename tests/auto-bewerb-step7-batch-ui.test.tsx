@@ -7,11 +7,14 @@
  *     bereit) and the global 100-company cap;
  *   - Send now behind the explicit confirmation modal (client passes ONLY
  *     company ids + confirmation);
- *   - "Versand-Warteschlange" from ws.batches (batch #, count, time, visual
- *     countdown, status, account, details, cancel ONLY pre-start);
+ *   - NO "Versand-Warteschlange" panel anymore (removed for UI
+ *     simplification) — persisted batches must NOT render a queue section;
+ *     tracking = review list (scheduled times) + statistics + Versand-Historie;
+ *   - "Versand-Historie" as the main send record (company, position,
+ *     recipient, date, status, account, batch id — all preserved);
  *   - Smart Sending policy panel (always on, real interval constants);
  *   - statistics from ws.sendStats (persisted data, never demo numbers);
- *   - graceful legacy mode (batchesSupported = false hides the queue; stats stay visible).
+ *   - graceful legacy mode (batchesSupported = false; stats stay visible).
  */
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,10 +22,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import React from "react";
 import { I18nProvider } from "@/lib/i18n";
 import { Step7Review } from "@/components/auto-bewerb/step7-review";
-import { cancelBatchAction, createBatchAction, sendCompaniesAction } from "@/app/auto-bewerb/actions";
+import { createBatchAction, sendCompaniesAction } from "@/app/auto-bewerb/actions";
 
 vi.mock("@/app/auto-bewerb/actions", () => ({
-  cancelBatchAction: vi.fn(),
   cancelSendAction: vi.fn(),
   createBatchAction: vi.fn(),
   scheduleCompaniesAction: vi.fn(),
@@ -143,10 +145,25 @@ const readyCompanies = () => [
   companyView("cb", "Firma B AG", "hr@firma-b.de", "Elektroniker", true),
 ];
 
+function historyView(over: Record<string, unknown> = {}) {
+  return {
+    companyId: "cs",
+    company: "Firma C GmbH",
+    position: "Fachinformatiker",
+    recipient: "jobs@firma-c.de",
+    status: "sent" as const,
+    sentAt: TS,
+    accountEmail: "mail@example.de",
+    batchId: "batch-history-1",
+    ...over,
+  };
+}
+
 function makeWs(opts: {
   batchMode?: boolean;
   companies?: ReturnType<typeof companyView>[];
   batches?: Record<string, unknown>[];
+  sendHistory?: ReturnType<typeof historyView>[];
   stats?: { sentToday: number; scheduled: number; processing: number; totalToday: number; failed?: number };
   capacity?: { reserved: number; capacity: number; available: number };
 }) {
@@ -165,6 +182,7 @@ function makeWs(opts: {
     candidateName: "Mustapha Drif",
     batchesSupported: opts.batchMode ?? true,
     batches: opts.batches ?? [],
+    sendHistory: opts.sendHistory ?? [],
     sendStats: opts.stats ?? { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 },
     ...(opts.capacity ? { capacity: opts.capacity } : {}),
   };
@@ -185,28 +203,24 @@ function mount(ws: Record<string, unknown>) {
 afterEach(cleanup);
 
 describe("Step 7 batch UI (batchesSupported = true)", () => {
-  it("renders the queue from persisted data: batch #, count, time, countdown, status, account", () => {
+  it("NO queue panel: persisted batches render nothing — history + stats + review remain the tracking surface", () => {
     mount(makeWs({
-      batches: [batchView()],
+      batches: [batchView()], // must NOT render a queue section anymore
+      sendHistory: [historyView()],
       stats: { sentToday: 2, scheduled: 1, processing: 0, totalToday: 5, failed: 0 },
     }));
+    // The removed "Versand-Warteschlange" section — and every part of it —
+    // is gone (title, batch chip, count, account line, countdown, details):
+    expect(screen.queryByText("Versand-Warteschlange")).toBeNull();
+    expect(screen.queryByText("Batch #1")).toBeNull();
+    expect(screen.queryByText("2 Unternehmen")).toBeNull();
+    expect(screen.queryByText("Von: mail@example.de")).toBeNull();
+    expect(screen.queryByText(/in \d/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
     // Current batch panel (nothing selected yet):
     expect(screen.getByText("Aktueller Batch (0 Unternehmen)")).toBeInTheDocument();
-    // The queue panel with the REAL persisted batch:
-    expect(screen.getByText("Versand-Warteschlange")).toBeInTheDocument();
-    expect(screen.getByText("Batch #1")).toBeInTheDocument();
-    expect(screen.getByText("2 Unternehmen")).toBeInTheDocument();
-    // "Geplant" = the batch status pill (also the "Scheduled" stats label):
-    expect(screen.getAllByText("Geplant").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Von: mail@example.de")).toBeInTheDocument();
-    // Visual countdown (server owns the schedule — this is display only):
-    expect(screen.getByText(/in \d/)).toBeInTheDocument();
-    // Details view: collapsed by default (the company appears only in the
-    // review list — exactly once); expanding adds the batch's own item list:
+    // Review list intact:
     expect(screen.getAllByText("Firma A GmbH")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Details" }));
-    expect(screen.getAllByText("Firma A GmbH")).toHaveLength(2);
-    expect(screen.getAllByText("Firma B AG")).toHaveLength(2);
     // Smart Sending policy (real constants, always on, no bypass UI):
     expect(screen.getByText("Smart Sending")).toBeInTheDocument();
     expect(screen.getByText("IMMER AN")).toBeInTheDocument();
@@ -214,11 +228,19 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     expect(screen.getByText("6 Sekunden")).toBeInTheDocument();
     expect(screen.getByText("5 Sekunden")).toBeInTheDocument();
     expect(screen.getByText(/3 Minuten 30 Sekunden/)).toBeInTheDocument();
-    // Statistics from persisted data:
+    // Statistics from persisted data (batch-independent):
     expect(screen.getByText("Versand-Statistik")).toBeInTheDocument();
     expect(screen.getByText("Heute gesendet")).toBeInTheDocument();
     expect(screen.getByText("Heute gesamt")).toBeInTheDocument();
     expect(screen.getAllByText("2").length).toBeGreaterThanOrEqual(1);
+    // Versand-Historie is the MAIN send record — all data fields preserved:
+    expect(screen.getByText("Versand-Historie")).toBeInTheDocument();
+    expect(screen.getByText("Firma C GmbH")).toBeInTheDocument(); // company
+    expect(screen.getByText("Fachinformatiker")).toBeInTheDocument(); // position
+    expect(screen.getByText(/jobs@firma-c\.de/)).toBeInTheDocument(); // recipient
+    expect(screen.getByText("Gesendet")).toBeInTheDocument(); // status
+    expect(screen.getByText(/Versand-Konto/)).toBeInTheDocument(); // account
+    expect(screen.getByText(/^Batch /)).toBeInTheDocument(); // batch id
   });
 
   it("selecting companies builds the current batch with readiness; send-now goes through the confirmation modal with ids + confirmation ONLY", async () => {
@@ -305,20 +327,27 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     expect(sendBtn).toBeEnabled();
   });
 
-  it("cancels ONLY pre-start batches (safe cancel); started/completed batches have no cancel", async () => {
-    (cancelBatchAction as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, value: { ok: true } });
-    const { notify } = mount(makeWs({
-      batches: [
-        batchView({ id: "batch-1", batch_no: 2 }),
-        batchView({ id: "batch-2", batch_no: 1, status: "completed", completed_at: TS, sentCount: 2, pendingCount: 0, scheduled_at: new Date(Date.now() - 3600_000).toISOString(), started_at: TS }),
-      ],
+  it("scheduled sends stay trackable WITHOUT the queue panel: review list shows the scheduled time, stats count them", () => {
+    // A company already committed to a scheduled batch (status = "scheduled"):
+    const scheduled = {
+      ...companyView("cs", "Firma S GmbH", "jobs@firma-s.de", "Elektroniker", true),
+      company: { ...companyRow("cs", "Firma S GmbH", "jobs@firma-s.de", "Elektroniker", true), status: "scheduled", scheduled_at: TS },
+    } as unknown as ReturnType<typeof companyView>;
+    mount(makeWs({
+      companies: [scheduled],
+      batches: [batchView()], // persisted batch — still must NOT render
+      stats: { sentToday: 0, scheduled: 1, processing: 0, totalToday: 1, failed: 0 },
     }));
-    // Only the scheduled (pre-start) batch offers the safe cancel:
-    expect(screen.getAllByRole("button", { name: "Abbrechen" })).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
-    await waitFor(() => expect(cancelBatchAction).toHaveBeenCalledTimes(1));
-    expect(cancelBatchAction).toHaveBeenCalledWith("batch-1");
-    await waitFor(() => expect(notify).toHaveBeenCalledWith("success", expect.stringContaining("Batch abgebrochen")));
+    // No queue section, no cancel button (the batch cancel API remains
+    // server-side; the UI tracking surface is the review list + stats):
+    expect(screen.queryByText("Versand-Warteschlange")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Abbrechen" })).toBeNull();
+    // The scheduled company stays in the review list with its scheduled time:
+    expect(screen.getByText("Firma S GmbH")).toBeInTheDocument();
+    expect(screen.getAllByText("Geplant").length).toBeGreaterThanOrEqual(1); // pill + stats label
+    expect(screen.getByText(/Geplant:/)).toBeInTheDocument(); // scheduled_at line
+    // The persisted statistics still surface the scheduled counter:
+    expect(screen.getByText("Versand-Statistik")).toBeInTheDocument();
   });
 
   it("shows the per-company gaps on batch rejection (actionable, not a bare code)", async () => {
@@ -341,7 +370,7 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
 });
 
 describe("Step 7 legacy mode (batchesSupported = false, migration pending)", () => {
-  it("hides the queue but keeps statistics visible + the full per-company workflow", async () => {
+  it("keeps statistics visible + the full per-company workflow (no queue panel in any mode)", async () => {
     (sendCompaniesAction as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
       value: [{ companyId: "ca", ok: true, dispatchStatus: "sent" }],
