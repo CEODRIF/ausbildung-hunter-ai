@@ -1,20 +1,31 @@
 // @vitest-environment jsdom
 /**
- * AUTO BEWERB — Step 7 multi-batch UI contract (jsdom).
+ * AUTO BEWERB — Step 7 Versand page UI contract (jsdom).
  *
- * The reference layout, wired to REAL persisted queue data:
- *   - "Aktueller Batch (X Unternehmen)" with per-company readiness (X von Y
- *     bereit) and the global 100-company cap;
- *   - Send now behind the explicit confirmation modal (client passes ONLY
+ * Reference layout (three zones, one page):
+ *   1. Versand-Regeln banner on top — the SERVER-enforced rules with their
+ *      REAL values (fixed 5–6 s per-account interval, the daily
+ *      07:30–10:30 Europe/Berlin window, server-side dedupe — the system
+ *      has no per-hour/per-day counters, so none are displayed);
+ *   2. two adjacent sections: "1. Unternehmen auswählen" (wider, left —
+ *      select-all row, live counter, per-company data + readiness) and
+ *      "2. Versand & Zeitplan" (right — send-now / schedule mode switch,
+ *      the single primary action, the real sending settings, statistics,
+ *      Smart Sending policy, results of the last accepted batch);
+ *   3. "3. Versand-Ergebnisse (Versand-Historie)" full-width below — the
+ *      preserved audit records (redesigned in PR #137, unchanged here).
+ *
+ * Functional contracts preserved from the pre-refactor tests:
+ *   - send now behind the explicit confirmation modal (client passes ONLY
  *     company ids + confirmation);
- *   - NO "Versand-Warteschlange" panel anymore (removed for UI
- *     simplification) — persisted batches must NOT render a queue section;
- *     tracking = review list (scheduled times) + statistics + Versand-Historie;
- *   - "Versand-Historie" as the main send record (company, position,
- *     recipient, date, status, account, batch id — all preserved);
- *   - Smart Sending policy panel (always on, real interval constants);
+ *   - NO "Versand-Warteschlange" panel (persisted batches render nothing);
+ *   - partial exclusion: an incomplete selected company is dropped with its
+ *     reason and never blocks the eligible subset;
+ *   - the global 100-company cap (persisted server counters);
+ *   - scheduled sends stay trackable (review row + statistics);
  *   - statistics from ws.sendStats (persisted data, never demo numbers);
- *   - graceful legacy mode (batchesSupported = false; stats stay visible).
+ *   - graceful legacy mode (batchesSupported = false; full per-company
+ *     workflow intact).
  */
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -202,31 +213,45 @@ function mount(ws: Record<string, unknown>) {
 
 afterEach(cleanup);
 
-describe("Step 7 batch UI (batchesSupported = true)", () => {
-  it("NO queue panel: persisted batches render nothing — redesigned history + stats + review remain the tracking surface", () => {
+describe("Step 7 page layout (reference: banner + two adjacent sections + full-width history)", () => {
+  it("renders the three zones: real rules banner, both adjacent sections, redesigned history below", () => {
     mount(makeWs({
-      batches: [batchView()], // must NOT render a queue section anymore
+      batches: [batchView()], // must NOT render a queue section
       sendHistory: [
         historyView(),
-        // A cancelled record (no send date, no batch) — the existing status
-        // must stay visible in the new design:
         historyView({ companyId: "cd", company: "Firma D GmbH", position: "Kaufmann", recipient: "hr@firma-d.de", status: "cancelled", sentAt: null, batchId: null }),
       ],
       stats: { sentToday: 2, scheduled: 1, processing: 0, totalToday: 5, failed: 0 },
     }));
-    // The removed "Versand-Warteschlange" section — and every part of it —
-    // is gone (title, batch chip, count, account line, countdown, details):
-    expect(screen.queryByText("Versand-Warteschlange")).toBeNull();
-    expect(screen.queryByText("Batch #1")).toBeNull();
-    expect(screen.queryByText("2 Unternehmen")).toBeNull();
-    expect(screen.queryByText("Von: mail@example.de")).toBeNull();
-    expect(screen.queryByText(/in \d/)).toBeNull();
-    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
-    // Current batch panel (nothing selected yet):
-    expect(screen.getByText("Aktueller Batch (0 Unternehmen)")).toBeInTheDocument();
-    // Review list intact:
+    // --- Zone 1: the rules banner with the REAL enforced values only ---
+    expect(screen.getByText("Versand-Regeln (sicher & realistisch)")).toBeInTheDocument();
+    expect(screen.getByText("Mindestens 5–6 Sekunden Abstand")).toBeInTheDocument();
+    expect(screen.getByText("Sende-Fenster 07:30–10:30 Europe/Berlin")).toBeInTheDocument();
+    expect(screen.getByText("Keine doppelten Sendungen")).toBeInTheDocument();
+    // The system has no per-hour / per-day counters — no fake limits:
+    expect(screen.queryByText(/pro Stunde/)).toBeNull();
+    expect(screen.queryByText(/Tageslimit/)).toBeNull();
+    // --- Zone 2a: "1. Unternehmen auswählen" (wider, left) ---
+    expect(screen.getByText("1. Unternehmen auswählen")).toBeInTheDocument();
+    expect(screen.getByText("Wählen Sie die Unternehmen aus, an die Sie Ihre Bewerbung senden möchten.")).toBeInTheDocument();
+    expect(screen.getByText("Alle auswählen")).toBeInTheDocument();
+    expect(screen.getByText("Ausgewählt: 0 / 2")).toBeInTheDocument();
+    expect(screen.getByText("0 von 2 ausgewählt")).toBeInTheDocument();
+    // Every company stays fully visible (name + position + recipient e-mail):
     expect(screen.getAllByText("Firma A GmbH")).toHaveLength(1);
-    // Smart Sending policy (real constants, always on, no bypass UI):
+    expect(screen.getByText("Mechatroniker")).toBeInTheDocument();
+    expect(screen.getAllByText("jobs@firma-a.de").length).toBeGreaterThanOrEqual(1);
+    // --- Zone 2b: "2. Versand & Zeitplan" (right) ---
+    expect(screen.getByText("2. Versand & Zeitplan")).toBeInTheDocument();
+    expect(screen.getByText("Legen Sie den Zeitpunkt und die Versand-Optionen fest.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Jetzt senden" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Zeitlich planen" })).toBeInTheDocument();
+    // Real, read-only sending settings (engine constants + the window):
+    expect(screen.getByText("Versand-Einstellungen")).toBeInTheDocument();
+    expect(screen.getByText("6 Sekunden (erlaubt 5–6)")).toBeInTheDocument();
+    expect(screen.getByText("07:30–10:30 Europe/Berlin")).toBeInTheDocument();
+    expect(screen.getByText("werden serverseitig verhindert")).toBeInTheDocument();
+    // Smart Sending policy (compact, still present, real constants):
     expect(screen.getByText("Smart Sending")).toBeInTheDocument();
     expect(screen.getByText("IMMER AN")).toBeInTheDocument();
     expect(screen.getByText("5–6 Sekunden")).toBeInTheDocument();
@@ -238,8 +263,8 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     expect(screen.getByText("Heute gesendet")).toBeInTheDocument();
     expect(screen.getByText("Heute gesamt")).toBeInTheDocument();
     expect(screen.getAllByText("2").length).toBeGreaterThanOrEqual(1);
-    // Versand-Historie (redesigned) is the MAIN send record — numbered
-    // title, subtitle, REAL summary badges and every persisted field.
+    // --- Zone 3: Versand-Historie (redesigned in PR #137) full-width below —
+    // numbered title, subtitle, REAL summary badges, every persisted field.
     // (jsdom renders the desktop table AND the mobile cards — count-aware
     // matchers throughout.)
     expect(screen.getByText(/Versand-Ergebnisse \(Versand-Historie\)/)).toBeInTheDocument();
@@ -266,9 +291,52 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     fireEvent.click(screen.getAllByRole("button", { name: /Details — Firma C GmbH/ })[0]);
     expect(screen.getAllByText(/Versand-Konto/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/batch-hi/).length).toBeGreaterThanOrEqual(1);
+    // The removed "Versand-Warteschlange" section — and every part of it —
+    // is gone (title, batch chip, count, account line, countdown, details):
+    expect(screen.queryByText("Versand-Warteschlange")).toBeNull();
+    expect(screen.queryByText("Batch #1")).toBeNull();
+    expect(screen.queryByText("2 Unternehmen")).toBeNull();
+    expect(screen.queryByText("Von: mail@example.de")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
   });
 
-  it("selecting companies builds the current batch with readiness; send-now goes through the confirmation modal with ids + confirmation ONLY", async () => {
+  it("select-all selects every company at once; the live counters update; a second click clears", () => {
+    mount(makeWs({}));
+    const selectAll = screen.getByLabelText("Alle auswählen");
+    fireEvent.click(selectAll);
+    expect(screen.getByText("Ausgewählt: 2 / 2")).toBeInTheDocument();
+    expect(screen.getByText("2 von 2 ausgewählt")).toBeInTheDocument();
+    expect(screen.getByText("2 von 2 bereit")).toBeInTheDocument();
+    // Select-all again (now checked) clears the whole selection:
+    fireEvent.click(screen.getByLabelText("Alle auswählen"));
+    expect(screen.getByText("Ausgewählt: 0 / 2")).toBeInTheDocument();
+    expect(screen.getByText("0 von 2 ausgewählt")).toBeInTheDocument();
+  });
+
+  it("the mode switch reveals the schedule form (validated future datetime flow untouched)", () => {
+    mount(makeWs({}));
+    // Select both companies so the actions are active:
+    fireEvent.click(screen.getByLabelText("Firma A GmbH"));
+    fireEvent.click(screen.getByLabelText("Firma B AG"));
+    // Default mode: send now — the primary send action is visible, the
+    // schedule form is hidden (asserted via its hidden timezone field):
+    expect(screen.getByRole("button", { name: "Bewerbungen jetzt senden (2)" })).toBeInTheDocument();
+    expect(document.querySelector('input[name="scheduleTimezone"]')).toBeNull();
+    // Switch to schedule mode: the existing ScheduleForm appears (send action hidden):
+    fireEvent.click(screen.getByRole("button", { name: "Zeitlich planen" }));
+    expect(document.querySelector('input[name="scheduleTimezone"]')).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Zeitlich planen" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: "Bewerbungen jetzt senden (2)" })).toBeNull();
+    // …and switching back reveals the primary send action again:
+    fireEvent.click(screen.getByRole("button", { name: "Jetzt senden" }));
+    expect(document.querySelector('input[name="scheduleTimezone"]')).toBeNull();
+    expect(screen.getByRole("button", { name: "Jetzt senden" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Bewerbungen jetzt senden (2)" })).toBeInTheDocument();
+  });
+});
+
+describe("Step 7 batch UI (batchesSupported = true)", () => {
+  it("selecting companies updates the counters; send-now goes through the confirmation modal with ids + confirmation ONLY", async () => {
     (createBatchAction as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
       value: {
@@ -286,10 +354,11 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     const { notify } = mount(makeWs({}));
     fireEvent.click(screen.getByLabelText("Firma A GmbH"));
     fireEvent.click(screen.getByLabelText("Firma B AG"));
-    expect(screen.getByText("Aktueller Batch (2 Unternehmen)")).toBeInTheDocument();
+    expect(screen.getByText("Ausgewählt: 2 / 2")).toBeInTheDocument();
+    expect(screen.getByText("2 von 2 ausgewählt")).toBeInTheDocument();
     expect(screen.getByText("2 von 2 bereit")).toBeInTheDocument();
     // Send now → explicit confirmation modal with the exact shared config:
-    fireEvent.click(screen.getByRole("button", { name: "Ausgewählte senden (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bewerbungen jetzt senden (2)" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Senden bestätigen")).toBeInTheDocument();
     // The modal shows the ONE shared e-mail (preview + every company's card):
@@ -303,7 +372,7 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     expect(createBatchAction).toHaveBeenCalledWith(["ca", "cb"], null, true);
     // Accepted batch leaves the active selection (spec D) + honest result:
     await waitFor(() => expect(notify).toHaveBeenCalledWith("success", expect.stringContaining("Batch #7")));
-    await waitFor(() => expect(screen.getByText("Aktueller Batch (0 Unternehmen)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Ausgewählt: 0 / 2")).toBeInTheDocument());
   });
 
   // 30 s budget: this test clicks 100 checkboxes sequentially, each re-rendering
@@ -320,7 +389,6 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
         capacity: { reserved: 100, capacity: 100, available: 0 }, // global capacity exhausted (persisted server data)
       }));
       for (let i = 1; i <= 100; i++) fireEvent.click(screen.getByLabelText(`Firma ${i} GmbH`));
-      expect(screen.getByText("Aktueller Batch (100 Unternehmen)")).toBeInTheDocument();
       expect(screen.getByText("100 von 100 bereit")).toBeInTheDocument();
       // The 101st company cannot be added to the current batch — the selection is
       // bounded by the GLOBAL capacity (exhausted at 100 reserved):
@@ -348,7 +416,7 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     expect(screen.queryByText(/genehmigt/)).toBeNull();
     // Sending is NOT blocked by the incomplete company — the button counts
     // only the send-ready subset (1 of 2) and stays enabled:
-    const sendBtn = screen.getByRole("button", { name: "Ausgewählte senden (1)" });
+    const sendBtn = screen.getByRole("button", { name: "Bewerbungen jetzt senden (1)" });
     expect(sendBtn).toBeEnabled();
   });
 
@@ -385,7 +453,7 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     mount(makeWs({}));
     fireEvent.click(screen.getByLabelText("Firma A GmbH"));
     fireEvent.click(screen.getByLabelText("Firma B AG"));
-    fireEvent.click(screen.getByRole("button", { name: "Ausgewählte senden (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bewerbungen jetzt senden (2)" }));
     await screen.findByText("Senden bestätigen");
     fireEvent.click(screen.getByRole("button", { name: "Jetzt senden (2)" }));
     await waitFor(() => expect(screen.getByText("Ergebnis")).toBeInTheDocument());
@@ -406,7 +474,7 @@ describe("Step 7 legacy mode (batchesSupported = false, migration pending)", () 
       stats: { sentToday: 99, scheduled: 99, processing: 99, totalToday: 99, failed: 0 },
     }));
     expect(screen.queryByText("Versand-Warteschlange")).toBeNull();
-    // Spec §9: capacity + sending statistics are now visible in ALL modes
+    // Spec §9: capacity + sending statistics are visible in ALL modes
     // (they derive from persisted counters, not from the batch queue):
     expect(screen.getByText("Versand-Statistik")).toBeInTheDocument();
     // 99 renders in every counter tile (sent today / scheduled / processing / total):
@@ -416,8 +484,8 @@ describe("Step 7 legacy mode (batchesSupported = false, migration pending)", () 
     expect(screen.getByText("Smart Sending")).toBeInTheDocument();
     // The legacy send path is intact (per-company isolation, explicit confirm):
     fireEvent.click(screen.getByLabelText("Firma A GmbH"));
-    expect(screen.getByText("Aktueller Batch (1 Unternehmen)")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Ausgewählte senden (1)" }));
+    expect(screen.getByText("1 von 1 bereit")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Bewerbungen jetzt senden (1)" }));
     await screen.findByRole("dialog");
     fireEvent.click(screen.getByRole("button", { name: "Jetzt senden (1)" }));
     await waitFor(() => expect(sendCompaniesAction).toHaveBeenCalledTimes(1));
