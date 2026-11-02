@@ -1,23 +1,24 @@
 // @vitest-environment jsdom
 /**
- * AUTO BEWERB — Step 7 explicit approval gate (UI contract).
+ * AUTO BEWERB — Step 7 auto-approval (UI contract).
  *
- * The engine refuses every send without `approved = true` on the company row.
- * Step 7 must therefore expose the EXPLICIT approval path: an unapproved
- * company shows an "Genehmigen" button (and is NOT selectable for sending),
- * an approved company shows the "Genehmigt" chip and no button, and the
- * approval call is scoped to the clicked company.
+ * The manual "Genehmigen" step no longer exists (migration
+ * 20261223000000 + engine auto-approval at company creation). A company row
+ * with a LEGACY `approved = false` flag (pre-migration database state) must
+ * behave exactly like any other company: selectable, send-ready when its
+ * data is complete, and rendered WITHOUT any approval UI (no button, no
+ * chip, no "muss erst genehmigt werden" gap). The only send gate is the
+ * explicit confirmation modal (exact shared content + verified recipients).
  */
 import "@testing-library/jest-dom/vitest";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import React from "react";
 import { I18nProvider } from "@/lib/i18n";
 import { Step7Review } from "@/components/auto-bewerb/step7-review";
-import { approveCompanyAction } from "@/app/auto-bewerb/actions";
 
 vi.mock("@/app/auto-bewerb/actions", () => ({
-  approveCompanyAction: vi.fn(),
   cancelBatchAction: vi.fn(),
   cancelSendAction: vi.fn(),
   createBatchAction: vi.fn(),
@@ -33,6 +34,8 @@ vi.mock("@/components/auto-bewerb/shared", async (importOriginal) => {
 
 const ts = "2026-12-01T00:00:00.000Z";
 
+/** A company row exactly as the DB returns it — `approved` is the LEGACY
+ *  flag (false = a pre-migration row, which must no longer matter). */
 function companyRow(id: string, company: string, email: string, job: string, approved: boolean) {
   return {
     id,
@@ -110,6 +113,8 @@ function makeWs() {
     photo: null,
     companies: [
       companyView("ca", "Firma A GmbH", "jobs@firma-a.de", "Mechatroniker", true),
+      // LEGACY pre-migration row (approved = false) — must be treated the
+      // same as the approved one:
       companyView("cb", "Firma B AG", "hr@firma-b.de", "Elektroniker", false),
     ],
     attachments: [],
@@ -118,52 +123,60 @@ function makeWs() {
     emailSettingsSupported: true,
     emailAccounts: [{ id: "acct1", provider: "gmail", email: "mail@example.de", is_active: true, requires_reconnect: false }],
     candidateName: "Mustapha Drif",
-    // Legacy mode (batches migration pending) — the approval-gate contract
-    // below documents the per-company isolation path.
-    batchesSupported: false,
+    batchesSupported: true,
     batches: [],
     sendStats: { sentToday: 0, scheduled: 0, processing: 0, totalToday: 0, failed: 0 },
   };
 }
 
+const read = (p: string) => readFileSync(p, "utf8");
+
 afterEach(cleanup);
 
-describe("Step 7 approval gate (UI)", () => {
-  it("unapproved company: approve button + not selectable + actionable gap; approved company: chip, no button", () => {
-    const notify = vi.fn();
-    wsHolder.current = { ws: makeWs(), refresh: vi.fn(), notify, goToStep: vi.fn() };
+describe("Step 7 auto-approval (no manual Genehmigung)", () => {
+  it("a LEGACY approved=false company is selectable + sendable — no approval UI anywhere in the step", () => {
+    wsHolder.current = { ws: makeWs(), refresh: vi.fn(), notify: vi.fn(), goToStep: vi.fn() };
     render(
       <I18nProvider>
         <Step7Review />
       </I18nProvider>,
     );
-    // The approved company shows the approval state (chip) and NO button:
-    expect(screen.getByText("Genehmigt")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Genehmigen" })).toHaveLength(1);
-    // The unapproved company is named in the actionable gap text:
-    expect(screen.getByText(/Bewerbung muss erst genehmigt werden/)).toBeInTheDocument();
-    // Its selection checkbox is DISABLED (no send without approval):
-    const cb = screen.getByLabelText("Firma B AG") as HTMLInputElement;
-    expect(cb).toBeDisabled();
-    // The approved company IS selectable:
+    // No approval button, no approval chip, no approval gap text at all:
+    expect(screen.queryByRole("button", { name: "Genehmigen" })).toBeNull();
+    expect(screen.queryByText(/genehmigt/i)).toBeNull();
+    expect(screen.queryByText(/Genehmigen/)).toBeNull();
+    // The LEGACY row (approved = false) is selectable, exactly like the
+    // approved one (both fully send-ready → "2 von 2 bereit" on selection):
     expect(screen.getByLabelText("Firma A GmbH")).toBeEnabled();
+    expect(screen.getByLabelText("Firma B AG")).toBeEnabled();
   });
 
-  it("clicking „Genehmigen“ approves EXACTLY that company and refreshes (mocked action, no email)", async () => {
-    const refresh = vi.fn();
-    const notify = vi.fn();
-    wsHolder.current = { ws: makeWs(), refresh, notify, goToStep: vi.fn() };
-    (approveCompanyAction as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, value: { id: "cb" } });
-    render(
-      <I18nProvider>
-        <Step7Review />
-      </I18nProvider>,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Genehmigen" }));
-    await waitFor(() => expect(approveCompanyAction).toHaveBeenCalledTimes(1));
-    // Scoped to the UNAPPROVED company only — never to the other one:
-    expect(approveCompanyAction).toHaveBeenCalledWith("cb");
-    expect(refresh).toHaveBeenCalled();
-    expect(notify).toHaveBeenCalledWith("success", "Bewerbung genehmigt.");
+  it("the approval contract is gone from the whole product surface (source level)", () => {
+    const ACTIONS = read("src/app/auto-bewerb/actions.ts");
+    expect(ACTIONS).not.toContain("approveCompanyAction");
+    expect(ACTIONS).not.toContain("approveAutoBewerbCompany");
+    const STEP7 = read("src/components/auto-bewerb/step7-review.tsx");
+    expect(STEP7).not.toContain("approveCompanyAction");
+    expect(STEP7).not.toContain("approveButton");
+    expect(STEP7).not.toContain("approvedChip");
+    expect(STEP7).not.toContain("missingApproval");
+    expect(STEP7).not.toContain("notApprovedResult");
+    // No user-visible "Genehmigen" string in any CODE line (doc comments may
+    // reference the removed step by name — rendered text may not):
+    const STEP7_CODE = STEP7.split("\n")
+      .filter((l) => !l.trim().startsWith("*") && !l.trim().startsWith("//"))
+      .join("\n");
+    expect(STEP7_CODE).not.toContain("Genehmigen");
+    const ENGINE = read("src/lib/auto-bewerb/engine.ts");
+    expect(ENGINE).not.toContain("not_approved");
+    expect(ENGINE).not.toContain("approveAutoBewerbCompany");
+    // The auto-approval contract lives in the migration (default + backfill)
+    // and the create-time stamp:
+    expect(read("supabase/migrations/20261223000000_auto_bewerb_auto_approval.sql")).toContain("set default true");
+    expect(ENGINE).toContain("approved: true");
+    // No stale approval strings survive in ANY supported language:
+    for (const stale of ["approveButton", "approving", "approvedChip", "approvedNote", "missingApproval", "notApprovedResult"]) {
+      expect(read("src/lib/i18n/dictionaries.ts")).not.toContain(stale + ":");
+    }
   });
 });

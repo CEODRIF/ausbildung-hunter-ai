@@ -3,7 +3,6 @@
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import type { CandidateProfile } from "@/lib/bewerbung-schema";
 import {
-  approveAutoBewerbCompany,
   cancelAutoBewerbBatch,
   cancelAutoBewerbSend,
   createAutoBewerbBatch,
@@ -42,8 +41,10 @@ import { sanitizeEmailHtml } from "@/lib/application-drafts";
  * from arguments) and works through the ownership-checked engine. Paid AI
  * operations live in the /api/auto-bewerb/* routes (client fetch + quota /
  * rate-limit responses); these actions cover the durable state transitions:
- * profile, companies, documents, template, approve,
+ * profile, companies, documents, template,
  * send, cancel — plus the page-load catch-up for due scheduled sends.
+ * (There is no approve action: companies are auto-approved — the send gate
+ * is the explicit per-batch confirmation below.)
  */
 
 type ActionResult<T> =
@@ -180,12 +181,6 @@ export async function deleteCompanyAction(companyId: string): Promise<ActionResu
   return toResult(await deleteAutoBewerbCompany(user.id, companyId)) as ActionResult<{ ok: true }>;
 }
 
-export async function approveCompanyAction(companyId: string): Promise<ActionResult<AutoBewerbCompanyRow>> {
-  const { user } = await getCurrentUserAndProfile();
-  if (!user) return unauthorized();
-  return toResult(await approveAutoBewerbCompany(user.id, companyId)) as ActionResult<AutoBewerbCompanyRow>;
-}
-
 // ---------------------------------------------------------------------------
 // Steps 4–5 — generated documents (per company, versioned)
 // ---------------------------------------------------------------------------
@@ -276,7 +271,7 @@ export interface SendCompanyResult {
 
 /** Send MULTIPLE companies with PER-COMPANY failure isolation: one company's
  *  rejection/failure never aborts or mislabels the others. Every send is
- *  individually approved (the caller verifies confirmed=true for each). */
+ *  individually confirmed (the caller verifies confirmed=true for each). */
 export async function sendCompaniesAction(
   inputs: SendCompanyInput[],
 ): Promise<ActionResult<SendCompanyResult[]>> {
@@ -316,8 +311,10 @@ export async function cancelSendAction(attemptId: string): Promise<ActionResult<
 
 /** Step 7 — create a BATCH (immediate or scheduled). One explicit
  *  `confirmed` covers the whole batch (immediate); the engine re-validates
- *  every company + the schedule server-side (all-or-nothing pre-checks).
- *  On failure, `errors` carries the exact per-company gaps (actionable UI). */
+ *  every company + the schedule server-side (partial exclusion: ineligible
+ *  companies are dropped with their exact reason and never block the
+ *  eligible subset). On a full failure, `errors` carries the per-company
+ *  gaps (actionable UI). */
 export type AutoBewerbBatchActionError = {
   ok: false;
   code: string;

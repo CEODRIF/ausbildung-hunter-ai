@@ -156,8 +156,10 @@ function seedCompany(
     email_attach_letter: true,
     email_account_id: null,
     idempotency_key: null,
-    approved: opts.approved ?? false,
-    approved_at: (opts.approved ?? false) ? TS : null,
+    // Auto-approval: new rows are approved by default (opts.approved only
+    // exists to simulate pre-migration legacy rows).
+    approved: opts.approved ?? true,
+    approved_at: (opts.approved ?? true) ? TS : null,
     scheduled_at: null,
     schedule_timezone: null,
     sent_at: null,
@@ -170,13 +172,12 @@ function seedCompany(
     updated_at: TS,
   };
   tCompanies().push(row);
-  // Sendable documents when approved (needed by the batch prepare step):
-  if (opts.approved) {
-    (db.tables.auto_bewerb_documents as Array<Record<string, unknown>>).push(
-      { id: `cv-${id}`, user_id: user, company_id: id, doc_type: "cv", version: 1, content: cvFor(company), created_at: TS, updated_at: TS },
-      { id: `lt-${id}`, user_id: user, company_id: id, doc_type: "cover_letter", version: 1, content: letterFor(company), created_at: TS, updated_at: TS },
-    );
-  }
+  // Sendable documents (needed by the batch prepare step) — every company
+  // is auto-approved, so documents are always seeded:
+  (db.tables.auto_bewerb_documents as Array<Record<string, unknown>>).push(
+    { id: `cv-${id}`, user_id: user, company_id: id, doc_type: "cv", version: 1, content: cvFor(company), created_at: TS, updated_at: TS },
+    { id: `lt-${id}`, user_id: user, company_id: id, doc_type: "cover_letter", version: 1, content: letterFor(company), created_at: TS, updated_at: TS },
+  );
   return row;
 }
 

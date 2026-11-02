@@ -50,7 +50,6 @@ import {
   type AutoBewerbSendAttemptRow,
   type AutoBewerbSendPayload,
   type AutoBewerbSendStats,
-  type AutoBewerbAppStatus,
 } from "./schema";
 import { reserveSenderSlot, SENDER_SLOT_WAIT_BUDGET_MS } from "../email-rate-limit";
 import { AUTO_BEWERB_SENDING_WINDOW, isCampaignTimeInWindow, isSendingWindowOpen, nextWindowStartMs, windowLabel } from "./sending-window";
@@ -86,9 +85,15 @@ import { SIGNATURE_MIME, signatureStoragePaths, validateSignature } from "./sign
  * from the session (or the cron worker's RPC) — never from client input.
  *
  * Send safety:
- *  - a send requires approved = true (explicit user confirmation showing the
- *    exact recipients + attachments) and an active, owned email account,
- *    re-checked at dispatch time;
+ *  - a send requires the user's explicit CONFIRMATION (the UI shows the exact
+ *    shared e-mail + every verified recipient + the attachments), complete
+ *    company data (verified recipient + the documents the attachment flags
+ *    demand) and an active, owned email account — every condition is
+ *    re-checked server-side at prepare AND dispatch time. Companies are
+ *    AUTO-approved since migration 20261223000000: there is no manual
+ *    "Genehmigen" step; the `approved` column is a historical audit field
+ *    the engine never gates on (no legacy approved=false row can block a
+ *    send).
  *  - each logical send is one auto_bewerb_send_attempts row with a unique
  *    idempotency_key; the claim is an atomic `update … where status='queued'`,
  *    so concurrent dispatchers can never double-send;
@@ -102,7 +107,6 @@ import { SIGNATURE_MIME, signatureStoragePaths, validateSignature } from "./sign
 export type AutoBewerbErrorCode =
   | "schema_pending"
   | "not_found"
-  | "not_approved"
   | "send_in_progress"
   | "already_sent"
   | "no_email_account"
@@ -845,6 +849,12 @@ export async function createAutoBewerbCompany(
         // inside the successful insert. A failed insert creates no row, so a
         // company can never be "confirmed" without existing.
         ad_confirmed_at: new Date().toISOString(),
+        // AUTO-APPROVAL: new companies are send-eligible by default (no manual
+        // "Genehmigen" step). The insert-level stamp keeps the historical
+        // audit column true even on databases where migration
+        // 20261223000000 (default flip) has not run yet.
+        approved: true,
+        approved_at: new Date().toISOString(),
       })
       .select("*")
       .single();
@@ -895,9 +905,9 @@ export async function createAutoBewerbCompany(
     void logAutoBewerbActivity(userId, "auto_bewerb_company_created", "Bewerbungszentrale: Unternehmen hinzugefügt", undefined, { company });
     return { ok: true, value: data as unknown as AutoBewerbCompanyRow };
   }
-  // Unreachable — every loop iteration returns (success or a classified
-  // error). Kept for exhaustiveness.
-  return fail("storage_error", "Speichern fehlgeschlagen. Bitte erneut versuchen.");
+   // Unreachable — every loop iteration returns (success or a classified
+   // error). Kept for exhaustiveness.
+   return fail("storage_error", "Speichern fehlgeschlagen. Bitte erneut versuchen.");
 }
 
 /** The user's ACTIVE working list — only RESERVED companies (draft / ready /
@@ -983,8 +993,6 @@ export type AutoBewerbCompanyPatch = Partial<
     | "profile_snapshot"
     | "status"
     | "idempotency_key"
-    | "approved"
-    | "approved_at"
     | "scheduled_at"
     | "schedule_timezone"
     | "sent_at"
@@ -1054,30 +1062,6 @@ export async function updateAutoBewerbCompany(
     if (!probe.data) return fail("not_found", "Unternehmen nicht gefunden.");
     return fail("company_duplicate", "Dieses Unternehmen wurde bereits hinzugefügt.");
   }
-  return { ok: true, value: app };
-}
-
-export async function approveAutoBewerbCompany(
-  userId: string,
-  companyId: string,
-): Promise<AutoBewerbOpResult<AutoBewerbCompanyRow>> {
-  const admin = createAdminClient();
-  const { data: existing } = await admin
-    .from("auto_bewerb_companies")
-    .select("id, status")
-    .eq("id", companyId)
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (!existing) return fail("not_found", "Unternehmen nicht gefunden.");
-  const current = (existing as { status: string }).status;
-  if (current === "sent") return fail("already_sent", "Diese Bewerbung wurde bereits versendet.");
-  const app = await patchCompany(userId, companyId, {
-    approved: true,
-    approved_at: new Date().toISOString(),
-    status: current === "draft" ? "ready" : (current as AutoBewerbAppStatus),
-  });
-  if (!app) return fail("not_found", "Unternehmen nicht gefunden.");
-  void logAutoBewerbActivity(userId, "auto_bewerb_company_approved", "Bewerbungszentrale: Bewerbung genehmigt");
   return { ok: true, value: app };
 }
 
@@ -1584,8 +1568,6 @@ export async function prepareAutoBewerbSend(
     .maybeSingle();
   if (appError || !appData) return { ok: false, code: "not_found", message: "Unternehmen nicht gefunden." };
   const app = revalidateCompanies([appData as unknown])[0];
-  if (!app.approved)
-    return { ok: false, code: "not_approved", message: "Bitte genehmigen Sie die Bewerbung zuerst." };
   if (app.status === "sent")
     return { ok: false, code: "already_sent", message: "Diese Bewerbung wurde bereits versendet." };
    // ONE global e-mail configuration for the whole batch (Step 6): subject,
@@ -2012,20 +1994,19 @@ export async function dispatchAutoBewerbAttempt(
   if (attempt.status === "cancelled" || attempt.status === "failed")
     return { ok: false, duplicate: false, status: "skipped" };
 
-  // Re-check consent + company state at EXECUTION time (a scheduled send may
-  // be hours old; the user could have reconnected a different mailbox). All
-  // three failures are TERMINAL (no auto-retry): they only resolve by a new,
-  // explicitly confirmed send.
+  // Re-check company state at EXECUTION time (a scheduled send may be hours
+  // old; the user could have reconnected a different mailbox). Both failures
+  // are TERMINAL (no auto-retry): they only resolve by a new, explicitly
+  // confirmed send. (No approval re-check: companies are auto-approved —
+  // see migration 20261223000000.)
   const { data: appData } = await admin
     .from("auto_bewerb_companies")
-    .select("id, approved, email_account_id, status")
+    .select("id, email_account_id, status")
     .eq("id", attempt.company_id)
     .maybeSingle();
   if (!appData)
     return terminalAttempt(admin, attempt, "company_missing", "Unternehmen nicht mehr vorhanden.");
-  const app = appData as { id: string; approved: boolean; email_account_id: string | null; status: string };
-  if (!app.approved)
-    return terminalAttempt(admin, attempt, "not_approved", "Bewerbung wurde nicht genehmigt.");
+  const app = appData as { id: string; email_account_id: string | null; status: string };
   if (!app.email_account_id)
     return terminalAttempt(admin, attempt, "no_email_account", "E-Mail-Konto wurde getrennt.");
 
@@ -2235,7 +2216,11 @@ export interface AutoBewerbBatchResult {
   status?: AutoBewerbBatchStatus;
   scheduledAt?: string | null;
   items?: AutoBewerbBatchItemResult[];
-  /** Non-empty = NOTHING was created (pre-validation is all-or-nothing). */
+  /** Companies EXCLUDED from this batch because they were not send-ready
+   *  (with the exact per-company reason). Present even when the batch WAS
+   *  created (partial exclusion — one company's gap never blocks the others).
+   *  `errors` non-empty AND no `batchId` = nothing was created (NOTHING was
+   *  send-ready). */
   errors?: AutoBewerbBatchItemError[];
   /** True = an IMMEDIATE batch was accepted but NOT started because the
    *  sending window (07:30–10:30 Europe/Berlin) is closed — it stays
@@ -2243,15 +2228,20 @@ export interface AutoBewerbBatchResult {
   windowDeferred?: boolean;
 }
 
-/** Create a batch (immediate or scheduled) and prepare every company in it.
- *
- *  Pre-validation is ALL-OR-NOTHING: if any company is not sendable
- *  (missing approval/recipient/documents), no batch is created and the
- *  caller receives the exact per-company gaps. After creation, one company's
- *  preparation failing (e.g. a PDF render error) does NOT roll back the
- *  others — the batch keeps the sendable subset (honest per-company
- *  results; the failed company stays selectable for a new batch).
- */
+  /** Create a batch (immediate or scheduled) and prepare every ELIGIBLE
+  *  company of the selection.
+  *
+  *  Partial-exclusion semantics: a company that is not send-ready
+  *  (missing recipient/documents, already sent, send in progress, …) is
+  *  EXCLUDED from the batch with its exact reason in `errors` — it never
+  *  blocks the other selected companies. Only a selection where NOTHING is
+  *  send-ready creates no batch (ok:false, all reasons in `errors`). After
+  *  creation, one company's preparation failing (e.g. a PDF render error)
+  *  also does NOT roll back the others — the batch keeps the sendable subset
+  *  (honest per-company results; the failed company stays selectable for a
+  *  new batch). No manual per-company approval exists (auto-approved since
+  *  migration 20261223000000).
+  */
 export async function createAutoBewerbBatch(
   userId: string,
   input: { companyIds: string[]; schedule: AutoBewerbScheduleInput | null },
@@ -2313,7 +2303,9 @@ export async function createAutoBewerbBatch(
     scheduledAt = new Date(utcMs).toISOString();
   }
 
-  // 4) All-or-nothing pre-validation (every company, verified data only):
+  // 4) Per-company pre-validation (verified data only). Ineligible companies
+  //    are EXCLUDED with their exact reason — one company's gap never blocks
+  //    the others (partial-exclusion semantics).
   const errors: AutoBewerbBatchItemError[] = [];
   const ready: Array<{ app: AutoBewerbCompanyRow; dest: string; cvName: string | null; letterName: string | null }> = [];
   for (const id of ids) {
@@ -2322,7 +2314,6 @@ export async function createAutoBewerbBatch(
     };
     const app = apps.find((a) => a.id === id);
     if (!app) { fail("not_found", "Unternehmen nicht gefunden."); continue; }
-    if (!app.approved) { fail("not_approved", "Bitte genehmigen Sie die Bewerbung zuerst."); continue; }
     if (app.status === "sent") { fail("already_sent", "Diese Bewerbung wurde bereits versendet."); continue; }
     if (app.status === "sending" || app.status === "scheduled") { fail("send_in_progress", "Es läuft bereits ein Versand für diese Bewerbung."); continue; }
     const dest = resolveAutoBewerbRecipient("", app.recipient_email, app.ad_extracted);
@@ -2347,7 +2338,9 @@ export async function createAutoBewerbBatch(
     }
     ready.push({ app, dest, cvName, letterName });
   }
-  if (errors.length > 0) return { ok: false, code: "batch_not_ready", message: "Nicht alle Unternehmen sind versandbereit.", errors };
+  // NOTHING send-ready → no batch (every selected company reported with its
+  // exact gap). Anything send-ready proceeds as its own subset.
+  if (ready.length === 0) return { ok: false, code: "batch_not_ready", message: "Kein Unternehmen der Auswahl war versandbereit.", errors };
 
   // 5) The shared document library (attachment references for the snapshot):
   const { data: libraryAtts } = await admin
@@ -2485,6 +2478,10 @@ export async function createAutoBewerbBatch(
     status: batch.status,
     scheduledAt,
     items,
+    // Partial exclusion: the companies dropped at pre-validation (with their
+    // exact reason) travel WITH the success result — the UI shows them
+    // alongside the per-company send results.
+    errors: errors.length > 0 ? errors : undefined,
     windowDeferred: windowDeferred || undefined,
   };
 }

@@ -62,7 +62,7 @@ const { createClient } = await import("@/lib/supabase/server");
 const { provider } = await import("@/lib/ai-service");
 const { reserveFeatureOp, completeFeatureOp, releaseFeatureOp } = await import("@/lib/billing/entitlement-service");
 const { checkRateLimit } = await import("@/lib/rate-limit");
-const { getAutoBewerbProfile, prepareAutoBewerbSend, approveAutoBewerbCompany, dispatchAutoBewerbAttempt } = await import("@/lib/auto-bewerb/engine");
+const { getAutoBewerbProfile, prepareAutoBewerbSend } = await import("@/lib/auto-bewerb/engine");
 const { POST } = await import("@/app/api/auto-bewerb/generate-email/route");
 const { createStudioDb } = await import("./helpers-studio");
 const { buildAutoBewerbEmailTemplatePrompt } = await import("@/lib/auto-bewerb/prompts");
@@ -681,8 +681,9 @@ describe("HTML sanitization (save + send + pure)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Approval gate — an EXPLICIT per-company approval is required before any
-// send (engine gate; the Step 7 "Genehmigen" button is the only UI path).
+// Auto-approval — the manual "Genehmigen" step no longer exists (migration
+// 20261223000000). A LEGACY approved = false row must NOT block any send;
+// only real data gaps (recipient / documents / configuration) do.
 // ---------------------------------------------------------------------------
 
 const unapproveAll = () => {
@@ -692,79 +693,28 @@ const unapproveAll = () => {
   }
 };
 
-describe("approval gate (explicit approval required before send)", () => {
-  it("an UNAPPROVED application is BLOCKED with a clear, actionable error (nothing is prepared)", async () => {
+describe("auto-approval (no manual approval required before send)", () => {
+  it("a LEGACY approved=false application is NOT blocked — it prepares + schedules normally", async () => {
     seed(globalTemplate());
-    unapproveAll();
+    unapproveAll(); // simulate a pre-migration row (approved = false)
     const res = await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE });
-    expect(res.ok).toBe(false);
-    expect((res as { code?: string }).code).toBe("not_approved");
-    // Actionable message (names the required action):
-    expect((res as { message?: string }).message).toContain("genehmigen");
-    // No attempt was created and the claim side effects never ran:
-    expect(db.tables.auto_bewerb_send_attempts).toHaveLength(0);
-    const row = db.tables.auto_bewerb_companies.find((r) => r.id === CO1)!;
-    expect(row.status).toBe("ready");
-    expect(row.email_body).toBe("LEGACY OVERRIDETEXT — must never be sent");
-    expect(row.idempotency_key).toBeNull();
-  });
-
-  it("explicit approval updates the correct company ONLY, persists, and unblocks the send (isolation across companies + owners)", async () => {
-    seed(globalTemplate());
-    unapproveAll();
-    // Approve CO1 (the user's explicit consent for THIS application):
-    const resA = await approveAutoBewerbCompany(USER, CO1);
-    expect(resA.ok, JSON.stringify(resA)).toBe(true);
-    // Persisted + readable by the send engine:
-    const row1 = db.tables.auto_bewerb_companies.find((r) => r.id === CO1)!;
-    expect(row1.approved).toBe(true);
-    expect(row1.approved_at).toBeTruthy();
-    expect(row1.status).toBe("ready");
-    // No cross-company authorization: CO2/CO3 stay unapproved:
-    expect(db.tables.auto_bewerb_companies.find((r) => r.id === CO2)!.approved).toBe(false);
-    expect(db.tables.auto_bewerb_companies.find((r) => r.id === CO3)!.approved).toBe(false);
-    // No cross-OWNER authorization: another user cannot approve CO1:
-    const resOther = await approveAutoBewerbCompany("22222222-2222-4222-8222-222222222222", CO1);
-    expect(resOther.ok).toBe(false);
-    // Approved → sendable; the unapproved sibling stays BLOCKED:
-    const sendA = await prepareAutoBewerbSend(USER, { companyId: CO1, schedule: FUTURE });
-    expect(sendA.ok, JSON.stringify(sendA)).toBe(true);
+    expect(res.ok, JSON.stringify(res)).toBe(true);
     expect(attempt(CO1).recipient_email).toBe("legacy-jobs@kaltbau-nord.de");
-    const sendB = await prepareAutoBewerbSend(USER, { companyId: CO2, schedule: FUTURE });
-    expect(sendB.ok).toBe(false);
-    expect((sendB as { code?: string }).code).toBe("not_approved");
+    // The attempt is durable + scheduled (never dispatched in this test):
+    expect(res.scheduledAt).toBeTruthy();
   });
 
-  it("a QUEUED attempt of an unapproved company is terminated at dispatch (not_approved) — no email, honest state", async () => {
-    seed(globalTemplate());
-    unapproveAll();
-    db.tables.auto_bewerb_send_attempts.push({
-      id: "att-1",
-      company_id: CO1,
-      user_id: USER,
-      idempotency_key: "k1",
-      recipient_email: "jobs@kaltbau-nord.de",
-      subject: "Betreff",
-      payload: { html: "<p>x</p>", text: "x", attachments: [] },
-      status: "queued",
-      scheduled_at: null,
-      attempt_count: 0,
-      next_attempt_at: null,
-      provider_message_id: null,
-      failure_code: null,
-      failure_message: null,
-      sent_at: null,
-      created_at: "2026-12-01T00:00:00.000Z",
-      updated_at: "2026-12-01T00:00:00.000Z",
-    });
-    const res = await dispatchAutoBewerbAttempt("att-1");
+  it("a REAL data gap still blocks with the honest reason (only the approval gate went away)", async () => {
+    seed(globalTemplate({ attach_cv: true }));
+    unapproveAll(); // even WITH the legacy flag off — the CV gap is the blocker
+    const res = await prepareAutoBewerbSend(USER, { companyId: CO2, schedule: FUTURE });
     expect(res.ok).toBe(false);
-    expect(res.failureCode).toBe("not_approved");
-    // Terminal + honest: attempt failed with the reason, company flagged:
-    const att = db.tables.auto_bewerb_send_attempts.find((a) => a.id === "att-1")!;
-    expect(att.status).toBe("failed");
-    expect(att.failure_code).toBe("not_approved");
-    expect(db.tables.auto_bewerb_companies.find((r) => r.id === CO1)!.last_failure_code).toBe("not_approved");
+    expect((res as { code?: string }).code).toBe("missing_cv");
+    // Nothing was prepared (no attempt, no claim side effects):
+    expect(db.tables.auto_bewerb_send_attempts).toHaveLength(0);
+    const row = db.tables.auto_bewerb_companies.find((r) => r.id === CO2)!;
+    expect(row.status).toBe("ready");
+    expect(row.idempotency_key).toBeNull();
   });
 });
 
@@ -860,18 +810,27 @@ describe("single global configuration (source contracts)", () => {
     expect(STEP6).not.toContain("updateCompanyAction"); // no per-company email save path
   });
 
-  it("Step 7 gates sends behind EXPLICIT per-company approval (button + sendable gate + actionable error)", () => {
-    expect(STEP7).toContain("approveCompanyAction");
-    // The UI gate mirrors the engine gate (no send selection without approved):
-    expect(STEP7).toContain("if (!r.approved) return false;");
-    expect(STEP7).toContain("missingApproval");
-    expect(STEP7).toContain("notApprovedResult");
-    expect(STEP7).toContain("approvedChip");
-    // The approval action stays scoped to one company of one owner:
-    expect(ACTIONS).toContain("approveAutoBewerbCompany(user.id, companyId)");
-    for (const key of ["approveButton", "approvedChip", "missingApproval", "notApprovedResult"]) {
-      expect(DICT.match(new RegExp(key + ":", "g"))!.length).toBe(4);
+  it("no manual approval exists ANYWHERE (engine + actions + Step 7 UI + all 4 dictionaries)", () => {
+    // Engine: no approval error code, no approval function, no approval gate:
+    expect(ENGINE).not.toContain("not_approved");
+    expect(ENGINE).not.toContain("approveAutoBewerbCompany");
+    expect(ENGINE).not.toContain("app.approved");
+    // Actions: no approve server action at all:
+    expect(ACTIONS).not.toContain("approveCompanyAction");
+    expect(ACTIONS).not.toContain("approveAutoBewerbCompany");
+    // Step 7 UI: no button, no chip, no gap, no result mapping:
+    expect(STEP7).not.toContain("approveCompanyAction");
+    expect(STEP7).not.toContain("approveButton");
+    expect(STEP7).not.toContain("approvedChip");
+    expect(STEP7).not.toContain("missingApproval");
+    expect(STEP7).not.toContain("notApprovedResult");
+    expect(STEP7).not.toContain(".approved");
+    // Dictionaries: the approval keys are gone from ALL four languages:
+    for (const key of ["approveButton", "approving", "approvedChip", "approvedNote", "missingApproval", "notApprovedResult"]) {
+      expect(DICT.match(new RegExp(key + ":", "g")), key).toBeNull();
     }
+    // The auto-approval contract lives in the create-time stamp:
+    expect(ENGINE).toContain("approved: true");
   });
 
   it("the shared-recipient override is REMOVED — every company routes to its own verified recipient", () => {

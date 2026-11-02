@@ -262,7 +262,8 @@ interface SeedOpts {
   count?: number;
   /** 1-based company indices with NO verified e-mail (recipient unresolved). */
   noEmail?: number[];
-  /** 1-based company indices that are NOT approved. */
+  /** 1-based company indices seeded as LEGACY pre-migration rows
+   *  (approved = false) — they must behave exactly like approved ones. */
   unapproved?: number[];
   /** 1-based company indices with an ad deadline (yyyy-mm-dd). */
   deadline?: Record<number, string>;
@@ -351,7 +352,9 @@ function seed(opts: SeedOpts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Creation & all-or-nothing pre-validation
+// Creation & partial-exclusion pre-validation
+// (one ineligible company is excluded WITH its reason — it never blocks the
+//  eligible subset; only an all-ineligible selection creates no batch)
 // ---------------------------------------------------------------------------
 
 describe("createAutoBewerbBatch — creation & pre-validation", () => {
@@ -396,24 +399,34 @@ describe("createAutoBewerbBatch — creation & pre-validation", () => {
     expect(res.code).toBe("empty_selection");
   });
 
-  it("(19) all-or-nothing: ONE unverified recipient blocks the WHOLE batch", async () => {
+  it("(19) PARTIAL: ONE unverified recipient is EXCLUDED with its reason — the other 2 are scheduled", async () => {
     seed({ count: 3, noEmail: [2] });
     const res = await createAutoBewerbBatch(USER, { companyIds: idsOf(3), schedule: FUTURE });
-    expect(res.ok).toBe(false);
-    expect(res.code).toBe("batch_not_ready");
+    expect(res.ok, JSON.stringify(res)).toBe(true);
     expect(res.errors?.[0]).toMatchObject({ companyId: cid(2), code: "invalid_recipient" });
-    expect(db.tables.auto_bewerb_batches).toHaveLength(0);
-    expect(db.tables.auto_bewerb_send_attempts).toHaveLength(0);
+    // The eligible subset forms the batch (2 of 3):
+    const batch = tBatches()[0];
+    expect(batch.snapshot.items).toHaveLength(2);
+    expect(batch.snapshot.items.map((i) => i.companyId)).toEqual([cid(1), cid(3)]);
+    const attempts = tAttempts();
+    expect(attempts).toHaveLength(2);
+    for (const a of attempts) {
+      expect(a.batch_id).toBe(batch.id);
+      expect(a.status).toBe("queued");
+    }
+    // The excluded company is UNTOUCHED (still selectable for a new batch):
+    expect(tCompanies().find((c) => c.id === cid(2))!.status).toBe("ready");
+    // Scheduling must NEVER send immediately:
     expect(sendEmail).not.toHaveBeenCalled();
   });
 
-  it("(19) an unapproved company is rejected with the exact gap", async () => {
-    seed({ count: 2, unapproved: [1] });
-    const res = await createAutoBewerbBatch(USER, { companyIds: idsOf(2), schedule: null });
-    expect(res.ok).toBe(false);
-    expect(res.code).toBe("batch_not_ready");
-    expect(res.errors?.[0]).toMatchObject({ companyId: cid(1), code: "not_approved" });
-    expect(db.tables.auto_bewerb_batches).toHaveLength(0);
+  it("(19) a LEGACY approved=false company is NOT rejected (auto-approval — no stale state blocks the batch)", async () => {
+    seed({ count: 2, unapproved: [1] }); // simulates a pre-migration row
+    const res = await createAutoBewerbBatch(USER, { companyIds: idsOf(2), schedule: FUTURE });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    expect(res.errors).toBeUndefined();
+    expect(tBatches()[0].snapshot.items).toHaveLength(2);
+    expect(tAttempts()).toHaveLength(2);
   });
 
   it("(3) a past schedule is rejected (server-side, never client state)", async () => {

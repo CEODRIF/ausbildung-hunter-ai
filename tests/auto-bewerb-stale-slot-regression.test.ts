@@ -63,7 +63,6 @@ vi.mock("@/lib/auto-bewerb/sending-window", () => ({
 const { createAdminClient } = await import("@/lib/supabase/admin");
 const { createEmailProvider } = await import("@/lib/email-providers");
 const {
-  approveAutoBewerbCompany,
   createAutoBewerbCompany,
   getAutoBewerbSendHistory,
   prepareAutoBewerbSend,
@@ -161,7 +160,7 @@ function seedBase(companies: Array<{ user?: string; company: string; status?: st
       ad_raw: AD_RAW, ad_extracted: extractFor(c.company, `jobs@seed-${seq}.de`, `Ausbildung ${c.company}`),
       ad_analysis: null, profile_snapshot: null, status, recipient_email: null, email_subject: null,
       email_body: null, email_attach_cv: true, email_attach_letter: true, email_account_id: ACCT,
-      idempotency_key: null, approved: c.approved ?? false, approved_at: (c.approved ?? false) ? TS : null,
+      idempotency_key: null, approved: c.approved ?? true, approved_at: (c.approved ?? true) ? TS : null,
       scheduled_at: null, schedule_timezone: null, sent_at: null, provider_message_id: null,
       last_failure_code: null, ad_confirmed_at: TS, cv_reviewed_at: null, letter_reviewed_at: null,
       created_at: TS, updated_at: TS,
@@ -375,8 +374,7 @@ describe("S11 — history preservation", () => {
       { company: "Hist Live", status: "draft", slot: 3 },
     ]);
     const cid = idOf("Hist Live");
-    const approved = await approveAutoBewerbCompany(USER, cid);
-    expect(approved.ok).toBe(true);
+    // Auto-approval: companies are approved by default — no consent step.
     await withDocs(cid, "Hist Live");
     const prep = await prepareAutoBewerbSend(USER, { companyId: cid });
     expect(prep.ok).toBe(true);
