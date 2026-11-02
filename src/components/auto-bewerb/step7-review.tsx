@@ -771,13 +771,14 @@ export function Step7Review() {
             <div className="mt-4 hidden overflow-x-clip md:block">
               <table className="w-full border-collapse text-left">
                 <thead>
+                  {/* Subtle rounded header band — matches the reference mock. */}
                   <tr className="text-[11px] font-semibold uppercase tracking-wide text-faint">
-                    <th className="pb-2 pr-4 font-semibold">{t("autoBewerb.historyColCompany")}</th>
-                    <th className="pb-2 pr-4 font-semibold">{t("autoBewerb.historyColPosition")}</th>
-                    <th className="pb-2 pr-4 font-semibold">{t("autoBewerb.historyColEmail")}</th>
-                    <th className="pb-2 pr-4 font-semibold">{t("autoBewerb.historyColSentAt")}</th>
-                    <th className="pb-2 pr-4 font-semibold">{t("autoBewerb.historyColStatus")}</th>
-                    <th className="w-12 pb-2" aria-hidden="true" />
+                    <th className="rounded-l-lg bg-surface-2/60 py-2 pr-4 font-semibold">{t("autoBewerb.historyColCompany")}</th>
+                    <th className="bg-surface-2/60 py-2 pr-4 font-semibold">{t("autoBewerb.historyColPosition")}</th>
+                    <th className="bg-surface-2/60 py-2 pr-4 font-semibold">{t("autoBewerb.historyColEmail")}</th>
+                    <th className="bg-surface-2/60 py-2 pr-4 font-semibold">{t("autoBewerb.historyColSentAt")}</th>
+                    <th className="bg-surface-2/60 py-2 pr-4 font-semibold">{t("autoBewerb.historyColStatus")}</th>
+                    <th className="w-12 rounded-r-lg bg-surface-2/60 py-2" aria-hidden="true" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
