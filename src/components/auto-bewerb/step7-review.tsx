@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import Link from "next/link";
-import { CalendarClock, ListPlus, Paperclip, Send, XCircle } from "lucide-react";
+import { CalendarClock, CheckCircle2, FileText, List, ListPlus, Paperclip, Send, XCircle } from "lucide-react";
 import { Button, Modal } from "@/components/ui";
 import { EmptyState, StatusPill, type StatusTone } from "@/components/ui/feedback";
 import { ScheduleForm } from "@/components/schedule-form";
@@ -96,6 +96,8 @@ export function Step7Review() {
   const [results, setResults] = useState<AutoBewerbBatchItemResult[] | null>(null);
   const [batchMeta, setBatchMeta] = useState<AutoBewerbBatchResult | null>(null);
   const [batchErrors, setBatchErrors] = useState<AutoBewerbBatchItemError[] | null>(null);
+  // Versand-Historie: which row's details expansion is open (client-only).
+  const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
 
   const s = ws.emailSettings; // null = legacy database (per-company rows)
   const globalComplete = Boolean(s && s.body.trim() && s.subject.trim() && s.accountId);
@@ -205,6 +207,12 @@ export function Step7Review() {
   const readyViews = selectedViews.filter(sendable);
   const allReady = selectedViews.length > 0 && readyViews.length === selectedViews.length;
   const atCap = selection.size >= AUTO_BEWERB_COMPANY_LIMIT;
+
+  // Versand-Historie summary — derived from the EXACT persisted rows shown
+  // below (never hardcoded, never demo numbers).
+  const history = ws.sendHistory ?? [];
+  const historySentCount = history.filter((h) => h.status === "sent").length;
+  const historyFailedCount = history.filter((h) => (h.status as string) === "failed").length;
 
   /** One honest result line per company of the last accepted batch. */
   const resultText = (r: AutoBewerbBatchItemResult): string => {
@@ -716,52 +724,192 @@ export function Step7Review() {
         </div>
       </SectionCard>
 
-      {/* G. Sending history — the preserved audit records of companies that
-          auto-left the active list (sent / safely cancelled). Nothing is ever
-          cascade-deleted: name, recipient, position, result, timestamp,
-          sending account and batch id stay accessible here. */}
-      <SectionCard title={t("autoBewerb.historyTitle")}>
-        {(ws.sendHistory?.length ?? 0) === 0 ? (
-          <p className="text-sm text-muted">{t("autoBewerb.historyEmpty")}</p>
+      {/* G. Versand-Ergebnisse (Versand-Historie) — the preserved audit
+          records of companies that auto-left the active list (sent / safely
+          cancelled). Nothing is ever cascade-deleted: name, recipient,
+          position, result, timestamp, sending account and batch id stay
+          accessible here (data source = ws.sendHistory, unchanged).
+          Redesign per the reference: icon + numbered title + subtitle,
+          REAL summary badges (computed from the displayed rows — never
+          hardcoded), responsive table (desktop) / compact cards (mobile).
+          Note: the persisted history carries the terminal statuses
+          "sent" / "cancelled"; a "failed" badge + counter are supported by
+          the design and count from real data (0 today — failed sends keep
+          their company in the ACTIVE list, where they are tracked). */}
+      <section className="rounded-3xl border border-line bg-surface p-5 shadow-[var(--shadow-card)] sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent-soft/70 text-accent">
+              <List size={18} />
+            </span>
+            <div>
+              <h2 className="text-base font-bold text-ink">{t("autoBewerb.historyTitle")}</h2>
+              <p className="mt-0.5 text-xs text-muted">{t("autoBewerb.historySubtitle")}</p>
+            </div>
+          </div>
+          {/* Summary badges — counts of the EXACT rows below (no demo data). */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success-soft/50 px-3 py-1 text-xs font-bold text-success">
+              <CheckCircle2 size={13} />
+              {t("autoBewerb.historyBadgeSuccess")}: {historySentCount}
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-danger/30 bg-danger-soft/50 px-3 py-1 text-xs font-bold text-danger">
+              <XCircle size={13} />
+              {t("autoBewerb.historyBadgeFailed")}: {historyFailedCount}
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2/70 px-3 py-1 text-xs font-bold text-ink-soft">
+              {t("autoBewerb.historyBadgeTotal")}: {history.length}
+            </span>
+          </div>
+        </div>
+
+        {history.length === 0 ? (
+          <p className="mt-4 text-sm text-muted">{t("autoBewerb.historyEmpty")}</p>
         ) : (
-          <ul className="divide-y divide-line">
-            {(ws.sendHistory ?? []).map((h) => (
-              <li key={h.companyId} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-xs">
-                <StatusPill
-                  tone={h.status === "sent" ? "success" : "skipped"}
-                  label={h.status === "sent" ? t("autoBewerb.historyStatusSent") : t("autoBewerb.historyStatusCancelled")}
-                />
-                <span className="font-bold text-ink">{h.company}</span>
-                {h.position && <span className="text-muted">{h.position}</span>}
-                {h.recipient && (
-                  <span className="text-muted">
-                    {t("autoBewerb.recipientLabel")}: {h.recipient}
-                  </span>
-                )}
-                <span className="text-faint">
-                  {h.sentAt
-                    ? h.status === "sent"
-                      ? t("autoBewerb.historySentAt", { time: fmtTime(h.sentAt) })
-                      : t("autoBewerb.historyCancelledAt", { time: fmtTime(h.sentAt) })
-                    : h.status === "sent"
-                      ? t("autoBewerb.historySentAt", { time: "—" })
-                      : t("autoBewerb.historyCancelledAt", { time: "—" })}
-                </span>
-                {h.accountEmail && (
-                  <span className="text-faint">
-                    {t("autoBewerb.historyAccount")}: {h.accountEmail}
-                  </span>
-                )}
-                {h.batchId && (
-                  <span className="font-mono text-[10px] text-faint">
-                    {t("autoBewerb.historyBatch")} {h.batchId.slice(0, 8)}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
+          <>
+            {/* Desktop: clean table with subtle row separators + hover */}
+            <div className="mt-4 hidden overflow-x-clip md:block">
+              <table className="w-full border-collapse text-left">
+                <thead>
+                  <tr className="text-[11px] font-semibold uppercase tracking-wide text-faint">
+                    <th className="pb-2 pr-4 font-semibold">{t("autoBewerb.historyColCompany")}</th>
+                    <th className="pb-2 pr-4 font-semibold">{t("autoBewerb.historyColPosition")}</th>
+                    <th className="pb-2 pr-4 font-semibold">{t("autoBewerb.historyColEmail")}</th>
+                    <th className="pb-2 pr-4 font-semibold">{t("autoBewerb.historyColSentAt")}</th>
+                    <th className="pb-2 pr-4 font-semibold">{t("autoBewerb.historyColStatus")}</th>
+                    <th className="w-12 pb-2" aria-hidden="true" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {history.map((h) => (
+                    <Fragment key={h.companyId}>
+                      <tr className="transition-colors duration-150 hover:bg-surface-2/40">
+                        <td className="py-2.5 pr-4">
+                          <span className="flex items-center gap-2.5">
+                            {/* Monogram tile — the data carries no logo, so the
+                                company initial is the neutral visual anchor. */}
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface-2/60 text-xs font-bold text-muted">
+                              {(h.company.trim().charAt(0) || "?").toUpperCase()}
+                            </span>
+                            <span className="text-sm font-semibold text-ink">{h.company}</span>
+                          </span>
+                        </td>
+                        <td className="py-2.5 pr-4 text-sm text-muted">{h.position || "—"}</td>
+                        <td className="py-2.5 pr-4 text-sm text-muted">{h.recipient || "—"}</td>
+                        <td className="py-2.5 pr-4 text-sm text-ink-soft">{h.sentAt ? fmtTime(h.sentAt) : "—"}</td>
+                        <td className="py-2.5 pr-4">
+                          <StatusPill
+                            tone={(h.status as string) === "failed" ? "blocked" : h.status === "sent" ? "success" : "skipped"}
+                            label={
+                              (h.status as string) === "failed"
+                                ? t("autoBewerb.historyBadgeFailed")
+                                : h.status === "sent"
+                                  ? t("autoBewerb.historyStatusSent")
+                                  : t("autoBewerb.historyStatusCancelled")
+                            }
+                          />
+                        </td>
+                        <td className="py-2.5 text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label={`${t("autoBewerb.historyColDetails")} — ${h.company}`}
+                            onClick={() => setExpandedHistory(expandedHistory === h.companyId ? null : h.companyId)}
+                          >
+                            <FileText size={15} />
+                          </Button>
+                        </td>
+                      </tr>
+                      {expandedHistory === h.companyId && (
+                        <tr className="bg-surface-2/30">
+                          <td colSpan={6} className="px-1 pb-3 pt-0">
+                            <dl className="grid gap-x-4 gap-y-0.5 pl-1 text-xs text-muted sm:grid-cols-2">
+                              <div>
+                                <dt className="inline font-semibold text-faint">{t("autoBewerb.recipientLabel")}: </dt>
+                                <dd className="inline text-ink-soft">{h.recipient || "—"}</dd>
+                              </div>
+                              <div>
+                                <dt className="inline font-semibold text-faint">{t("autoBewerb.historyAccount")}: </dt>
+                                <dd className="inline text-ink-soft">{h.accountEmail || "—"}</dd>
+                              </div>
+                              <div>
+                                <dt className="inline font-semibold text-faint">
+                                  {h.status === "sent" ? t("autoBewerb.historySentAt", { time: h.sentAt ? fmtTime(h.sentAt) : "—" }) : t("autoBewerb.historyCancelledAt", { time: h.sentAt ? fmtTime(h.sentAt) : "—" })}
+                                </dt>
+                              </div>
+                              {h.batchId && (
+                                <div>
+                                  <dt className="inline font-semibold text-faint">{t("autoBewerb.historyBatch")}: </dt>
+                                  <dd className="inline font-mono text-[11px] text-ink-soft">{h.batchId.slice(0, 8)}</dd>
+                                </div>
+                              )}
+                            </dl>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile: compact cards (no horizontal overflow) */}
+            <ul className="mt-4 space-y-3 md:hidden">
+              {history.map((h) => (
+                <li key={h.companyId} className="rounded-2xl border border-line bg-surface-2/30 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface-2/60 text-xs font-bold text-muted">
+                        {(h.company.trim().charAt(0) || "?").toUpperCase()}
+                      </span>
+                      <span className="truncate text-sm font-semibold text-ink">{h.company}</span>
+                    </span>
+                    <StatusPill
+                      tone={(h.status as string) === "failed" ? "blocked" : h.status === "sent" ? "success" : "skipped"}
+                      label={
+                        (h.status as string) === "failed"
+                          ? t("autoBewerb.historyBadgeFailed")
+                          : h.status === "sent"
+                            ? t("autoBewerb.historyStatusSent")
+                            : t("autoBewerb.historyStatusCancelled")
+                      }
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-muted">{h.position || "—"}</p>
+                  <p className="mt-1 text-xs text-muted">
+                    {t("autoBewerb.historyColEmail")}: {h.recipient || "—"}
+                  </p>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <span className="text-xs text-faint">{h.sentAt ? fmtTime(h.sentAt) : "—"}</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`${t("autoBewerb.historyColDetails")} — ${h.company}`}
+                      onClick={() => setExpandedHistory(expandedHistory === h.companyId ? null : h.companyId)}
+                    >
+                      <FileText size={15} />
+                    </Button>
+                  </div>
+                  {expandedHistory === h.companyId && (
+                    <dl className="mt-2 space-y-0.5 border-t border-line pt-2 text-xs text-muted">
+                      <div>
+                        <dt className="inline font-semibold text-faint">{t("autoBewerb.historyAccount")}: </dt>
+                        <dd className="inline text-ink-soft">{h.accountEmail || "—"}</dd>
+                      </div>
+                      {h.batchId && (
+                        <div>
+                          <dt className="inline font-semibold text-faint">{t("autoBewerb.historyBatch")}: </dt>
+                          <dd className="inline font-mono text-[11px] text-ink-soft">{h.batchId.slice(0, 8)}</dd>
+                        </div>
+                      )}
+                    </dl>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </>
         )}
-      </SectionCard>
+      </section>
 
       {/* Explicit confirmation — the EXACT shared e-mail configuration +
           the verified delivery destination for EVERY recipient */}

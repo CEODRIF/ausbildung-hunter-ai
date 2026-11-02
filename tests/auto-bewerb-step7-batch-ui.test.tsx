@@ -203,10 +203,15 @@ function mount(ws: Record<string, unknown>) {
 afterEach(cleanup);
 
 describe("Step 7 batch UI (batchesSupported = true)", () => {
-  it("NO queue panel: persisted batches render nothing — history + stats + review remain the tracking surface", () => {
+  it("NO queue panel: persisted batches render nothing — redesigned history + stats + review remain the tracking surface", () => {
     mount(makeWs({
       batches: [batchView()], // must NOT render a queue section anymore
-      sendHistory: [historyView()],
+      sendHistory: [
+        historyView(),
+        // A cancelled record (no send date, no batch) — the existing status
+        // must stay visible in the new design:
+        historyView({ companyId: "cd", company: "Firma D GmbH", position: "Kaufmann", recipient: "hr@firma-d.de", status: "cancelled", sentAt: null, batchId: null }),
+      ],
       stats: { sentToday: 2, scheduled: 1, processing: 0, totalToday: 5, failed: 0 },
     }));
     // The removed "Versand-Warteschlange" section — and every part of it —
@@ -233,14 +238,34 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     expect(screen.getByText("Heute gesendet")).toBeInTheDocument();
     expect(screen.getByText("Heute gesamt")).toBeInTheDocument();
     expect(screen.getAllByText("2").length).toBeGreaterThanOrEqual(1);
-    // Versand-Historie is the MAIN send record — all data fields preserved:
-    expect(screen.getByText("Versand-Historie")).toBeInTheDocument();
-    expect(screen.getByText("Firma C GmbH")).toBeInTheDocument(); // company
-    expect(screen.getByText("Fachinformatiker")).toBeInTheDocument(); // position
-    expect(screen.getByText(/jobs@firma-c\.de/)).toBeInTheDocument(); // recipient
-    expect(screen.getByText("Gesendet")).toBeInTheDocument(); // status
-    expect(screen.getByText(/Versand-Konto/)).toBeInTheDocument(); // account
-    expect(screen.getByText(/^Batch /)).toBeInTheDocument(); // batch id
+    // Versand-Historie (redesigned) is the MAIN send record — numbered
+    // title, subtitle, REAL summary badges and every persisted field.
+    // (jsdom renders the desktop table AND the mobile cards — count-aware
+    // matchers throughout.)
+    expect(screen.getByText(/Versand-Ergebnisse \(Versand-Historie\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Übersicht aller gesendeten Bewerbungen/)).toBeInTheDocument();
+    // Summary badges = counts of the EXACT displayed rows (1 sent, 1
+    // cancelled, 0 failed — never hardcoded):
+    expect(screen.getByText("Erfolgreich: 1")).toBeInTheDocument();
+    expect(screen.getByText("Fehlgeschlagen: 0")).toBeInTheDocument();
+    expect(screen.getByText("Gesamt: 2")).toBeInTheDocument();
+    // Table headers:
+    expect(screen.getByText("Unternehmen")).toBeInTheDocument();
+    expect(screen.getByText("Gesendet am")).toBeInTheDocument();
+    expect(screen.getAllByText("Status").length).toBeGreaterThanOrEqual(1);
+    // Row 1 (sent): company, position, recipient, success badge:
+    expect(screen.getAllByText("Firma C GmbH").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Fachinformatiker").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/jobs@firma-c\.de/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Erfolgreich").length).toBeGreaterThanOrEqual(1);
+    // Row 2 (cancelled): the existing status stays visible:
+    expect(screen.getAllByText("Abgebrochen").length).toBeGreaterThanOrEqual(1);
+    // Details are collapsed by default (account + batch hidden)…
+    expect(screen.queryByText(/Versand-Konto:/)).toBeNull();
+    // …and accessible through the details action:
+    fireEvent.click(screen.getAllByRole("button", { name: /Details — Firma C GmbH/ })[0]);
+    expect(screen.getAllByText(/Versand-Konto/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/batch-hi/).length).toBeGreaterThanOrEqual(1);
   });
 
   it("selecting companies builds the current batch with readiness; send-now goes through the confirmation modal with ids + confirmation ONLY", async () => {
