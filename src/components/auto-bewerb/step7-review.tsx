@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { CalendarClock, ChevronDown, ListPlus, Paperclip, Send, Timer, XCircle } from "lucide-react";
+import { CalendarClock, ListPlus, Paperclip, Send, XCircle } from "lucide-react";
 import { Button, Modal } from "@/components/ui";
 import { EmptyState, StatusPill, type StatusTone } from "@/components/ui/feedback";
 import { ScheduleForm } from "@/components/schedule-form";
@@ -23,7 +23,6 @@ import type {
 } from "@/lib/auto-bewerb/engine";
 import { AUTO_BEWERB_SENDING_WINDOW, formatWindowTime, windowLabel } from "@/lib/auto-bewerb/sending-window";
 import {
-  cancelBatchAction,
   cancelSendAction,
   createBatchAction,
   scheduleCompaniesAction,
@@ -46,12 +45,16 @@ import { Note, SectionCard, companyLabel, statusPill, useAutoBewerb } from "./sh
   *  - partial exclusion: an incomplete selected company is dropped from the
   *    batch with its exact reason (shown in the results panel) and NEVER
   *    blocks the eligible subset;
- *  - the 3:30 inter-batch delay and the 5s per-account e-mail interval are
- *    enforced SERVER-SIDE (RPC gate + sender slots) — every countdown here
- *    is visual only;
- *  - databases without the batches migration fall back to the legacy
- *    per-company send/schedule path (batchesSupported = false).
- */
+  *  - the 3:30 inter-batch delay and the 5s per-account e-mail interval are
+  *    enforced SERVER-SIDE (RPC gate + sender slots);
+  *  - there is NO queue panel in this step (removed for UI simplification):
+  *    the review list (scheduled times + per-company states), the persisted
+  *    statistics and the "Versand-Historie" section are the tracking surface.
+  *    The backend (batches, attempts, cron scheduler, batch cancel API) is
+  *    unchanged — only the display section went away;
+  *  - databases without the batches migration fall back to the legacy
+  *    per-company send/schedule path (batchesSupported = false).
+  */
 
 /** The status set a company can still (re-)enter a batch from — sent,
  *  scheduled and sending companies are already committed to a delivery. */
@@ -71,26 +74,6 @@ const BATCH_TONE: Record<AutoBewerbBatchStatus, StatusTone> = {
   failed: "blocked",
   cancelled: "skipped",
 };
-
-const BATCH_TERMINAL: ReadonlyArray<AutoBewerbBatchStatus> = [
-  "completed",
-  "partially_failed",
-  "failed",
-  "cancelled",
-];
-
-/** Visual-only countdown formatting (the server owns the actual schedule). */
-function countdownText(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const d = Math.floor(total / 86400);
-  const h = Math.floor((total % 86400) / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
 
 function StatTile({ label, value, hint }: { label: string; value: number | string; hint?: string }) {
   return (
@@ -113,10 +96,6 @@ export function Step7Review() {
   const [results, setResults] = useState<AutoBewerbBatchItemResult[] | null>(null);
   const [batchMeta, setBatchMeta] = useState<AutoBewerbBatchResult | null>(null);
   const [batchErrors, setBatchErrors] = useState<AutoBewerbBatchItemError[] | null>(null);
-  const [expandedBatch, setExpandedBatch] = useState<string | null>(null);
-  const [cancellingBatch, setCancellingBatch] = useState<string | null>(null);
-  // Visual-only clock for the queue countdowns (30 s tick, never authoritative).
-  const [now, setNow] = useState(() => Date.now());
 
   const s = ws.emailSettings; // null = legacy database (per-company rows)
   const globalComplete = Boolean(s && s.body.trim() && s.subject.trim() && s.accountId);
@@ -128,11 +107,6 @@ export function Step7Review() {
     capacity: AUTO_BEWERB_COMPANY_LIMIT,
     available: Math.max(0, AUTO_BEWERB_COMPANY_LIMIT - ws.companies.length),
   };
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(id);
-  }, []);
 
   const fmtTime = (iso: string) => new Date(iso).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
 
@@ -386,20 +360,6 @@ export function Step7Review() {
     } else notify("error", t("autoBewerb.saveError"));
   };
 
-  /** Safe batch cancellation — only before the batch started (the engine
-   *  re-checks the status atomically); releases queue reservations only. */
-  const cancelBatch = async (batchId: string) => {
-    setCancellingBatch(batchId);
-    const res = await cancelBatchAction(batchId);
-    setCancellingBatch(null);
-    if (res.ok) {
-      await refresh();
-      notify("success", t("autoBewerb.queueCancelled"));
-    } else {
-      notify("error", t("autoBewerb.saveError"));
-    }
-  };
-
   const batchStatusLabel = (status: AutoBewerbBatchStatus): string =>
     status === "scheduled"
       ? t("autoBewerb.batchStatusScheduled")
@@ -415,10 +375,12 @@ export function Step7Review() {
                 ? t("autoBewerb.batchStatusFailed")
                 : t("autoBewerb.batchStatusCancelled");
 
-  // Empty ONLY when there is truly nothing: no active companies, no batches
-  // and no preserved history. With automatic removal a fully-delivered
-  // campaign leaves the active list — the queue + history must still show.
-  if (ws.companies.length === 0 && ws.batches.length === 0 && (ws.sendHistory?.length ?? 0) === 0) {
+  // Empty ONLY when there is truly nothing: no active companies and no
+  // preserved history. With automatic removal a fully-delivered campaign
+  // leaves the active list — the history must still show. (No queue panel
+  // exists anymore: an active batch implies reserved companies, which are
+  // shown in the review list with their scheduled times.)
+  if (ws.companies.length === 0 && (ws.sendHistory?.length ?? 0) === 0) {
     return <EmptyState title={t("autoBewerb.reviewEmpty")} body={t("autoBewerb.reviewEmptyBody")} illustration={<Send size={34} strokeWidth={1.6} />} ctaIcon={<Button variant="primary" onClick={() => goToStep(2)}>{t("autoBewerb.goToCompanies")}</Button>} />;
   }
 
@@ -611,83 +573,10 @@ export function Step7Review() {
         </div>
       )}
 
-      {/* C. Versand-Warteschlange — real persisted queue data */}
-      {batchMode && (
-        <SectionCard title={t("autoBewerb.queueTitle")}>
-          {ws.batches.length === 0 ? (
-            <p className="text-sm text-muted">{t("autoBewerb.queueEmpty")}</p>
-          ) : (
-            <ul className="space-y-3">
-              {ws.batches.map((b) => {
-                const cancellable = b.status === "scheduled" || b.status === "waiting";
-                const countdown =
-                  cancellable && b.scheduled_at && Date.parse(b.scheduled_at) > now
-                    ? countdownText(Date.parse(b.scheduled_at) - now)
-                    : null;
-                const expanded = expandedBatch === b.id;
-                const terminal = BATCH_TERMINAL.includes(b.status);
-                return (
-                  <li
-                    key={b.id}
-                    className={`rounded-2xl border p-4 ${
-                      b.status === "sending" ? "border-accent/40 bg-accent-soft/10" : "border-line bg-surface-2/30"
-                    } ${terminal ? "opacity-75" : ""}`}
-                  >
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                      <span className="text-sm font-bold text-ink">{t("autoBewerb.queueBatchNo", { no: b.batch_no })}</span>
-                      <span className="text-xs text-muted">{t("autoBewerb.queueCompanies", { count: b.snapshot.items.length })}</span>
-                      <StatusPill tone={BATCH_TONE[b.status]} label={batchStatusLabel(b.status)} />
-                      {b.scheduled_at && (
-                        <span className="text-xs text-ink-soft">{t("autoBewerb.queueScheduledAt", { time: fmtTime(b.scheduled_at) })}</span>
-                      )}
-                      {b.started_at && (
-                        <span className="text-xs text-ink-soft">{t("autoBewerb.queueStartedAt", { time: fmtTime(b.started_at) })}</span>
-                      )}
-                      {countdown && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft/60 px-2 py-0.5 text-[11px] font-bold text-accent">
-                          <Timer size={11} />
-                          {t("autoBewerb.queueCountdown", { time: countdown })}
-                        </span>
-                      )}
-                      {b.status === "waiting" && !countdown && (
-                        <span className="text-[11px] font-semibold text-warning">{t("autoBewerb.queueWaitingGate")}</span>
-                      )}
-                      <span className="text-xs text-muted">{t("autoBewerb.queueAccount", { account: b.snapshot.accountEmail || "—" })}</span>
-                    </div>
-                    <p className="mt-1.5 text-[11px] text-faint">
-                      {t("autoBewerb.queueCounts", { sent: b.sentCount, failed: b.failedCount, pending: b.pendingCount })}
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Button variant="ghost" size="sm" onClick={() => setExpandedBatch(expanded ? null : b.id)}>
-                        <ChevronDown size={14} className={expanded ? "rotate-180" : ""} />
-                        {expanded ? t("autoBewerb.queueHideDetails") : t("autoBewerb.queueDetails")}
-                      </Button>
-                      {cancellable && (
-                        <Button variant="ghost" size="sm" onClick={() => void cancelBatch(b.id)} disabled={cancellingBatch !== null}>
-                          <XCircle size={14} />
-                          {cancellingBatch === b.id ? t("autoBewerb.queueCancelling") : t("autoBewerb.queueCancel")}
-                        </Button>
-                      )}
-                    </div>
-                    {expanded && (
-                      <ul className="mt-3 divide-y divide-line rounded-xl border border-line bg-surface px-3 py-1">
-                        {b.snapshot.items.map((item) => (
-                          <li key={item.companyId} className="flex flex-wrap items-baseline gap-2 py-2 text-xs">
-                            <span className="font-semibold text-ink">{item.company}</span>
-                            {item.position && <span className="text-muted">{item.position}</span>}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </SectionCard>
-      )}
-
-      {/* Company review list — build the batch (up to 100, bounded by the global capacity) */}
+      {/* Company review list — build the batch (up to 100, bounded by the global capacity).
+          Scheduled/sending companies stay here with their scheduled time — this
+          list + the statistics + the Versand-Historie below are the tracking
+          surface (the former "Versand-Warteschlange" panel was removed). */}
       <SectionCard title={t("autoBewerb.reviewHeading")}>
         <ul className="divide-y divide-line">
           {ws.companies.map((v) => {
@@ -759,8 +648,9 @@ export function Step7Review() {
                     </p>
                   )}
                 </div>
-                {/* Legacy per-attempt cancel only (batch mode: cancel the whole
-                    batch from the queue panel — the atomic status gate applies). */}
+                 {/* Legacy per-attempt cancel (batch mode: the batch cancel API
+                     remains server-side; the queue panel with its button was
+                     removed for UI simplification). */}
                  {!batchMode && r.status === "scheduled" && v.latestAttempt && (
                    <Button variant="ghost" size="sm" onClick={() => void cancelScheduled(v.latestAttempt!.id)}>
                      <XCircle size={14} />
