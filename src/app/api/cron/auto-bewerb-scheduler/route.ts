@@ -14,8 +14,9 @@ import { windowLabel } from "@/lib/auto-bewerb/sending-window";
  *   - Concurrency-safe: claim_due_auto_bewerb_attempts uses FOR UPDATE
  *     SKIP LOCKED and dispatchAutoBewerbAttempt re-claims atomically, so an
  *     overlapping tick can never double-send.
- *   - Every dispatched attempt was explicitly approved + confirmed by the
- *     user; nothing is enqueued by page visits or generation.
+  *   - Every dispatched attempt was explicitly CONFIRMED by the user (the
+  *     send-confirmation modal shows the exact recipients + attachments);
+  *     nothing is enqueued by page visits or generation.
  *   - Safe logs: counts and ids only — never recipients or content.
  *
  * Wired in .github/workflows/email-scheduler.yml (same cadence as the

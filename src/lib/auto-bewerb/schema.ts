@@ -308,9 +308,15 @@ export interface AutoBewerbCompanyRow {
   email_attach_cv: boolean;
   email_attach_letter: boolean;
   email_account_id: string | null;
-  idempotency_key: string | null;
-  approved: boolean;
-  approved_at: string | null;
+   idempotency_key: string | null;
+   /** @deprecated LEGACY manual-approval flag — the "Genehmigen" step was
+    *  removed (auto-approval since migration 20261223000000). The column
+    *  exists only as a historical audit field: every new row is stamped
+    *  true, existing rows are backfilled true, and NO engine/UI path reads
+    *  or gates on it. Kept on the row type because the DB column still
+    *  exists (no destructive change). */
+   approved: boolean;
+   approved_at: string | null;
   scheduled_at: string | null;
   schedule_timezone: string | null;
   sent_at: string | null;

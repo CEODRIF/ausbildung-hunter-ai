@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { CalendarClock, CheckCircle2, ChevronDown, ListPlus, Paperclip, Send, Timer, XCircle } from "lucide-react";
+import { CalendarClock, ChevronDown, ListPlus, Paperclip, Send, Timer, XCircle } from "lucide-react";
 import { Button, Modal } from "@/components/ui";
 import { EmptyState, StatusPill, type StatusTone } from "@/components/ui/feedback";
 import { ScheduleForm } from "@/components/schedule-form";
@@ -23,7 +23,6 @@ import type {
 } from "@/lib/auto-bewerb/engine";
 import { AUTO_BEWERB_SENDING_WINDOW, formatWindowTime, windowLabel } from "@/lib/auto-bewerb/sending-window";
 import {
-  approveCompanyAction,
   cancelBatchAction,
   cancelSendAction,
   createBatchAction,
@@ -35,14 +34,18 @@ import { Note, SectionCard, companyLabel, statusPill, useAutoBewerb } from "./sh
 /**
  * Step 7 — final review, explicit confirmation, multi-batch send / schedule.
  *
- * Safety contract (mirrors the engine):
- *  - the ONE global e-mail configuration (Step 6) is the exact content for
- *    EVERY company in the batch — the client passes only company ids;
- *  - a batch is a persistent unit: an immutable snapshot + per-company
- *    attempts are stored server-side and survive refresh / logout / restart;
- *  - a send only happens after a confirmation modal that lists the EXACT
- *    shared subject/body/account/attachments + the per-company delivery
- *    destination (each company's verified address);
+  * Safety contract (mirrors the engine):
+  *  - there is NO manual per-company approval ("Genehmigen" was removed —
+  *    companies are auto-approved, migration 20261223000000); the send gate
+  *    is the explicit CONFIRMATION modal below (exact shared content +
+  *    every verified destination + the companies excluded for gaps);
+  *  - the ONE global e-mail configuration (Step 6) is the exact content for
+  *    EVERY company in the batch — the client passes only company ids;
+  *  - a batch is a persistent unit: an immutable snapshot + per-company
+  *    attempts are stored server-side and survive refresh / logout / restart;
+  *  - partial exclusion: an incomplete selected company is dropped from the
+  *    batch with its exact reason (shown in the results panel) and NEVER
+  *    blocks the eligible subset;
  *  - the 3:30 inter-batch delay and the 5s per-account e-mail interval are
  *    enforced SERVER-SIDE (RPC gate + sender slots) — every countdown here
  *    is visual only;
@@ -110,7 +113,6 @@ export function Step7Review() {
   const [results, setResults] = useState<AutoBewerbBatchItemResult[] | null>(null);
   const [batchMeta, setBatchMeta] = useState<AutoBewerbBatchResult | null>(null);
   const [batchErrors, setBatchErrors] = useState<AutoBewerbBatchItemError[] | null>(null);
-  const [approvingId, setApprovingId] = useState<string | null>(null);
   const [expandedBatch, setExpandedBatch] = useState<string | null>(null);
   const [cancellingBatch, setCancellingBatch] = useState<string | null>(null);
   // Visual-only clock for the queue countdowns (30 s tick, never authoritative).
@@ -158,13 +160,14 @@ export function Step7Review() {
     };
   };
 
+  /** Send-readiness = base status + complete data (verified recipient + the
+   *  documents the attachment flags demand + a complete global
+   *  configuration). NO manual approval: companies are auto-approved — the
+   *  engine re-checks every condition server-side at prepare/dispatch. */
   const sendable = (v: AutoBewerbCompanyView): boolean => {
     const r = v.company;
     const base = r.status === "draft" || r.status === "ready" || r.status === "failed" || r.status === "cancelled";
     if (!base) return false;
-    // Explicit approval is REQUIRED (engine gate — set via the row's
-    // "Genehmigen" button; the engine re-checks it server-side at send).
-    if (!r.approved) return false;
     const cfg = emailCfg(v);
     if (s) {
       // Global configuration: complete settings + a resolvable verified
@@ -181,10 +184,10 @@ export function Step7Review() {
   const selectable = (v: AutoBewerbCompanyView): boolean =>
     batchMode ? BASE_SELECTABLE.includes(v.company.status) : sendable(v);
 
+  /** The REAL send blockers only (recipient, documents, configuration) —
+   *  no approval item exists anymore. */
   const missing = (v: AutoBewerbCompanyView): string[] => {
     const out: string[] = [];
-    const r = v.company;
-    if (!r.approved) out.push(t("autoBewerb.missingApproval"));
     const cfg = emailCfg(v);
     if (!cfg.body) out.push(t("autoBewerb.templateEmptyNote"));
     if (!cfg.subject) out.push(t("autoBewerb.missingSubject"));
@@ -240,7 +243,6 @@ export function Step7Review() {
     }
     const code = r.failureCode ?? r.code ?? "";
     if (code === "already_sent") return t("autoBewerb.alreadySentNote");
-    if (code === "not_approved") return t("autoBewerb.notApprovedResult");
     if (code === "no_email_account") return t("autoBewerb.emailAccountNoneBody");
     return t("autoBewerb.resultFailed", { code });
   };
@@ -248,7 +250,6 @@ export function Step7Review() {
   /** Actionable per-company gap text for batch pre-validation failures. */
   const itemErrorText = (code: string): string => {
     switch (code) {
-      case "not_approved": return t("autoBewerb.notApprovedResult");
       case "already_sent": return t("autoBewerb.alreadySentNote");
       case "invalid_recipient": return t("autoBewerb.invalidRecipient");
       case "missing_cv": return t("autoBewerb.missingCv");
@@ -278,7 +279,9 @@ export function Step7Review() {
   const handleBatchCreated = (res: AutoBewerbBatchResult) => {
     setResults(res.items ?? []);
     setBatchMeta(res);
-    setBatchErrors(null);
+    // Partial exclusion: companies dropped server-side for gaps travel with
+    // the SUCCESS result — shown alongside the per-company send results.
+    setBatchErrors(res.errors ?? null);
     setSelected(new Set()); // spec: accepted batch leaves the active selection
     void refresh();
     if (res.windowDeferred) {
@@ -351,7 +354,10 @@ export function Step7Review() {
         hour: num("scheduleHour"),
         minute: num("scheduleMinute"),
       };
-      void createBatchAction(selectedViews.map((v) => v.company.id), schedule, true).then((res) => {
+              // ALL selected ids go to the server: the engine excludes the
+              // not-ready companies itself and reports each with its exact
+              // reason (shown in the results panel) — never a silent drop.
+              void createBatchAction(selectedViews.map((v) => v.company.id), schedule, true).then((res) => {
         setScheduling(false);
         if (res.ok) handleBatchCreated(res.value);
         else handleBatchError(res.code, "errors" in res ? res.errors : undefined);
@@ -370,20 +376,6 @@ export function Step7Review() {
         notify("error", t("autoBewerb.saveError"));
       }
     });
-  };
-
-  /** Explicit per-company approval — the engine refuses every send without
-   *  approved = true; this is the UI path that sets it (scoped by company id). */
-  const approve = async (companyId: string) => {
-    setApprovingId(companyId);
-    const res = await approveCompanyAction(companyId);
-    setApprovingId(null);
-    if (res.ok) {
-      await refresh();
-      notify("success", t("autoBewerb.approvedNote"));
-    } else {
-      notify("error", res.code === "already_sent" ? t("autoBewerb.alreadySentNote") : t("autoBewerb.saveError"));
-    }
   };
 
   const cancelScheduled = async (attemptId: string) => {
@@ -574,21 +566,27 @@ export function Step7Review() {
                 );
               })}
             </ul>
-            {!allReady && <p className="mt-2 text-xs text-warning">{t("autoBewerb.noneSelectable")}</p>}
+            {!allReady && (
+              <p className="mt-2 text-xs text-warning">
+                {t("autoBewerb.partialBatchWarning", { ready: readyViews.length, total: selectedViews.length })}
+              </p>
+            )}
             {atCap && <p className="mt-2 text-xs text-faint">{t("autoBewerb.currentBatchMaxHint")}</p>}
             <div className="mt-4 flex flex-wrap gap-2">
-              <Button variant="primary" size="sm" onClick={() => setConfirmOpen(true)} disabled={!allReady || sending}>
+              {/* Partial-exclusion contract: at least ONE send-ready company
+                  is enough to start — the server drops the rest with reasons. */}
+              <Button variant="primary" size="sm" onClick={() => setConfirmOpen(true)} disabled={readyViews.length === 0 || sending}>
                 <Send size={14} />
-                {sending ? t("autoBewerb.sendingNote") : t("autoBewerb.sendNowButton", { count: selectedViews.length })}
+                {sending ? t("autoBewerb.sendingNote") : t("autoBewerb.sendNowButton", { count: readyViews.length })}
               </Button>
               <Button
                 variant="secondary"
                 size="sm"
                 onClick={() => document.getElementById("schedule-form")?.scrollIntoView({ behavior: "smooth" })}
-                disabled={!allReady || scheduling}
+                disabled={readyViews.length === 0 || scheduling}
               >
                 <CalendarClock size={14} />
-                {t("autoBewerb.scheduleButton", { count: selectedViews.length })}
+                {t("autoBewerb.scheduleButton", { count: readyViews.length })}
               </Button>
             </div>
           </>
@@ -714,11 +712,6 @@ export function Step7Review() {
                     <span className="truncate text-sm font-bold text-ink">{name}</span>
                     {job && <span className="truncate text-xs text-muted">{job}</span>}
                     {statusPill(r.status, t)}
-                    {r.approved && (
-                      <span className="rounded-full border border-success/30 bg-success-soft/50 px-2 py-0.5 text-[10px] font-bold text-success">
-                        {t("autoBewerb.approvedChip")}
-                      </span>
-                    )}
                     {res && (
                       <span className={`text-xs font-semibold ${res.ok ? "text-success" : "text-danger"}`}>
                         {res.ok ? (res.dispatchStatus === "queued" || res.dispatchStatus === "skipped" || res.scheduledAt ? t("autoBewerb.resultQueued") : t("autoBewerb.resultSent")) : resultText(res)}
@@ -751,19 +744,13 @@ export function Step7Review() {
                       </div>
                     )}
                   </dl>
-                  {gaps.length > 0 && (
+                   {gaps.length > 0 && (
                     <p className="mt-1 text-xs text-warning">
                       {gaps.join(" · ")}
-                      {/* Approval is fixed RIGHT HERE (row button) — the Step 6
-                          link only applies to the e-mail configuration gaps. */}
-                      {gaps.some((g) => g !== t("autoBewerb.missingApproval")) && (
-                        <>
-                          {" — "}
-                          <button type="button" className="font-semibold underline underline-offset-2" onClick={() => goToStep(6)}>
-                            {t("autoBewerb.fixInStep6")}
-                          </button>
-                        </>
-                      )}
+                      {" — "}
+                      <button type="button" className="font-semibold underline underline-offset-2" onClick={() => goToStep(6)}>
+                        {t("autoBewerb.fixInStep6")}
+                      </button>
                     </p>
                   )}
                   {r.scheduled_at && (
@@ -774,19 +761,13 @@ export function Step7Review() {
                 </div>
                 {/* Legacy per-attempt cancel only (batch mode: cancel the whole
                     batch from the queue panel — the atomic status gate applies). */}
-                {!batchMode && r.status === "scheduled" && v.latestAttempt && (
-                  <Button variant="ghost" size="sm" onClick={() => void cancelScheduled(v.latestAttempt!.id)}>
-                    <XCircle size={14} />
-                    {t("autoBewerb.cancelSchedule")}
-                  </Button>
-                )}
-                {r.status !== "sent" && !r.approved && (
-                  <Button variant="secondary" size="sm" onClick={() => void approve(r.id)} disabled={approvingId !== null}>
-                    <CheckCircle2 size={14} />
-                    {approvingId === r.id ? t("autoBewerb.approving") : t("autoBewerb.approveButton")}
-                  </Button>
-                )}
-              </li>
+                 {!batchMode && r.status === "scheduled" && v.latestAttempt && (
+                   <Button variant="ghost" size="sm" onClick={() => void cancelScheduled(v.latestAttempt!.id)}>
+                     <XCircle size={14} />
+                     {t("autoBewerb.cancelSchedule")}
+                   </Button>
+                 )}
+               </li>
             );
           })}
         </ul>
@@ -921,14 +902,34 @@ export function Step7Review() {
                 return body ? `${body.slice(0, 400)}${body.length > 400 ? "…" : ""}` : t("autoBewerb.templateEmptyNote");
               })()}
             </pre>
-            <p className="mt-1.5 text-faint">{t("autoBewerb.previewCount", { count: selectedViews.length })}</p>
+            <p className="mt-1.5 text-faint">{t("autoBewerb.previewCount", { count: readyViews.length })}</p>
+          </div>
+        )}
+
+        {/* Partial exclusion — the selected companies that will NOT be sent
+            (client mirror of the server-side pre-validation; the engine is
+            authoritative and re-checks everything at batch creation). */}
+        {selectedViews.length > 0 && !allReady && (
+          <div className="mt-3 rounded-2xl border border-warning/40 bg-warning-soft/40 p-3 text-xs">
+            <p className="font-bold text-warning">
+              {t("autoBewerb.confirmExcludedTitle", { count: selectedViews.length - readyViews.length })}
+            </p>
+            <ul className="mt-1 space-y-1">
+              {selectedViews
+                .filter((v) => !sendable(v))
+                .map((v) => (
+                  <li key={v.company.id} className="text-warning">
+                    <span className="font-semibold">{companyLabel(v.company).name}:</span> {missing(v).join(" · ")}
+                  </li>
+                ))}
+            </ul>
           </div>
         )}
 
         {/* Per-company breakdown (verified, read-only): each company's own
             recipient + its OWN CV/letter filenames, plus the shared subject/docs. */}
         <div className="mt-3 max-h-64 space-y-2 overflow-auto">
-          {selectedViews.map((v) => {
+          {readyViews.map((v) => {
             const { name, job } = companyLabel(v.company);
             const cfg = emailCfg(v);
             return (
@@ -965,7 +966,7 @@ export function Step7Review() {
           </Button>
           <Button variant="primary" onClick={() => void doSend()} disabled={sending}>
             <Send size={14} />
-            {sending ? t("autoBewerb.sendingNote") : t("autoBewerb.confirmSendButton", { count: selectedViews.length })}
+            {sending ? t("autoBewerb.sendingNote") : t("autoBewerb.confirmSendButton", { count: readyViews.length })}
           </Button>
         </div>
       </Modal>

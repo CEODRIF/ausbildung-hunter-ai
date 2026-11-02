@@ -22,7 +22,6 @@ import { Step7Review } from "@/components/auto-bewerb/step7-review";
 import { cancelBatchAction, createBatchAction, sendCompaniesAction } from "@/app/auto-bewerb/actions";
 
 vi.mock("@/app/auto-bewerb/actions", () => ({
-  approveCompanyAction: vi.fn(),
   cancelBatchAction: vi.fn(),
   cancelSendAction: vi.fn(),
   createBatchAction: vi.fn(),
@@ -286,20 +285,24 @@ describe("Step 7 batch UI (batchesSupported = true)", () => {
     30_000,
   );
 
-  it("an incomplete company can be selected but blocks sending (readiness indicator)", () => {
+  it("an incomplete company can be selected; it is EXCLUDED (with reason) and never blocks the rest (partial batch)", () => {
     const companies = [
       companyView("ca", "Firma A GmbH", "jobs@firma-a.de", "Mechatroniker", true),
-      companyView("cb", "Firma B AG", "hr@firma-b.de", "Elektroniker", false), // not approved
+      // missing CV (the workspace view types cv as nullable in production):
+      { ...companyView("cb", "Firma B AG", "hr@firma-b.de", "Elektroniker", true), cv: null, cvVersion: null, cvPdfName: null } as unknown as ReturnType<typeof companyView>,
     ];
     mount(makeWs({ companies }));
     fireEvent.click(screen.getByLabelText("Firma A GmbH"));
     fireEvent.click(screen.getByLabelText("Firma B AG"));
     expect(screen.getByText("1 von 2 bereit")).toBeInTheDocument();
     expect(screen.getByText("Unvollständig")).toBeInTheDocument();
-    // The actionable gap names the missing approval:
-    expect(screen.getByText(/Bewerbung muss erst genehmigt werden/)).toBeInTheDocument();
-    // Sending is disabled while the batch is not fully ready:
-    expect(screen.getByRole("button", { name: "Ausgewählte senden (2)" })).toBeDisabled();
+    // The actionable gap names the REAL missing document (no approval gap):
+    expect(screen.getByText(/Lebenslauf noch nicht erstellt/)).toBeInTheDocument();
+    expect(screen.queryByText(/genehmigt/)).toBeNull();
+    // Sending is NOT blocked by the incomplete company — the button counts
+    // only the send-ready subset (1 of 2) and stays enabled:
+    const sendBtn = screen.getByRole("button", { name: "Ausgewählte senden (1)" });
+    expect(sendBtn).toBeEnabled();
   });
 
   it("cancels ONLY pre-start batches (safe cancel); started/completed batches have no cancel", async () => {
