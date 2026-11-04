@@ -69,12 +69,17 @@ function nextWindowWall(nowMs: number, timeZone: string, startMinute: number, en
  * extraHidden) so the payload is complete for both uses (new composer
  * dialog and campaign reschedule).
  *
- * When `window` is provided the form is constrained to the daily sending
- * window: the timezone is locked to the window's IANA zone, hour options
- * shrink to the window's hours, and an out-of-window (hour, minute)
- * selection blocks submission with a clear localized message (the time is
- * never silently adjusted nor deferred to another day).
- */
+   * When `window` is provided the form is constrained to the daily sending
+   * window: the timezone is locked to the window's IANA zone, hour options
+   * shrink to the window's hours, and an out-of-window (hour, minute)
+   * selection blocks submission with a clear localized message (the time is
+   * never silently adjusted nor deferred to another day).
+   *
+   * An `adminBypass` (server-computed, display only) lifts this constraint
+   * for administrators (24h hours, free timezone, any time submittable) —
+   * the server re-validates authoritatively via the trusted public.admins
+   * membership; the flag itself grants nothing.
+   */
 export function ScheduleForm({
   action,
   extraHidden = [],
@@ -84,6 +89,7 @@ export function ScheduleForm({
   cancelLabel,
   onCancel,
   window: windowConstraint,
+  adminBypass = false,
 }: {
   action: (formData: FormData) => void | Promise<void>;
   extraHidden?: Array<{ name: string; value: string }>;
@@ -93,19 +99,29 @@ export function ScheduleForm({
   cancelLabel?: string;
   onCancel?: () => void;
   window?: ScheduleWindowConstraint;
+  /** Admin window bypass (server-computed, DISPLAY ONLY): when true the
+   *  daily-window constraint is lifted — 24h hour options, free timezone
+   *  choice, any time submittable. It grants nothing by itself: the server
+   *  re-validates authoritatively via the trusted public.admins
+   *  membership. Omitted/false → the window constraint applies. */
+  adminBypass?: boolean;
 }) {
   const { t, lang } = useI18n();
   const locale = localeForLang(lang);
   const months = dictionaries[lang].apps.schedule.months;
+  // Effective window constraint: an administrator is unconstrained (the
+  // server-side rule is `window open OR owner is admin`; this flag is UI
+  // convenience only and never trusted for authorization).
+  const w = adminBypass ? undefined : windowConstraint;
 
   // Default prefill: the campaign's CURRENT schedule (reschedule) or the
   // next half hour in the user's own zone if it is offered (new schedule).
   // With a window constraint, prefill the NEXT in-window time (locked zone).
   const initial = useMemo(() => {
     if (defaults) return defaults;
-    if (windowConstraint) {
-      const wall = nextWindowWall(Date.now(), windowConstraint.timeZone, windowConstraint.startMinute, windowConstraint.endMinute);
-      if (wall) return { ...wall, timeZone: windowConstraint.timeZone };
+    if (w) {
+      const wall = nextWindowWall(Date.now(), w.timeZone, w.startMinute, w.endMinute);
+      if (wall) return { ...wall, timeZone: w.timeZone };
     }
     const browserZone =
       typeof Intl !== "undefined"
@@ -144,17 +160,17 @@ export function ScheduleForm({
 
   // Window constraint (AUTO BEWERB): the selectable hours shrink to the
   // window's hours; the timezone is locked to the window's IANA zone.
-  const windowStartHour = windowConstraint ? Math.floor(windowConstraint.startMinute / 60) : 0;
-  const windowEndHour = windowConstraint ? Math.floor(windowConstraint.endMinute / 60) : 23;
-  const hourOptions = windowConstraint
+  const windowStartHour = w ? Math.floor(w.startMinute / 60) : 0;
+  const windowEndHour = w ? Math.floor(w.endMinute / 60) : 23;
+  const hourOptions = w
     ? Array.from({ length: windowEndHour - windowStartHour + 1 }, (_, i) => windowStartHour + i)
     : Array.from({ length: 24 }, (_, i) => i);
   // The selected wall-clock minute-of-day, checked against the inclusive
   // window bounds (minute granularity). This is the exact client-side mirror
   // of the server's isCampaignTimeInWindow — the server remains authoritative.
   const selectedMinuteOfDay = hour * 60 + minute;
-  const outOfWindow = windowConstraint
-    ? selectedMinuteOfDay < windowConstraint.startMinute || selectedMinuteOfDay > windowConstraint.endMinute
+  const outOfWindow = w
+    ? selectedMinuteOfDay < w.startMinute || selectedMinuteOfDay > w.endMinute
     : false;
 
   // Live preview — same pure function, same rules, as the server action.
@@ -289,7 +305,7 @@ export function ScheduleForm({
       </div>
       <div>
         <label className={LABEL_CLASS}>{t("apps.schedule.timezone")}</label>
-        {windowConstraint ? (
+        {w ? (
           // The window is defined in exactly ONE zone (Germany) — locked,
           // not a choice: the same clock time in another zone could fall
           // outside the Berlin window.
@@ -316,7 +332,7 @@ export function ScheduleForm({
         )}
       </div>
 
-      {windowConstraint && outOfWindow && (
+      {w && outOfWindow && (
         <div className="rounded-2xl bg-danger-soft px-4 py-3 text-xs font-semibold text-danger">
           <p>{t("autoBewerb.scheduleWindowInvalid")}</p>
         </div>
@@ -342,7 +358,7 @@ export function ScheduleForm({
             <p className="mt-1">{t("apps.schedule.inPast")}</p>
           ) : (
             <p className="mt-1 leading-5 opacity-80">
-              {windowConstraint
+              {w
                 ? t("autoBewerb.scheduleWindowStartNote")
                 : t("apps.schedule.scheduleHint")}
             </p>

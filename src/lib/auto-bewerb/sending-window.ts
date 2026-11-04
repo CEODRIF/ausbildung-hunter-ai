@@ -7,6 +7,15 @@
  * migration `auto_bewerb_sending_window.sql` → `auto_bewerb_sending_window_open()`),
  * which is the authoritative gate for the cron path. The two MUST stay in sync.
  *
+ * ADMIN EXCEPTION (applied by the CALLERS, never in this module): members of
+ * `public.admins` may start/send at any time of day. The rule is
+ * `window open OR owner is admin`, enforced server-side in the engine
+ * (isUserAdmin — session-derived user ids only) and mirrored data-driven in
+ * Postgres (claim_startable_auto_bewerb_batches, migration
+ * `20261224000000_auto_bewerb_admin_window_bypass.sql`). This module stays
+ * the pure normal-user window definition; no client-supplied flag can
+ * influence the exception.
+ *
  *  - Window: 07:30 → 10:30, EVERY day. Start is inclusive (07:30:00).
  *    The end is inclusive at MINUTE granularity: the 10:30 minute (10:30:00–
  *    10:30:59) is still inside, so a campaign scheduled for exactly 10:30

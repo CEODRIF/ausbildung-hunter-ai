@@ -607,6 +607,12 @@ export interface AutoBewerbWorkspace {
    *  moment the window opens (null while open). Optional so pre-feature
    *  fixtures remain valid. */
   sendingWindow?: AutoBewerbSendingWindow | null;
+  /** Server-computed admin flag (trusted public.admins membership) —
+   *  DISPLAY ONLY: lets the UI offer administrators the unrestricted
+   *  scheduling form. It grants nothing by itself; every enforcement point
+   *  (engine gates, Postgres claim RPC) re-checks the membership
+   *  server-side. Optional so pre-feature fixtures remain valid. */
+  isAdmin?: boolean;
 }
 
 /** All tables the AUTO BEWERB feature needs (the probe checks all seven). */
