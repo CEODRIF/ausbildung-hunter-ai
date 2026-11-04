@@ -1697,14 +1697,25 @@ export async function prepareAutoBewerbSend(
       // The sent PDF carries the SAME frozen photo the preview shows
       // (reference resolved ownership-scoped; missing → no photo).
       const photoDataUrl = await resolveAutoBewerbPhotoDataUrl(userId, cv.personal.photo);
-      cvBytes = await generateCvPdf(cv, { photoDataUrl });
-    } catch (error) {
-      // ONE-PAGE POLICY: an overflowing CV is an explicit, actionable
-      // validation error — the email is never sent with a multi-page or
-      // clipped CV attached.
-      if (error instanceof CvPdfOverflowError) {
-        return { ok: false, code: "cv_overflow", message: error.message };
+      try {
+        cvBytes = await generateCvPdf(cv, { photoDataUrl });
+      } catch (cvError) {
+        // OVERFLOW FALLBACK (completeness over one page): when even the
+        // densest readable tier overflows one A4 page, NOTHING is deleted,
+        // shortened or clipped — the renderer's existing multi-page mode
+        // (running header + page numbers, every entry kept) takes over, the
+        // same fallback the PDF export route already uses. An application is
+        // never blocked by the length of the candidate's own verified CV.
+        if (cvError instanceof CvPdfOverflowError) {
+          cvBytes = await generateCvPdf(cv, { photoDataUrl, allowMultiPage: true });
+          console.warn(
+            `[auto-bewerb] CV for company ${app.id} exceeds one A4 page — sending the complete multi-page CV (nothing trimmed).`,
+          );
+        } else {
+          throw cvError;
+        }
       }
+    } catch (error) {
       console.error("[auto-bewerb] CV PDF rendering failed:", error instanceof Error ? error.message : error);
       return { ok: false, code: "cv_render_failed", message: "Das CV-PDF für dieses Unternehmen konnte nicht erstellt werden." };
     }
