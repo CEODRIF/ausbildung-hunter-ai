@@ -534,7 +534,15 @@ function buildLayout(cv: CvDocument, fonts: Fonts, photo: PhotoBox | null, tier:
         text: meta,
       });
     }
-    const rightH = ((dates ? 1 : 0) + (meta ? 1 : 0)) * lineH(tier.contact, tier.metaLh);
+    // True ink extent of the right stack, matching the draw above: the dates
+    // baseline sits on the FIRST lead line's baseline, the meta baseline ONE
+    // step below it (regardless of dates' presence), and the last line's
+    // descent extends below its baseline. `n × lineH` under-reserved the
+    // meta-only case (meta ink would overprint the next element) and
+    // over-reserved the others — the layout is safe only when the
+    // reservation equals the drawn extent.
+    const lastBaseline = meta ? leadBaseline + lineH(tier.contact, tier.metaLh) : leadBaseline;
+    const rightH = dates || meta ? lastBaseline + tier.contact * 0.28 : 0;
     h = Math.max(h, rightH);
     for (const b of bullets.filter((b) => b.trim())) {
       const lines = wrapLine(fonts.reg, b, tier.base, contentW - 10.5);
