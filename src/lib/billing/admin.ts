@@ -117,6 +117,36 @@ export async function requireAdmin(): Promise<Profile | null> {
   return access.status === "ok" ? access.profile : null;
 }
 
+/**
+ * Trusted admin-membership check for a SPECIFIC user id (no session needed).
+ *
+ * For engine paths that already run with a session-derived user id (the
+ * server actions pass `user.id` — resolved from the authenticated session,
+ * never from a request body). Same trusted source as requireAdmin():
+ * `public.admins`, read with the service role. Callers must NEVER pass a
+ * client-provided id here — the only way a normal user can become "admin"
+ * is a service-role grant through the admin UI (audited in
+ * admin_audit_log), which is impossible from the browser (RLS, no user
+ * policies on public.admins).
+ *
+ * Fails CLOSED: a malformed id or a failed read is "not admin".
+ */
+export async function isUserAdmin(userId: string): Promise<boolean> {
+  if (!isUuid(userId)) return false;
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from("admins")
+      .select("user_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error) return false;
+    return data !== null;
+  } catch {
+    return false;
+  }
+}
+
 export type AdminAction =
   | "set_plan"
   | "cancel_subscription"

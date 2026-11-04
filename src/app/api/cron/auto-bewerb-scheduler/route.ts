@@ -60,8 +60,11 @@ export async function GET(request: Request) {
       ok: true,
       // The sending window (07:30–10:30 Europe/Berlin) is enforced HERE,
       // server-side — window_open=false means this tick started NO new
-      // batches (in-flight batches still drained). The GH Actions schedule
-      // is a best-effort trigger only, never the enforcement.
+      // NORMAL-user batches (in-flight batches still drained);
+      // administrator-owned batches may still start outside the window
+      // (admin window bypass — trusted public.admins membership, never a
+      // client flag). The GH Actions schedule is a best-effort trigger
+      // only, never the enforcement.
       window_open: windowOpen,
       sending_window: windowLabel(),
       recovered,

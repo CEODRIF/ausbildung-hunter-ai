@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isUserAdmin } from "@/lib/billing/admin";
 import { effectiveUploadLimitBytes } from "@/lib/billing/entitlement-service";
 import { detectFileType } from "@/lib/ai-service";
 import {
@@ -1559,6 +1560,12 @@ export async function prepareAutoBewerbSend(
   if (!(await hasAutoBewerbSchema()))
     return { ok: false, code: "schema_pending", message: "Die Datenbank der Bewerbungszentrale wird vorbereitet." };
   const admin = createAdminClient();
+  // ADMIN WINDOW BYPASS (lazy, at most one membership read): the user id is
+  // session-derived at the action boundary (never client input). Trusted
+  // source: public.admins (see isUserAdmin). Normal users keep the exact
+  // 07:30–10:30 Europe/Berlin window.
+  let adminBypassPromise: Promise<boolean> | null = null;
+  const isAdmin = () => (adminBypassPromise ??= isUserAdmin(userId));
 
   const { data: appData, error: appError } = await admin
     .from("auto_bewerb_companies")
@@ -1783,8 +1790,10 @@ export async function prepareAutoBewerbSend(
       return { ok: false, code: "invalid_schedule", message: "Ungültiges Datum, Uhrzeit oder Zeitzone." };
     // SENDING WINDOW (07:30–10:30 Europe/Berlin): same authoritative rule as
     // the batch path — a scheduled send may only be set for a time inside the
-    // window (rejected, never silently moved).
-    if (!isCampaignTimeInWindow(utcMs))
+    // window (rejected, never silently moved). Admin exception: an
+    // administrator may schedule at ANY time of day (trusted
+    // public.admins membership — never a client flag).
+    if (!isCampaignTimeInWindow(utcMs) && !(await isAdmin()))
       return { ok: false, code: "schedule_outside_window", message: `Der Versandzeitpunkt muss zwischen 07:30 und 10:30 Deutschland-Zeit liegen (${windowLabel()}).` };
     if (utcMs <= Date.now() + 60_000)
       return { ok: false, code: "invalid_schedule", message: "Der Versandzeitpunkt muss in der Zukunft liegen." };
@@ -1879,7 +1888,9 @@ export async function prepareAutoBewerbSend(
     // at the NEXT window start (company + attempt become 'scheduled'; the
     // cron claims it at/after the window opens — never before its due
     // instant). The result reports the honest held time, never "sent".
-    if (!isSendingWindowOpen()) {
+    // Admin exception: an administrator's immediate send dispatches at any
+    // time of day (trusted public.admins membership — never a client flag).
+    if (!isSendingWindowOpen() && !(await isAdmin())) {
       const next = nextWindowStartMs(Date.now());
       const attemptId = (attempt as unknown as AutoBewerbSendAttemptRow).id;
       if (next === null) {
@@ -2252,6 +2263,11 @@ export async function createAutoBewerbBatch(
   if (ids.length < 1) return { ok: false, code: "empty_selection", message: "Bitte mindestens ein Unternehmen auswählen." };
   if (ids.length > AUTO_BEWERB_BATCH_COMPANY_LIMIT) return { ok: false, code: "batch_too_large", message: `Maximal ${AUTO_BEWERB_BATCH_COMPANY_LIMIT} Unternehmen pro Batch.` };
   const admin = createAdminClient();
+  // ADMIN WINDOW BYPASS (lazy, at most one membership read): the user id is
+  // session-derived at the action boundary (never client input); trusted
+  // source: public.admins. Normal users keep the 07:30–10:30 window.
+  let adminBypassPromise: Promise<boolean> | null = null;
+  const isAdmin = () => (adminBypassPromise ??= isUserAdmin(userId));
 
   // 1) The ONE global e-mail configuration (Step 6) — a batch is only valid
   //    when it is complete (body + subject + an active owned account).
@@ -2297,7 +2313,9 @@ export async function createAutoBewerbBatch(
     // may only be SCHEDULED for a time INSIDE the window — it starts at its
     // exact selected time (never normalized to 07:30), so an out-of-window
     // time is rejected here, not silently moved to another day/window.
-    if (!isCampaignTimeInWindow(utcMs))
+    // Admin exception: an administrator may schedule at ANY time of day
+    // (trusted public.admins membership — never a client flag).
+    if (!isCampaignTimeInWindow(utcMs) && !(await isAdmin()))
       return { ok: false, code: "schedule_outside_window", message: `Der Versandzeitpunkt muss zwischen 07:30 und 10:30 Deutschland-Zeit liegen (${windowLabel()}).` };
     if (utcMs <= Date.now() + 60_000) return { ok: false, code: "invalid_schedule", message: "Der Versandzeitpunkt muss in der Zukunft liegen." };
     scheduledAt = new Date(utcMs).toISOString();
@@ -2431,7 +2449,10 @@ export async function createAutoBewerbBatch(
   //    (never a silent deferral, never an out-of-window start).
   let windowDeferred = false;
   if (!scheduledAt) {
-    if (!isSendingWindowOpen()) {
+    // Admin exception: an administrator's immediate batch STARTS at any time
+    // of day (trusted public.admins membership — never a client flag); for
+    // everyone else the window rule above applies unchanged.
+    if (!isSendingWindowOpen() && !(await isAdmin())) {
       windowDeferred = true;
     } else {
       await startAutoBewerbBatchesForUser(userId, 5);
@@ -2486,34 +2507,17 @@ export async function createAutoBewerbBatch(
   };
 }
 
-/** The TS mirror of the claim_startable RPC (same rule, same conditional
- *  flip) — used by the immediate-start path and the page-load catch-up,
- *  where the service-role RPC is not the active writer. Overlapping writers
- *  are still safe: the flip is conditional (status must still be
- *  scheduled/waiting), so exactly one wins. */
-export async function startAutoBewerbBatchesForUser(userId: string, limit = 5): Promise<AutoBewerbBatchRow[]> {
-  // SENDING WINDOW gate (07:30–10:30 Europe/Berlin, IANA, DST-aware): while
-  // the window is closed NO new batch starts — due batches stay
-  // scheduled/waiting in Supabase for the next eligible window. This is the
-  // single TS choke point for batch starts (immediate 'send now' + the
-  // page-load catch-up); the cron path is gated the same way in Postgres
-  // (auto_bewerb_sending_window_open). In-flight 'sending' batches are
-  // unaffected — their attempts drain via the ungated claim path (safe batch
-  // boundary: we finish what started, we start nothing new).
-  if (!isSendingWindowOpen()) return [];
-  const admin = createAdminClient();
-  const nowIso = new Date().toISOString();
-  const { data: dueRows } = await admin
-    .from("auto_bewerb_batches")
-    .select("*")
-    .eq("user_id", userId)
-    .in("status", ["scheduled", "waiting"])
-    .limit(20);
-  const due = ((dueRows ?? []) as unknown as AutoBewerbBatchRow[])
-    .filter((b) => b.scheduled_at === null || b.scheduled_at <= nowIso)
-    .sort((a, b) => String(a.scheduled_at ?? a.created_at).localeCompare(String(b.scheduled_at ?? b.created_at)));
+/** The shared 3:30 inter-batch gate + conditional flip (the TS mirror of
+ *  the claim_startable RPC's per-batch loop). Overlapping writers are safe:
+ *  the flip is conditional (status must still be scheduled/waiting), so
+ *  exactly one wins. */
+async function flipDueBatches(
+  admin: ReturnType<typeof createAdminClient>,
+  candidates: AutoBewerbBatchRow[],
+  nowIso: string,
+): Promise<AutoBewerbBatchRow[]> {
   const started: AutoBewerbBatchRow[] = [];
-  for (const b of due.slice(0, limit)) {
+  for (const b of candidates) {
     // The 3:30 inter-batch gate for the SAME sending account:
     const { data: sameAccount } = await admin.from("auto_bewerb_batches").select("id, started_at").eq("account_id", b.account_id);
     const lastStart = ((sameAccount ?? []) as Array<{ id: string; started_at: string | null }>)
@@ -2535,6 +2539,75 @@ export async function startAutoBewerbBatchesForUser(userId: string, limit = 5): 
     if (flipped && flipped.length > 0) started.push({ ...b, status: "sending", started_at: nowIso });
   }
   return started;
+}
+
+/** The TS mirror of the claim_startable RPC (same rule, same conditional
+ *  flip) — used by the immediate-start path and the page-load catch-up,
+ *  where the service-role RPC is not the active writer.
+ *
+ *  SENDING WINDOW gate (07:30–10:30 Europe/Berlin, IANA, DST-aware): while
+ *  the window is closed NO new batch starts for a NORMAL user — due batches
+ *  stay scheduled/waiting in Supabase for the next eligible window. This is
+ *  the single TS choke point for batch starts (immediate 'send now' + the
+ *  page-load catch-up); the cron path is gated the same way in Postgres
+ *  (auto_bewerb_sending_window_open). In-flight 'sending' batches are
+ *  unaffected — their attempts drain via the ungated claim path (safe batch
+ *  boundary: we finish what started, we start nothing new).
+ *
+ *  ADMIN EXCEPTION: an administrator's due batches may start at ANY time of
+ *  day (trusted public.admins membership via isUserAdmin — never a client
+ *  flag). The SAME window-OR-admin rule is mirrored in Postgres
+ *  (claim_startable_auto_bewerb_batches, migration
+ *  20261224000000_auto_bewerb_admin_window_bypass.sql) — the two must stay
+ *  in sync. */
+export async function startAutoBewerbBatchesForUser(userId: string, limit = 5): Promise<AutoBewerbBatchRow[]> {
+  if (!isSendingWindowOpen() && !(await isUserAdmin(userId))) return [];
+  const admin = createAdminClient();
+  const nowIso = new Date().toISOString();
+  const { data: dueRows } = await admin
+    .from("auto_bewerb_batches")
+    .select("*")
+    .eq("user_id", userId)
+    .in("status", ["scheduled", "waiting"])
+    .limit(20);
+  const due = ((dueRows ?? []) as unknown as AutoBewerbBatchRow[])
+    .filter((b) => b.scheduled_at === null || b.scheduled_at <= nowIso)
+    .sort((a, b) => String(a.scheduled_at ?? a.created_at).localeCompare(String(b.scheduled_at ?? b.created_at)));
+  return flipDueBatches(admin, due.slice(0, limit), nowIso);
+}
+
+/** Cron path (window CLOSED): start ONLY due batches owned by
+ *  ADMINISTRATORS — the global mirror of the per-user admin window bypass.
+ *
+ *  Safety:
+ *   - Service role throughout; admin membership comes from public.admins
+ *     (RLS enabled, NO user policies — not readable or writable from any
+ *     user session), never from client input.
+ *   - Normal users' batches are NEVER touched here — they stay
+ *     scheduled/waiting for the next eligible window.
+ *   - The same 3:30 inter-batch gate + conditional flip as
+ *     startAutoBewerbBatchesForUser (shared flipDueBatches — no rule drift),
+ *     and the same per-owner rule as the Postgres claim_startable RPC.
+ *   - Fails closed: no admins row readable → nothing starts. */
+export async function startAdminBatchesOutsideWindow(limit = 5): Promise<AutoBewerbBatchRow[]> {
+  const admin = createAdminClient();
+  const { data: adminRows, error: adminError } = await admin.from("admins").select("user_id");
+  if (adminError) return [];
+  const adminIds = ((adminRows ?? []) as Array<{ user_id: string }>)
+    .map((r) => r.user_id)
+    .filter((id) => typeof id === "string" && id.length > 0);
+  if (adminIds.length === 0) return [];
+  const nowIso = new Date().toISOString();
+  const { data: dueRows } = await admin
+    .from("auto_bewerb_batches")
+    .select("*")
+    .in("user_id", adminIds)
+    .in("status", ["scheduled", "waiting"])
+    .limit(50);
+  const due = ((dueRows ?? []) as unknown as AutoBewerbBatchRow[])
+    .filter((b) => b.scheduled_at === null || b.scheduled_at <= nowIso)
+    .sort((a, b) => String(a.scheduled_at ?? a.created_at).localeCompare(String(b.scheduled_at ?? b.created_at)));
+  return flipDueBatches(admin, due.slice(0, limit), nowIso);
 }
 
 /** The queued + due attempts of one batch (the dispatch loop's work list). */
@@ -2903,17 +2976,25 @@ export async function claimAndDispatchDueAutoBewerbAttempts(limit = 5, budgetMs 
   const recoveredCount = Number(recovered ?? 0) || 0;
   // Batches: recover stale (safe any time) + start the due ones (the
   // inter-batch gate is atomic inside the RPC — overlapping ticks can never
-  // double-start). SENDING WINDOW: the app-level gate is authoritative even
-  // before the DB gate migration is applied — while the window is closed, NO
-  // new batch starts (due batches stay scheduled/waiting for the next
-  // window); in-flight 'sending' batches still drain below (safe batch
-  // boundary — nothing is interrupted).
+  // double-start).
+  // SENDING WINDOW: while the window is OPEN, the claim_startable RPC starts
+  // what is due (Postgres gate: window, + the per-batch admin bypass — the
+  // authoritative, data-driven rule). While the window is CLOSED the RPC
+  // must NEVER be called: on databases predating the window-gate migration
+  // it would start normal users' batches unchecked (fail-open). Instead,
+  // ONLY administrator-owned batches start, through the service-role mirror
+  // (startAdminBatchesOutsideWindow — public.admins membership, never client
+  // input); normal batches stay scheduled/waiting for the next window.
+  // In-flight 'sending' batches still drain below (safe batch boundary —
+  // nothing is interrupted).
   await admin.rpc("recover_stale_auto_bewerb_batches");
   const windowOpen = isSendingWindowOpen();
   let startedBatches: unknown = [];
   if (windowOpen) {
     const res = await admin.rpc("claim_startable_auto_bewerb_batches", { p_limit: limit });
     startedBatches = res.data ?? [];
+  } else {
+    startedBatches = await startAdminBatchesOutsideWindow(limit);
   }
   const startedIds = ((startedBatches ?? []) as Array<{ id?: string }>).map((b) => b.id).filter(Boolean) as string[];
   // Attempts: the claim RPC only returns attempts of STARTED batches (or
@@ -3048,6 +3129,11 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     label: windowLabel(),
     nextStartMs: nextWindowStartMs(nowMs),
   };
+  // Admin window-bypass flag: server-computed from the trusted public.admins
+  // membership (the same source the engine gates on). DISPLAY ONLY — every
+  // enforcement point re-checks the membership server-side; this value never
+  // grants anything by itself.
+  const isAdmin = await isUserAdmin(userId);
   const empty: AutoBewerbWorkspace = {
     ready,
     setupIssue,
@@ -3072,6 +3158,7 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     capacity: null,
     sendHistory: [],
     sendingWindow,
+    isAdmin,
   };
   if (!ready) return empty;
 
@@ -3279,5 +3366,6 @@ export async function getAutoBewerbWorkspace(userId: string): Promise<AutoBewerb
     capacity,
     sendHistory,
     sendingWindow,
+    isAdmin,
   };
 }

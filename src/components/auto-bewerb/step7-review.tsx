@@ -412,18 +412,26 @@ export function Step7Review() {
       {/* Live sending-window state (server-computed, IANA Europe/Berlin,
           DST-aware): new batch STARTS only happen while open; waiting
           batches start automatically in the next window. */}
-      {ws.sendingWindow && (
-        <Note kind={ws.sendingWindow.open ? "success" : "info"}>
-          {ws.sendingWindow.open
-            ? t("autoBewerb.windowBannerOpen", { label: ws.sendingWindow.label })
-            : t("autoBewerb.windowBannerClosed", {
-                label: ws.sendingWindow.label,
-                // The instant is correct; format it in the window's OWN zone
-                // (Europe/Berlin, DST-aware) — never browser-local or UTC.
-                time: ws.sendingWindow.nextStartMs ? formatWindowTime(ws.sendingWindow.nextStartMs, locale) : "–",
-              })}
-        </Note>
-      )}
+       {ws.sendingWindow && (
+         <Note kind={ws.sendingWindow.open ? "success" : "info"}>
+           {ws.sendingWindow.open
+             ? t("autoBewerb.windowBannerOpen", { label: ws.sendingWindow.label })
+             : t("autoBewerb.windowBannerClosed", {
+                 label: ws.sendingWindow.label,
+                 // The instant is correct; format it in the window's OWN zone
+                 // (Europe/Berlin, DST-aware) — never browser-local or UTC.
+                 time: ws.sendingWindow.nextStartMs ? formatWindowTime(ws.sendingWindow.nextStartMs, locale) : "–",
+               })}
+         </Note>
+       )}
+
+       {/* Admin window bypass (server-computed flag, DISPLAY ONLY — every
+           enforcement point re-checks public.admins server-side): an
+           administrator starts/sends at any time, so the closed-window note
+           above would mislead. */}
+       {ws.isAdmin === true && (
+         <Note kind="success">{t("autoBewerb.adminWindowNote")}</Note>
+       )}
 
       {ws.emailAccounts.length === 0 && (
         <Note kind="error">
@@ -648,16 +656,20 @@ export function Step7Review() {
             (selectedViews.length > 0 ? (
               <div id="schedule-form" className="mt-4">
                 <p className="mb-2 text-xs font-bold uppercase tracking-wide text-faint">{t("autoBewerb.scheduleTitle")}</p>
-                <ScheduleForm
-                  action={onSchedule}
-                  submitLabel={scheduling ? t("autoBewerb.scheduling") : t("autoBewerb.scheduleSubmit", { count: selectedViews.length })}
-                  pendingLabel={t("autoBewerb.scheduling")}
-                  window={{
-                    timeZone: AUTO_BEWERB_SENDING_WINDOW.timeZone,
-                    startMinute: AUTO_BEWERB_SENDING_WINDOW.startHour * 60 + AUTO_BEWERB_SENDING_WINDOW.startMinute,
-                    endMinute: AUTO_BEWERB_SENDING_WINDOW.endHour * 60 + AUTO_BEWERB_SENDING_WINDOW.endMinute,
-                  }}
-                />
+                 <ScheduleForm
+                   action={onSchedule}
+                   submitLabel={scheduling ? t("autoBewerb.scheduling") : t("autoBewerb.scheduleSubmit", { count: selectedViews.length })}
+                   pendingLabel={t("autoBewerb.scheduling")}
+                   // Admins may schedule at ANY time (server re-validates via
+                   // the trusted public.admins membership — this flag is UI
+                   // convenience only).
+                   adminBypass={ws.isAdmin === true}
+                   window={{
+                     timeZone: AUTO_BEWERB_SENDING_WINDOW.timeZone,
+                     startMinute: AUTO_BEWERB_SENDING_WINDOW.startHour * 60 + AUTO_BEWERB_SENDING_WINDOW.startMinute,
+                     endMinute: AUTO_BEWERB_SENDING_WINDOW.endHour * 60 + AUTO_BEWERB_SENDING_WINDOW.endMinute,
+                   }}
+                 />
               </div>
             ) : (
               <p className="mt-4 rounded-2xl border border-dashed border-line-strong px-4 py-4 text-center text-xs text-muted">
