@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Building2, CalendarClock, CheckCheck, ChevronRight, Pencil, RefreshCw, Search, Trash2 } from "lucide-react";
 import { Button, Input, Modal, Textarea } from "@/components/ui";
 import { EmptyState } from "@/components/ui/feedback";
@@ -27,6 +27,46 @@ interface PendingAnalysis {
   reused: boolean;
 }
 
+/** localStorage key for the in-progress vacancy draft (Step 2 only). */
+const AD_DRAFT_KEY = "auto-bewerb:step2-ad-draft";
+
+/**
+ * Map a server failure `code` to a LOCALIZED, actionable message. The browser
+ * never sees the raw provider wording (status / body / model) — only the
+ * stable code, which selects the right category:
+ *  - transient (outage / network / timeout / rate limit / bad response) →
+ *    "retry shortly", the Analyze button is the retry and the draft is kept;
+ *  - configuration (auth / not-configured / provider quota) → "contact
+ *    the provider", a user retry would not help.
+ * Unknown codes fall back to the server's safe English `error` string, then
+ * to the generic message — so a NEW code can never render a blank.
+ */
+function analyzeErrorFor(code: string | undefined, serverError: string | undefined, t: (k: string) => string): string {
+  switch (code) {
+    case "provider_timeout":
+      return t("autoBewerb.analyzeErrTimeout");
+    case "provider_unavailable":
+    case "provider_network":
+      return t("autoBewerb.analyzeErrUnavailable");
+    case "provider_rate_limited":
+      return t("autoBewerb.analyzeErrRateLimited");
+    case "provider_quota":
+      return t("autoBewerb.analyzeErrProviderQuota");
+    case "provider_auth":
+    case "provider_not_configured":
+      return t("autoBewerb.analyzeErrConfiguration");
+    case "provider_invalid_response":
+    case "provider_request_rejected":
+      return t("autoBewerb.analyzeErrResponse");
+    case "invalid_ai_output":
+      return t("autoBewerb.analyzeErrOutput");
+    // Quota / feature / slot / …: the server already returns a safe,
+    // user-facing message for these — pass it through unchanged.
+    default:
+      return serverError ?? t("autoBewerb.analyzeError");
+  }
+}
+
 /**
  * Step 2 — job-ad input with TWO distinct actions:
  *  "Analyze" (POST /api/auto-bewerb/analyze-ad → local preview only) and
@@ -43,7 +83,18 @@ interface PendingAnalysis {
 export function Step2Companies() {
   const { ws, refresh, notify, companyId, selectCompany, goToStep } = useAutoBewerb();
   const { t } = useI18n();
-  const [adText, setAdText] = useState("");
+  // Draft persistence: a failed analysis (provider outage, timeout, …) must
+  // never cost the user the vacancy text — the draft survives the in-session
+  // error AND a page refresh, so a retry re-uses the stored text instead of
+  // forcing a re-paste. Cleared only when the company is actually saved.
+  const [adText, setAdText] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      return window.localStorage.getItem(AD_DRAFT_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAnalysis | null>(null);
@@ -83,6 +134,20 @@ export function Step2Companies() {
   }
   const atLimit = !capacityUnknown && reserved >= capacity;
 
+  // Debounced draft persistence (the vacancy text is expensive to re-type;
+  // a transient provider failure — or a refresh — must not destroy it).
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      try {
+        if (adText.trim()) window.localStorage.setItem(AD_DRAFT_KEY, adText);
+        else window.localStorage.removeItem(AD_DRAFT_KEY);
+      } catch {
+        /* storage unavailable (private mode) — the in-memory draft still works */
+      }
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [adText]);
+
   const analyze = async () => {
     setAnalyzing(true);
     setAnalyzeError(null);
@@ -95,17 +160,23 @@ export function Step2Companies() {
       });
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;
+        code?: string;
+        retryable?: boolean;
         extract?: AdExtract;
         analysis?: AdAnalysis;
         reused?: boolean;
         profileHash?: string | null;
       };
       if (!res.ok || !data.extract || !data.analysis) {
-        setAnalyzeError(data.error ?? t("autoBewerb.analyzeError"));
+        // Accurate + localized by code; the vacancy text is intentionally
+        // KEPT (adText is untouched) so the retry needs no re-entry.
+        setAnalyzeError(analyzeErrorFor(data.code, data.error, t));
       } else {
         setPending({ extract: data.extract, analysis: data.analysis, profileHash: data.profileHash ?? null, reused: Boolean(data.reused) });
       }
     } catch {
+      // Network-level fetch failure (app itself unreachable) — generic safe
+      // message; the draft is preserved for the retry.
       setAnalyzeError(t("autoBewerb.analyzeError"));
     } finally {
       setAnalyzing(false);
@@ -135,6 +206,12 @@ export function Step2Companies() {
     if (res.ok) {
       setAdText("");
       setPending(null);
+      // The saved company is the draft's destination — drop the stored copy.
+      try {
+        window.localStorage.removeItem(AD_DRAFT_KEY);
+      } catch {
+        /* ignore */
+      }
       await refresh();
       notify("success", t("autoBewerb.saved"));
     } else {
