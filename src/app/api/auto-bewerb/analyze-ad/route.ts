@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { AIProviderError } from "@/lib/ai-provider";
 import { provider } from "@/lib/ai-service";
 import {
   completeFeatureOp,
@@ -53,6 +54,56 @@ class InvalidModelOutput extends Error {
     super("invalid_ai_output");
     this.name = "InvalidModelOutput";
   }
+}
+
+/**
+ * Map a caught analysis failure to the browser response:
+ *  - an HTTP status with correct semantics (5xx provider faults are server
+ *    errors, NOT 400 client errors — the old flat-400 made every provider
+ *    outage look like a broken request),
+ *  - a stable machine `code` the frontend maps to a LOCALIZED, actionable
+ *    message (the raw provider wording never reaches the browser),
+ *  - `retryable` so the UI can afford the user an immediate retry for
+ *    transient conditions (outage / timeout / rate limit).
+ * The detailed cause (status, provider code, sanitized body) was already
+ * logged server-side where the failure happened — nothing sensitive is
+ * duplicated here.
+ */
+export function analyzeAdFailureResponse(error: unknown): NextResponse {
+  if (error instanceof InvalidModelOutput) {
+    return NextResponse.json(
+      {
+        error: "Analyse konnte nicht ausgewertet werden. Bitte erneut versuchen.",
+        code: "invalid_ai_output",
+        retryable: true,
+      },
+      { status: 502 },
+    );
+  }
+  if (error instanceof AIProviderError) {
+    const status =
+      error.code === "provider_rate_limited"
+        ? 429
+        : error.code === "provider_timeout"
+          ? 504
+          : error.code === "provider_unavailable" ||
+              error.code === "provider_network" ||
+              error.code === "provider_not_configured"
+            ? 503
+            : 502;
+    return NextResponse.json(
+      { error: error.message, code: error.code, retryable: error.retryable },
+      { status },
+    );
+  }
+  return NextResponse.json(
+    {
+      error: error instanceof Error ? error.message : "AI request failed.",
+      code: "unknown_error",
+      retryable: false,
+    },
+    { status: 400 },
+  );
 }
 
 /** In-flight single-flight table: identical concurrent requests share ONE
@@ -171,25 +222,33 @@ export async function POST(request: Request) {
     inFlight.set(sfKey, work);
   }
 
+  const analysisStarted = Date.now();
   try {
     const data = await work;
     await completeFeatureOp(user.id, "ai_assistant", runId);
+    console.info(
+      `[auto-bewerb][analyze-ad] analysis ok: runId=${runId} userId=${user.id} adChars=${adCheck.data.length} durationMs=${Date.now() - analysisStarted}`,
+    );
     return NextResponse.json(
       { extract: data.extract, analysis: data.analysis, reused: false, profileHash },
       { headers: rateLimitHeaders(limited) },
     );
   } catch (error) {
     await releaseFeatureOp(user.id, "ai_assistant", runId);
-    if (error instanceof InvalidModelOutput) {
-      return NextResponse.json(
-        { error: "Analyse konnte nicht ausgewertet werden. Bitte erneut versuchen.", code: "invalid_ai_output" },
-        { status: 502 },
-      );
-    }
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "AI request failed." },
-      { status: 400 },
+    // One greppable server line per failure (code + status + duration only —
+    // never the ad text, the profile, or any credential). The detailed
+    // provider cause (HTTP status, provider error code/body, redacted) is
+    // logged by the provider layer itself at the point of failure.
+    const code =
+      error instanceof InvalidModelOutput
+        ? "invalid_ai_output"
+        : error instanceof AIProviderError
+          ? error.code
+          : "unknown_error";
+    console.error(
+      `[auto-bewerb][analyze-ad] analysis failed: code=${code} providerStatus=${error instanceof AIProviderError ? error.status ?? "n/a" : "n/a"} runId=${runId} userId=${user.id} adChars=${adCheck.data.length} durationMs=${Date.now() - analysisStarted}`,
     );
+    return analyzeAdFailureResponse(error);
   } finally {
     // Drop the entry once EVERY joiner has settled (identity check: a later
     // identical request re-registered a new promise for the same key).
