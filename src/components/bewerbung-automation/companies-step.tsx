@@ -654,7 +654,11 @@ export const CompaniesStep = memo(function CompaniesStep({
   const advanceReason = busy ? t("bewauto.continueDocsSaving") : nextBlockedReason;
 
   return (
-    <div className="grid gap-4">
+    // minmax(0, 1fr): without it the company table's 960px min-width
+    // propagates through the auto grid track and stretches the page past
+    // the viewport on tablets (768–1024px) — the table must instead
+    // scroll inside its own overflow-auto wrapper.
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <Card className="p-5">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>

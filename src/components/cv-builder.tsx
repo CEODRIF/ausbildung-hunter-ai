@@ -115,14 +115,14 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card className="p-4 sm:p-5" as="section">
+    <Card className="rounded-3xl p-4 shadow-[var(--shadow-card)] transition-shadow duration-300 hover:shadow-[var(--shadow-float)] sm:p-5" as="section">
       <div ref={onSectionRef} className="scroll-mt-24" />
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-            <Icon name={icon} size={15} />
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+            <Icon name={icon} size={16} />
           </span>
-          <h3 className="truncate text-sm font-bold text-ink">{title}</h3>
+          <h3 className="truncate text-base font-bold text-ink">{title}</h3>
           {count !== undefined && count > 0 && (
             <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-bold text-muted">
               {count}
@@ -160,7 +160,7 @@ function EntryCard({
   const iconButton =
     "rounded-lg p-1.5 text-faint transition-colors hover:bg-surface-2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-35";
   return (
-    <div className="rounded-xl border border-line bg-surface-2/40 p-3.5">
+    <div className="rounded-2xl border border-line bg-surface p-3.5 shadow-sm transition-shadow duration-300 hover:shadow-[var(--shadow-card)]">
       <div className="mb-3 flex items-center justify-end gap-0.5">
         <button
           type="button"
@@ -1175,14 +1175,14 @@ export function CvBuilder({
         <div className="mt-6">
           {/* Mobile: control groups get their own full row on phones. */}
           <div className="mb-4 flex flex-wrap items-center gap-2.5 lg:hidden">
-            <div className="flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto">
+            <div className="flex w-full rounded-full border border-line bg-surface p-1 shadow-sm sm:w-auto">
               <button
                 type="button"
                 aria-pressed={view === "content"}
                 onClick={() => setView("content")}
-                className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold transition-colors sm:flex-none ${
                   view === "content"
-                    ? "bg-accent text-white"
+                    ? "bg-navy text-white"
                     : "text-muted hover:text-ink"
                 }`}
               >
@@ -1193,9 +1193,9 @@ export function CvBuilder({
                 type="button"
                 aria-pressed={view === "design"}
                 onClick={() => setView("design")}
-                className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold transition-colors sm:flex-none ${
                   view === "design"
-                    ? "bg-accent text-white"
+                    ? "bg-navy text-white"
                     : "text-muted hover:text-ink"
                 }`}
               >
@@ -1203,14 +1203,14 @@ export function CvBuilder({
                 {t("templates.tabDesign")}
               </button>
             </div>
-            <div className="flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto lg:hidden">
+            <div className="flex w-full rounded-full border border-line bg-surface p-1 shadow-sm sm:w-auto lg:hidden">
               <button
                 type="button"
                 aria-pressed={mobileView === "edit"}
                 onClick={() => setMobileView("edit")}
-                className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
+                className={`flex flex-1 items-center justify-center rounded-full px-4 py-2 text-xs font-bold transition-colors sm:flex-none ${
                   mobileView === "edit"
-                    ? "bg-accent text-white"
+                    ? "bg-navy text-white"
                     : "text-muted hover:text-ink"
                 }`}
               >
@@ -1220,9 +1220,9 @@ export function CvBuilder({
                 type="button"
                 aria-pressed={mobileView === "preview"}
                 onClick={() => setMobileView("preview")}
-                className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
+                className={`flex flex-1 items-center justify-center rounded-full px-4 py-2 text-xs font-bold transition-colors sm:flex-none ${
                   mobileView === "preview"
-                    ? "bg-accent text-white"
+                    ? "bg-navy text-white"
                     : "text-muted hover:text-ink"
                 }`}
               >
@@ -1233,14 +1233,14 @@ export function CvBuilder({
 
           {/* Desktop: the [Content | Design | Preview] tab row. */}
           <div className="mb-4 hidden max-w-fit lg:block">
-            <div className="flex items-center rounded-xl border border-line-strong bg-surface p-1">
+            <div className="flex items-center rounded-full border border-line bg-surface p-1 shadow-sm">
               <button
                 type="button"
                 aria-pressed={view === "content"}
                 onClick={() => setView("content")}
-                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                className={`flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold transition-colors ${
                   view === "content"
-                    ? "bg-accent text-white"
+                    ? "bg-navy text-white"
                     : "text-muted hover:text-ink"
                 }`}
               >
@@ -1251,9 +1251,9 @@ export function CvBuilder({
                 type="button"
                 aria-pressed={view === "design"}
                 onClick={() => setView("design")}
-                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                className={`flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold transition-colors ${
                   view === "design"
-                    ? "bg-accent text-white"
+                    ? "bg-navy text-white"
                     : "text-muted hover:text-ink"
                 }`}
               >
@@ -1264,9 +1264,9 @@ export function CvBuilder({
                 type="button"
                 aria-pressed={view === "preview"}
                 onClick={() => setView("preview")}
-                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                className={`flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold transition-colors ${
                   view === "preview"
-                    ? "bg-accent text-white"
+                    ? "bg-navy text-white"
                     : "text-muted hover:text-ink"
                 }`}
               >

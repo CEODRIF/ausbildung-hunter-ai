@@ -23,7 +23,7 @@ export function AdminNav({ labels }: { labels: AdminNavLabels }) {
   return (
     <nav
       aria-label="Admin"
-      className="mt-6 flex flex-wrap gap-2 border-b border-line pb-4"
+      className="mt-6 flex w-fit flex-wrap items-center gap-1 rounded-2xl border border-line bg-surface p-1 shadow-[var(--shadow-card)]"
     >
       {items.map((item) => {
         const active = pathname.startsWith(item.href);
@@ -32,9 +32,9 @@ export function AdminNav({ labels }: { labels: AdminNavLabels }) {
             key={item.href}
             href={item.href}
             aria-current={active ? "page" : undefined}
-            className={`rounded-full px-4 py-1.5 text-sm font-semibold transition-colors ${
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${
               active
-                ? "bg-accent-soft text-accent"
+                ? "bg-navy text-white shadow-sm"
                 : "text-muted hover:bg-surface-2 hover:text-ink"
             }`}
           >

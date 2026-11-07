@@ -97,44 +97,48 @@ export function LibrarySearchForm({
     <form
       onSubmit={handleSubmit}
       role="search"
-      className="mt-6 grid gap-3 sm:grid-cols-[1fr_auto_auto]"
+      className="mt-6"
     >
-      <div className="relative">
-        <span className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 text-faint">
+      <div className="surface-elevated grid gap-2.5 rounded-3xl p-2.5 shadow-[var(--shadow-card)] sm:grid-cols-[1fr_auto_auto] sm:items-center sm:p-2.5">
+        <div className="relative">
+          <span className="pointer-events-none absolute start-4 top-1/2 -translate-y-1/2 text-faint">
+            <Icon name="search" size={18} />
+          </span>
+          <input
+            type="search"
+            name="q"
+            value={searchValue}
+            onChange={(event) => setSearchValue(event.target.value)}
+            placeholder={t("library.searchPlaceholder")}
+            aria-label={t("library.searchAria")}
+            className="h-12 w-full rounded-2xl bg-surface-2/70 ps-12 pe-4 text-sm font-medium text-ink outline-none transition placeholder:text-faint focus:bg-surface focus:ring-4 focus:ring-accent/10"
+          />
+        </div>
+        <select
+          name="cat"
+          value={categoryValue}
+          onChange={(event) => setCategoryValue(event.target.value)}
+          aria-label={t("library.categoryLabel")}
+          className="h-12 cursor-pointer rounded-2xl border border-transparent bg-surface-2/70 px-4 text-sm font-semibold text-ink-soft outline-none transition hover:bg-surface-2 focus:ring-4 focus:ring-accent/10"
+        >
+          <option value="">{t("library.allCategories")}</option>
+          {BOOK_CATEGORIES.map((entry) => (
+            <option key={entry.slug} value={entry.slug}>
+              {t(entry.labelKey)}
+            </option>
+          ))}
+        </select>
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={isPending}
+          aria-busy={isPending}
+          className="h-12 justify-center rounded-2xl px-6 text-sm"
+        >
           <Icon name="search" size={16} />
-        </span>
-        <input
-          type="search"
-          name="q"
-          value={searchValue}
-          onChange={(event) => setSearchValue(event.target.value)}
-          placeholder={t("library.searchPlaceholder")}
-          aria-label={t("library.searchAria")}
-          className="h-11 w-full rounded-2xl border border-line-strong bg-surface ps-10 pe-4 text-sm text-ink shadow-[var(--shadow-card)] outline-none transition placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10"
-        />
+          {t("library.search")}
+        </Button>
       </div>
-      <select
-        name="cat"
-        value={categoryValue}
-        onChange={(event) => setCategoryValue(event.target.value)}
-        aria-label={t("library.categoryLabel")}
-        className="h-11 rounded-2xl border border-line-strong bg-surface px-3.5 text-sm text-ink-soft shadow-[var(--shadow-card)] outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10"
-      >
-        <option value="">{t("library.allCategories")}</option>
-        {BOOK_CATEGORIES.map((entry) => (
-          <option key={entry.slug} value={entry.slug}>
-            {t(entry.labelKey)}
-          </option>
-        ))}
-      </select>
-      <Button
-        type="submit"
-        variant="secondary"
-        disabled={isPending}
-        aria-busy={isPending}
-      >
-        {t("library.search")}
-      </Button>
     </form>
   );
 }

@@ -78,10 +78,10 @@ describe("premium i18n: no raw keys reach the UI", () => {
     const premiumKeys = collectStaticKeys().filter((key) =>
       key.startsWith("premium."),
     );
-    // Floor recalibrated after the v2 sky landing replaced the premium hero:
-    // remaining static t() refs are nav.more, hero.subtitle, hero.searchTitle
-    // and hero.ctaStart (4 unique keys).
-    expect(premiumKeys.length).toBeGreaterThanOrEqual(4);
+    // Floor recalibrated after the Phase 2 dashboard reorganization: the
+    // dashboard hero now uses dash.* keys, so the only remaining static
+    // premium.* ref in src is nav.more (1 unique key).
+    expect(premiumKeys.length).toBeGreaterThanOrEqual(1);
     for (const lang of SUPPORTED_LANGUAGES) {
       for (const key of premiumKeys) {
         const value = lookup(dictionaries[lang], key);
@@ -382,8 +382,10 @@ describe("CV / cover-letter builders: mobile is a full-width single column", () 
       expect(src).toContain(
         "flex w-full flex-wrap items-center gap-2.5 sm:w-auto sm:justify-end",
       );
+      // Phase 2: the control group is a pill (rounded-full) with the same
+      // full-width-below-sm invariant.
       expect(src).toContain(
-        "flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto",
+        "flex w-full rounded-full border border-line bg-surface p-1 shadow-sm sm:w-auto",
       );
     });
 

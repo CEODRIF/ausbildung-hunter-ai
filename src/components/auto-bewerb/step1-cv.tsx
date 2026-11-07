@@ -250,6 +250,7 @@ export function Step1Cv() {
       {/* Upload / file meta */}
       <SectionCard
         title={t("autoBewerb.cvUploadTitle")}
+        icon="user"
         aside={
           profile && (
             <div className="flex items-center gap-2">

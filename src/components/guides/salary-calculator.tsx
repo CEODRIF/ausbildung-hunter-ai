@@ -13,6 +13,7 @@
  *  - PKV: uses the user's own premium — no assumed rate.
  */
 import { useMemo, useState } from "react";
+import { Icon } from "@/components/icon";
 import { dictionaries, useI18n } from "@/lib/i18n";
 import {
   BUNDESLAENDER,
@@ -113,10 +114,21 @@ export function SalaryCalculator() {
   const segOff = "bg-surface text-muted hover:text-ink";
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <p className="text-sm leading-relaxed text-muted">{t("guides.gehalt.intro")}</p>
 
-      <div className="surface-elevated rounded-3xl p-5 sm:p-6">
+      <div className="surface-elevated rounded-3xl p-5 shadow-[var(--shadow-card)] sm:p-6">
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <span
+            aria-hidden="true"
+            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-accent-soft text-accent"
+          >
+            <Icon name="chart" size={20} />
+          </span>
+          <span className="rounded-full bg-surface-2 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-muted">
+            {t("guides.gehalt.yearLabel")} {String(SALARY_YEAR)}
+          </span>
+        </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {/* Gross — spans two columns so the amount input keeps a comfortable
               width next to the per-month/per-year control at every size
@@ -290,24 +302,41 @@ export function SalaryCalculator() {
         <button
           type="button"
           onClick={calc}
-          className="mt-5 w-full rounded-2xl bg-accent px-5 py-3 text-sm font-bold text-white shadow-sm transition-colors hover:bg-accent-deep sm:w-auto"
+          className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-6 text-sm font-bold text-white shadow-sm transition hover:bg-accent-deep"
         >
+          <Icon name="chart" size={16} />
           {t("guides.gehalt.calc")}
         </button>
         {error && <p className="mt-3 text-sm font-semibold text-danger">{error}</p>}
       </div>
 
       {result && (
-        <div className="surface-elevated rounded-3xl p-5 sm:p-6">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-base font-bold tracking-tight text-ink">
-              {t("guides.gehalt.resultTitle")}
-            </h2>
-            <span className="num text-3xl font-extrabold text-ink">
-              {eur(result.monthly.net)} €
+        <div className="surface-elevated overflow-hidden rounded-3xl shadow-[var(--shadow-card)]">
+          {/* Hero: the net amount is the answer — it gets the stage. */}
+          <div
+            className="flex flex-wrap items-center justify-between gap-4 px-5 py-5 sm:px-7 sm:py-6"
+            style={{ background: "var(--gradient-neon)" }}
+          >
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-white/75">
+                {t("guides.gehalt.rowNetto")} · {t("guides.gehalt.modeMonthly")}
+              </p>
+              <p className="num mt-1 text-4xl font-extrabold text-white sm:text-5xl">
+                {eur(result.monthly.net)} €
+              </p>
+            </div>
+            <span
+              aria-hidden="true"
+              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/15 text-white"
+            >
+              <Icon name="check" size={22} />
             </span>
           </div>
-          <dl className="mt-4 divide-y divide-line">
+          <div className="px-5 py-5 sm:px-7 sm:py-6">
+          <h2 className="text-base font-bold tracking-tight text-ink">
+            {t("guides.gehalt.resultTitle")}
+          </h2>
+          <dl className="mt-3 divide-y divide-line">
             {rows.map((r) => (
               <div key={r.key} className="flex items-baseline justify-between gap-3 py-2">
                 <dt
@@ -374,6 +403,7 @@ export function SalaryCalculator() {
               </a>
             </p>
           </details>
+          </div>
         </div>
       )}
     </div>

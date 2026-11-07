@@ -574,10 +574,15 @@ export default async function BillingSettingsPage() {
                       key={fid}
                       className="grid gap-1 sm:grid-cols-[190px_1fr] sm:items-center sm:gap-4"
                     >
-                      <dt className="text-xs text-muted">
-                        {t(`billing.featureNames.${fid}`)}
-                      </dt>
-                      <dd>{usageCell(fid)}</dd>
+                    <dt className="text-xs text-muted">
+                      {t(`billing.featureNames.${fid}`)}
+                    </dt>
+                    {/* The quota bar's label is nowrap by default; on phones
+                        the longest feature names would push the card past
+                        the viewport — let the label wrap instead. */}
+                    <dd className="min-w-0 [&_.whitespace-nowrap]:whitespace-normal">
+                      {usageCell(fid)}
+                    </dd>
                     </div>
                   ))}
                 </dl>

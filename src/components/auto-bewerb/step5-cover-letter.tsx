@@ -185,7 +185,7 @@ export function Step5CoverLetter() {
       {/* ------------------------------------------------------------------ */}
       {/* Global generation panel                                            */}
       {/* ------------------------------------------------------------------ */}
-      <SectionCard title={t("autoBewerb.letterBulkTitle")} className="bg-gradient-to-br from-accent-soft/40 via-surface to-surface">
+      <SectionCard title={t("autoBewerb.letterBulkTitle")} icon="mail" className="bg-gradient-to-br from-accent-soft/40 via-surface to-surface">
         <p className="max-w-2xl text-sm leading-6 text-muted">{t("autoBewerb.letterBulkDesc")}</p>
 
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">

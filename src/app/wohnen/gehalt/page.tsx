@@ -7,7 +7,7 @@ import { SalaryCalculator } from "@/components/guides/salary-calculator";
  */
 export default function GehaltPage() {
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 lg:px-10">
       <SalaryCalculator />
     </div>
   );

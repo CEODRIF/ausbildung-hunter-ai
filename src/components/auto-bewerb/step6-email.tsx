@@ -216,6 +216,7 @@ export function Step6Email() {
       {/* 1 — Shared e-mail template (subject + body + the remaining shared options) */}
       <SectionCard
         title={t("autoBewerb.templateTitle")}
+        icon="mail"
         aside={
           <div className="flex items-center gap-2">
             <Button variant="secondary" size="sm" onClick={() => void generateDraft()} disabled={drafting}>

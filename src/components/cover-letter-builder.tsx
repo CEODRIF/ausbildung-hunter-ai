@@ -377,7 +377,10 @@ export function CoverLetterBuilder({ userId }: CoverLetterBuilderProps) {
     try {
       const raw = window.localStorage.getItem(clStorageKey(userId));
       hadStored = Boolean(raw);
-      if (raw) loaded = sanitizeClDocument(raw) ?? clEmpty();
+      // The persisted value is a JSON string (written by the autosave above)
+      // and the sanitizer takes the parsed object — exactly like the CV
+      // builder's restore path. Corrupt JSON falls into the catch below.
+      if (raw) loaded = sanitizeClDocument(JSON.parse(raw)) ?? clEmpty();
     } catch {
       /* corrupt storage — start fresh */
     }
@@ -687,14 +690,14 @@ export function CoverLetterBuilder({ userId }: CoverLetterBuilderProps) {
             </span>
           )}
           {started && (
-            <div className="flex w-full rounded-xl border border-line-strong bg-surface p-1 sm:w-auto lg:hidden">
+            <div className="flex w-full rounded-full border border-line bg-surface p-1 shadow-sm sm:w-auto lg:hidden">
               <button
                 type="button"
                 aria-pressed={mobileView === "edit"}
                 onClick={() => setMobileView("edit")}
-                className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
+                className={`flex flex-1 items-center justify-center rounded-full px-4 py-2 text-xs font-bold transition-colors sm:flex-none ${
                   mobileView === "edit"
-                    ? "bg-accent text-white"
+                    ? "bg-navy text-white"
                     : "text-muted hover:text-ink"
                 }`}
               >
@@ -704,9 +707,9 @@ export function CoverLetterBuilder({ userId }: CoverLetterBuilderProps) {
                 type="button"
                 aria-pressed={mobileView === "preview"}
                 onClick={() => setMobileView("preview")}
-                className={`flex flex-1 items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors sm:flex-none ${
+                className={`flex flex-1 items-center justify-center rounded-full px-4 py-2 text-xs font-bold transition-colors sm:flex-none ${
                   mobileView === "preview"
-                    ? "bg-accent text-white"
+                    ? "bg-navy text-white"
                     : "text-muted hover:text-ink"
                 }`}
               >

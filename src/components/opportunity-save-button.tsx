@@ -10,6 +10,10 @@ interface SaveOpportunityButtonProps {
   /** Icon-only control for dense card layouts (opportunity list). Defaults to
    *  the labelled button used everywhere else. */
   compact?: boolean;
+  /** Optional state mirror for the parent (e.g. a card that restyles its
+   *  avatar for the saved state). Purely presentational — the fetch and the
+   *  success/failure handling stay here. */
+  onSavedChange?: (saved: boolean) => void;
 }
 
 /**
@@ -29,6 +33,7 @@ export function SaveOpportunityButton({
   opportunityKey,
   initialSaved,
   compact = false,
+  onSavedChange,
 }: SaveOpportunityButtonProps) {
   const { t } = useI18n();
   const [saved, setSaved] = useState(initialSaved);
@@ -50,7 +55,11 @@ export function SaveOpportunityButton({
         setError(t(failureKey(response.status)));
         return;
       }
-      setSaved((value) => !value);
+      setSaved((value) => {
+        const next = !value;
+        onSavedChange?.(next);
+        return next;
+      });
     } catch {
       setError(t("account.saveFailed"));
     } finally {

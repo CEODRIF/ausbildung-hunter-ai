@@ -487,21 +487,26 @@ export function BewerbungAutomation({
     <div className="relative mx-auto max-w-5xl px-4 py-6">
       <GradientMesh />
       <div className="relative">
-        {/* Header row */}
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-extrabold tracking-tight text-ink">
-              {t("bewauto.title")}
-            </h1>
-            <p className="mt-1 text-sm text-muted">
-              {t("bewauto.campaignSummary", {
-                sent: view.campaign.sent_count,
-                failed: view.campaign.failed_count,
-                total: view.campaign.total_count,
-              })}
-            </p>
+        {/* Header row — premium hero card with the live campaign summary */}
+        <div className="surface-elevated mb-5 flex flex-wrap items-center justify-between gap-4 rounded-3xl p-5 sm:p-6">
+          <div className="flex min-w-0 items-center gap-3.5">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+              <Icon name="spark" size={20} />
+            </span>
+            <div className="min-w-0">
+              <h1 className="display-title text-2xl text-ink sm:text-3xl">
+                {t("bewauto.title")}
+              </h1>
+              <p className="mt-1 text-sm text-muted">
+                {t("bewauto.campaignSummary", {
+                  sent: view.campaign.sent_count,
+                  failed: view.campaign.failed_count,
+                  total: view.campaign.total_count,
+                })}
+              </p>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3 [&_.whitespace-nowrap]:whitespace-normal">
             {/* Shared green quota indicator (P0 quota audit): used/limit,
                 remaining and the UTC reset label from the SERVER view —
                 the old StatusPill only showed the remaining count and an
@@ -546,21 +551,25 @@ export function BewerbungAutomation({
                     type="button"
                     disabled={!gates[s]}
                     onClick={() => setStep(s)}
-                    className={`flex min-w-0 w-full flex-col items-center gap-1.5 break-words rounded-2xl border px-1.5 py-2 text-center text-xs font-semibold transition sm:flex-row sm:justify-center sm:gap-0 sm:px-2 sm:py-2.5 sm:text-sm ${
-                      active
-                        ? "border-accent bg-accent-soft text-accent"
-                        : done
-                          ? "border-line-strong bg-surface text-ink-soft hover:border-faint"
-                          : gates[s]
-                            ? "border-line bg-surface/60 text-muted hover:border-line-strong"
-                            : "cursor-not-allowed border-line bg-surface/40 text-faint"
-                    }`}
-                  >
-                    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[11px] font-bold sm:mr-1.5">
-                      {s}
-                    </span>
-                    {t(`bewauto.step${s}`)}
-                  </button>
+                      className={`flex min-w-0 w-full flex-col items-center gap-1.5 break-words rounded-2xl border px-1.5 py-2 text-center text-xs font-semibold transition sm:flex-row sm:justify-center sm:gap-0 sm:px-2 sm:py-2.5 sm:text-sm ${
+                        active
+                          ? "border-navy bg-navy text-white shadow-[var(--shadow-card)]"
+                          : done
+                            ? "border-line-strong bg-surface text-ink-soft hover:border-faint"
+                            : gates[s]
+                              ? "border-line bg-surface/60 text-muted hover:border-line-strong"
+                              : "cursor-not-allowed border-line bg-surface/40 text-faint"
+                      }`}
+                    >
+                      <span
+                        className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold sm:mr-1.5 ${
+                          active ? "bg-white/20 text-white" : "bg-surface-2 text-muted"
+                        }`}
+                      >
+                        {s}
+                      </span>
+                      {t(`bewauto.step${s}`)}
+                    </button>
                 </li>
               );
             })}

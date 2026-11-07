@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { Icon } from "@/components/icon";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { requireAdmin } from "@/lib/billing/admin";
 import { listAdminBooks, bookCoverPublicUrl } from "@/lib/book-library";
@@ -45,11 +46,20 @@ export default async function AdminBooksPage() {
 
   return (
     <>
-      <div className="mt-8">
-        <h1 className="mt-2 text-3xl font-bold tracking-[-0.04em] text-ink">
-          {t("admin.books.title")}
-        </h1>
-        <p className="mt-2 text-sm text-muted">{t("admin.books.subtitle")}</p>
+      <div className="mt-8 flex items-center gap-4">
+        <span
+          aria-hidden="true"
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-white shadow-[var(--shadow-card)]"
+          style={{ background: "var(--gradient-neon)" }}
+        >
+          <Icon name="book" size={22} />
+        </span>
+        <div>
+          <h1 className="text-2xl font-bold tracking-[-0.03em] text-ink sm:text-3xl">
+            {t("admin.books.title")}
+          </h1>
+          <p className="mt-1 text-sm text-muted">{t("admin.books.subtitle")}</p>
+        </div>
       </div>
       <AdminBookManager books={rows} />
     </>

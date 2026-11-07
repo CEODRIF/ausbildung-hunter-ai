@@ -11,7 +11,7 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { Pin, Search } from "lucide-react";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
-import { Icon } from "@/components/icon";
+import { Icon, type IconName } from "@/components/icon";
 import { EmptyState } from "@/components/empty-state";
 import { Skeleton } from "@/components/ui/feedback";
 import {
@@ -116,6 +116,14 @@ function initials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+/** Compact tab badge ("60.6k") for large totals; exact below 10,000.
+ *  Locale-aware decimal formatting. */
+function compactCount(n: number, locale: string): string {
+  if (n < 10000) return n.toLocaleString(locale);
+  const value = Math.round((n / 1000) * 10) / 10;
+  return `${value.toLocaleString(locale, { maximumFractionDigits: 1 })}k`;
+}
+
 function RadioRow({
   name,
   checked,
@@ -211,6 +219,20 @@ export function OpportunitySearch({
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
+  /** Saved-state mirror per card (fed by SaveOpportunityButton's
+   *  onSavedChange) — the card's avatar reflects the real saved state. */
+  const [savedIds, setSavedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const markSaved = useCallback(
+    (opportunityId: string) => (saved: boolean) => {
+      setSavedIds((prev) => {
+        const next = new Set(prev);
+        if (saved) next.add(opportunityId);
+        else next.delete(opportunityId);
+        return next;
+      });
+    },
+    [],
+  );
   // View Details double-click guard: the id currently opening (any row
   // stays disabled while one is).
   const [openingId, setOpeningId] = useState<string | null>(null);
@@ -476,54 +498,72 @@ export function OpportunitySearch({
   return (
     <div className="space-y-5">
       {/* ------------------------------------------------ search hero ---- */}
+      {/* Dark premium hero (Bewerby reference): title + one big white search
+          bar with the green circular submit + refinement fields. */}
       <form
         onSubmit={(event) => {
           event.preventDefault();
           commitSearch((current) => current);
         }}
-        className="rounded-3xl border border-line bg-surface p-4 shadow-[var(--shadow-card)] sm:p-5"
+        className="relative overflow-hidden rounded-3xl bg-navy p-5 shadow-[var(--shadow-float)] sm:p-8"
       >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div
-            role="group"
-            aria-label={t("pages.opportunities.title")}
-            className="inline-flex rounded-full bg-surface-2 p-1"
-          >
-            {(["ausbildung", "arbeit"] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => commitSearch((current) => ({ ...current, goal: value }))}
-                aria-pressed={state.goal === value}
-                className={
-                  state.goal === value
-                    ? "rounded-full bg-surface px-4 py-2 text-xs font-bold text-ink shadow-[var(--shadow-card)]"
-                    : "rounded-full px-4 py-2 text-xs font-semibold text-muted transition-colors hover:text-ink"
-                }
-              >
-                {t(value === "ausbildung" ? "dash.goalAusbildung" : "dash.goalArbeit")}
-              </button>
-            ))}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -end-20 -top-28 h-72 w-72 rounded-full bg-accent/25 blur-3xl"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-32 -start-16 h-64 w-64 rounded-full bg-white/5 blur-3xl"
+        />
+        <div className="relative">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div
+              role="group"
+              aria-label={t("pages.opportunities.title")}
+              className="inline-flex rounded-full bg-white/10 p-1"
+            >
+              {(["ausbildung", "arbeit"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => commitSearch((current) => ({ ...current, goal: value }))}
+                  aria-pressed={state.goal === value}
+                  className={
+                    state.goal === value
+                      ? "rounded-full bg-white px-4 py-2 text-xs font-bold text-ink shadow-sm"
+                      : "rounded-full px-4 py-2 text-xs font-semibold text-white/60 transition-colors hover:text-white"
+                  }
+                >
+                  {t(value === "ausbildung" ? "dash.goalAusbildung" : "dash.goalArbeit")}
+                </button>
+              ))}
+            </div>
+            <Link
+              href="/opportunities/saved"
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-white/70 transition-colors hover:text-white"
+            >
+              <Icon name="bookmark" size={14} />
+              {t("pages.opportunitiesSaved.title")}
+            </Link>
           </div>
-          <Link
-            href="/opportunities/saved"
-            className="text-xs font-bold text-accent transition-colors hover:text-accent-deep"
-          >
-            {t("pages.opportunitiesSaved.title")}
-          </Link>
-        </div>
 
-        {/* Primary query row: one big input + the green submit button. */}
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-          <div className="relative min-w-0 flex-1">
+          <h1 className="display-title mt-6 text-3xl text-white sm:text-4xl">
+            {t("opp.hero.title")}
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-white/60">
+            {t("opp.hero.subtitle")}
+          </p>
+
+          {/* Primary query row: one big white bar + the green circular CTA. */}
+          <div className="mt-6 flex items-center gap-1.5 rounded-full bg-white p-1.5 shadow-lg">
             <Search
               size={18}
               strokeWidth={2}
               aria-hidden="true"
-              className="pointer-events-none absolute start-4 top-1/2 -translate-y-1/2 text-faint"
+              className="pointer-events-none ms-3 shrink-0 text-faint"
             />
             <input
-              className="h-12 w-full rounded-2xl border border-line-strong bg-surface ps-11 pe-4 text-sm text-ink shadow-[var(--shadow-card)] outline-none transition-[border-color,box-shadow] placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10"
+              className="h-11 min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-faint"
               placeholder={t("search.ph.keyword")}
               value={state.keyword}
               maxLength={120}
@@ -532,38 +572,39 @@ export function OpportunitySearch({
               }
               aria-label={t("search.ph.keyword")}
             />
+            <button
+              type="submit"
+              disabled={loading}
+              aria-label={loading ? t("search.searching") : t("search.search")}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-white transition-colors hover:bg-accent-deep disabled:cursor-wait disabled:opacity-60"
+            >
+              <Icon name="arrowRight" size={18} className="rtl:-scale-x-100" />
+            </button>
           </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn-neon inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-2xl px-6 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-70"
-          >
-            {loading ? t("search.searching") : t("search.search")}
-          </button>
-        </div>
 
-        {/* Refinement fields: stacked on phones, side by side from sm. */}
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          <input
-            className="h-11 w-full rounded-2xl border border-line bg-surface px-4 text-sm text-ink outline-none transition-[border-color,box-shadow] placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10"
-            placeholder={t("search.ph.role")}
-            value={state.role}
-            maxLength={120}
-            onChange={(event) =>
-              scheduleSearch((current) => ({ ...current, role: event.target.value }))
-            }
-            aria-label={t("search.ph.role")}
-          />
-          <input
-            className="h-11 w-full rounded-2xl border border-line bg-surface px-4 text-sm text-ink outline-none transition-[border-color,box-shadow] placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10"
-            placeholder={t("search.ph.company")}
-            value={state.company}
-            maxLength={160}
-            onChange={(event) =>
-              scheduleSearch((current) => ({ ...current, company: event.target.value }))
-            }
-            aria-label={t("search.ph.company")}
-          />
+          {/* Refinement fields: stacked on phones, side by side from sm. */}
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <input
+              className="h-11 w-full rounded-2xl border border-white/15 bg-white/10 px-4 text-sm text-white outline-none transition-colors placeholder:text-white/40 focus:border-accent"
+              placeholder={t("search.ph.role")}
+              value={state.role}
+              maxLength={120}
+              onChange={(event) =>
+                scheduleSearch((current) => ({ ...current, role: event.target.value }))
+              }
+              aria-label={t("search.ph.role")}
+            />
+            <input
+              className="h-11 w-full rounded-2xl border border-white/15 bg-white/10 px-4 text-sm text-white outline-none transition-colors placeholder:text-white/40 focus:border-accent"
+              placeholder={t("search.ph.company")}
+              value={state.company}
+              maxLength={160}
+              onChange={(event) =>
+                scheduleSearch((current) => ({ ...current, company: event.target.value }))
+              }
+              aria-label={t("search.ph.company")}
+            />
+          </div>
         </div>
       </form>
 
@@ -924,7 +965,7 @@ export function OpportunitySearch({
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <p className="flex items-baseline gap-2">
                   {total !== null && (
-                    <span className="num text-2xl font-extrabold tracking-tight text-ink">
+                    <span className="num text-3xl font-extrabold tracking-tight text-ink">
                       {total.toLocaleString(locale)}
                     </span>
                   )}
@@ -975,8 +1016,8 @@ export function OpportunitySearch({
                 >
                   {(
                     [
-                      { value: "any", label: t("opp.all") },
-                      { value: "available", label: t("opp.email") },
+                      { value: "any", label: t("opp.all"), icon: "grid" as IconName },
+                      { value: "available", label: t("opp.email"), icon: "mail" as IconName },
                     ] as const
                   ).map((tab) => {
                     const active =
@@ -994,13 +1035,28 @@ export function OpportunitySearch({
                             contact_email: tab.value,
                           }))
                         }
-                        className={
+                        className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition-colors ${
                           active
-                            ? "rounded-full bg-navy px-3.5 py-1.5 text-xs font-bold text-white"
-                            : "rounded-full px-3.5 py-1.5 text-xs font-semibold text-muted transition-colors hover:text-ink"
-                        }
+                            ? "bg-navy text-white"
+                            : "text-muted hover:text-ink"
+                        }`}
                       >
+                        <Icon name={tab.icon} size={13} />
                         {tab.label}
+                        {/* The badge carries the REAL current total — no
+                            per-type counts exist in the response, so no
+                            fabricated number is shown on the Email tab. */}
+                        {tab.value === "any" && total !== null && (
+                          <span
+                            className={`num rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                              active
+                                ? "bg-white/20 text-white"
+                                : "bg-surface-2 text-faint"
+                            }`}
+                          >
+                            {compactCount(total, locale)}
+                          </span>
+                        )}
                       </button>
                     );
                   })}
@@ -1100,8 +1156,8 @@ export function OpportunitySearch({
                 `/opportunities/${encodeURIComponent(opportunity.id)}` +
                 (fromState ? `?from=${encodeURIComponent(fromState)}` : "");
               const company = opportunity.company_name || t("search.companyNotListed");
+              const isSaved = savedIds.has(opportunity.id);
               const meta = [
-                opportunity.profession,
                 formatDay(opportunity.posted_at, locale)
                   ? t("search.posted", { date: formatDay(opportunity.posted_at, locale) ?? "" })
                   : null,
@@ -1115,56 +1171,63 @@ export function OpportunitySearch({
               return (
                 <article
                   key={opportunity.id}
-                  className="group relative rounded-3xl border border-line bg-surface p-4 shadow-[var(--shadow-card)] transition-shadow duration-300 hover:shadow-[var(--shadow-float)] sm:p-5"
+                  className="group relative rounded-3xl border border-line bg-surface p-4 shadow-[var(--shadow-card)] transition-[transform,box-shadow,border-color] duration-300 hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-[var(--shadow-float)] sm:p-5"
                 >
-                  {/* Bookmark floats in the corner so the German job title gets
-                      the full card width instead of wrapping around it. */}
+                  {/* Bookmark floats in the corner so the company row and the
+                      German job title get the full card width. */}
                   <div className="absolute end-3 top-3 z-10">
                     <SaveOpportunityButton
                       opportunityKey={opportunity.id}
                       initialSaved={false}
                       compact
+                      onSavedChange={markSaved(opportunity.id)}
                     />
                   </div>
-                  <div className="flex min-w-0 items-start gap-3 pe-12">
+                  {/* Avatar: company initials — turns into the saved-state
+                      brand gradient with a bookmark icon (reference look). */}
+                  <div className="flex min-w-0 items-center gap-3.5 pe-12">
                     <span
                       aria-hidden="true"
-                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-xs font-extrabold text-accent"
+                      className={`flex h-13 w-13 shrink-0 items-center justify-center rounded-2xl transition-colors duration-300 ${
+                        isSaved ? "text-white" : "bg-accent-soft text-accent"
+                      }`}
+                      style={isSaved ? { backgroundImage: "var(--gradient-neon)" } : undefined}
                     >
-                      {initials(company)}
+                      {isSaved ? (
+                        <Icon name="bookmark" size={20} />
+                      ) : (
+                        <span className="text-sm font-extrabold">{initials(company)}</span>
+                      )}
                     </span>
-                    <div className="min-w-0">
-                      <p className="truncate text-xs font-bold text-muted">{company}</p>
-                      <h2 className="mt-0.5 break-words text-[15px] font-bold leading-6 text-ink transition-colors group-hover:text-accent sm:text-base">
-                        {opportunity.title}
-                      </h2>
-                    </div>
+                    <p className="min-w-0 truncate text-sm font-bold text-ink">{company}</p>
                   </div>
+                  <h2 className="mt-2.5 break-words text-[15px] font-semibold leading-6 text-ink transition-colors group-hover:text-accent sm:text-base">
+                    {opportunity.title}
+                  </h2>
 
                   <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                    <span className="rounded-full bg-accent-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-accent">
-                      {t(
-                        opportunity.goal === "ausbildung"
-                          ? "dash.goalAusbildung"
-                          : "dash.goalArbeit",
-                      )}
-                    </span>
-                    {opportunity.training_type &&
-                      !(
-                        opportunity.goal === "ausbildung" &&
-                        opportunity.training_type === "AUSBILDUNG"
-                      ) && (
-                        <span className="rounded-full bg-ai-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-ai">
-                          {opportunity.training_type.toLowerCase().replaceAll("_", " ")}
-                        </span>
-                      )}
-                    {opportunity.salary?.label ? (
+                    {/* Application-type indicators first (reference: "Online
+                        form" chip) — derived from real per-opportunity data. */}
+                    {opportunity.application_url && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-accent">
+                        <Icon name="file" size={11} />
+                        {t("opp.typeOnline")}
+                      </span>
+                    )}
+                    {opportunity.contact?.email && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-line-strong bg-surface px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-muted">
+                        <Icon name="mail" size={11} />
+                        {t("opp.typeEmail")}
+                      </span>
+                    )}
+                    {opportunity.profession && (
+                      <span className="rounded-full border border-line-strong bg-surface px-2.5 py-1 text-[10px] font-bold text-muted">
+                        {opportunity.profession}
+                      </span>
+                    )}
+                    {opportunity.salary?.label && (
                       <span className="rounded-full bg-success-soft px-2.5 py-1 text-[10px] font-bold text-success">
                         {opportunity.salary.label}
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-semibold text-faint">
-                        {t("search.salaryNotSpecified")}
                       </span>
                     )}
                     {opportunity.employment_type && (
@@ -1182,6 +1245,15 @@ export function OpportunitySearch({
                         {t("search.careerChanger")}
                       </span>
                     )}
+                    {opportunity.training_type &&
+                      !(
+                        opportunity.goal === "ausbildung" &&
+                        opportunity.training_type === "AUSBILDUNG"
+                      ) && (
+                        <span className="rounded-full bg-ai-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-ai">
+                          {opportunity.training_type.toLowerCase().replaceAll("_", " ")}
+                        </span>
+                      )}
                   </div>
 
                   <div className="mt-4 flex flex-wrap items-end justify-between gap-3 border-t border-line pt-3">
