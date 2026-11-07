@@ -223,11 +223,15 @@ describe("6. every language has the copy (no hardcoded strings)", () => {
 });
 
 describe("7. nothing else changed, nothing was deleted", () => {
-  it("keeps the navigation entry and the shell heading for /deckblatt", () => {
+  it("keeps the shell heading for /deckblatt (direct URL access) but no longer lists it in navigation", () => {
     const shell = read("src/components/app-shell.tsx");
-    expect(shell).toContain(
+    // Product decision (2026-11): Deckblatt AI is hidden from the platform
+    // navigation. The nav entry must be GONE from the shell…
+    expect(shell).not.toContain(
       '{ labelKey: "nav.deckblatt", href: "/deckblatt", icon: "image" }',
     );
+    // …while the route heading survives, so a direct visit to /deckblatt
+    // still renders the correct page header.
     // Whitespace-tolerant: the heading object may be formatted on one or
     // several lines — the contract is that the deckblatt heading survives.
     expect(shell.replace(/\s+/g, "")).toContain(

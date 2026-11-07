@@ -733,13 +733,9 @@ function WorkflowNav({ goalLabel, t }: { goalLabel: string; t: T }) {
       label: t("workflow.email.label"),
       desc: t("workflow.email.desc"),
     },
-    {
-      key: "usage",
-      icon: "settings",
-      href: "/settings/usage",
-      label: t("workflow.usage.label"),
-      desc: t("workflow.usage.desc"),
-    },
+    // HIDDEN FROM NAVIGATION (product decision, 2026-11): the "usage"
+    // quick link (Settings, /settings/usage) is no longer offered here; the
+    // page remains reachable by direct URL.
   ];
   return (
     <GlassCard variant="surface" className="mt-5 overflow-hidden" as="section">
@@ -837,16 +833,12 @@ function UsageCard({
           upgradeHint={t("quota.upgrade")}
         />
       </div>
-      <Link
-        href="/settings/usage"
-        className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-success transition-colors hover:text-success/80"
-      >
-        {t("quota.details")}
-        <Icon name="arrowRight" size={12} className="rtl:-scale-x-100" />
-      </Link>
-    </div>
-  );
-}
+       {/* HIDDEN FROM NAVIGATION (product decision, 2026-11): this quick
+           link pointed at Settings (/settings/usage), which is no longer
+           offered in platform navigation. The page stays reachable by URL. */}
+     </div>
+   );
+ }
 
 function MetricCard({
   label,

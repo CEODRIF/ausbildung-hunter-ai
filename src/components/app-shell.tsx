@@ -147,7 +147,9 @@ const NAV_SECTIONS: NavSection[] = [
       { labelKey: "nav.emailAssistant", href: "/settings/email", icon: "mail" },
       { labelKey: "nav.templates", href: "/dashboard/templates", icon: "file" },
       { labelKey: "nav.coverLetter", href: "/dashboard/cover-letter", icon: "send" },
-      { labelKey: "nav.deckblatt", href: "/deckblatt", icon: "image" },
+      // HIDDEN FROM NAVIGATION (product decision, 2026-11): Deckblatt AI
+      // stays fully functional at /deckblatt (route, components, APIs
+      // untouched) — it is simply not offered in the menu anymore.
       {
         labelKey: "nav.bewerbungAutomation",
         href: "/bewerbung-automation",
@@ -159,7 +161,9 @@ const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.account",
     items: [
       { labelKey: "nav.profile", href: "/settings/profile", icon: "user" },
-      { labelKey: "nav.settings", href: "/settings/usage", icon: "settings" },
+      // HIDDEN FROM NAVIGATION (product decision, 2026-11): the Settings
+      // entry (/settings/usage) is no longer listed; the page itself remains
+      // reachable by direct URL, as do the other /settings/* routes.
       { labelKey: "nav.billing", href: "/settings/billing", icon: "idCard" },
     ],
   },

@@ -889,9 +889,11 @@ describe("responsive layout", () => {
 
   it("desktop: two columns (form | preview) beside the existing sidebar", () => {
     expect(generator).toContain("lg:grid-cols-[minmax(0,460px)_minmax(0,1fr)]");
-    // The shell is untouched: the nav item joins the existing model.
+    // Product decision (2026-11): the nav item is hidden from the platform
+    // navigation — the shell must NOT list it anymore…
     const shell = read("src/components/app-shell.tsx");
-    expect(shell).toContain('{ labelKey: "nav.deckblatt", href: "/deckblatt", icon: "image" }');
+    expect(shell).not.toContain('{ labelKey: "nav.deckblatt", href: "/deckblatt", icon: "image" }');
+    // …while the route heading survives for direct URL access.
     // Whitespace-tolerant (the heading object may reflow across lines):
     expect(shell.replace(/\s+/g, "")).toContain(
       'titleKey:"pages.deckblatt.title",subtitleKey:"pages.deckblatt.subtitle"',
@@ -918,9 +920,14 @@ describe("feature invariants", () => {
     expect(selectDeckblattStyle("Ausbildungsplatz unbekannt 123").id).toBe("modern");
   });
 
-  it("the nav item exists with a lucide icon and an i18n label", () => {
+  it("the nav item is hidden, but its i18n label and the page stay in place", () => {
     const shell = read("src/components/app-shell.tsx");
-    expect(shell).toContain('icon: "image"');
+    // Hidden from navigation (2026-11): the shell no longer references the
+    // deckblatt nav entry or its icon.
+    expect(shell).not.toContain('labelKey: "nav.deckblatt"');
+    expect(shell).not.toContain('icon: "image"');
+    // The i18n label is retained (pinned in all four languages by the
+    // "nav + page heading keys" test below via translate()).
     const generator = read("src/components/deckblatt-generator.tsx");
     // Real states only — the UI cycles preparing → generating → finalizing.
     expect(generator).toContain('"preparing" | "generating" | "finalizing"');

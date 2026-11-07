@@ -268,10 +268,15 @@ describe("navigation + app shell", () => {
       "/bewerbung-scanner",
       "/opportunities/saved",
       "/settings/email",
-      "/settings/usage",
     ]) {
       expect(shell, `nav must link ${route}`).toContain(`href: "${route}"`);
     }
+    // Product decision (2026-11): Settings (/settings/usage) and Deckblatt AI
+    // (/deckblatt) are hidden from the platform navigation. The routes stay
+    // reachable by direct URL (PAGE heading entries remain above); only the
+    // menu entries are gone.
+    expect(shell).not.toContain(`href: "/settings/usage"`);
+    expect(shell).not.toContain(`href: "/deckblatt"`);
   });
 
   it("provides accessible nav states (aria-current, collapsed tooltips)", () => {

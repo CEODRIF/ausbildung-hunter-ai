@@ -869,13 +869,9 @@ export function AIChat({
           <Icon name="arrowLeft" size={14} />
           Dashboard
         </Link>
-        <Link
-          href="/settings/usage"
-          className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-xs font-semibold text-muted transition hover:bg-surface-2 hover:text-ink-soft"
-        >
-          <Icon name="activity" size={14} />
-          KI-Nutzung
-        </Link>
+        {/* HIDDEN FROM NAVIGATION (product decision, 2026-11): the "KI-Nutzung"
+            quick link pointed at Settings (/settings/usage), which is no
+            longer offered in platform navigation. Direct URL access kept. */}
       </div>
     </div>
   );
@@ -927,12 +923,9 @@ export function AIChat({
               />
             </span>
           ) : null}
-          <Link
-            href="/settings/usage"
-            className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-accent hover:bg-accent-soft"
-          >
-            Nutzung
-          </Link>
+          {/* HIDDEN FROM NAVIGATION (product decision, 2026-11): the "Nutzung"
+              chip pointed at Settings (/settings/usage), which is no longer
+              offered in platform navigation. Direct URL access kept. */}
         </header>
 
         <div
