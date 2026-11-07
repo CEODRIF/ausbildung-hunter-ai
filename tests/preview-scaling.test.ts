@@ -272,10 +272,12 @@ describe("desktop sticky preview (CV builder only)", () => {
     expect(paneLine).not.toContain("fixed");
   });
 
-  it("top-20 is derived from the AppShell sticky header (h-16 + 16px gap), not arbitrary", () => {
-    // The header the preview must clear.
-    expect(appshell).toContain("sticky top-0 z-20 flex h-16");
-    // 80px (top-20) = 64px (h-16) + 16px breathing room.
+  it("top-20 clears the AppShell sticky header (pt-4 + h-14 + 8px gap), not arbitrary", () => {
+    // The header the preview must clear (v2 pill header).
+    expect(appshell).toContain("sticky top-0 z-20 px-3 pt-3 sm:px-6 sm:pt-4");
+    expect(appshell).toContain("flex h-14 w-full max-w-7xl");
+    // Desktop header = 16px (sm:pt-4) + 56px (h-14) = 72px; top-20 (80px)
+    // leaves an 8px breathing room.
     expect(cv).toContain("lg:top-20");
   });
 

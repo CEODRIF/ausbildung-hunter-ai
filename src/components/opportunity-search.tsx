@@ -9,7 +9,7 @@ import {
 } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { Search } from "lucide-react";
+import { Pin, Search } from "lucide-react";
 import { SaveOpportunityButton } from "@/components/opportunity-save-button";
 import { Icon } from "@/components/icon";
 import { EmptyState } from "@/components/empty-state";
@@ -101,12 +101,19 @@ function formatMonth(ym: string, locale: string): string {
 function FilterGroup({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div>
-      <p className="text-xs font-bold uppercase tracking-[0.08em] text-faint">
-        {title}
-      </p>
-      <div className="mt-2">{children}</div>
+      <p className="text-[10px] font-bold tracking-[0.12em] text-faint uppercase">{title}</p>
+      <div className="mt-2 space-y-0.5">{children}</div>
     </div>
   );
+}
+
+/** Two-letter mark for a company, used as the card avatar. Deterministic and
+ *  decorative only — the company name is always rendered next to it. */
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 function RadioRow({
@@ -125,7 +132,7 @@ function RadioRow({
   locale: string;
 }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-ink-soft transition hover:bg-surface-2">
+    <label className="flex min-h-9 cursor-pointer items-center gap-2.5 rounded-xl px-2 py-2 text-sm text-ink-soft transition-colors hover:bg-surface-2">
       <input
         type="radio"
         name={name}
@@ -133,9 +140,9 @@ function RadioRow({
         onChange={() => onSelect()}
         className="h-4 w-4 accent-accent"
       />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="min-w-0 flex-1">{label}</span>
       {count !== null && (
-        <span className="text-xs font-semibold text-muted">
+        <span className="num shrink-0 text-xs font-semibold text-faint">
           {count.toLocaleString(locale)}
         </span>
       )}
@@ -167,10 +174,10 @@ function ViewDetailsButton({
       onClick={() => onOpen(opportunityId, href)}
       onPointerEnter={() => onHoverPrefetch(opportunityId, href)}
       onFocus={() => onHoverPrefetch(opportunityId, href)}
-      className={`rounded-2xl px-4 py-2.5 text-xs font-bold text-white transition ${
+      className={`inline-flex min-h-9 items-center rounded-full border px-4 py-2 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-60 ${
         opening
-          ? "cursor-wait bg-accent"
-          : "bg-navy hover:bg-accent disabled:opacity-60"
+          ? "border-accent bg-accent-soft text-accent"
+          : "border-accent/45 text-accent hover:border-accent hover:bg-accent-soft"
       }`}
     >
       {opening ? t("search.viewDetailsLoading") : t("search.viewDetails")}
@@ -467,102 +474,120 @@ export function OpportunitySearch({
   const fromState = serializeSearchState(state);
 
   return (
-    <div className="space-y-4">
-      {/* Search bar: goal + keyword/role/company */}
+    <div className="space-y-5">
+      {/* ------------------------------------------------ search hero ---- */}
       <form
         onSubmit={(event) => {
           event.preventDefault();
           commitSearch((current) => current);
         }}
-        className="surface-elevated rounded-3xl p-5 sm:p-6"
+        className="rounded-3xl border border-line bg-surface p-4 shadow-[var(--shadow-card)] sm:p-5"
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div
+            role="group"
+            aria-label={t("pages.opportunities.title")}
+            className="inline-flex rounded-full bg-surface-2 p-1"
+          >
             {(["ausbildung", "arbeit"] as const).map((value) => (
               <button
                 key={value}
                 type="button"
-                onClick={() =>
-                  commitSearch((current) => ({ ...current, goal: value }))
-                }
+                onClick={() => commitSearch((current) => ({ ...current, goal: value }))}
                 aria-pressed={state.goal === value}
                 className={
                   state.goal === value
-                    ? "rounded-full bg-navy px-4 py-2 text-xs font-bold text-white"
-                    : "rounded-full bg-surface-2 px-4 py-2 text-xs font-semibold text-muted transition hover:bg-line"
+                    ? "rounded-full bg-surface px-4 py-2 text-xs font-bold text-ink shadow-[var(--shadow-card)]"
+                    : "rounded-full px-4 py-2 text-xs font-semibold text-muted transition-colors hover:text-ink"
                 }
               >
                 {t(value === "ausbildung" ? "dash.goalAusbildung" : "dash.goalArbeit")}
               </button>
             ))}
           </div>
+          <Link
+            href="/opportunities/saved"
+            className="text-xs font-bold text-accent transition-colors hover:text-accent-deep"
+          >
+            {t("pages.opportunitiesSaved.title")}
+          </Link>
+        </div>
+
+        {/* Primary query row: one big input + the green submit button. */}
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              size={18}
+              strokeWidth={2}
+              aria-hidden="true"
+              className="pointer-events-none absolute start-4 top-1/2 -translate-y-1/2 text-faint"
+            />
+            <input
+              className="h-12 w-full rounded-2xl border border-line-strong bg-surface ps-11 pe-4 text-sm text-ink shadow-[var(--shadow-card)] outline-none transition-[border-color,box-shadow] placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10"
+              placeholder={t("search.ph.keyword")}
+              value={state.keyword}
+              maxLength={120}
+              onChange={(event) =>
+                scheduleSearch((current) => ({ ...current, keyword: event.target.value }))
+              }
+              aria-label={t("search.ph.keyword")}
+            />
+          </div>
           <button
             type="submit"
             disabled={loading}
-            className="btn-neon rounded-2xl px-5 py-2.5 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-70"
+            className="btn-neon inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-2xl px-6 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-70"
           >
-            <Search size={15} strokeWidth={2} className="inline me-1.5 -translate-y-px" />
             {loading ? t("search.searching") : t("search.search")}
           </button>
         </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+
+        {/* Refinement fields: stacked on phones, side by side from sm. */}
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
           <input
-            className="rounded-2xl border border-line bg-surface px-4 py-3 text-sm text-ink shadow-sm outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/10 sm:col-span-1"
-            placeholder={t("search.ph.keyword")}
-            value={state.keyword}
-            maxLength={120}
-            onChange={(event) =>
-              scheduleSearch((current) => ({
-                ...current,
-                keyword: event.target.value,
-              }))
-            }
-            aria-label={t("search.ph.keyword")}
-          />
-          <input
-            className="rounded-2xl border border-line bg-surface px-4 py-3 text-sm text-ink shadow-sm outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/10"
+            className="h-11 w-full rounded-2xl border border-line bg-surface px-4 text-sm text-ink outline-none transition-[border-color,box-shadow] placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10"
             placeholder={t("search.ph.role")}
             value={state.role}
             maxLength={120}
             onChange={(event) =>
-              scheduleSearch((current) => ({
-                ...current,
-                role: event.target.value,
-              }))
+              scheduleSearch((current) => ({ ...current, role: event.target.value }))
             }
             aria-label={t("search.ph.role")}
           />
           <input
-            className="rounded-2xl border border-line bg-surface px-4 py-3 text-sm text-ink shadow-sm outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/10"
+            className="h-11 w-full rounded-2xl border border-line bg-surface px-4 text-sm text-ink outline-none transition-[border-color,box-shadow] placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/10"
             placeholder={t("search.ph.company")}
             value={state.company}
             maxLength={160}
             onChange={(event) =>
-              scheduleSearch((current) => ({
-                ...current,
-                company: event.target.value,
-              }))
+              scheduleSearch((current) => ({ ...current, company: event.target.value }))
             }
             aria-label={t("search.ph.company")}
           />
         </div>
       </form>
 
-      <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start lg:gap-6">
-        {/* Mobile filter toggle */}
-        <div className="flex items-center justify-between lg:hidden">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[300px_minmax(0,1fr)] lg:items-start lg:gap-6">
+        {/* Mobile filter toggle — one wide pill, like the reference. */}
+        <div className="lg:hidden">
           <button
             type="button"
             onClick={() => setShowMobileFilters((value) => !value)}
-            className="rounded-2xl border border-line bg-surface px-4 py-2.5 text-xs font-bold text-ink shadow-sm"
             aria-expanded={showMobileFilters}
+            className="flex min-h-12 w-full items-center justify-between gap-2 rounded-2xl border border-line bg-surface px-4 py-3 text-sm font-bold text-ink shadow-[var(--shadow-card)]"
           >
-            {t("search.filters")}
-            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+            <span className="flex items-center gap-2">
+              {t("opp.filterToggle")}
+              {activeFilterCount > 0 && (
+                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1.5 text-[10px] font-bold text-white">
+                  {activeFilterCount}
+                </span>
+              )}
+            </span>
             <Icon
-              name="chevronRight"
-              size={14}
-              className={`ml-1 inline transition-transform ${showMobileFilters ? "-rotate-90" : ""} rtl:-scale-x-100`}
+              name="chevron"
+              size={16}
+              className={`text-faint transition-transform ${showMobileFilters ? "rotate-180" : ""}`}
             />
           </button>
         </div>
@@ -571,19 +596,29 @@ export function OpportunitySearch({
         <aside
           className={`${
             showMobileFilters ? "block" : "hidden"
-          } surface-elevated rounded-3xl lg:sticky lg:top-6 lg:block`}
+          } rounded-3xl border border-line bg-surface shadow-[var(--shadow-card)] lg:sticky lg:top-20 lg:block`}
         >
           <div className="flex items-center justify-between border-b border-line px-5 py-4">
             <span className="text-sm font-bold text-ink">{t("search.filters")}</span>
-            {activeFilterCount > 0 && (
+            <div className="flex items-center gap-3">
+              {activeFilterCount > 0 && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="text-xs font-bold text-accent transition-colors hover:text-accent-deep"
+                >
+                  {t("search.clear")}
+                </button>
+              )}
               <button
                 type="button"
-                onClick={clearFilters}
-                className="text-xs font-semibold text-accent hover:text-accent-deep"
+                onClick={() => setShowMobileFilters(false)}
+                aria-label={t("common.close")}
+                className="text-faint lg:hidden"
               >
-                {t("search.clear")}
+                <Icon name="x" size={16} />
               </button>
-            )}
+            </div>
           </div>
           <div className="space-y-6 p-5">
             {/* Work place */}
@@ -883,50 +918,105 @@ export function OpportunitySearch({
             </div>
           )}
 
-          {/* Result meta + toolbar */}
+          {/* ------------------------------------ result summary -------- */}
           {results !== null && (
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm font-semibold text-muted">
-                {total !== null &&
-                  t(
-                    mode === "scan" && scanTruncated
-                      ? "search.resultsScanWindow"
-                      : "search.results",
-                    { count: total.toLocaleString(locale) },
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <p className="flex items-baseline gap-2">
+                  {total !== null && (
+                    <span className="num text-2xl font-extrabold tracking-tight text-ink">
+                      {total.toLocaleString(locale)}
+                    </span>
                   )}
-                {mode === "upstream" &&
-                  total !== null &&
-                  total >= SEARCH_SOURCE_LIMIT &&
-                  t("search.sourceLimit", {
+                  <span className="text-sm font-semibold text-muted">
+                    {mode === "scan" && scanTruncated
+                      ? t("search.resultsScanWindow", {
+                          count: (total ?? 0).toLocaleString(locale),
+                        })
+                      : t("opp.resultsWord")}
+                  </span>
+                </p>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {searchEntitlement ? (
+                    <QuotaIndicator
+                      data={quotaDataFromEntitlement(searchEntitlement)}
+                      unit={t("quota.unitSearches")}
+                      resetLabel={t("quota.resetsDaily")}
+                      labels={makeQuotaLabels(t)}
+                      upgradeHint={t("quota.upgrade")}
+                    />
+                  ) : null}
+                  {mode === "scan" && scanTruncated && (
+                    <span className="rounded-full bg-warning-soft px-3 py-1.5 text-[11px] font-semibold text-warning">
+                      {t("search.scanTruncated")}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {mode === "upstream" && total !== null && total >= SEARCH_SOURCE_LIMIT && (
+                <p className="text-xs text-faint">
+                  {t("search.sourceLimit", {
                     count: SEARCH_SOURCE_LIMIT.toLocaleString(locale),
                   })}
-              </p>
+                </p>
+              )}
+
               <div className="flex flex-wrap items-center gap-2">
-                {/* Shared green quota indicator (P0 quota audit). */}
-                {searchEntitlement ? (
-                  <QuotaIndicator
-                    data={quotaDataFromEntitlement(searchEntitlement)}
-                    unit={t("quota.unitSearches")}
-                    resetLabel={t("quota.resetsDaily")}
-                    labels={makeQuotaLabels(t)}
-                    upgradeHint={t("quota.upgrade")}
-                  />
-                ) : null}
-                {mode === "scan" && scanTruncated && (
-                  <span className="rounded-xl bg-warning-soft px-3 py-2 text-xs font-semibold text-warning">
-                    {t("search.scanTruncated")}
-                  </span>
-                )}
+                {/* Application type. Only options the backend genuinely
+                    supports are offered: "All" and "Email" (the existing
+                    contact_email filter). There is no server-side "form"
+                    filter, so no third tab is invented. */}
+                <div
+                  role="group"
+                  aria-label={t("opp.typeLabel")}
+                  className="inline-flex items-center gap-1 rounded-full border border-line bg-surface p-1"
+                >
+                  {(
+                    [
+                      { value: "any", label: t("opp.all") },
+                      { value: "available", label: t("opp.email") },
+                    ] as const
+                  ).map((tab) => {
+                    const active =
+                      tab.value === "any"
+                        ? state.contact_email === "any"
+                        : state.contact_email === "available";
+                    return (
+                      <button
+                        key={tab.value}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() =>
+                          commitSearch((current) => ({
+                            ...current,
+                            contact_email: tab.value,
+                          }))
+                        }
+                        className={
+                          active
+                            ? "rounded-full bg-navy px-3.5 py-1.5 text-xs font-bold text-white"
+                            : "rounded-full px-3.5 py-1.5 text-xs font-semibold text-muted transition-colors hover:text-ink"
+                        }
+                      >
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
                 {state.match && !matchAvailable && (
                   <Link
                     href="/bewerbung-scanner"
-                    className="rounded-xl bg-warning-soft px-3 py-2 text-xs font-bold text-warning"
+                    className="rounded-full bg-warning-soft px-3 py-1.5 text-[11px] font-bold text-warning"
                   >
                     {t("search.matchUnavailable")}
                   </Link>
                 )}
+
                 <select
-                  className="rounded-2xl border border-line bg-surface px-3 py-2 text-xs font-bold text-ink shadow-sm outline-none focus:border-accent"
+                  className="h-9 rounded-full border border-line bg-surface px-3 text-xs font-bold text-ink outline-none transition-colors focus:border-accent"
                   value={state.sort}
                   onChange={(event) =>
                     commitSearch((current) => ({
@@ -949,7 +1039,8 @@ export function OpportunitySearch({
                     </option>
                   ))}
                 </select>
-                <label className="flex items-center gap-2 rounded-xl bg-surface px-3 py-2 text-xs font-medium text-muted">
+
+                <label className="flex h-9 cursor-pointer items-center gap-2 rounded-full border border-line bg-surface px-3 text-xs font-semibold text-muted">
                   <input
                     type="checkbox"
                     checked={state.match}
@@ -963,7 +1054,7 @@ export function OpportunitySearch({
                             : "relevance",
                       }))
                     }
-                    className="h-4 w-4 accent-accent"
+                    className="h-3.5 w-3.5 accent-accent"
                   />
                   {t("search.matchToggle")}
                 </label>
@@ -1007,120 +1098,116 @@ export function OpportunitySearch({
             {results?.map((opportunity) => {
               const detailHref =
                 `/opportunities/${encodeURIComponent(opportunity.id)}` +
-                (fromState
-                  ? `?from=${encodeURIComponent(fromState)}`
-                  : "");
+                (fromState ? `?from=${encodeURIComponent(fromState)}` : "");
+              const company = opportunity.company_name || t("search.companyNotListed");
+              const meta = [
+                opportunity.profession,
+                formatDay(opportunity.posted_at, locale)
+                  ? t("search.posted", { date: formatDay(opportunity.posted_at, locale) ?? "" })
+                  : null,
+                formatDay(opportunity.valid_from, locale)
+                  ? t("search.start", { date: formatDay(opportunity.valid_from, locale) ?? "" })
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+
               return (
                 <article
                   key={opportunity.id}
-                  className="surface-elevated group rounded-3xl p-5 transition-shadow duration-300 hover:shadow-[var(--shadow-float)]"
+                  className="group relative rounded-3xl border border-line bg-surface p-4 shadow-[var(--shadow-card)] transition-shadow duration-300 hover:shadow-[var(--shadow-float)] sm:p-5"
                 >
-                  <div className="flex items-start justify-between gap-4">
+                  {/* Bookmark floats in the corner so the German job title gets
+                      the full card width instead of wrapping around it. */}
+                  <div className="absolute end-3 top-3 z-10">
+                    <SaveOpportunityButton
+                      opportunityKey={opportunity.id}
+                      initialSaved={false}
+                      compact
+                    />
+                  </div>
+                  <div className="flex min-w-0 items-start gap-3 pe-12">
+                    <span
+                      aria-hidden="true"
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-xs font-extrabold text-accent"
+                    >
+                      {initials(company)}
+                    </span>
                     <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-full bg-accent-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-accent">
-                          {t(
-                            opportunity.goal === "ausbildung"
-                              ? "dash.goalAusbildung"
-                              : "dash.goalArbeit",
-                          )}
-                        </span>
-                        {opportunity.training_type && (
-                          <span className="rounded-full bg-ai-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-ai">
-                            {opportunity.training_type
-                              .toLowerCase()
-                              .replaceAll("_", " ")}
-                          </span>
-                        )}
-                        {opportunity.salary?.label ? (
-                          <span className="rounded-full bg-success-soft px-2.5 py-1 text-[10px] font-bold text-success">
-                            {opportunity.salary.label}
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-semibold text-faint">
-                            {t("search.salaryNotSpecified")}
-                          </span>
-                        )}
-                        {opportunity.employment_type && (
-                          <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-bold text-muted">
-                            {opportunity.employment_type}
-                          </span>
-                        )}
-                        {opportunity.home_office === true && (
-                          <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-bold text-muted">
-                            {t("search.homeOfficeBadge")}
-                          </span>
-                        )}
-                        {opportunity.career_change_friendly === true && (
-                          <span className="rounded-full bg-success-soft px-2.5 py-1 text-[10px] font-bold text-success">
-                            {t("search.careerChanger")}
-                          </span>
-                        )}
-                      </div>
-                      <h2 className="mt-3 text-lg font-bold leading-7 text-ink transition-colors group-hover:text-accent">
+                      <p className="truncate text-xs font-bold text-muted">{company}</p>
+                      <h2 className="mt-0.5 break-words text-[15px] font-bold leading-6 text-ink transition-colors group-hover:text-accent sm:text-base">
                         {opportunity.title}
                       </h2>
-                      <p className="mt-1 text-sm text-muted">
-                        {opportunity.company_name || t("search.companyNotListed")} ·{" "}
-                        {opportunity.location || t("search.locationNotListed")}
-                        {opportunity.distance_km !== null &&
-                          ` · ${opportunity.distance_km} km`}
-                      </p>
-                      <p className="mt-1 text-xs text-muted">
-                        {[
-                          opportunity.profession,
-                          formatDay(opportunity.posted_at, locale)
-                            ? t("search.posted", {
-                                date: formatDay(opportunity.posted_at, locale) ?? "",
-                              })
-                            : null,
-                          formatDay(opportunity.valid_from, locale)
-                            ? t("search.start", {
-                                date:
-                                  formatDay(opportunity.valid_from, locale) ?? "",
-                              })
-                            : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </p>
-                      {opportunity.match && (
-                        <div className="mt-3 rounded-2xl bg-surface-2 p-3.5">
-                          {opportunity.match.status === "complete" ? (
-                            <>
-                              {opportunity.match.score !== null && (
-                                <p className="text-xs font-bold text-accent">
-                                  {t("search.match", {
-                                    score: opportunity.match.score,
-                                  })}
-                                </p>
-                              )}
-                              <ul className="mt-1 space-y-0.5 text-xs text-muted">
-                                {opportunity.match.reasons
-                                  .slice(0, 3)
-                                  .map((line, index) => (
-                                    <li key={index}>✓ {line}</li>
-                                  ))}
-                              </ul>
-                            </>
-                          ) : (
-                            <>
-                              <p className="text-xs font-bold text-warning">
-                                {t("search.matchIncomplete")}
-                              </p>
-                              <ul className="mt-1 space-y-0.5 text-xs text-muted">
-                                {opportunity.match.missing_information
-                                  .slice(0, 2)
-                                  .map((line, index) => (
-                                    <li key={index}>△ {line}</li>
-                                  ))}
-                              </ul>
-                            </>
-                          )}
-                        </div>
-                      )}
                     </div>
-                    <div className="flex shrink-0 flex-col items-end gap-3">
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-full bg-accent-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-accent">
+                      {t(
+                        opportunity.goal === "ausbildung"
+                          ? "dash.goalAusbildung"
+                          : "dash.goalArbeit",
+                      )}
+                    </span>
+                    {opportunity.training_type &&
+                      !(
+                        opportunity.goal === "ausbildung" &&
+                        opportunity.training_type === "AUSBILDUNG"
+                      ) && (
+                        <span className="rounded-full bg-ai-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-ai">
+                          {opportunity.training_type.toLowerCase().replaceAll("_", " ")}
+                        </span>
+                      )}
+                    {opportunity.salary?.label ? (
+                      <span className="rounded-full bg-success-soft px-2.5 py-1 text-[10px] font-bold text-success">
+                        {opportunity.salary.label}
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-semibold text-faint">
+                        {t("search.salaryNotSpecified")}
+                      </span>
+                    )}
+                    {opportunity.employment_type && (
+                      <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-bold text-muted">
+                        {opportunity.employment_type}
+                      </span>
+                    )}
+                    {opportunity.home_office === true && (
+                      <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-bold text-muted">
+                        {t("search.homeOfficeBadge")}
+                      </span>
+                    )}
+                    {opportunity.career_change_friendly === true && (
+                      <span className="rounded-full bg-success-soft px-2.5 py-1 text-[10px] font-bold text-success">
+                        {t("search.careerChanger")}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap items-end justify-between gap-3 border-t border-line pt-3">
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-1.5 text-xs font-semibold text-ink-soft">
+                        <Pin size={13} strokeWidth={2} aria-hidden="true" className="shrink-0 text-faint" />
+                        <span className="truncate">
+                          {opportunity.location || t("search.locationNotListed")}
+                        </span>
+                        {opportunity.distance_km !== null && (
+                          <span className="shrink-0 text-faint">· {opportunity.distance_km} km</span>
+                        )}
+                      </p>
+                      {meta && <p className="mt-1 truncate text-[11px] text-faint">{meta}</p>}
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <a
+                        href={opportunity.application_url ?? opportunity.source_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex min-h-9 items-center gap-1 rounded-full px-3 py-2 text-xs font-bold text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
+                      >
+                        {t("search.apply")}
+                        <Icon name="arrowRight" size={12} className="rtl:-scale-x-100" />
+                      </a>
                       <ViewDetailsButton
                         href={detailHref}
                         opportunityId={opportunity.id}
@@ -1129,21 +1216,38 @@ export function OpportunitySearch({
                         onHoverPrefetch={hoverPrefetch}
                         t={t}
                       />
-                      <a
-                        href={opportunity.application_url ?? opportunity.source_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs font-bold text-accent"
-                      >
-                        {t("search.apply")}
-                        <Icon name="arrowRight" size={12} className="rtl:-scale-x-100" />
-                      </a>
-                      <SaveOpportunityButton
-                        opportunityKey={opportunity.id}
-                        initialSaved={false}
-                      />
                     </div>
                   </div>
+
+                  {opportunity.match && (
+                    <div className="mt-3 rounded-2xl bg-surface-2 p-3.5">
+                      {opportunity.match.status === "complete" ? (
+                        <>
+                          {opportunity.match.score !== null && (
+                            <p className="text-xs font-bold text-accent">
+                              {t("search.match", { score: opportunity.match.score })}
+                            </p>
+                          )}
+                          <ul className="mt-1 space-y-0.5 text-xs text-muted">
+                            {opportunity.match.reasons.slice(0, 3).map((line, index) => (
+                              <li key={index}>✓ {line}</li>
+                            ))}
+                          </ul>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-xs font-bold text-warning">
+                            {t("search.matchIncomplete")}
+                          </p>
+                          <ul className="mt-1 space-y-0.5 text-xs text-muted">
+                            {opportunity.match.missing_information.slice(0, 2).map((line, index) => (
+                              <li key={index}>△ {line}</li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </article>
               );
             })}
@@ -1151,23 +1255,21 @@ export function OpportunitySearch({
 
           {/* Pagination */}
           {results !== null && results.length > 0 && (
-            <div className="mt-6 flex items-center justify-center gap-3">
+            <div className="mt-6 flex items-center justify-center gap-2">
               <button
                 type="button"
                 disabled={!hasPrev || loading}
                 onClick={() =>
-                  commitSearch(
-                    (current) => ({ ...current, page: current.page - 1 }),
-                    false,
-                  )
+                  commitSearch((current) => ({ ...current, page: current.page - 1 }), false)
                 }
-                className="rounded-2xl border border-line bg-surface px-4 py-2.5 text-sm font-bold text-accent shadow-sm transition hover:bg-accent-soft disabled:opacity-40"
+                aria-label={t("search.previous")}
+                className="inline-flex h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-4 text-sm font-bold text-ink transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-40"
               >
                 <Icon name="chevronLeft" size={15} className="rtl:hidden" />
                 <Icon name="chevronRight" size={15} className="hidden rtl:block" />
-                {t("search.previous")}
+                <span className="hidden sm:inline">{t("search.previous")}</span>
               </button>
-              <span className="num text-sm font-bold text-muted">
+              <span className="num rounded-full bg-surface-2 px-4 py-2.5 text-xs font-bold text-muted">
                 {t("search.page", {
                   page: state.page,
                   total: Math.max(1, Math.ceil(maxReachable / PAGE_SIZE)),
@@ -1177,14 +1279,12 @@ export function OpportunitySearch({
                 type="button"
                 disabled={!hasNext || loading}
                 onClick={() =>
-                  commitSearch(
-                    (current) => ({ ...current, page: current.page + 1 }),
-                    false,
-                  )
+                  commitSearch((current) => ({ ...current, page: current.page + 1 }), false)
                 }
-                className="rounded-2xl border border-line bg-surface px-4 py-2.5 text-sm font-bold text-accent shadow-sm transition hover:bg-accent-soft disabled:opacity-40"
+                aria-label={t("search.next")}
+                className="inline-flex h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-4 text-sm font-bold text-ink transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-40"
               >
-                {t("search.next")}
+                <span className="hidden sm:inline">{t("search.next")}</span>
                 <Icon name="chevronRight" size={15} className="rtl:hidden" />
                 <Icon name="chevronLeft" size={15} className="hidden rtl:block" />
               </button>

@@ -78,9 +78,10 @@ describe("premium i18n: no raw keys reach the UI", () => {
     const premiumKeys = collectStaticKeys().filter((key) =>
       key.startsWith("premium."),
     );
-    // Floor recalibrated after the Company Discovery removal: the premium
-    // block now carries the hero, launcher and nav keys (5 static t() refs).
-    expect(premiumKeys.length).toBeGreaterThanOrEqual(5);
+    // Floor recalibrated after the v2 sky landing replaced the premium hero:
+    // remaining static t() refs are nav.more, hero.subtitle, hero.searchTitle
+    // and hero.ctaStart (4 unique keys).
+    expect(premiumKeys.length).toBeGreaterThanOrEqual(4);
     for (const lang of SUPPORTED_LANGUAGES) {
       for (const key of premiumKeys) {
         const value = lookup(dictionaries[lang], key);
@@ -234,21 +235,28 @@ describe("mobile shell: drawer, bottom nav, header fit", () => {
     expect(shell).toContain("pb-24 lg:pb-0");
   });
 
-  it("the mobile header collapses to the mark so nothing overflows", () => {
-    expect(shell).toContain('wordmarkClassName="hidden sm:inline"');
+  it("the mobile header brand is overflow-safe (built-in wordmark truncate)", () => {
+    // v2 header: the full brand lives in a constrained pill on phones
+    // (lg:hidden); overflow is guarded by the wordmark's built-in
+    // `min-w-0 truncate` inside BrandLogo, not by hiding the wordmark.
+    expect(shell).toContain(
+      '<span className="lg:hidden">\n                <BrandLogo size={30} href="/dashboard" />',
+    );
     const logo = read("src/components/brand-logo.tsx");
+    expect(logo).toContain("min-w-0 truncate text-sm font-bold");
     expect(logo).toContain("wordmarkClassName?: string;");
     expect(logo).toContain("${wordmarkClass} ${wordmarkClassName}");
   });
 
   it("landing hero typography scales down and wraps on narrow screens", () => {
     const page = read("src/app/page.tsx");
+    // Fluid clamp (36px→72px) + text-balance replace the old step scale.
     expect(page).toContain(
-      "display-title text-neon-gradient anim-fade-up text-4xl break-words sm:text-5xl md:text-6xl xl:text-7xl",
+      "display-title hero-shadow mt-6 text-balance text-[clamp(2.25rem,8vw,4.5rem)] text-white",
     );
-    // Decorative layers must never push the viewport horizontally.
-    expect(page).toContain("overflow-hidden");
-    expect(page).toContain("hero-orb pointer-events-none");
+    // Decorative sky layers must never push the viewport horizontally.
+    const sky = read("src/components/landing/sky.tsx");
+    expect(sky).toContain("pointer-events-none absolute inset-0 overflow-hidden");
   });
 });
 
@@ -295,15 +303,17 @@ describe("desktop sidebar (lg+): fixed start-edge rail, content beside it", () =
   });
 
   it("the top header no longer carries desktop navigation (no duplication)", () => {
-    // Mobile brand/trigger stays; desktop primary links + "More" are gone.
-    expect(shell).toContain('wordmarkClassName="hidden sm:inline"');
+    // v2 header: brand pill on phones (lg:hidden), page heading on desktop
+    // (hidden lg:block); no nav links in the header at any breakpoint.
+    expect(shell).toContain('<span className="lg:hidden">\n                <BrandLogo size={30} href="/dashboard" />');
+    expect(shell).toContain('<div className="hidden min-w-0 lg:block">');
     expect(shell).not.toContain("hidden items-center gap-1 lg:flex");
     // The collapse toggle still exists and drives the sidebar width.
     expect(shell).toContain("PanelLeftClose");
     expect(shell).toContain("PanelLeftOpen");
     expect(shell).toContain("toggleCollapsed");
-    // Header switchers hand over to the sidebar at lg.
-    expect(shell).toContain("hidden sm:block lg:hidden");
+    // Header switchers are desktop-only; the drawer owns mobile controls.
+    expect(shell).toContain('<span className="hidden lg:block">');
   });
 
   it("layering: sidebar above content/header, below drawer and modals", () => {

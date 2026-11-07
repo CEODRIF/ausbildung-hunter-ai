@@ -3,10 +3,12 @@
 import { useActionState, useState } from "react";
 import { AuthFeedback } from "@/components/auth-feedback";
 import { saveGoal } from "@/app/onboarding/actions";
+import { useI18n } from "@/lib/i18n";
 
 const initialState = { error: "" };
 
 export function OnboardingForm() {
+  const { t } = useI18n();
   const [state, formAction, pending] = useActionState(saveGoal, initialState);
   const [selected, setSelected] = useState("");
   return (
@@ -27,7 +29,7 @@ export function OnboardingForm() {
               Ausbildung
             </span>
             <span className="mt-1 block text-sm text-muted">
-              Find a practical path to start your career.
+              {t("auth.goalAusbildungDesc")}
             </span>
           </span>
           <span className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-line-strong text-white peer-checked:border-accent peer-checked:bg-accent">
@@ -50,7 +52,7 @@ export function OnboardingForm() {
               Arbeit
             </span>
             <span className="mt-1 block text-sm text-muted">
-              Explore jobs that match your next chapter.
+              {t("auth.goalArbeitDesc")}
             </span>
           </span>
           <span className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-line-strong text-white peer-checked:border-accent peer-checked:bg-accent">
@@ -65,10 +67,10 @@ export function OnboardingForm() {
         disabled={pending || !selected}
       >
         {pending ? (
-          "Saving your choice…"
+          t("auth.savingChoice")
         ) : (
           <>
-            Continue <span>→</span>
+            {t("auth.continue")} <span>→</span>
           </>
         )}
       </button>

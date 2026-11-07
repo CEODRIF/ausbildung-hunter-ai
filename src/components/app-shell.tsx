@@ -567,43 +567,32 @@ export function AppShell({
         }`}
       >
         {/* ------------------------------------------------ top bar -------- */}
-        <header className="sticky top-0 z-20 flex h-16 items-center px-3 sm:px-6">
-          <div className="glass mx-auto flex h-14 w-full max-w-7xl items-center justify-between gap-2 rounded-3xl ps-3 pe-2">
-            {/* brand + mobile drawer trigger (desktop shows the brand in
-                the sidebar instead — the top bar is a slim utility bar) */}
-            <div className="flex min-w-0 items-center gap-2 lg:hidden">
-              <button
-                className="flex h-10 w-10 items-center justify-center rounded-2xl text-muted transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
-                onClick={() => setMobileOpen(true)}
-                aria-label={t("nav.expand")}
-              >
-                <MoreHorizontal size={19} strokeWidth={1.8} className="rotate-90" />
-              </button>
-              <BrandLogo
-                variant={pathname === "/dashboard" ? "mark" : "full"}
-                size={32}
-                href="/dashboard"
-                wordmarkClassName="hidden sm:inline"
-              />
-            </div>
-
-            {/* right cluster */}
-            <div className="flex shrink-0 items-center gap-0.5 sm:gap-1.5">
+        {/* One white pill: brand (phones) or page title (desktop) on the
+            start edge, account controls on the end edge. */}
+        <header className="sticky top-0 z-20 px-3 pt-3 sm:px-6 sm:pt-4">
+          <div className="mx-auto flex h-14 w-full max-w-7xl items-center justify-between gap-2 rounded-full border border-line bg-surface/95 ps-2.5 pe-2 shadow-[var(--shadow-card)] backdrop-blur-md">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="lg:hidden">
+                <BrandLogo size={30} href="/dashboard" />
+              </span>
               {heading && (
-                <div className="me-1 hidden min-w-0 md:block">
-                  <h1 className="max-w-44 truncate text-sm font-bold text-ink">
+                <div className="hidden min-w-0 lg:block">
+                  <h1 className="max-w-64 truncate text-sm font-bold text-ink">
                     {t(heading.titleKey)}
                   </h1>
-                  <p className="max-w-44 truncate text-[11px] text-muted">
+                  <p className="max-w-64 truncate text-[11px] text-muted">
                     {t(heading.subtitleKey)}
                   </p>
                 </div>
               )}
+            </div>
+
+            <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
                 onClick={toggleCollapsed}
                 aria-label={collapsed ? t("nav.expand") : t("nav.collapse")}
-                className="hidden h-10 w-10 items-center justify-center rounded-2xl text-muted transition-colors hover:bg-surface-2 hover:text-ink lg:flex"
+                className="hidden h-9 w-9 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-ink lg:flex"
               >
                 {collapsed ? (
                   <PanelLeftOpen size={18} strokeWidth={1.8} />
@@ -611,26 +600,27 @@ export function AppShell({
                   <PanelLeftClose size={18} strokeWidth={1.8} />
                 )}
               </button>
-              {/* Secondary sections live in the desktop sidebar now —
-                  no "More" dropdown on lg+ (no duplicate navigation). */}
-              <span className="ms-1 hidden h-7 w-px bg-line sm:block" />
-              {/* Language/theme: in the header for mobile/tablet, in the
-                  sidebar footer for desktop. */}
-              <span className="hidden sm:block lg:hidden">
-                <LanguageSwitcher />
+              <span className="hidden lg:block">
+                <LanguageSwitcher compact />
               </span>
-              <span className="hidden sm:block lg:hidden">
+              <span className="hidden lg:block">
                 <ThemeSwitcher />
               </span>
               {profile ? (
-                <span className="ms-0.5">
-                  <ProfileMenu profile={profile} />
-                </span>
+                <ProfileMenu profile={profile} />
               ) : (
-                <span className="text-xs text-faint">
+                <span className="px-2 text-xs text-faint">
                   {t("account.accountFallback")}
                 </span>
               )}
+              <button
+                type="button"
+                onClick={() => setMobileOpen(true)}
+                aria-label={t("nav.expand")}
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-line text-ink transition-colors hover:bg-surface-2 lg:hidden"
+              >
+                <Menu size={19} strokeWidth={1.9} />
+              </button>
             </div>
           </div>
         </header>

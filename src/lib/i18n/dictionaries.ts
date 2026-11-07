@@ -13,6 +13,122 @@
  */
 
 const de = {
+  // ---- Opportunities page (application-type tabs + result summary) --------
+  opp: {
+    typeLabel: "Bewerbungsart",
+    all: "Alle",
+    email: "E-Mail",
+    resultsWord: "Ergebnisse",
+    filterToggle: "Filter",
+  },
+
+  // ---- Landing v2 ("Aircraft Green" redesign) ------------------------------
+  // One block for the redesigned public site. Keys stay parallel across all
+  // four languages because `Dict` is derived from this object.
+  v2: {
+    nav: {
+      how: "So funktioniert's",
+      jobs: "Stellen",
+      pricing: "Tarife",
+      faq: "FAQ",
+      library: "Bibliothek",
+      login: "Anmelden",
+      register: "Kostenlos starten",
+      menu: "Menü",
+    },
+    hero: {
+      badge: "Täglich aktualisierte Ausbildungsplätze",
+      lead: "Finde deine",
+      accent: "Ausbildung",
+      tail: "in Deutschland.",
+      subtitle:
+        "Bezahlte Ausbildungsplätze, täglich aktualisiert. Suche nach Beruf oder Unternehmen – und bewirb dich in Minuten.",
+      searchPlaceholder: "z. B. Kaufmann, Pflegefachkraft …",
+      searchCta: "Suchen",
+      secondaryCta: "Alle Stellen ansehen",
+      trustBa: "Stellen der Bundesagentur für Arbeit",
+      trustMatch: "Nachvollziehbares Matching",
+      trustPrivacy: "DSGVO-konform",
+    },
+    how: {
+      eyebrow: "Ablauf",
+      title: "In fünf Schritten zur Bewerbung",
+      subtitle:
+        "Von der ersten Profilanalyse bis zum Kontakt mit dem Unternehmen.",
+    },
+    jobs: {
+      eyebrow: "Beliebte Berufe",
+      title: "Direkt in die passende Suche",
+      subtitle: "Wähle ein Berufsfeld und starte mit echten Stellenangeboten.",
+      all: "Alle Stellen ansehen",
+      pflege: "Pflege",
+      it: "IT & Software",
+      mechatronik: "Mechatronik",
+      buero: "Büromanagement",
+      gastro: "Gastronomie",
+      handwerk: "Handwerk",
+    },
+    features: {
+      eyebrow: "Plattform",
+      title: "Alles für deine Bewerbung an einem Ort",
+      subtitle: "Suche, Profil, Unterlagen und Versand in einem Arbeitsbereich.",
+      ai: {
+        title: "KI-Assistent",
+        text: "Fragen zu Ausbildung, Bewerbung und Deutschland – direkt beantwortet.",
+      },
+      scanner: {
+        title: "Bewerbung Scanner",
+        text: "Lebenslauf hochladen und ein strukturiertes Profil erhalten.",
+      },
+      auto: {
+        title: "AUTO-Bewerb",
+        text: "Bewerbungen vorbereiten, prüfen und gebündelt versenden.",
+      },
+      library: {
+        title: "Deutsch Bibliothek",
+        text: "Bücher und Guides zu Beruf, Sprache und Alltag.",
+      },
+    },
+    pricing: {
+      eyebrow: "Tarife",
+      title: "Faire Tarife, klar gestaffelt",
+      subtitle: "Starte kostenlos – erweitere, wenn du mehr brauchst.",
+      note: "Aktuelle Preise und Leistungen findest du im Abrechnungsbereich.",
+      cta: "Tarife ansehen",
+      free: "Free",
+      freeText: "Zum Ausprobieren",
+      plus: "Plus",
+      plusText: "Mehr Spielraum",
+      pro: "Pro",
+      proText: "Für intensive Suche",
+    },
+    faq: {
+      eyebrow: "FAQ",
+      title: "Häufige Fragen",
+      subtitle: "Kurz und konkret beantwortet.",
+      more: "Alle Fragen ansehen",
+    },
+    cta: {
+      title: "Bereit für deinen nächsten Schritt?",
+      subtitle: "Erstelle ein Konto und starte die Suche – kostenlos.",
+      button: "Kostenlos starten",
+      secondary: "Stellen durchsuchen",
+    },
+    footer: {
+      tagline: "Für deinen nächsten Schritt in Deutschland gebaut.",
+      product: "Produkt",
+      resources: "Ressourcen",
+      legal: "Rechtliches",
+      rights: "Alle Rechte vorbehalten.",
+      jobs: "Stellen finden",
+      saved: "Gemerkte Stellen",
+      dashboard: "Dashboard",
+      contact: "Kontakt",
+      privacy: "Datenschutz",
+      terms: "AGB",
+    },
+  },
+
   premium: {
     nav: {
       more: "Mehr",
@@ -618,6 +734,17 @@ const de = {
     pitchBody:
       "Ein ruhiger, fokussierter Arbeitsbereich für die passende Ausbildung und Jobmöglichkeiten in Deutschland.",
     chapter: "Gemacht für Ihr nächstes Kapitel",
+    loginTitle: "Willkommen zurück",
+    loginSubtitle: "Melde dich an, um dein nächstes Kapitel weiterzubauen.",
+    registerTitle: "Erstelle deinen Arbeitsbereich",
+    registerSubtitle: "Richte deinen Weg zur passenden Stelle ein – ganz nach dir.",
+    onboardingTitle: "Wonach suchst du?",
+    onboardingSubtitle:
+      "Wähle eine Option, um deinen Arbeitsbereich persönlich zu machen. Du kannst das später ändern.",
+    goalAusbildungDesc: "Finde einen praktischen Weg, um deine Karriere zu starten.",
+    goalArbeitDesc: "Entdecke Jobs, die zu deinem nächsten Kapitel passen.",
+    savingChoice: "Wird gespeichert …",
+    continue: "Weiter",
     form: {
       fullName: "Vollständiger Name",
       fullNamePlaceholder: "Ihr vollständiger Name",
@@ -2830,6 +2957,117 @@ const de = {
 export type Dict = typeof de;
 
 const en: Dict = {
+  opp: {
+    typeLabel: "Application type",
+    all: "All",
+    email: "Email",
+    resultsWord: "results",
+    filterToggle: "Filter",
+  },
+
+  v2: {
+    nav: {
+      how: "How it works",
+      jobs: "Jobs",
+      pricing: "Plans",
+      faq: "FAQ",
+      library: "Library",
+      login: "Log in",
+      register: "Start free",
+      menu: "Menu",
+    },
+    hero: {
+      badge: "Training places updated every day",
+      lead: "Find your",
+      accent: "Ausbildung",
+      tail: "in Germany.",
+      subtitle:
+        "Paid training places, updated every day. Search by job title or company — and apply in minutes.",
+      searchPlaceholder: "e.g. Kaufmann, Pflegefachkraft …",
+      searchCta: "Search",
+      secondaryCta: "Browse all jobs",
+      trustBa: "Jobs from the Bundesagentur für Arbeit",
+      trustMatch: "Explainable matching",
+      trustPrivacy: "GDPR compliant",
+    },
+    how: {
+      eyebrow: "Process",
+      title: "Five steps to your application",
+      subtitle: "From the first profile analysis to contacting the company.",
+    },
+    jobs: {
+      eyebrow: "Popular careers",
+      title: "Jump straight into the right search",
+      subtitle: "Pick a field and start with real job listings.",
+      all: "Browse all jobs",
+      pflege: "Care",
+      it: "IT & software",
+      mechatronik: "Mechatronics",
+      buero: "Office management",
+      gastro: "Hospitality",
+      handwerk: "Trades",
+    },
+    features: {
+      eyebrow: "Platform",
+      title: "Everything for your application in one place",
+      subtitle: "Search, profile, documents and sending in one workspace.",
+      ai: {
+        title: "AI assistant",
+        text: "Questions about Ausbildung, applications and Germany — answered directly.",
+      },
+      scanner: {
+        title: "Application scanner",
+        text: "Upload your CV and get a structured profile back.",
+      },
+      auto: {
+        title: "AUTO-Bewerb",
+        text: "Prepare, review and send applications in batches.",
+      },
+      library: {
+        title: "German library",
+        text: "Books and guides on work, language and everyday life.",
+      },
+    },
+    pricing: {
+      eyebrow: "Plans",
+      title: "Fair plans, clearly tiered",
+      subtitle: "Start free — upgrade when you need more.",
+      note: "Current prices and entitlements are shown in the billing area.",
+      cta: "View plans",
+      free: "Free",
+      freeText: "To try things out",
+      plus: "Plus",
+      plusText: "More headroom",
+      pro: "Pro",
+      proText: "For intensive search",
+    },
+    faq: {
+      eyebrow: "FAQ",
+      title: "Frequently asked questions",
+      subtitle: "Short, concrete answers.",
+      more: "See all questions",
+    },
+    cta: {
+      title: "Ready for your next step?",
+      subtitle: "Create an account and start searching — free.",
+      button: "Start free",
+      secondary: "Browse jobs",
+    },
+    footer: {
+      tagline: "Built for your next step in Germany.",
+      product: "Product",
+      resources: "Resources",
+      legal: "Legal",
+      rights: "All rights reserved.",
+      jobs: "Find jobs",
+      saved: "Saved jobs",
+      dashboard: "Dashboard",
+      contact: "Contact",
+      privacy: "Privacy",
+      terms: "Terms",
+    },
+  },
+
   premium: {
     nav: {
       more: "More",
@@ -3407,6 +3645,17 @@ const en: Dict = {
     pitchBody:
       "A calm, focused workspace for finding the right apprenticeship and job opportunities in Germany.",
     chapter: "Made for your next chapter",
+    loginTitle: "Welcome back",
+    loginSubtitle: "Sign in to continue building your next chapter.",
+    registerTitle: "Create your workspace",
+    registerSubtitle: "Start organizing your path toward the right opportunity.",
+    onboardingTitle: "What are you looking for?",
+    onboardingSubtitle:
+      "Choose one to personalize your workspace. You can update this later.",
+    goalAusbildungDesc: "Find a practical path to start your career.",
+    goalArbeitDesc: "Explore jobs that match your next chapter.",
+    savingChoice: "Saving your choice…",
+    continue: "Continue",
     form: {
       fullName: "Full name",
       fullNamePlaceholder: "Your full name",
@@ -5580,6 +5829,121 @@ const en: Dict = {
 };
 
 const fr: Dict = {
+  opp: {
+    typeLabel: "Type de candidature",
+    all: "Toutes",
+    email: "E-mail",
+    resultsWord: "résultats",
+    filterToggle: "Filtre",
+  },
+
+  v2: {
+    nav: {
+      how: "Fonctionnement",
+      jobs: "Offres",
+      pricing: "Tarifs",
+      faq: "FAQ",
+      library: "Bibliothèque",
+      login: "Se connecter",
+      register: "Commencer gratuitement",
+      menu: "Menu",
+    },
+    hero: {
+      badge: "Des places de formation mises à jour chaque jour",
+      lead: "Trouvez votre",
+      accent: "Ausbildung",
+      tail: "en Allemagne.",
+      subtitle:
+        "Des places de formation rémunérées, mises à jour chaque jour. Cherchez par métier ou par entreprise — et postulez en quelques minutes.",
+      searchPlaceholder: "ex. Kaufmann, Pflegefachkraft …",
+      searchCta: "Rechercher",
+      secondaryCta: "Voir toutes les offres",
+      trustBa: "Offres de la Bundesagentur für Arbeit",
+      trustMatch: "Matching explicable",
+      trustPrivacy: "Conforme au RGPD",
+    },
+    how: {
+      eyebrow: "Déroulé",
+      title: "Cinq étapes vers votre candidature",
+      subtitle:
+        "De la première analyse du profil jusqu au contact avec l entreprise.",
+    },
+    jobs: {
+      eyebrow: "Métiers populaires",
+      title: "Accédez directement à la bonne recherche",
+      subtitle:
+        "Choisissez un domaine et commencez avec de vraies offres.",
+      all: "Voir toutes les offres",
+      pflege: "Soins",
+      it: "IT et logiciel",
+      mechatronik: "Mécatronique",
+      buero: "Gestion administrative",
+      gastro: "Restauration",
+      handwerk: "Artisanat",
+    },
+    features: {
+      eyebrow: "Plateforme",
+      title: "Tout pour votre candidature au même endroit",
+      subtitle:
+        "Recherche, profil, documents et envoi dans un seul espace de travail.",
+      ai: {
+        title: "Assistant IA",
+        text: "Des réponses directes sur l Ausbildung, la candidature et l Allemagne.",
+      },
+      scanner: {
+        title: "Scanner de candidature",
+        text: "Importez votre CV et obtenez un profil structuré.",
+      },
+      auto: {
+        title: "AUTO-Bewerb",
+        text: "Préparez, vérifiez et envoyez vos candidatures par lots.",
+      },
+      library: {
+        title: "Bibliothèque allemande",
+        text: "Livres et guides sur le travail, la langue et le quotidien.",
+      },
+    },
+    pricing: {
+      eyebrow: "Tarifs",
+      title: "Des tarifs justes, clairement étagés",
+      subtitle: "Commencez gratuitement — évoluez selon vos besoins.",
+      note:
+        "Les prix et prestations actuels sont affichés dans l espace facturation.",
+      cta: "Voir les tarifs",
+      free: "Free",
+      freeText: "Pour essayer",
+      plus: "Plus",
+      plusText: "Plus de marge",
+      pro: "Pro",
+      proText: "Pour une recherche intensive",
+    },
+    faq: {
+      eyebrow: "FAQ",
+      title: "Questions fréquentes",
+      subtitle: "Des réponses courtes et concrètes.",
+      more: "Voir toutes les questions",
+    },
+    cta: {
+      title: "Prêt pour la prochaine étape ?",
+      subtitle: "Créez un compte et lancez la recherche — gratuitement.",
+      button: "Commencer gratuitement",
+      secondary: "Parcourir les offres",
+    },
+    footer: {
+      tagline: "Conçu pour votre prochaine étape en Allemagne.",
+      product: "Produit",
+      resources: "Ressources",
+      legal: "Mentions légales",
+      rights: "Tous droits réservés.",
+      jobs: "Trouver des offres",
+      saved: "Offres enregistrées",
+      dashboard: "Tableau de bord",
+      contact: "Contact",
+      privacy: "Confidentialité",
+      terms: "Conditions",
+    },
+  },
+
   premium: {
     nav: {
       more: "Plus",
@@ -6163,6 +6527,17 @@ const fr: Dict = {
     pitchBody:
       "Un espace de travail calme et concentré pour trouver la bonne alternance et des opportunités d'emploi en Allemagne.",
     chapter: "Conçu pour votre prochain chapitre",
+    loginTitle: "Bon retour",
+    loginSubtitle: "Connectez-vous pour continuer à construire votre prochain chapitre.",
+    registerTitle: "Créez votre espace",
+    registerSubtitle: "Organisez votre parcours vers l'opportunité qui vous correspond.",
+    onboardingTitle: "Que recherchez-vous ?",
+    onboardingSubtitle:
+      "Choisissez une option pour personnaliser votre espace. Vous pourrez la modifier plus tard.",
+    goalAusbildungDesc: "Trouvez un parcours concret pour lancer votre carrière.",
+    goalArbeitDesc: "Explorez des emplois en phase avec votre prochain chapitre.",
+    savingChoice: "Enregistrement…",
+    continue: "Continuer",
     form: {
       fullName: "Nom complet",
       fullNamePlaceholder: "Votre nom complet",
@@ -8346,6 +8721,117 @@ const fr: Dict = {
 };
 
 const ar: Dict = {
+  opp: {
+    typeLabel: "نوع التقديم",
+    all: "الكل",
+    email: "بريد إلكتروني",
+    resultsWord: "نتيجة",
+    filterToggle: "تصفية",
+  },
+
+  v2: {
+    nav: {
+      how: "كيف يعمل",
+      jobs: "الوظائف",
+      pricing: "الخطط",
+      faq: "الأسئلة الشائعة",
+      library: "المكتبة",
+      login: "تسجيل الدخول",
+      register: "ابدأ مجانًا",
+      menu: "القائمة",
+    },
+    hero: {
+      badge: "أماكن تدريب تُحدَّث كل يوم",
+      lead: "اعثر على",
+      accent: "Ausbildung",
+      tail: "في ألمانيا.",
+      subtitle:
+        "أماكن تدريب مدفوعة تُحدَّث كل يوم. ابحث بالمهنة أو بالشركة — وقدّم طلبك في دقائق.",
+      searchPlaceholder: "مثال: Kaufmann، Pflegefachkraft …",
+      searchCta: "بحث",
+      secondaryCta: "عرض جميع الوظائف",
+      trustBa: "وظائف من Bundesagentur für Arbeit",
+      trustMatch: "مطابقة قابلة للتفسير",
+      trustPrivacy: "متوافق مع GDPR",
+    },
+    how: {
+      eyebrow: "الخطوات",
+      title: "خمس خطوات حتى تقديم الطلب",
+      subtitle: "من تحليل الملف الأول إلى التواصل مع الشركة.",
+    },
+    jobs: {
+      eyebrow: "مهن شائعة",
+      title: "انتقل مباشرة إلى البحث المناسب",
+      subtitle: "اختر مجالًا وابدأ بعروض عمل حقيقية.",
+      all: "عرض جميع الوظائف",
+      pflege: "التمريض والرعاية",
+      it: "تقنية المعلومات",
+      mechatronik: "الميكاترونيك",
+      buero: "إدارة المكاتب",
+      gastro: "المطاعم والضيافة",
+      handwerk: "الحرف اليدوية",
+    },
+    features: {
+      eyebrow: "المنصة",
+      title: "كل ما تحتاجه لطلبك في مكان واحد",
+      subtitle: "البحث والملف والمستندات والإرسال في مساحة عمل واحدة.",
+      ai: {
+        title: "المساعد الذكي",
+        text: "أسئلة عن التدريب والتقديم وألمانيا — بإجابات مباشرة.",
+      },
+      scanner: {
+        title: "ماسح الطلبات",
+        text: "ارفع سيرتك الذاتية واحصل على ملف منظم.",
+      },
+      auto: {
+        title: "AUTO-Bewerb",
+        text: "حضّر طلباتك وراجعها وأرسلها على دفعات.",
+      },
+      library: {
+        title: "المكتبة الألمانية",
+        text: "كتب وأدلة عن العمل واللغة والحياة اليومية.",
+      },
+    },
+    pricing: {
+      eyebrow: "الخطط",
+      title: "خطط عادلة وواضحة المستويات",
+      subtitle: "ابدأ مجانًا — وارتقِ عند الحاجة.",
+      note: "تظهر الأسعار والمزايا الحالية في قسم الفوترة.",
+      cta: "عرض الخطط",
+      free: "Free",
+      freeText: "للتجربة",
+      plus: "Plus",
+      plusText: "مساحة أوسع",
+      pro: "Pro",
+      proText: "للبحث المكثّف",
+    },
+    faq: {
+      eyebrow: "الأسئلة الشائعة",
+      title: "أسئلة متكررة",
+      subtitle: "إجابات قصيرة ومحددة.",
+      more: "عرض جميع الأسئلة",
+    },
+    cta: {
+      title: "مستعد لخطوتك التالية؟",
+      subtitle: "أنشئ حسابًا وابدأ البحث — مجانًا.",
+      button: "ابدأ مجانًا",
+      secondary: "تصفّح الوظائف",
+    },
+    footer: {
+      tagline: "صُمم لخطوتك التالية في ألمانيا.",
+      product: "المنتج",
+      resources: "المصادر",
+      legal: "قانوني",
+      rights: "جميع الحقوق محفوظة.",
+      jobs: "ابحث عن وظائف",
+      saved: "الوظائف المحفوظة",
+      dashboard: "لوحة التحكم",
+      contact: "اتصل بنا",
+      privacy: "الخصوصية",
+      terms: "الشروط",
+    },
+  },
+
   premium: {
     nav: {
       more: "المزيد",
@@ -8912,6 +9398,17 @@ const ar: Dict = {
     pitchBody:
       "مساحة عمل هادئة ومنظمة تساعدك على العثور على التدريب المهني المناسب وفرص العمل في ألمانيا.",
     chapter: "صُمم لخطوتك التالية",
+    loginTitle: "مرحبًا بعودتك",
+    loginSubtitle: "سجّل دخولك لمتابعة بناء فصلك القادم.",
+    registerTitle: "أنشئ مساحة عملك",
+    registerSubtitle: "ابدأ بتنظيم طريقك نحو الفرصة المناسبة.",
+    onboardingTitle: "ما الذي تبحث عنه؟",
+    onboardingSubtitle:
+      "اختر خيارًا لتخصيص مساحة عملك. يمكنك تغييره لاحقًا.",
+    goalAusbildungDesc: "اعثر على مسار عملي لبدء مسيرتك المهنية.",
+    goalArbeitDesc: "استكشف وظائف تناسب فصلك القادم.",
+    savingChoice: "جارٍ حفظ اختيارك…",
+    continue: "متابعة",
     form: {
       fullName: "الاسم الكامل",
       fullNamePlaceholder: "اسمك الكامل",

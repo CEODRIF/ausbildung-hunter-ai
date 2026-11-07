@@ -13,14 +13,15 @@ import Link from "next/link";
  * assistant, scanner, search, opportunities, applications, settings, mobile
  * nav, empty states) picks up the identity from this one component. The
  * wordmark is HTML text — not CSS art — so it stays crisp, theme-aware and
- * accessible: "Ausbildungs" in the surface ink color, "Weg" in brand blue.
+ 
  */
 export const BRAND_LOGO_URL = "/logo-mark.jpg";
 
-/** Brand accent for the "Weg" part of the wordmark. */
-const WEG_CLASS =
-  "text-[#0B63E5] dark:text-[#168CFF]";
-const WEG_CLASS_LIGHT = "text-[#168CFF]";
+/** Brand accent for the "Weg" part of the wordmark — the green of the
+ *  "Aircraft Green" identity (deep enough for AA on white; the bright
+ *  variant on the dark auth panel and on the sky hero). */
+const WEG_CLASS = "text-[#0C7F45] dark:text-[#35C288]";
+const WEG_CLASS_LIGHT = "text-[#C9F56D]";
 
 export interface BrandLogoProps {
   /** "full" = mark + wordmark, "mark" = compact icon only. */

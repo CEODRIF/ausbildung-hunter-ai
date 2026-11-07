@@ -1,11 +1,13 @@
 import { AuthShell } from "@/components/auth-shell";
 import { OnboardingForm } from "@/app/onboarding/onboarding-form";
+import { getServerT } from "@/lib/i18n/server";
 
-export default function OnboardingPage() {
+export default async function OnboardingPage() {
+  const t = await getServerT();
   return (
     <AuthShell
-      title="What are you looking for?"
-      subtitle="Choose one to personalize your workspace. You can update this later."
+      title={t("auth.onboardingTitle")}
+      subtitle={t("auth.onboardingSubtitle")}
     >
       <OnboardingForm />
     </AuthShell>

@@ -349,7 +349,8 @@ describe("source invariants", () => {
     expect(shell).toContain('icon: "book"');
     expect(shell).toContain('match: (p) => p === "/bibliothek"');
     const landing = read("src/app/page.tsx");
-    expect(landing).toContain('href="/bibliothek"');
+    // v2 landing: /bibliothek is wired through the FEATURES card array.
+    expect(landing).toContain('href: "/bibliothek"');
     const adminNav = read("src/components/admin-nav.tsx");
     expect(adminNav).toContain('href: "/admin/books"');
   });

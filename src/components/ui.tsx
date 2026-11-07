@@ -18,10 +18,12 @@ import { Icon } from "@/components/icon";
  */
 
 export const buttonStyles = {
-  primary:
-    "btn-neon text-white shadow-[0_8px_22px_rgba(var(--glow-accent-rgb),0.3)] hover:shadow-[0_10px_26px_rgba(var(--glow-accent-rgb),0.38)]",
+  primary: "btn-neon text-white",
   secondary:
-    "border border-line-strong bg-surface text-ink-soft hover:border-faint hover:bg-surface-2",
+    "border border-line-strong bg-surface text-ink hover:border-accent/40 hover:bg-surface-2",
+  /** Green outline — the "Details" affordance on opportunity cards. */
+  outline:
+    "border border-accent/45 bg-surface text-accent hover:border-accent hover:bg-accent-soft",
   ghost: "text-muted hover:bg-surface-2 hover:text-ink",
   dark:
     "border border-transparent bg-navy text-white shadow-[0_8px_18px_rgba(var(--glow-navy-rgb),0.18)] hover:bg-navy-soft dark:border-line dark:shadow-[0_8px_18px_rgba(0,0,0,0.35)]",
@@ -41,13 +43,13 @@ export function Button({
   ...props
 }: ButtonProps) {
   const sizes = {
-    sm: "h-8 px-3 text-xs",
-    md: "h-10 px-4 text-sm",
-    lg: "h-11 px-5 text-sm",
+    sm: "h-9 px-3.5 text-xs",
+    md: "h-11 px-4.5 text-sm",
+    lg: "h-12 px-6 text-[15px]",
   };
   return (
     <button
-      className={`inline-flex items-center justify-center gap-2 rounded-2xl font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${sizes[size]} ${buttonStyles[variant]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 rounded-2xl font-semibold transition-[background-color,border-color,color,box-shadow,transform] disabled:cursor-not-allowed disabled:opacity-50 ${sizes[size]} ${buttonStyles[variant]} ${className}`}
       {...props}
     >
       {children}

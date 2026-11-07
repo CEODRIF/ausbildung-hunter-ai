@@ -1,11 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import { Bookmark } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 
 interface SaveOpportunityButtonProps {
   opportunityKey: string;
   initialSaved: boolean;
+  /** Icon-only control for dense card layouts (opportunity list). Defaults to
+   *  the labelled button used everywhere else. */
+  compact?: boolean;
 }
 
 /**
@@ -24,6 +28,7 @@ function failureKey(status: number): string {
 export function SaveOpportunityButton({
   opportunityKey,
   initialSaved,
+  compact = false,
 }: SaveOpportunityButtonProps) {
   const { t } = useI18n();
   const [saved, setSaved] = useState(initialSaved);
@@ -51,6 +56,37 @@ export function SaveOpportunityButton({
     } finally {
       setBusy(false);
     }
+  }
+
+  const label = saved
+    ? t("account.savedRemove")
+    : t("account.saveOpportunity");
+
+  if (compact) {
+    return (
+      <span className="inline-flex flex-col items-end gap-1">
+        <button
+          type="button"
+          onClick={toggle}
+          disabled={busy}
+          aria-pressed={saved}
+          aria-label={label}
+          title={label}
+          className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors disabled:opacity-60 ${
+            saved
+              ? "border-accent/40 bg-accent-soft text-accent"
+              : "border-line text-faint hover:border-accent/40 hover:text-accent"
+          }`}
+        >
+          <Bookmark size={17}strokeWidth={2} fill={saved ? "currentColor" : "none"} />
+        </button>
+        {error && (
+          <span className="max-w-28 text-end text-[10px] font-semibold text-danger">
+            {error}
+          </span>
+        )}
+      </span>
+    );
   }
 
   return (

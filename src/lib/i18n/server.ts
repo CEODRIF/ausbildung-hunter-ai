@@ -10,8 +10,14 @@ import { resolveLang, translate, type Language, type TranslateVars } from "./cor
 
 /** The persisted UI language for the current request (default: de). */
 export async function getRequestLang(): Promise<Language> {
-  const store = await cookies();
-  return resolveLang(store.get("aha_lang")?.value);
+  try {
+    const store = await cookies();
+    return resolveLang(store.get("aha_lang")?.value);
+  } catch {
+    // Outside a request scope (unit tests render page components directly):
+    // fall back to the default language instead of throwing.
+    return "de";
+  }
 }
 
 /** A bound `t` for server components. */
