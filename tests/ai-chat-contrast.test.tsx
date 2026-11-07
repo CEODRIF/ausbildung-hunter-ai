@@ -32,8 +32,8 @@ import type {
  *   4. The brand mark is a white tile with a near-invisible ring
  *      (ring-black/5) on the white light sidebar.
  *   5. THE INCIDENT THAT SURVIVED FIX #30 (production 2026-10-15): the
- *      gradient surfaces used a `bg-[…]` class on a gradient variable,
- *      which Tailwind compiles to `background-color: var(…)`.
+ *      gradient surfaces used a background-colour utility on a gradient
+ *      variable, which Tailwind compiles to `background-color: var(...)`.
  *      A `linear-gradient()` value is NOT a valid `<color>` for
  *      `background-color`, so the browser drops the declaration as
  *      "invalid at computed-value time" and the surface renders
@@ -160,12 +160,15 @@ describe("light-mode token contrast (WCAG AA, computed from shipped CSS)", () =>
   });
 
   it("AA red #b93a44 clears 4.5:1 on white and on the light danger-soft", () => {
-    const dangerSoft = blend("#d9535d", "#ffffff", 0.1);
+    // danger-soft as shipped: --danger at 0.09 alpha over white.
+    const dangerSoft = blend(varOf(light, "--danger"), "#ffffff", 0.09);
     expect(contrast("#b93a44", "#ffffff")).toBeGreaterThanOrEqual(4.5);
     expect(contrast("#b93a44", dangerSoft)).toBeGreaterThanOrEqual(4.5);
-    // …while the system light --danger token it replaces does not:
+    // The redesign deepened the system light --danger to the same AA red
+    // family, so it clears 4.5:1 too (the original regression that
+    // motivated the chat-scoped token is gone for light mode).
     const danger = varOf(light, "--danger");
-    expect(contrast(danger, "#ffffff")).toBeLessThan(4.5);
+    expect(contrast(danger, "#ffffff")).toBeGreaterThanOrEqual(4.5);
   });
 
   it("solid light accent (thinking dots) clears 3:1 as a UI graphic", () => {
@@ -179,21 +182,31 @@ describe("light-mode token contrast (WCAG AA, computed from shipped CSS)", () =>
   });
 });
 
-/* ------------------------- dark theme unchanged ---------------------- */
+/* ------------------------- dark theme (redesigned) -------------------- */
 
-describe("dark mode stays visually identical", () => {
+describe("dark theme keeps its chat/CTA contrast guarantees", () => {
   const dark = blockOf(".dark");
 
   it("chat gradient is pinned to the dark site gradient", () => {
     expect(varOf(dark, "--gradient-ai-chat")).toBe("var(--gradient-neon)");
   });
 
-  it("dark theme variables were not modified (spot-check the values the fix relied on)", () => {
-    expect(varOf(dark, "--faint")).toBe("#55555e");
-    expect(varOf(dark, "--muted")).toBe("#71717a");
+  it("dark theme variables follow the green redesign (spot-check)", () => {
+    expect(varOf(dark, "--faint")).toBe("#5c6664");
+    expect(varOf(dark, "--muted")).toBe("#7d8985");
     expect(varOf(dark, "--gradient-neon")).toBe(
-      "linear-gradient(120deg, #7567f5 0%, #8b7cff 100%)",
+      "linear-gradient(135deg, #0c7f45 0%, #0a6b3a 100%)",
     );
+  });
+
+  it("dark fill gradient: white text clears 4.5:1 on EVERY stop (CTAs + chat bubbles)", () => {
+    // The redesign's bright accent (#35c288) fails AA for white text
+    // (2.3:1) — the FILL gradient must stay deep in dark mode too.
+    const stops = gradientStops(varOf(dark, "--gradient-neon"));
+    expect(stops).toHaveLength(2);
+    for (const stop of stops) {
+      expect(contrast("#ffffff", stop), `white on ${stop}`).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });
 
@@ -344,7 +357,7 @@ describe("ai-chat.tsx source contract", () => {
     // Exactly five surfaces: user bubble, committed avatar, empty-state
     // icon, pending avatar, send button.
     expect(src.match(/\$\{CHAT_GRADIENT_BG\}/g)).toHaveLength(5);
-    // The broken bg-[var(…)] mapping (→ background-color, invalid for
+    // The broken background-colour mapping (→ background-color, invalid for
     // gradients → transparent surface) must not exist anywhere, comments
     // included.
     expect(src).not.toContain(BROKEN_CHAT_BG);
@@ -374,7 +387,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 // The broken class literals are assembled from parts on purpose:
 // Tailwind's source scanner also scans test files, and a contiguous
-// `bg-[var(--…)]` token here would recompile the known-broken
+// A background-colour token here would recompile the known-broken
 // `background-color` rule into the production CSS as a dead rule.
 const BROKEN_CHAT_BG = "bg-[var(--" + "gradient-ai-chat)]";
 const BROKEN_SITE_BG = "bg-[var(--" + "gradient-neon)]";

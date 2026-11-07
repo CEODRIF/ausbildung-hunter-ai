@@ -1,140 +1,145 @@
 @import "tailwindcss";
 
-/* ---------------------------------------------------------------------------
- * Design tokens — AusbildungsWeg (Premium 2026 identity)
- * One visual identity, two scopes: the .dark scope is the dimmed glass
- * variant of the same violet/blue identity, the light scope is the default
- * (very light, calm, layered). Every component picks the palette up from
- * here via the semantic utilities (bg-surface, text-ink, border-line,
- * bg-accent, …) — no per-theme branching in components.
+/*
+ * AusbildungsWeg — "Aircraft Green" identity (2026 premium redesign).
+ *
+ * One visual identity, two scopes. Every component reads the palette from
+ * here through the semantic utilities (bg-surface, text-ink, border-line,
+ * bg-accent, …) — no component hard-codes a colour, so retheming the whole
+ * platform happens in this one file.
  *
  * Layering scale (light):
- *   --background      #f6f6fb  (off-white lavender page base)
- *   --surface          #ffffff (crisp cards, inputs, dropdowns)
- *   --surface-2        #efeff7 (fills, chips, hover, skeletons)
- *   --glass            translucent white for the premium floating surfaces
- *   --surface-floating #ffffff (elevated panels that float above the page)
+ *   --background   #f7f9f8  (cool off-white page base)
+ *   --surface      #ffffff  (crisp cards, inputs, dropdowns)
+ *   --surface-2    #f1f5f3  (fills, chips, hover, skeletons)
+ *   --glass        translucent white for floating surfaces
+ *   --surface-floating #ffffff (elevated panels above the page)
+ *
+ * Brand: a professional, dark-enough green (5.1:1 on white, so white button
+ * text and green body links both pass WCAG AA) with a bright sibling used
+ * only for large display text and icons, plus a lime tone that lives on the
+ * sky hero where a deep green would not read.
  * --------------------------------------------------------------------------- */
 :root {
-  --background: #f6f6fb;
-  --foreground: #17183a;
+  --background: #f7f9f8;
+  --foreground: #0b1f33;
   --surface: #ffffff;
-  --surface-2: #efeff7;
+  --surface-2: #f1f5f3;
   --surface-floating: #ffffff;
-  --glass: rgba(255, 255, 255, 0.62);
-  --glass-strong: rgba(255, 255, 255, 0.88);
+  --glass: rgba(255, 255, 255, 0.74);
+  --glass-strong: rgba(255, 255, 255, 0.93);
   --glass-border: rgba(255, 255, 255, 0.9);
-  --ink: #17183a;
-  --ink-soft: #3d3f66;
-  --muted: #686b8c;
-  --faint: #9598b6;
-  --line: #e5e5f1;
-  --line-strong: #d3d4e6;
-  --navy: #17183a;
-  --navy-soft: #2b2d58;
-  --blue: #6d5df6;
-  --blue-deep: #5847e8;
-  --blue-soft: rgba(109, 93, 246, 0.09);
-  --cyan: #5a8df8;
-  --cyan-soft: rgba(90, 141, 248, 0.1);
-  --ai: #9b7bf7;
-  --ai-deep: #8258f0;
-  --ai-soft: rgba(155, 123, 247, 0.1);
-  --success: #1f9d72;
-  --success-soft: rgba(31, 157, 114, 0.11);
-  --warning: #a3611c;
-  --warning-soft: rgba(163, 97, 28, 0.11);
-  --danger: #d9535d;
-  --danger-soft: rgba(217, 83, 93, 0.1);
-  --focus-ring: rgba(109, 93, 246, 0.28);
-  --selection: #ddd6fe;
-  --shadow-color: 76, 70, 160;
-  /* Depth scale — soft, colored, layered. */
+  --ink: #0b1f33;
+  --ink-soft: #2f4356;
+  --muted: #5b6b78;
+  --faint: #8494a0;
+  --line: #e4eae7;
+  --line-strong: #d0d9d4;
+  --navy: #0b1f33;
+  --navy-soft: #17324b;
+  /* Brand green — the single accent used for CTAs, active nav, links, focus. */
+  --blue: #0c7f45;
+  --blue-deep: #0a6b3a;
+  --blue-soft: rgba(12, 127, 69, 0.09);
+  --green-bright: #17a45e;
+  --green-lime: #c9f56d;
+  /* Sky support tones (hero only). */
+  --sky-top: #2b78cd;
+  --sky-mid: #5aa6e8;
+  --sky-low: #b7daf6;
+  --cyan: #1e7bd8;
+  --cyan-soft: rgba(30, 123, 216, 0.1);
+  /* AI surfaces stay in the same cool family so nothing looks bolted on. */
+  --ai: #0e7490;
+  --ai-deep: #0b5c73;
+  --ai-soft: rgba(14, 116, 144, 0.1);
+  --success: #0c7f45;
+  --success-soft: rgba(12, 127, 69, 0.1);
+  --warning: #91560a;
+  --warning-soft: rgba(145, 86, 10, 0.1);
+  --danger: #bd3542;
+  --danger-soft: rgba(189, 53, 66, 0.09);
+  --focus-ring: rgba(12, 127, 69, 0.3);
+  --selection: #cfeedd;
+  --shadow-color: 11, 31, 51;
+  /* Depth scale — soft, low-contrast, navy-tinted. */
   --shadow-card:
     0 1px 2px rgba(var(--shadow-color), 0.04),
-    0 6px 20px -8px rgba(var(--shadow-color), 0.1);
+    0 8px 24px -12px rgba(var(--shadow-color), 0.12);
   --shadow-float:
     0 2px 6px rgba(var(--shadow-color), 0.05),
-    0 24px 48px -16px rgba(var(--shadow-color), 0.18);
+    0 26px 50px -20px rgba(var(--shadow-color), 0.2);
   --shadow-pop:
-    0 16px 30px -10px rgba(var(--blue-deep), 0.42),
-    inset 0 1px 0 rgba(255, 255, 255, 0.35);
-  --glow-accent-rgb: 109, 93, 246;
-  --glow-navy-rgb: 23, 24, 58;
-  --gradient-neon: linear-gradient(120deg, #7b6cf6 0%, #5a8df8 55%, #9b7bf7 100%);
-  --gradient-headline: linear-gradient(120deg, #4f3ee0 0%, #6d5df6 48%, #9b7bf7 100%);
-  /* AI chat: the site-wide --gradient-neon stops sit at 3.2–3.9:1 against
-   * white, which fails WCAG AA for the white text on user bubbles. The
-   * chat-scoped gradient deepens every stop to ≥4.5:1 on white while
-   * keeping the same violet→blue→violet hue walk, so light mode stays on
-   * brand. (Dark mode pins this variable to --gradient-neon below —
-   * unchanged.) */
-  --gradient-ai-chat: linear-gradient(120deg, #5f4de8 0%, #4a63e0 55%, #7a52ea 100%);
+    0 10px 24px -12px rgba(12, 127, 69, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  --glow-accent-rgb: 12, 127, 69;
+  --glow-navy-rgb: 11, 31, 51;
+  --gradient-neon: linear-gradient(135deg, #0e8f4e 0%, #0a6b3a 100%);
+  --gradient-headline: linear-gradient(120deg, #0b1f33 0%, #14513a 58%, #0c7f45 100%);
+  /* AI chat: every stop deepened to >=4.5:1 on white for the user bubble text. */
+  --gradient-ai-chat: linear-gradient(120deg, #0a6b3a 0%, #0b6478 55%, #0a6b3a 100%);
   --blur-glass: 18px;
   --radius-2xl: 1.5rem;
   --radius-3xl: 2rem;
 }
 
-/* Neutral dark / charcoal scope (OpenRouter-style). Purple is an ACCENT
- * ONLY here — CTAs, active nav, focus rings, links, small highlights —
- * never a page background or a haze. The surfaces form a neutral ladder:
- *   --background #050708 (page) → --navy #0a0d0f → --surface #0d1012
- *   (cards) → --surface-floating #111416 (elevated) → --surface-2 #15191b
- *   (hover/fills). Thin borders carry the structure; shadows stay subtle. */
+/* Dimmed scope: the same identity on a neutral charcoal ladder. Green is an
+ * ACCENT only — CTAs, active nav, focus rings, links — never a page wash. */
 .dark {
-  --background: #050708;
-  --foreground: #f5f5f5;
-  --surface: #0d1012;
-  --surface-2: #15191b;
-  --surface-floating: #111416;
-  --glass: rgba(17, 20, 22, 0.66);
-  --glass-strong: rgba(17, 20, 22, 0.9);
+  --background: #06090b;
+  --foreground: #f4f7f5;
+  --surface: #0d1214;
+  --surface-2: #151b1d;
+  --surface-floating: #111719;
+  --glass: rgba(17, 23, 25, 0.68);
+  --glass-strong: rgba(17, 23, 25, 0.92);
   --glass-border: rgba(255, 255, 255, 0.07);
-  --ink: #f5f5f5;
-  --ink-soft: #a1a1aa;
-  --muted: #71717a;
-  --faint: #55555e;
-  --line: #202427;
-  --line-strong: #292d30;
-  --navy: #0a0d0f;
-  --navy-soft: #111416;
-  /* Accent (used sparingly): */
-  --blue: #8b7cff;
-  --blue-deep: #7567f5;
-  --blue-soft: rgba(139, 124, 255, 0.12);
-  --cyan: #6f9dff;
-  --cyan-soft: rgba(111, 157, 255, 0.12);
-  --ai: #9b8cff;
-  --ai-deep: #8574f0;
-  --ai-soft: rgba(155, 140, 255, 0.12);
-  --success: #2fd6a5;
-  --success-soft: rgba(47, 214, 165, 0.13);
-  --warning: #f2b04c;
-  --warning-soft: rgba(242, 176, 76, 0.13);
-  --danger: #ff5c7a;
-  --danger-soft: rgba(255, 92, 122, 0.13);
-  --focus-ring: rgba(139, 124, 255, 0.45);
-  --selection: rgba(139, 124, 255, 0.35);
+  --ink: #f4f7f5;
+  --ink-soft: #a9b4ae;
+  --muted: #7d8985;
+  --faint: #5c6664;
+  --line: #1e2628;
+  --line-strong: #29312f;
+  --navy: #0a0e10;
+  --navy-soft: #111719;
+  --blue: #35c288;
+  --blue-deep: #2aa874;
+  --blue-soft: rgba(53, 194, 136, 0.12);
+  --green-bright: #4ad79a;
+  --green-lime: #c9f56d;
+  --sky-top: #123a5c;
+  --sky-mid: #1b5580;
+  --sky-low: #2a6e9e;
+  --cyan: #57a9f0;
+  --cyan-soft: rgba(87, 169, 240, 0.12);
+  --ai: #4bb8c9;
+  --ai-deep: #3aa2b2;
+  --ai-soft: rgba(75, 184, 201, 0.12);
+  --success: #35c288;
+  --success-soft: rgba(53, 194, 136, 0.13);
+  --warning: #e9b25a;
+  --warning-soft: rgba(233, 178, 90, 0.13);
+  --danger: #ff6b7a;
+  --danger-soft: rgba(255, 107, 122, 0.13);
+  --focus-ring: rgba(53, 194, 136, 0.45);
+  --selection: rgba(53, 194, 136, 0.32);
   --shadow-color: 0, 0, 0;
-  /* Subtle neutral depth — the 1px border, not a big shadow, defines cards. */
   --shadow-card:
     0 1px 2px rgba(0, 0, 0, 0.4),
     0 12px 32px -20px rgba(0, 0, 0, 0.55);
   --shadow-float:
     0 2px 8px rgba(0, 0, 0, 0.35),
     0 28px 56px -24px rgba(0, 0, 0, 0.5);
-  /* Primary CTA: a contained violet lift — the one place shadow glows. */
-  --shadow-pop: 0 10px 24px -12px rgba(117, 103, 245, 0.5);
-  --glow-accent-rgb: 139, 124, 255;
+  --shadow-pop: 0 10px 24px -12px rgba(53, 194, 136, 0.42);
+  --glow-accent-rgb: 53, 194, 136;
   --glow-navy-rgb: 0, 0, 0;
-  /* CTA gradient: tight two-stop violet (no blue/violet spread). */
-  --gradient-neon: linear-gradient(120deg, #7567f5 0%, #8b7cff 100%);
-  /* Dark mode: the AI chat gradient is the site gradient — dark stays
-   * visually identical to the pre-fix rendering. */
+  /* FILL gradient (CTAs + AI chat bubbles carry WHITE text): kept deep in
+     dark mode too — the bright accent (#35c288) is for text/icons ON dark
+     surfaces, and white on it only reaches 2.3:1. Deep green clears AA
+     (5.1:1 / 6.6:1) and mirrors the light-theme gradient structure. */
+  --gradient-neon: linear-gradient(135deg, #0c7f45 0%, #0a6b3a 100%);
   --gradient-ai-chat: var(--gradient-neon);
-  /* Headlines: white-dominant with a faint lavender tail — brand whisper,
-   * not a purple headline. */
-  --gradient-headline: linear-gradient(120deg, #f5f5f5 0%, #e7e5ff 55%, #b9aeff 100%);
+  --gradient-headline: linear-gradient(120deg, #f4f7f5 0%, #d9f5e8 55%, #7fe0b4 100%);
   --blur-glass: 14px;
 }
 
@@ -157,6 +162,11 @@
   --color-accent: var(--blue);
   --color-accent-deep: var(--blue-deep);
   --color-accent-soft: var(--blue-soft);
+  --color-green-bright: var(--green-bright);
+  --color-green-lime: var(--green-lime);
+  --color-sky-top: var(--sky-top);
+  --color-sky-mid: var(--sky-mid);
+  --color-sky-low: var(--sky-low);
   --color-cyan: var(--cyan);
   --color-cyan-soft: var(--cyan-soft);
   --color-ai: var(--ai);
@@ -188,6 +198,7 @@ html.theme-anim *::after {
     fill 200ms ease !important;
 }
 
+@layer base {
 html {
   min-width: 320px;
   background: var(--background);
@@ -242,14 +253,15 @@ textarea:focus-visible,
 .dark ::selection {
   color: #fff;
 }
+}
 
 /* ---------------------------------------------------------------------------
  * Backgrounds & depth
- * --------------------------------------------------------------------------- */
+ * ------------------------------------------------------------------------- */
 
 /* Large, very soft radial glow field. Rendered ONCE per screen (fixed,
  * behind the content, no blur filters — pure radial gradients, so it stays
- * cheap on phones). */
+ * cheap on phones). Two faint brand washes, nothing more. */
 .app-mesh {
   position: fixed;
   inset: 0;
@@ -257,84 +269,202 @@ textarea:focus-visible,
   pointer-events: none;
   background:
     radial-gradient(
-      52rem 34rem at 12% -6%,
-      rgba(123, 108, 246, 0.13) 0%,
-      rgba(123, 108, 246, 0) 65%
+      54rem 36rem at 8% -8%,
+      rgba(23, 164, 94, 0.07) 0%,
+      rgba(23, 164, 94, 0) 66%
     ),
     radial-gradient(
-      46rem 30rem at 96% -10%,
-      rgba(90, 141, 248, 0.12) 0%,
-      rgba(90, 141, 248, 0) 65%
-    ),
-    radial-gradient(
-      40rem 30rem at 78% 108%,
-      rgba(244, 114, 182, 0.07) 0%,
-      rgba(244, 114, 182, 0) 70%
+      46rem 30rem at 98% -12%,
+      rgba(43, 120, 205, 0.06) 0%,
+      rgba(43, 120, 205, 0) 66%
     );
 }
 
 .dark .app-mesh {
-  /* No purple haze: one faint brand whisper top-left + a neutral slate
-     top-right. The page reads as flat charcoal-black, OpenRouter-style. */
   background:
     radial-gradient(
-      52rem 34rem at 12% -6%,
-      rgba(139, 124, 255, 0.05) 0%,
-      rgba(139, 124, 255, 0) 65%
+      54rem 36rem at 8% -8%,
+      rgba(53, 194, 136, 0.05) 0%,
+      rgba(53, 194, 136, 0) 66%
     ),
     radial-gradient(
-      46rem 30rem at 96% -10%,
-      rgba(148, 163, 184, 0.04) 0%,
-      rgba(148, 163, 184, 0) 65%
+      46rem 30rem at 98% -12%,
+      rgba(148, 163, 184, 0.035) 0%,
+      rgba(148, 163, 184, 0) 66%
     );
 }
 
 .grid-fade {
   background-image:
-    linear-gradient(rgba(109, 93, 246, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(109, 93, 246, 0.05) 1px, transparent 1px);
+    linear-gradient(rgba(11, 31, 51, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(11, 31, 51, 0.045) 1px, transparent 1px);
 }
 
 .dark .grid-fade {
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
 }
 
 .hero-orb {
   background:
-    radial-gradient(circle, rgba(123, 108, 246, 0.12) 0%, rgba(123, 108, 246, 0) 65%),
+    radial-gradient(circle, rgba(23, 164, 94, 0.1) 0%, rgba(23, 164, 94, 0) 66%),
     radial-gradient(
       circle at 70% 70%,
-      rgba(90, 141, 248, 0.1) 0%,
-      rgba(90, 141, 248, 0) 60%
+      rgba(43, 120, 205, 0.08) 0%,
+      rgba(43, 120, 205, 0) 62%
     );
 }
 
 .dark .hero-orb {
   background:
-    radial-gradient(circle, rgba(139, 124, 255, 0.09) 0%, rgba(139, 124, 255, 0) 65%),
+    radial-gradient(circle, rgba(53, 194, 136, 0.08) 0%, rgba(53, 194, 136, 0) 66%),
     radial-gradient(
       circle at 70% 70%,
-      rgba(148, 163, 184, 0.07) 0%,
-      rgba(148, 163, 184, 0) 60%
+      rgba(148, 163, 184, 0.06) 0%,
+      rgba(148, 163, 184, 0) 62%
     );
 }
 
 /* ---------------------------------------------------------------------------
- * Surfaces — the premium card language
- * --------------------------------------------------------------------------- */
+ * Sky hero — the landing page signature
+ * ------------------------------------------------------------------------- */
 
-/* Translucent glass with a subtle inner top highlight. Use for the key
- * floating elements (nav, hero, search card, run orb) — not for everything. */
+/* Vertical sky: deep blue at the top fading to a pale horizon. */
+.sky-hero {
+  background: linear-gradient(
+    180deg,
+    var(--sky-top) 0%,
+    var(--sky-mid) 42%,
+    #8ec8f0 74%,
+    var(--sky-low) 100%
+  );
+}
+
+/* A soft sun glow behind the headline, plus a haze band at the horizon. */
+.sky-hero::before {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      40rem 26rem at 78% 4%,
+      rgba(255, 255, 255, 0.35) 0%,
+      rgba(255, 255, 255, 0) 62%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0) 62%, rgba(255, 255, 255, 0.22) 100%);
+  content: "";
+  pointer-events: none;
+}
+
+/* Clouds are inline SVG groups (<CloudShape />) — no bitmaps, no filters,
+ * so they cost nothing to paint and stay crisp on every DPI. */
+.cloud {
+  position: absolute;
+  color: #ffffff;
+  pointer-events: none;
+}
+
+@keyframes cloud-drift {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(6%, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cloud-slow {
+    animation: cloud-drift 46s ease-in-out infinite alternate;
+  }
+
+  .cloud-slower {
+    animation: cloud-drift 72s ease-in-out infinite alternate-reverse;
+  }
+}
+
+/* The airplane crosses the hero continuously, right-to-left motion read as
+ * "flying toward you". Only the compositor moves — transform + opacity, no
+ * layout, no JS. */
+.plane {
+  position: absolute;
+  top: 5rem;
+  left: 54%;
+  width: clamp(150px, 17vw, 240px);
+  transform: rotate(-3deg);
+  will-change: transform;
+}
+
+/* The cycle starts with the aircraft already partly on screen, so the very
+ * first frame of the page already shows it flying — no empty sky for the
+ * first ten seconds. */
+@keyframes plane-cross {
+  0% {
+    transform: translate3d(-44vw, 12px, 0) rotate(-3deg);
+  }
+  100% {
+    transform: translate3d(54vw, -14px, 0) rotate(-3deg);
+  }
+}
+
+@keyframes plane-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.plane-bob {
+  display: block;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .plane {
+    animation: plane-cross 30s linear infinite;
+  }
+
+  .plane-bob {
+    animation: plane-bob 7s ease-in-out infinite;
+  }
+}
+
+/* On phones the hero is taller relative to its width: lift the aircraft a
+ * little so it never sits on the headline. */
+@media (max-width: 640px) {
+  .plane {
+    top: 5rem;
+    left: 56%;
+    width: clamp(140px, 40vw, 190px);
+  }
+}
+
+/* Headlines and body copy sit on a photographic sky, so they carry a very
+ * slight shadow: it buys contrast over a passing cloud without turning into
+ * a visible drop shadow. */
+.hero-shadow {
+  text-shadow:
+    0 1px 2px rgba(11, 31, 51, 0.16),
+    0 10px 30px rgba(11, 31, 51, 0.18);
+}
+
+/* ---------------------------------------------------------------------------
+ * Surfaces — the card language
+ * ------------------------------------------------------------------------- */
+
+/* Lightly translucent white with a hairline edge. Used for the few floating
+ * surfaces (top bar, menus) — deliberately NOT a glassmorphism effect:
+ * 92 % opaque, 10 px blur, one soft shadow. */
 .glass {
-  background: var(--glass);
+  background: var(--glass-strong);
   border: 1px solid var(--glass-border);
-  backdrop-filter: blur(var(--blur-glass)) saturate(1.4);
-  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(1.4);
+  backdrop-filter: blur(10px) saturate(1.15);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
   box-shadow:
-    var(--shadow-float),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+    var(--shadow-card),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 .dark .glass {
@@ -343,18 +473,35 @@ textarea:focus-visible,
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
-/* Crisp elevated surface (non-translucent) for data-dense cards. */
+/* Crisp elevated surface (opaque) for data-dense cards. */
 .surface-elevated {
   background: var(--surface-floating);
   border: 1px solid var(--line);
   box-shadow: var(--shadow-card);
 }
 
+/* Interactive card: lifts on hover, keeps the border honest. */
+.card-interactive {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-card);
+  transition:
+    box-shadow 220ms ease,
+    transform 220ms ease,
+    border-color 220ms ease;
+}
+
+.card-interactive:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-float);
+  transform: translateY(-2px);
+}
+
 .card-shadow {
   box-shadow: var(--shadow-card);
 }
 
-/* Primary CTA — soft 3D floating button. */
+/* Primary CTA — one solid brand green, barely-there lift. */
 .btn-neon {
   background-image: var(--gradient-neon);
   box-shadow: var(--shadow-pop);
@@ -365,7 +512,7 @@ textarea:focus-visible,
 }
 
 .btn-neon:hover {
-  filter: brightness(1.07);
+  filter: brightness(1.06);
   transform: translateY(-1px);
 }
 
@@ -378,7 +525,7 @@ textarea:focus-visible,
   transform: none;
 }
 
-/* Gradient text for the key headline. */
+/* Gradient text for the key headline — navy body, green tail. */
 .text-neon-gradient {
   background-image: var(--gradient-headline);
   background-clip: text;
@@ -389,13 +536,24 @@ textarea:focus-visible,
 /* Large expressive display type for heroes. */
 .display-title {
   letter-spacing: -0.03em;
-  line-height: 1.05;
+  line-height: 1.04;
   font-weight: 800;
 }
 
 .num {
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
+}
+
+/* ---------------------------------------------------------------------------
+ * Section rhythm — one spacing scale for every marketing section
+ * ------------------------------------------------------------------------- */
+.section-pad {
+  padding-block: clamp(3rem, 6vw, 5.5rem);
+}
+
+.shell-x {
+  padding-inline: clamp(1rem, 4vw, 2.5rem);
 }
 
 /* ---------------------------------------------------------------------------

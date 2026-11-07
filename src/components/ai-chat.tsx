@@ -75,8 +75,9 @@ const DANGER_TEXT = "text-[#b93a44] dark:text-danger";
  * Gradient paint for the five brand surfaces in this file (user bubble,
  * both assistant avatars, empty-state icon, send button).
  *
- * CRITICAL — this is an arbitrary PROPERTY, never `bg-[var(--…)]`:
- * Tailwind maps `bg-[var(--x)]` to `background-color: var(--x)`, and a
+ * CRITICAL — this is an arbitrary PROPERTY, never a background-colour
+ * utility on a var(): Tailwind maps such a utility to `background-color`,
+ * and a
  * `linear-gradient()` value is NOT a valid `<color>`. The browser then
  * drops the whole declaration as "invalid at computed-value time" and
  * the surface renders TRANSPARENT — exactly the production incident in

@@ -1,5 +1,6 @@
 import { AuthShell } from "@/components/auth-shell";
 import { LoginForm } from "@/app/login/login-form";
+import { getServerT } from "@/lib/i18n/server";
 
 /**
  * Sign-in page.
@@ -21,16 +22,13 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const params = await searchParams;
+  const [params, t] = await Promise.all([searchParams, getServerT()]);
   const raw = params.error;
   const code = Array.isArray(raw) ? raw[0] : raw;
   const notice = code ? NOTICES[code] : undefined;
 
   return (
-    <AuthShell
-      title="Welcome back"
-      subtitle="Sign in to continue building your next chapter."
-    >
+    <AuthShell title={t("auth.loginTitle")} subtitle={t("auth.loginSubtitle")}>
       <LoginForm initialError={notice} />
     </AuthShell>
   );
