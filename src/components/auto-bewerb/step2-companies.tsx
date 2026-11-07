@@ -257,6 +257,7 @@ export function Step2Companies() {
       {/* Ad input */}
       <SectionCard
         title={t("autoBewerb.adInputTitle")}
+        icon="file"
         aside={
           <div className="flex flex-col items-end gap-0.5 text-xs">
             <span className="font-semibold text-muted">{capacityUnknown ? "—" : `${reserved} / ${capacity}`}</span>

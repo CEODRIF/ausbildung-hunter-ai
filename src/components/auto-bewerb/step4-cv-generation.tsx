@@ -169,7 +169,7 @@ export function Step4CvGeneration() {
       {/* ------------------------------------------------------------------ */}
       {/* Global generation panel                                            */}
       {/* ------------------------------------------------------------------ */}
-      <SectionCard title={t("autoBewerb.cvBulkTitle")} className="bg-gradient-to-br from-accent-soft/40 via-surface to-surface">
+      <SectionCard title={t("autoBewerb.cvBulkTitle")} icon="spark" className="bg-gradient-to-br from-accent-soft/40 via-surface to-surface">
         <p className="max-w-2xl text-sm leading-6 text-muted">{t("autoBewerb.cvBulkDesc")}</p>
 
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">

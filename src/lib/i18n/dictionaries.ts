@@ -20,6 +20,12 @@ const de = {
     email: "E-Mail",
     resultsWord: "Ergebnisse",
     filterToggle: "Filter",
+    hero: {
+      title: "Finde deinen Platz in Deutschland",
+      subtitle: "Echte Stellen, täglich aktualisiert. Suche nach Jobtitel, Beruf oder Unternehmen.",
+    },
+    typeOnline: "Online-Formular",
+    typeEmail: "E-Mail",
   },
 
   // ---- Landing v2 ("Aircraft Green" redesign) ------------------------------
@@ -862,6 +868,26 @@ const de = {
       },
     },
     nextAction: "Empfohlener nächster Schritt",
+    quick: {
+      title: "Schnelle Aktionen",
+    },
+    header: {
+      profileChip: "Profil {percent} %",
+    },
+    appStatus: {
+      draft: "Entwurf",
+      queued: "In Warteschlange",
+      sending: "Wird gesendet",
+      completed: "Abgeschlossen",
+      partially_failed: "Teilweise fehlgeschlagen",
+      failed: "Fehlgeschlagen",
+      cancelled: "Abgebrochen",
+    },
+    apps: {
+      prepared: "Vorbereitet",
+      sentOf: "{sent} von {total} versendet",
+      untitled: "Bewerbung ohne Betreff",
+    },
     metrics: {
       saved: "Gespeicherte Stellen",
       savedDetail: "{count} vollständige Passungsnachweise",
@@ -880,7 +906,8 @@ const de = {
     sections: {
       recommended: { title: "Empfohlene Stellen", hint: "Aus der offiziellen Quelle, abgeglichen mit Ihrem Profil" },
       saved: { title: "Gespeicherte Stellen", hint: "Nachweise sind historisch – die aktuelle Passung steht auf der Detailseite" },
-      
+      applications: { title: "Ihre Bewerbungen", hint: "Ihre letzten Kampagnen mit aktuellem Status", cta: "Im Studio öffnen" },
+      activity: { title: "Letzte Aktivitäten", hint: "Ihr neuerster Verlauf auf der Plattform" },
       
       
       account: { title: "Kontoübersicht", hint: "Ihre aktuellen Profildaten" },
@@ -919,6 +946,8 @@ const de = {
       noMatches: { title: "Gerade keine passenden Stellen", body: "Die Quelle lieferte für Ihr dokumentiertes Ziel keine Ergebnisse. Versuchen Sie eine breitere Suche." },
       recsUnavailable: { title: "Empfehlungen nicht verfügbar", bodyNoProfile: "Scannen Sie Ihre Bewerbung, um Ihr Kandidatenprofil zu erstellen – Empfehlungen werden echte Stellen dagegen abgleichen.", bodyNoKeyword: "Fügen Sie Ihrem Profil zuerst ein Zielfeld hinzu – Empfehlungen werden nur mit dokumentierten Stichwörtern gesucht (nichts wird erfunden).", bodySource: "Die Stellenquelle ist gerade nicht verfügbar. Anstelle echter Ergebnisse wird nichts angezeigt." },
       nothingSaved: { title: "Noch nichts gespeichert", body: "Speichern Sie Stellen, auf die Sie sich bewerben – sie behalten einen serverseitig berechneten Passungsnachweis." },
+      noApplications: { title: "Noch keine Bewerbungen", body: "Erstellen Sie im Studio Ihre erste Bewerbung — ihr Status erscheint dann hier." },
+      noActivity: { title: "Noch keine Aktivität", body: "Hier erscheinen Ihre letzten Handlungen — gespeicherte Stellen, Scans und Bewerbungen." },
       
       
     },
@@ -2386,6 +2415,7 @@ const de = {
   autoBewerb: {
     // Page / shell
     navLabel: "Ablauf der Bewerbungszentrale",
+    progressStep: "Schritt {current} von {total}",
     retry: "Erneut versuchen",
     refreshError: "Aktualisierung fehlgeschlagen. Bitte erneut versuchen.",
     setupPendingTitle: "Setup ausstehend",
@@ -2963,6 +2993,12 @@ const en: Dict = {
     email: "Email",
     resultsWord: "results",
     filterToggle: "Filter",
+    hero: {
+      title: "Find your place in Germany",
+      subtitle: "Real vacancies, updated daily. Search by job title, profession or company.",
+    },
+    typeOnline: "Online form",
+    typeEmail: "Email",
   },
 
   v2: {
@@ -3768,6 +3804,26 @@ const en: Dict = {
       },
     },
     nextAction: "Recommended next step",
+    quick: {
+      title: "Quick actions",
+    },
+    header: {
+      profileChip: "Profile {percent} %",
+    },
+    appStatus: {
+      draft: "Draft",
+      queued: "Queued",
+      sending: "Sending",
+      completed: "Completed",
+      partially_failed: "Partially failed",
+      failed: "Failed",
+      cancelled: "Cancelled",
+    },
+    apps: {
+      prepared: "Prepared",
+      sentOf: "{sent} of {total} sent",
+      untitled: "Application without subject",
+    },
     metrics: {
       saved: "Saved vacancies",
       savedDetail: "{count} complete match snapshots",
@@ -3786,7 +3842,8 @@ const en: Dict = {
     sections: {
       recommended: { title: "Recommended vacancies", hint: "Resolved from the official source and matched against your profile" },
       saved: { title: "Saved vacancies", hint: "Snapshots are historical — the live match is on the detail page" },
-      
+      applications: { title: "Your applications", hint: "Your latest campaigns with live status", cta: "Open in studio" },
+      activity: { title: "Recent activity", hint: "Your latest movements on the platform" },
       
       
       account: { title: "Account overview", hint: "Your current profile data" },
@@ -3825,6 +3882,8 @@ const en: Dict = {
       noMatches: { title: "No matching vacancies right now", body: "The source returned no results for your documented target. Try a broader search." },
       recsUnavailable: { title: "Recommendations unavailable", bodyNoProfile: "Scan your application to build your candidate profile — recommendations compare real vacancies against it.", bodyNoKeyword: "Add a target role to your profile first — recommendations are searched with documented keywords only (nothing is invented).", bodySource: "The vacancy source is unavailable right now. Nothing is shown instead of real results." },
       nothingSaved: { title: "Nothing saved yet", body: "Save vacancies you want to apply to — they keep a server-computed match snapshot." },
+      noApplications: { title: "No applications yet", body: "Create your first application in the studio — its status will appear here." },
+      noActivity: { title: "No activity yet", body: "Your latest actions appear here — saved vacancies, scans and applications." },
       
       
     },
@@ -5266,6 +5325,7 @@ const en: Dict = {
   autoBewerb: {
     // Page / shell
     navLabel: "Application Hub workflow",
+    progressStep: "Step {current} of {total}",
     retry: "Retry",
     refreshError: "Refresh failed. Please try again.",
     setupPendingTitle: "Setup pending",
@@ -5835,6 +5895,12 @@ const fr: Dict = {
     email: "E-mail",
     resultsWord: "résultats",
     filterToggle: "Filtre",
+    hero: {
+      title: "Trouvez votre place en Allemagne",
+      subtitle: "De vraies offres, mises à jour chaque jour. Recherchez par intitulé, métier ou entreprise.",
+    },
+    typeOnline: "Formulaire en ligne",
+    typeEmail: "E-mail",
   },
 
   v2: {
@@ -6650,6 +6716,26 @@ const fr: Dict = {
       },
     },
     nextAction: "Prochaine étape recommandée",
+    quick: {
+      title: "Actions rapides",
+    },
+    header: {
+      profileChip: "Profil {percent} %",
+    },
+    appStatus: {
+      draft: "Brouillon",
+      queued: "En file",
+      sending: "Envoi en cours",
+      completed: "Terminé",
+      partially_failed: "Partiellement en échec",
+      failed: "En échec",
+      cancelled: "Annulé",
+    },
+    apps: {
+      prepared: "Préparée",
+      sentOf: "{sent} sur {total} envoyés",
+      untitled: "Candidature sans objet",
+    },
     metrics: {
       saved: "Offres enregistrées",
       savedDetail: "{count} correspondances complètes",
@@ -6668,7 +6754,8 @@ const fr: Dict = {
     sections: {
       recommended: { title: "Offres recommandées", hint: "Résolues depuis la source officielle et comparées à votre profil" },
       saved: { title: "Offres enregistrées", hint: "Les instantanés sont historiques — la correspondance en direct est sur la page de détail" },
-      
+      applications: { title: "Vos candidatures", hint: "Vos dernières campagnes avec leur statut en direct", cta: "Ouvrir dans le studio" },
+      activity: { title: "Activité récente", hint: "Vos derniers mouvements sur la plateforme" },
       
       
       account: { title: "Aperçu du compte", hint: "Vos données de profil actuelles" },
@@ -6707,6 +6794,8 @@ const fr: Dict = {
       noMatches: { title: "Aucune offre correspondante pour le moment", body: "La source n'a retourné aucun résultat pour votre cible documentée. Essayez une recherche plus large." },
       recsUnavailable: { title: "Recommandations indisponibles", bodyNoProfile: "Scannez votre candidature pour créer votre profil candidat — les recommandations comparent de vraies offres avec celui-ci.", bodyNoKeyword: "Ajoutez d'abord un poste cible à votre profil — les recommandations ne cherchent qu'avec des mots-clés documentés (rien n'est inventé).", bodySource: "La source d'offres est indisponible pour le moment. Rien n'est affiché à la place de vrais résultats." },
       nothingSaved: { title: "Rien d'enregistré pour le moment", body: "Enregistrez des offres sur lesquelles vous voulez candidater — elles conservent un instantané de correspondance calculé sur le serveur." },
+      noApplications: { title: "Aucune candidature pour le moment", body: "Créez votre première candidature dans le studio — son statut apparaîtra ici." },
+      noActivity: { title: "Aucune activité pour le moment", body: "Vos derniers gestes apparaissent ici — offres enregistrées, scans et candidatures." },
       
       
     },
@@ -8159,6 +8248,7 @@ const fr: Dict = {
   autoBewerb: {
     // Page / shell
     navLabel: "Flux du Centre de candidatures",
+    progressStep: "Étape {current} sur {total}",
     retry: "Réessayer",
     refreshError: "Échec du rafraîchissement. Veuillez réessayer.",
     setupPendingTitle: "Configuration en attente",
@@ -8727,6 +8817,12 @@ const ar: Dict = {
     email: "بريد إلكتروني",
     resultsWord: "نتيجة",
     filterToggle: "تصفية",
+    hero: {
+      title: "اعثر على مكانك في ألمانيا",
+      subtitle: "وظائف حقيقية تُحدَّث يوميًا. ابحث حسب مسمى العمل أو المهنة أو الشركة.",
+    },
+    typeOnline: "نموذج إلكتروني",
+    typeEmail: "بريد إلكتروني",
   },
 
   v2: {
@@ -9521,6 +9617,26 @@ const ar: Dict = {
       },
     },
     nextAction: "الخطوة التالية المقترحة",
+    quick: {
+      title: "إجراءات سريعة",
+    },
+    header: {
+      profileChip: "الملف {percent}٪",
+    },
+    appStatus: {
+      draft: "مسودة",
+      queued: "في قائمة الانتظار",
+      sending: "جارٍ الإرسال",
+      completed: "مكتمل",
+      partially_failed: "فشل جزئي",
+      failed: "فشل",
+      cancelled: "ملغى",
+    },
+    apps: {
+      prepared: "مُعدّة",
+      sentOf: "أُرسل {sent} من {total}",
+      untitled: "طلب بدون موضوع",
+    },
     metrics: {
       saved: "وظائف محفوظة",
       savedDetail: "{count} ملاءمة كاملة",
@@ -9539,7 +9655,8 @@ const ar: Dict = {
     sections: {
       recommended: { title: "وظائف موصى بها", hint: "من المصدر الرسمي، مقابَلة مع ملفك" },
       saved: { title: "وظائف محفوظة", hint: "اللقطات تاريخية — الملاءمة الحية على صفحة التفاصيل" },
-      
+      applications: { title: "طلباتك", hint: "أحدث حملاتك مع الحالة المباشرة", cta: "فتح في الاستوديو" },
+      activity: { title: "النشاط الأخير", hint: "أحدث أعمالك على المنصة" },
       
       
       account: { title: "نظرة على الحساب", hint: "بيانات ملفك الحالية" },
@@ -9578,6 +9695,8 @@ const ar: Dict = {
       noMatches: { title: "لا توجد وظائف مطابقة حاليًا", body: "لم يُرجع المصدر نتائج لهدفك الموثّق. جرّب بحثًا أوسع." },
       recsUnavailable: { title: "التوصيات غير متاحة", bodyNoProfile: "امسح طلبك لإنشاء ملف مرشح — المقابلات تقارن وظائف حقيقية معه.", bodyNoKeyword: "أضف مهنة مستهدفة إلى ملفك أولًا — التوصيات تُبحث بكلمات موثّقة فقط (لا يُختلق شيء).", bodySource: "مصدر الوظائف غير متاح حاليًا. لا يُعرض شيء بدلًا من النتائج الحقيقية." },
       nothingSaved: { title: "لا شيء محفوظ بعد", body: "احفظ الوظائف التي تريد التقديم عليها — تحتفظ بلقطة ملاءمة محسوبة على الخادم." },
+      noApplications: { title: "لا توجد طلبات بعد", body: "أنشئ طلبك الأول في الاستوديو — ستظهر حالته هنا." },
+      noActivity: { title: "لا يوجد نشاط بعد", body: "تظهر هنا أعمالك الأخيرة — وظائف محفوظة، عمليات مسح وطلبات." },
       
       
     },
@@ -10964,6 +11083,7 @@ const ar: Dict = {
   autoBewerb: {
     // Page / shell
     navLabel: "مسار مركز طلبات التوظيف",
+    progressStep: "الخطوة {current} من {total}",
     retry: "إعادة المحاولة",
     refreshError: "فشل التحديث. يرجى المحاولة مرة أخرى.",
     setupPendingTitle: "الإعداد قيد الانتظار",

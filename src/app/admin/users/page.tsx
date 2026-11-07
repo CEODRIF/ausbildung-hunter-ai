@@ -1,15 +1,11 @@
 import { redirect } from "next/navigation";
-import { Card } from "@/components/ui";
+import { Icon } from "@/components/icon";
 import { getCurrentUserAndProfile } from "@/lib/auth";
 import { requireAdmin } from "@/lib/billing/admin";
 import { listAdminUsers } from "@/lib/billing/admin-users";
 import { getServerT, getRequestLang } from "@/lib/i18n/server";
 import { localeForLang } from "@/lib/i18n/core";
-import {
-  AdminUserActions,
-  type AdminUserRow,
-} from "@/components/admin-user-actions";
-import { AdminAuditLog } from "@/components/admin-audit-log";
+import { AdminUserTable } from "@/components/admin-user-table";
 
 export const dynamic = "force-dynamic";
 
@@ -37,144 +33,38 @@ export default async function AdminPage({
 
   return (
     <>
-      <div className="mt-8 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="mt-2 text-3xl font-bold tracking-[-0.04em] text-ink">
-            {t("admin.title")}
-          </h1>
-          <p className="mt-2 text-sm text-muted">{t("admin.subtitle")}</p>
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <span
+            aria-hidden="true"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-white shadow-[var(--shadow-card)]"
+            style={{ background: "var(--gradient-neon)" }}
+          >
+            <Icon name="user" size={22} />
+          </span>
+          <div>
+            <h1 className="text-2xl font-bold tracking-[-0.03em] text-ink sm:text-3xl">
+              {t("admin.title")}
+            </h1>
+            <p className="mt-1 text-sm text-muted">{t("admin.subtitle")}</p>
+          </div>
         </div>
         <AdminFilterForm t={t} initial={params.email ?? ""} />
       </div>
       {params.feedback && (
-        <p className="mt-4 rounded-xl bg-success-soft px-4 py-3 text-sm font-semibold text-success">
+        <p className="mt-4 flex items-center gap-2 rounded-2xl border border-success/25 bg-success-soft px-4 py-3 text-sm font-semibold text-success">
+          <Icon name="check" size={15} className="shrink-0" />
           {params.feedback}
         </p>
       )}
 
-      <Card className="mt-6 overflow-hidden">
-        {users.length === 0 ? (
-          <p className="px-6 py-10 text-center text-sm text-muted">
-            {t("admin.noMatch")}
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-start text-sm">
-              <thead>
-                <tr className="border-b border-line text-[11px] uppercase tracking-[0.08em] text-faint">
-                  <th className="px-5 py-3 text-start">{t("admin.user")}</th>
-                  <th className="px-5 py-3 text-start">{t("admin.goal")}</th>
-                  <th className="px-5 py-3 text-start">{t("admin.plan")}</th>
-                  <th className="px-5 py-3 text-start">{t("admin.today")}</th>
-                  <th className="px-5 py-3 text-start">{t("admin.role")}</th>
-                  <th className="px-5 py-3 text-start">{t("admin.actions")}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {users.map((row) => (
-                  <tr key={row.id}>
-                    <td className="px-5 py-3">
-                      <p className="font-semibold text-ink-soft">
-                        {row.full_name}
-                      </p>
-                      <p className="text-xs text-muted">{row.email}</p>
-                    </td>
-                    <td className="px-5 py-3 text-xs text-muted">
-                      {row.selected_goal ?? "—"}
-                    </td>
-                    <td className="px-5 py-3">
-                      {describePlanCell(row.subscription, t, locale)}
-                    </td>
-                    <td className="px-5 py-3 text-xs text-muted">
-                      {row.usage_today.emails_sent} /{" "}
-                      {row.usage_today.ai_requests}
-                    </td>
-                    <td className="px-5 py-3">
-                      {row.is_admin ? (
-                        <span className="rounded-md bg-ai-soft px-1.5 py-0.5 text-[10px] font-bold text-ai">
-                          {t("admin.adminBadge")}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted">
-                          {t("admin.userRole")}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="flex items-start gap-2">
-                        <AdminUserActions
-                          actorId={admin.id}
-                          row={row as AdminUserRow}
-                        />
-                        <AdminAuditLog userId={row.id} />
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+      <AdminUserTable
+        t={t}
+        locale={locale}
+        users={users}
+        actorId={admin.id}
+      />
     </>
-  );
-}
-
-/** Canonical subscription state cell — computed SERVER-side from the
- *  trusted row (never client state): plan + source (admin grants are
- *  labeled as such, never as payments) + effective state (active until /
- *  canceled / expired, with the relevant date) + the trial window for
- *  trial rows (start = the one-shot activation stamp). */
-function describePlanCell(
-  sub: AdminUserRow["subscription"],
-  t: T,
-  locale: string,
-) {
-  if (!sub) {
-    return <span className="text-xs text-muted">{t("admin.noPlan")}</span>;
-  }
-  const now = Date.now();
-  const fmt = (iso: string) => new Date(iso).toLocaleDateString(locale);
-  const endIso = sub.current_period_end;
-  const endMs = endIso ? Date.parse(endIso) : null;
-  let state: string;
-  if (sub.plan === "free") {
-    // The permanent Free plan was removed (2026-10-24, PR #72 revision): a
-    // historical `free` row grants NOTHING and is no longer a valid plan —
-    // the account is subject to the plan-selection gate. Show it as "no
-    // plan" rather than a live free tier.
-    state = t("admin.noPlan");
-  } else if (sub.status === "canceled") {
-    state = t("admin.stateCanceled", {
-      date: sub.canceled_at ? fmt(sub.canceled_at) : "—",
-    });
-  } else if (
-    sub.status === "expired" ||
-    (sub.status === "active" && endMs !== null && endMs <= now)
-  ) {
-    state = t("admin.stateExpired", { date: endIso ? fmt(endIso) : "—" });
-  } else {
-    state = t("admin.stateActiveUntil", { date: endIso ? fmt(endIso) : "—" });
-  }
-  const adminGrant = sub.provider === "manual" && sub.plan !== "trial";
-  return (
-    <div className="flex flex-col">
-      <span className="text-xs font-semibold text-ink-soft">
-        {sub.plan}
-        {adminGrant && (
-          <span className="text-ai"> · {t("admin.grantedByAdmin")}</span>
-        )}
-      </span>
-      <span className="text-[11px] text-muted">{state}</span>
-      {sub.plan === "trial" && sub.trial_activated_at && endIso && (
-        <span className="text-[11px] text-muted">
-          {t("admin.trialRange", {
-            start: fmt(sub.trial_activated_at),
-            end: fmt(endIso),
-          })}
-        </span>
-      )}
-    </div>
   );
 }
 
@@ -183,19 +73,24 @@ function AdminFilterForm({ t, initial }: { t: T; initial: string }) {
     <form
       action="/admin/users"
       method="GET"
-      className="flex items-center gap-2"
+      className="flex items-center gap-2 rounded-2xl border border-line-strong bg-surface p-1.5 shadow-[var(--shadow-card)]"
     >
-      <input
-        type="search"
-        name="email"
-        defaultValue={initial}
-        placeholder={t("admin.filterPlaceholder")}
-        aria-label={t("admin.filterPlaceholder")}
-        className="w-56 rounded-xl border border-line-strong bg-surface px-3 py-2 text-sm"
-      />
+      <div className="relative">
+        <span className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-faint">
+          <Icon name="search" size={15} />
+        </span>
+        <input
+          type="search"
+          name="email"
+          defaultValue={initial}
+          placeholder={t("admin.filterPlaceholder")}
+          aria-label={t("admin.filterPlaceholder")}
+          className="w-52 rounded-xl bg-surface-2/70 py-2 pe-3 ps-9 text-sm text-ink outline-none transition placeholder:text-faint focus:bg-surface focus:ring-2 focus:ring-accent/30 sm:w-56"
+        />
+      </div>
       <button
         type="submit"
-        className="rounded-xl bg-accent px-4 py-2 text-sm font-bold text-white"
+        className="rounded-xl bg-accent px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-accent-deep"
       >
         {t("admin.filter")}
       </button>

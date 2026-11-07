@@ -31,7 +31,7 @@ export default async function UsageSettingsPage() {
           {/* Shared green quota indicator (P0 quota audit): same component
               and state rules as all other quota surfaces. The stats below
               stay as the detailed numbers (same server-derived source). */}
-          <div className="mb-5">
+          <div className="mb-5 min-w-0 [&_.whitespace-nowrap]:whitespace-normal">
             <QuotaIndicator
               variant="bar"
               data={{

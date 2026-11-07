@@ -12,6 +12,7 @@ import {
 } from "react";
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui";
+import { Icon, type IconName } from "@/components/icon";
 import { StatusPill, type StatusTone } from "@/components/ui/feedback";
 import { useI18n } from "@/lib/i18n";
 import { resolveAutoBewerbRecipient } from "@/lib/auto-bewerb/schema";
@@ -209,63 +210,95 @@ export function StepShell({
   const states = computeStepState(ws);
   const atLast = step === 7;
 
+  const doneCount = states.filter((s) => s.done).length;
+  const progress = Math.round((doneCount / states.length) * 100);
+
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
-      {/* Step rail (desktop: horizontal; mobile: compact) */}
+      {/* Step rail — premium stepper card: overall progress + 7 steps
+          (grid on sm+, scrollable rail on phones). */}
       <nav aria-label={t("autoBewerb.navLabel")} className="mb-6">
-        <ol className="flex items-center gap-1 overflow-x-auto pb-1 sm:gap-2">
-          {STEP_KEYS.map((key, i) => {
-            const n = i + 1;
-            const active = step === n;
-            const done = states[i].done;
-            return (
-              <li key={key} className="flex shrink-0 items-center gap-1 sm:gap-2">
-                <button
-                  type="button"
-                  onClick={() => goToStep(n)}
-                  aria-current={active ? "step" : undefined}
-                  className={`group flex items-center gap-2 rounded-2xl border px-2.5 py-2 text-xs font-semibold transition-colors sm:px-3 sm:text-sm ${
-                    active
-                      ? "border-accent bg-accent-soft text-accent"
-                      : done
-                        ? "border-line bg-surface text-ink-soft hover:border-line-strong"
-                        : "border-line bg-surface/60 text-muted hover:border-line-strong hover:text-ink-soft"
-                  }`}
-                >
-                  <span
-                    className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${
-                      done ? "bg-success text-white" : active ? "bg-accent text-white" : "bg-surface-2 text-muted"
+        <div className="surface-elevated rounded-3xl p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-faint">
+              {t("autoBewerb.progressStep", {
+                current: step,
+                total: states.length,
+              })}
+            </p>
+            <p className="num text-[11px] font-bold text-muted">
+              {doneCount}/{states.length} · {progress} %
+            </p>
+          </div>
+          <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-surface-2">
+            <div
+              className="h-full rounded-full transition-[width] duration-500"
+              style={{ width: `${progress}%`, backgroundImage: "var(--gradient-neon)" }}
+            />
+          </div>
+          <ol className="mt-4 grid max-sm:grid-flow-col max-sm:auto-cols-[88px] max-sm:overflow-x-auto sm:grid-cols-4 lg:grid-cols-7">
+            {STEP_KEYS.map((key, i) => {
+              const n = i + 1;
+              const active = step === n;
+              const done = states[i].done;
+              return (
+                <li key={key} className="min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => goToStep(n)}
+                    aria-current={active ? "step" : undefined}
+                    className={`flex w-full flex-col items-center gap-2 rounded-2xl px-1 py-2.5 transition-colors ${
+                      active ? "bg-accent-soft/70" : "hover:bg-surface-2/60"
                     }`}
                   >
-                    {done && !active ? <Check size={12} strokeWidth={3} /> : n}
-                  </span>
-                  <span className="hidden md:inline">{t(key)}</span>
-                  <span className="md:hidden">{n}</span>
-                </button>
-                {n < 7 && <span aria-hidden="true" className="h-px w-3 shrink-0 bg-line-strong sm:w-4" />}
-              </li>
-            );
-          })}
-        </ol>
+                    <span
+                      className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-bold transition-colors ${
+                        active
+                          ? "text-white shadow-[var(--shadow-card)]"
+                          : done
+                            ? "bg-success text-white"
+                            : "border border-line-strong bg-surface text-muted"
+                      }`}
+                      style={active ? { backgroundImage: "var(--gradient-neon)" } : undefined}
+                    >
+                      {done && !active ? (
+                        <Check size={14} strokeWidth={3} />
+                      ) : (
+                        n
+                      )}
+                    </span>
+                    <span
+                      className={`max-w-full truncate text-[10px] font-semibold leading-tight sm:max-w-none sm:text-center sm:text-xs ${
+                        active ? "text-accent" : done ? "text-ink-soft" : "text-muted"
+                      }`}
+                    >
+                      {t(key)}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
       </nav>
 
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-xl font-bold tracking-tight text-ink sm:text-2xl">{title}</h1>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">{subtitle}</p>
+          <h1 className="display-title text-2xl text-ink sm:text-3xl">{title}</h1>
+          <p className="mt-1.5 max-w-2xl text-sm leading-6 text-muted">{subtitle}</p>
         </div>
         {primary}
       </header>
 
       <div>{children}</div>
 
-      <footer className="mt-8 flex items-center justify-between gap-3">
+      <footer className="mt-8 flex flex-wrap items-center justify-between gap-3">
         <Button
           variant="secondary"
           size="md"
           onClick={() => step > 1 && goToStep(step - 1)}
           disabled={step <= 1}
-          className="rtl:flex-row-reverse"
+          className="h-11 rounded-2xl px-5 rtl:flex-row-reverse"
         >
           <ChevronLeft size={16} className="rtl:rotate-180" />
           {t("common.back")}
@@ -273,7 +306,12 @@ export function StepShell({
         <div className="flex items-center gap-3">
           {primary && null}
           {!atLast && (
-            <Button variant="primary" size="md" onClick={() => goToStep(step + 1)} className="rtl:flex-row-reverse">
+            <Button
+              variant="primary"
+              size="md"
+              onClick={() => goToStep(step + 1)}
+              className="h-11 rounded-2xl px-6 rtl:flex-row-reverse"
+            >
               {t("common.continue")}
               <ChevronRight size={16} className="rtl:rotate-180" />
             </Button>
@@ -328,7 +366,7 @@ export function CompanyPicker({
   const list = useMemo(() => ws.companies, [ws.companies]);
   if (list.length === 0) return null;
   return (
-    <div className="mb-5 flex flex-wrap gap-2" role="tablist" aria-label={t("autoBewerb.pickCompany")}>
+    <div className="mb-5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" role="tablist" aria-label={t("autoBewerb.pickCompany")}>
       {list.map((c) => {
         const { name, job } = companyLabel(c.company);
         const active = value === c.company.id;
@@ -341,14 +379,25 @@ export function CompanyPicker({
             aria-selected={active}
             disabled={disabled}
             onClick={() => onChange(c.company.id)}
-            className={`flex min-w-0 items-center gap-2 rounded-2xl border px-3 py-2 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+            className={`flex min-w-0 items-center gap-3 rounded-2xl border p-3 text-left transition-[border-color,box-shadow,background-color] duration-300 disabled:cursor-not-allowed disabled:opacity-50 ${
               active
-                ? "border-accent bg-accent-soft text-accent"
-                : "border-line bg-surface text-ink-soft hover:border-line-strong"
+                ? "border-accent bg-accent-soft/60 shadow-[var(--shadow-card)]"
+                : "border-line bg-surface hover:border-line-strong hover:shadow-[var(--shadow-card)]"
             }`}
           >
-            <span className="max-w-[160px] truncate font-semibold">{name}</span>
-            {job && <span className="max-w-[180px] truncate text-xs text-muted">{job}</span>}
+            <span
+              aria-hidden="true"
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-extrabold ${
+                active ? "text-white" : "bg-accent-soft text-accent"
+              }`}
+              style={active ? { backgroundImage: "var(--gradient-neon)" } : undefined}
+            >
+              {companyInitials(name)}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-bold text-ink">{name}</span>
+              {job && <span className="block truncate text-xs text-muted">{job}</span>}
+            </span>
             {statusPill(c.company.status, t)}
           </button>
         );
@@ -357,22 +406,42 @@ export function CompanyPicker({
   );
 }
 
-/** Small labelled section wrapper (cards keep the premium surface language). */
+/** Deterministic avatar initials for the company picker cards. */
+function companyInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "—";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+/** Small labelled section wrapper (cards keep the premium surface language).
+ *  Optional `icon` renders the brand icon chip next to the title. */
 export function SectionCard({
   title,
   aside,
   children,
   className = "",
+  icon,
 }: {
   title: string;
   aside?: ReactNode;
   children: ReactNode;
   className?: string;
+  icon?: IconName;
 }) {
   return (
-    <section className={`rounded-3xl border border-line bg-surface p-5 shadow-[var(--shadow-card)] sm:p-6 ${className}`}>
+    <section
+      className={`rounded-3xl border border-line bg-surface p-5 shadow-[var(--shadow-card)] transition-shadow duration-300 hover:shadow-[var(--shadow-float)] sm:p-6 ${className}`}
+    >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-bold text-ink">{title}</h2>
+        <div className="flex min-w-0 items-center gap-2.5">
+          {icon && (
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+              <Icon name={icon} size={16} />
+            </span>
+          )}
+          <h2 className="min-w-0 text-base font-bold text-ink">{title}</h2>
+        </div>
         {aside}
       </div>
       {children}

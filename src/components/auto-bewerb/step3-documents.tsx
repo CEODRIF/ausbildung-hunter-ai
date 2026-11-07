@@ -122,7 +122,7 @@ export function Step3Documents() {
       <Note kind="success">{t("autoBewerb.docsGlobalNote")}</Note>
 
       {/* Global library — single source of truth for every application */}
-      <SectionCard title={t("autoBewerb.docsUploadTitle")}>
+      <SectionCard title={t("autoBewerb.docsUploadTitle")} icon="folder">
         <input ref={fileInput} type="file" accept={DOC_ACCEPT} multiple className="hidden" onChange={(e) => void upload(e.target.files)} />
         <div className="flex flex-wrap items-center gap-3">
           <div className="w-56">

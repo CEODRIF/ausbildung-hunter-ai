@@ -204,7 +204,16 @@ export default async function BibliothekPage({
 function LibraryShell({ t, children }: { t: T; children: React.ReactNode }) {
   return (
     <div className="relative mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-10">
-      <p className="text-sm leading-relaxed text-muted">{t("library.intro")}</p>
+      <div className="flex items-center gap-3">
+        <span
+          aria-hidden="true"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-white shadow-[var(--shadow-card)]"
+          style={{ background: "var(--gradient-neon)" }}
+        >
+          <Icon name="book" size={20} />
+        </span>
+        <p className="text-sm leading-relaxed text-muted">{t("library.intro")}</p>
+      </div>
       <div className="mt-5">{children}</div>
     </div>
   );

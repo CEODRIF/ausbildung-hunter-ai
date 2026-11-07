@@ -113,15 +113,18 @@ export function LibraryBookGrid({
   return (
     <>
       {/* Quota / access bar (polite live region: state changes announce) */}
-      <div className="mt-5" aria-live="polite">
+      <div className="mt-6" aria-live="polite">
         {quota.state === "guest" && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line-strong bg-surface px-4 py-3">
-            <p className="text-xs leading-5 text-muted">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-line-strong bg-surface px-5 py-4 shadow-[var(--shadow-card)]">
+            <p className="flex items-center gap-2.5 text-sm leading-5 text-muted">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+                <Icon name="download" size={16} />
+              </span>
               {t("library.quota.guestHint")}
             </p>
             <Link
               href="/login"
-              className="inline-flex items-center gap-2 rounded-2xl border border-line-strong bg-surface px-4 py-2 text-xs font-bold text-ink-soft transition-colors hover:border-accent hover:text-accent"
+              className="inline-flex items-center gap-2 rounded-2xl bg-accent px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-accent-deep"
             >
               <Icon name="download" size={14} />
               {t("library.download.signIn")}
@@ -129,20 +132,26 @@ export function LibraryBookGrid({
           </div>
         )}
         {quota.state === "ready" && (
-          <p className="rounded-2xl border border-line-strong bg-surface px-4 py-3 text-xs font-semibold text-muted">
+          <div className="flex items-center gap-2.5 rounded-3xl border border-success/25 bg-success-soft px-5 py-3.5 text-sm font-semibold text-success">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/70">
+              <Icon name="check" size={16} />
+            </span>
             {t("library.quota.remaining", {
               n: quota.remaining,
               limit: quota.limit,
             })}
-          </p>
+          </div>
         )}
         {quota.state === "exhausted" && (
-          <p
+          <div
             dir="auto"
-            className="rounded-2xl border border-line-strong bg-surface px-4 py-3 text-xs font-semibold text-muted"
+            className="flex items-center gap-2.5 rounded-3xl border border-warning/30 bg-warning-soft px-5 py-3.5 text-sm font-semibold text-warning"
           >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/70">
+              <Icon name="alert" size={16} />
+            </span>
             {exhaustedMessage}
-          </p>
+          </div>
         )}
         {actionError && (
           <p role="alert" className="mt-2 text-xs font-semibold text-danger">
@@ -151,7 +160,7 @@ export function LibraryBookGrid({
         )}
       </div>
 
-      <ul className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <ul className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {books.map((book) => (
           <BookCard
             key={book.id}
@@ -181,29 +190,39 @@ function BookCard({
   onDownload: (bookId: string) => void;
 }) {
   const { t } = useI18n();
+  const buttonBase =
+    "mt-auto inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-60";
   const buttonClasses =
-    "mt-auto inline-flex items-center justify-center gap-2 rounded-2xl border border-line-strong bg-surface px-4 py-2.5 text-xs font-bold text-ink-soft transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-line-strong disabled:hover:text-ink-soft";
+    quota.state === "exhausted"
+      ? `${buttonBase} border border-line-strong bg-surface text-ink-soft disabled:border-line disabled:text-faint`
+      : `${buttonBase} bg-navy text-white shadow-sm hover:bg-navy-soft`;
 
   return (
-    <li className="surface-elevated group flex flex-col overflow-hidden rounded-3xl transition-transform duration-200 hover:-translate-y-0.5">
+    <li className="surface-elevated group flex flex-col overflow-hidden rounded-3xl shadow-[var(--shadow-card)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow-float)]">
       {book.coverUrl ? (
         // Remote Supabase storage origin (allowed by the CSP img-src built
         // from the Supabase URL); aspect ratio keeps the 3:4 cover box
         // stable. next/image would need a remotePatterns allowlist, which
         // would modify shared config — plain img keeps the feature additive.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={book.coverUrl}
-          alt=""
-          loading="lazy"
-          className="aspect-[3/4] w-full object-cover"
-        />
+        <div className="relative overflow-hidden">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={book.coverUrl}
+            alt=""
+            loading="lazy"
+            className="aspect-[3/4] w-full object-cover transition-transform duration-300 group-hover:scale-[1.04]"
+          />
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-ink/25 to-transparent"
+          />
+        </div>
       ) : (
         <div
           aria-hidden
-          className="flex aspect-[3/4] w-full items-center justify-center bg-surface-2 text-faint"
+          className="flex aspect-[3/4] w-full items-center justify-center bg-gradient-to-br from-surface-2 to-surface-2/40 text-faint"
         >
-          <Icon name="book" size={32} strokeWidth={1.4} />
+          <Icon name="book" size={36} strokeWidth={1.3} />
         </div>
       )}
       <div className="flex flex-1 flex-col gap-2 p-4">
@@ -218,7 +237,10 @@ function BookCard({
         )}
 
         {quota.state === "guest" ? (
-          <Link href="/login" className={buttonClasses}>
+          <Link
+            href="/login"
+            className={`${buttonBase} border border-line-strong bg-surface text-ink-soft hover:border-accent hover:text-accent`}
+          >
             <Icon name="download" size={14} />
             {t("library.download.signIn")}
             <Icon name="external" size={12} className="text-faint" />
@@ -251,7 +273,7 @@ function BookCard({
           >
             <Icon name="download" size={14} />
             {pending ? t("library.download.pending") : t("library.download.button")}
-            {!pending && <Icon name="external" size={12} className="text-faint" />}
+            {!pending && <Icon name="external" size={12} className="text-white/70" />}
           </button>
         )}
       </div>
