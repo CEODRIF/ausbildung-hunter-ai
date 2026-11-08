@@ -17,6 +17,9 @@
  *   persisted in `profiles.avatar_url` (see uploadProfileAvatar →
  *   storage.getPublicUrl). The Supabase origin is therefore REQUIRED in
  *   img-src: omitting it silently blocks every avatar in production.
+ * - Connect: `blob:` in addition to 'self' — the hero's three.js GLTFLoader
+ *   fetches the aircraft model's embedded textures via blob: URLs minted from
+ *   the same-origin GLB bytes. Inert for exfiltration, same as img-src's blob:.
  * - No web fonts, no third-party scripts, no WebSockets, no analytics.
  *
  * Documented trade-off: script-src includes 'unsafe-inline' because
@@ -55,7 +58,9 @@ function supabaseOrigin(supabaseUrl: string | undefined): string | null {
 }
 
 function cspFor(supabaseUrl: string | undefined): string {
-  const connectOrigins: string[] = ["'self'"];
+  // blob: — GLTFLoader fetches the hero model's embedded textures from blob:
+  // URLs created from the same-origin GLB (inert for exfiltration, cf. img-src).
+  const connectOrigins: string[] = ["'self'", "blob:"];
   const imageOrigins: string[] = ["'self'", "data:", "blob:"];
   const origin = supabaseOrigin(supabaseUrl);
   if (origin) {

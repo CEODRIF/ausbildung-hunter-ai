@@ -1,22 +1,27 @@
-CC0 1.0 Universal (CC0 1.0) Public Domain Dedication
+Aircraft model: Boeing 777-200 (NASA N577NA "Airborne Science Laboratory")
+Source:       NASA Airborne Science Program — "B777 - LaRC"
+              https://airbornescience.nasa.gov/3d-models/
+              (file: B777_LARC_AIR_1026.glb)
 
-To the extent possible under law, Grab3D has waived all copyright and related or neighboring rights to the
-3D models, textures and images in this package. This work is published from: Germany.
+License:      NASA public domain.
+              Works of the U.S. Government, including NASA content, are not
+              eligible for U.S. copyright protection (17 U.S.C. § 105).
+              The model may be used, modified and distributed for any
+              purpose; attribution is appreciated but not required.
 
-https://creativecommons.org/publicdomain/zero/1.0/legalcode
+Modifications made for this project:
+  - All NASA livery was removed from the base-colour textures (red "NASA"
+    wordmarks, meatball logos, blue world-map nose cone, "N577NA"
+    registration, "National Aeronautics and Space Administration /
+    Airborne Science Laboratory" text). No NASA branding remains in the
+    model.
+  - Base-colour and metal-roughness textures downscaled 4096 -> 2048 for
+    web delivery; the two unused textures were shrunk to 64 px.
+  - Node scale 0.01 baked to 1 (positions were already in metres).
+  - The German black/red/gold tail + winglet livery is NOT baked into
+    this file; it is applied per-fragment at render time by
+    src/lib/flight/aircraft.ts (onBeforeCompile), so the stripes stay
+    crisp on the fin's sparse tessellation.
 
-Origin / AI disclosure
-----------------------
-Method: procedural (no AI-generated geometry or textures, AI-assisted code)
-Built procedurally with Blender scripts. The scripts were written with the help of an AI coding assistant. No
-generative AI model produced the geometry or textures directly.
-If your platform asks whether AI was used in the creation process, note that the generator scripts were
-written with an AI coding assistant.
-
-Source
-------
-Model: "Passenger Airplane" - https://grab3d.com/models/vehicles/passenger-airplane/
-Download: https://grab3d.com/dl/passenger-airplane/passenger-airplane.glb
-Livery: generic German black/red/gold scheme applied to the model base color.
-No airline affiliation, no state emblem (the federal eagle is state property
-and is intentionally omitted).
+Replaces the previous public/models/airliner.glb, which was a low-detail
+passenger airliner from Grab3D (https://grab3d.com) licensed CC0.

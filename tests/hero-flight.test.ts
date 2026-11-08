@@ -150,8 +150,8 @@ describe("3D flight hero", () => {
     const glb = readFileSync(resolve(root, "public/models/airliner.glb"));
     expect(glb.length).toBeGreaterThan(1_000_000); // the full re-liveried model
     const license = read("public/models/airliner-LICENSE.txt");
-    expect(license).toContain("CC0");
-    expect(license).toContain("grab3d.com");
+    expect(license).toContain("NASA public domain");
+    expect(license).toContain("airbornescience.nasa.gov");
   });
 
   it("uses three.js as the only 3D dependency", () => {
@@ -161,8 +161,10 @@ describe("3D flight hero", () => {
     const aircraft = read("src/lib/flight/aircraft.ts");
     expect(aircraft).toContain("three/examples/jsm/loaders/GLTFLoader.js");
     expect(aircraft).toContain("GERMANY"); // generic wordmark, no airline
-    expect(aircraft).toContain("window_glass"); // night cabin glow
+    expect(aircraft).toContain("GlassM"); // night cabin glow (777 airframe glass)
     const env = read("src/lib/flight/environment.ts");
+    // The sun is a Preetham atmospheric sky, not a sprite.
+    expect(env).toContain("three/examples/jsm/objects/Sky.js");
     // Four cloud depth bands — two in front of the aircraft (positive z),
     // two behind (negative z).
     expect(env).toMatch(/z: -48/);
