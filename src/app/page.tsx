@@ -16,17 +16,16 @@ import { getServerT } from "@/lib/i18n/server";
 import { SiteHeader } from "@/components/landing/site-header";
 import { SiteFooter } from "@/components/landing/site-footer";
 import { LandingFaq } from "@/components/landing/landing-faq";
-import { HeroParallax } from "@/components/landing/hero-parallax";
-import { HeroScene } from "@/components/landing/sky";
+import { HeroFlight } from "@/components/landing/hero-flight";
 
 /**
  * Public landing page — "Aircraft Green" redesign.
  *
- * Server component: no client JavaScript beyond the shared switchers. The
- * hero sky, the clouds and the aircraft are CSS + inline SVG; the search is a
- * plain GET form into the existing /opportunities route (which already parses
- * `keyword` server-side), so the primary call to action works with JS
- * disabled and needs no new endpoint.
+ * Server component: the only client code in the hero is the 3D flight scene
+ * (HeroFlight — WebGL aircraft + dynamic sky with a CSS fallback underneath).
+ * The search is a plain GET form into the existing /opportunities route
+ * (which already parses `keyword` server-side), so the primary call to action
+ * works with JS disabled and needs no new endpoint.
  */
 
 const BENEFITS = [
@@ -71,9 +70,8 @@ export default async function Home() {
     <main className="min-h-screen bg-background text-ink">
       {/* ---------------------------------------------------------- hero -- */}
       <div className="sky-hero relative isolate">
-        <HeroParallax>
-          <HeroScene />
-        </HeroParallax>
+        <HeroFlight />
+        <div className="hero-scrim" aria-hidden="true" />
         <SiteHeader />
 
         <section className="relative z-10 mx-auto flex max-w-4xl flex-col items-center px-4 pb-20 pt-24 text-center [min-height:86svh] sm:px-6 sm:pb-28 sm:pt-28">
