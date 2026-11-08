@@ -329,10 +329,12 @@ textarea:focus-visible,
 /* ---------------------------------------------------------------------------
  * 3D flight hero — the landing page signature
  *
- * A continuously animated passenger aircraft (Three.js, CC0 Grab3D model with
- * a generic German livery) crossing a real-time sky: gradient dome, sun and
- * rising moon, progressive star fields, and four cloud depth bands — two
- * behind the aircraft, two in front — drifting at different speeds.
+ * A continuously animated passenger aircraft (Three.js, NASA B777 model
+ * public domain, generic German livery) crossing a real-time sky: a
+ * Preetham atmospheric sky with the natural sun by day, deep blue dome,
+ * rising moon and progressive star fields by night, and four cloud depth
+ * bands — two behind the aircraft, two in front — drifting at different
+ * speeds.
  *
  * The scene lives in a <canvas> (hero-flight.tsx) and is driven by the theme
  * system: the `dark` class on <html> (src/lib/theme.ts) is the single source
@@ -491,17 +493,20 @@ textarea:focus-visible,
   }
 }
 
-/* Soft, theme-aware veil so the white copy stays readable over a busy
- * photographic sky (bright cumulus by day, lit fuselage by night). The
- * centre radial keeps the headline zone calm; the edge bands ground the
- * search row and the trust line. Sits above every scene layer. */
+/* Soft, theme-aware veil so the white copy stays readable over the 3D sky.
+ * The centre radial calms the headline zone; the bottom band grounds the
+ * search row and trust line. Both are sized so the natural sun (upper-right
+ * corner of the frame, at the 20°-elevation / 163°-azimuth sky position)
+ * stays OUTSIDE the veil's coverage — a wider radial diluted the disc
+ * measurably (QA-verified in qa-tooling/sun-test/). Sits above every scene
+ * layer. */
 .hero-scrim {
   position: absolute;
   inset: 0;
   z-index: 9;
   background:
-    radial-gradient(62rem 36rem at 50% 44%, rgba(8, 22, 42, 0.44) 0%, rgba(8, 22, 42, 0) 70%),
-    linear-gradient(180deg, rgba(8, 22, 42, 0.3) 0%, rgba(8, 22, 42, 0.08) 46%, rgba(8, 22, 42, 0.4) 100%);
+    radial-gradient(62rem 26rem at 50% 44%, rgba(8, 22, 42, 0.5) 0%, rgba(8, 22, 42, 0) 70%),
+    linear-gradient(180deg, rgba(8, 22, 42, 0) 0%, rgba(8, 22, 42, 0) 19%, rgba(8, 22, 42, 0.08) 46%, rgba(8, 22, 42, 0.42) 100%);
   opacity: 0.85;
   transition: opacity 1.5s ease;
 }
