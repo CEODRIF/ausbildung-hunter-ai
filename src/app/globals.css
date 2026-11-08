@@ -327,39 +327,27 @@ textarea:focus-visible,
 }
 
 /* ---------------------------------------------------------------------------
- * Day/night photo hero — the landing page signature
+ * 3D flight hero — the landing page signature
  *
- * A layered cinematic sky: two full-bleed photographic layers (day + night)
- * crossfading with the theme, a sun/moon light wash, atmospheric haze, a
- * CSS-only star field, a night moonlight sheen and two drifting foreground
- * cloud banks that pass in front of the aircraft.
+ * A continuously animated passenger aircraft (Three.js, CC0 Grab3D model with
+ * a generic German livery) crossing a real-time sky: gradient dome, sun and
+ * rising moon, progressive star fields, and four cloud depth bands — two
+ * behind the aircraft, two in front — drifting at different speeds.
  *
- * The theme is the `dark` class on <html> (src/lib/theme.ts); the pre-paint
- * script applies it before first paint, so the correct scene is visible in
- * the very first frame — no flash, no second theme state.
+ * The scene lives in a <canvas> (hero-flight.tsx) and is driven by the theme
+ * system: the `dark` class on <html> (src/lib/theme.ts) is the single source
+ * of truth; a MutationObserver tweens the whole environment over ~2 s while
+ * the aircraft keeps flying. The pre-paint theme script runs before first
+ * paint, so the first frame is already in the right state.
  *
- * Motion model (compositor-only: transform/opacity on separate elements,
- * so nothing fights over one property):
- *   - .hero-photo   theme transition (cross-fade + moon rise/set travel)
- *   - .hero-cam     slow 30 s "camera" drift — scale 1.02→1.048, a slight
- *                   bank (≤ 0.5°) — the forward-flight illusion. The
- *                   parallax custom properties ride inside the same
- *                   keyframes (0 on unsupported devices).
- *   - img           11 s float bob (the night layer de-synced)
- *   - .hero-bank    slow oscillating drift, near bank faster than far
- *
- * Depth comes from per-layer multipliers on --hero-px / --hero-py /
- * --hero-sy (written by HeroParallax): far planes move little and with the
- * pointer, near planes move more and against it.
- *
- * Timing budget (day→night, ~2.1 s total): sky 1.5 s, photos 1.5 s +
- * moon travel 1.6 s, sun out 1.5 s @ +0.15 s, moon glow in 1.5 s @ +0.55 s,
- * haze/sheen 1.6 s @ +0.6 s, banks 1.6 s @ +0.3 s, stars in @ +0.35 s /
- * +0.75 s. Night→day plays the same choreography in reverse.
+ * Under the canvas sits a CSS-only sky (HeroFallbackSky, sky.tsx): it paints
+ * instantly (first paint + model load) and is the complete fallback when
+ * WebGL is unavailable. The theme-aware scrim above the canvas keeps the
+ * white copy readable.
  * ------------------------------------------------------------------------- */
 
-/* Base fill behind the photographs (also the fallback while they load):
- * calm daylight blue by day, deep night navy by night. */
+/* Base fill behind the canvas (also the fallback while it loads): calm
+ * daylight blue by day, deep night navy by night. */
 .sky-hero {
   background-color: #5aa7dd;
   transition: background-color 1.5s ease;
@@ -369,129 +357,62 @@ textarea:focus-visible,
   background-color: #0b1830;
 }
 
-/* The photographic layers are oversized (inset: -8%): that oversize is the
- * travel budget for the camera drift, the parallax and the theme travel, so
- * no combination of keyframes can ever expose an edge of the photograph. */
-.hero-photo {
-  position: absolute;
-  inset: -8%;
-  transition:
-    opacity 1.5s ease,
-    transform 1.6s cubic-bezier(0.4, 0, 0.2, 1);
-  will-change: opacity, transform;
-}
-
-.hero-cam {
+/* The WebGL canvas fades in once the first frame is rendered; the CSS sky
+ * below is visible until then (and forever, when WebGL is unavailable). */
+.hero-flight-canvas {
   position: absolute;
   inset: 0;
-  will-change: transform;
-}
-
-/* Each scene is a <picture>: the <source> (portrait framing) serves
- * phones, the <img> fallback (landscape) serves sm+. Only the matching
- * candidate is ever loaded. */
-.hero-photo picture {
-  position: absolute;
-  inset: 0;
-}
-
-.hero-photo img {
-  position: absolute;
-  inset: 0;
-  display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  object-position: 50% 50%;
-}
-
-/* The day scene owns the light theme and starts level. */
-.hero-photo--day {
-  z-index: 1;
-  opacity: 1;
-}
-
-/* The night scene sits ABOVE the day scene and starts a few percent below
- * its final position: going dark lifts it into place (the moon rises),
- * going light sinks it again (the moon sets) while it fades out. */
-.hero-photo--night {
   z-index: 2;
   opacity: 0;
-  transform: translateY(4.5%);
+  transition: opacity 0.7s ease;
 }
 
-.dark .hero-photo--day {
-  opacity: 0;
-  transform: translateY(-2.5%);
-}
-
-.dark .hero-photo--night {
+.hero-flight-canvas.is-ready {
   opacity: 1;
-  transform: translateY(0);
 }
 
-/* The vertical mobile framings put the aircraft in the upper third; bias
- * the cover crop upward so it stays clear of the headline. */
-@media (max-width: 767px) {
-  .hero-photo img {
-    object-position: 50% 32%;
-  }
+/* CSS fallback sky — a themed gradient standing in for the 3D dome. */
+.hero-fallback-sky {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(180deg, #2f7fd6 0%, #7db8e8 55%, #cfe9f8 100%);
+  transition: background 1.5s ease;
 }
 
-/* Slow "camera" drift — the forward-flight illusion: the frame creeps
- * forward (scale), banks a fraction of a degree and settles again over
- * ~30 s. The parallax custom properties (0 on unsupported devices) ride
- * inside the same keyframes, so pointer motion is part of the flight rather
- * than a separate wiggle. The night camera runs the same keyframes de-
- * synced by half a cycle so the two scenes never drift in unison. */
-@keyframes hero-cam {
-  0%,
-  100% {
-    transform: translate3d(
-        calc(var(--hero-px, 0) * -10px),
-        calc(var(--hero-py, 0) * -7px + var(--hero-sy, 0) * 20px),
-        0
-      )
-      scale(1.02) rotate(0.18deg);
-  }
-  50% {
-    transform: translate3d(
-        calc(var(--hero-px, 0) * -10px),
-        calc(var(--hero-py, 0) * -7px + var(--hero-sy, 0) * 20px),
-        0
-      )
-      scale(1.048) rotate(-0.32deg);
-  }
+.dark .hero-fallback-sky {
+  background: linear-gradient(180deg, #050b1c 0%, #0e1b33 60%, #182741 100%);
 }
 
-/* The aircraft — and the whole scene with it — bobs almost imperceptibly.
- * The night layer is de-synced so the two scenes never bob in unison. */
-@keyframes hero-float {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-7px);
-  }
+/* Static cloud masses for the fallback sky (the 3D clouds are the animated
+ * ones); tinted down at night like moonlit cloud. */
+.hero-fallback-cloud {
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  z-index: 1;
+  height: 34%;
+  background:
+    radial-gradient(50% 70% at 20% 100%, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(45% 65% at 60% 105%, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(40% 60% at 90% 100%, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0) 70%);
+  transition: filter 1.5s ease;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .hero-cam {
-    animation: hero-cam 30s ease-in-out infinite;
-  }
+.hero-fallback-cloud--far {
+  bottom: 18%;
+  opacity: 0.4;
+}
 
-  .hero-cam--night {
-    animation-delay: -15s;
-  }
+.hero-fallback-cloud--near {
+  bottom: -6%;
+  opacity: 0.55;
+}
 
-  .hero-photo img {
-    animation: hero-float 11s ease-in-out infinite;
-  }
-
-  .hero-photo--night img {
-    animation-delay: -5.5s;
-  }
+.dark .hero-fallback-cloud {
+  filter: brightness(0.35) saturate(0.6);
 }
 
 /* Star field: two sparse radial-gradient dot layers across the upper sky.
@@ -503,14 +424,10 @@ textarea:focus-visible,
 .hero-stars {
   position: absolute;
   inset: 0 0 30% 0;
-  z-index: 5;
+  /* The stars live only in the CSS fallback sky — below the 3D canvas. */
+  z-index: 1;
   opacity: 0;
   transition: opacity 1.1s ease;
-  transform: translate3d(
-    calc(var(--hero-px, 0) * -4px),
-    calc(var(--hero-py, 0) * -3px + var(--hero-sy, 0) * 12px),
-    0
-  );
 }
 
 .hero-stars--bright {
@@ -574,210 +491,6 @@ textarea:focus-visible,
   }
 }
 
-/* Light washes — the sun by day, the moon by night, at the SAME upper-
- * right light source in both photographs. They sit above the photos so the
- * glow blooms over sky and fuselage alike. */
-.hero-glow {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  opacity: 0;
-  transition: opacity 1.5s ease;
-  transform: translate3d(
-    calc(var(--hero-px, 0) * -16px),
-    calc(var(--hero-py, 0) * -12px + var(--hero-sy, 0) * 34px),
-    0
-  );
-}
-
-.hero-glow--sun {
-  background: radial-gradient(
-    52rem 34rem at 76% 10%,
-    rgba(255, 246, 219, 0.42) 0%,
-    rgba(255, 238, 196, 0.18) 36%,
-    rgba(255, 246, 219, 0) 70%
-  );
-  opacity: 0.9;
-}
-
-.hero-glow--moon {
-  background: radial-gradient(
-    44rem 30rem at 74% 13%,
-    rgba(206, 226, 255, 0.34) 0%,
-    rgba(186, 210, 250, 0.14) 40%,
-    rgba(206, 226, 255, 0) 72%
-  );
-  transition-delay: 0.55s;
-}
-
-.dark .hero-glow--sun {
-  opacity: 0;
-  transition-delay: 0.15s;
-}
-
-.dark .hero-glow--moon {
-  opacity: 1;
-}
-
-/* Atmospheric haze — one neutral depth treatment that reads in BOTH scenes
- * (soft horizon glow below, faint cool lift at the top), so it needs no
- * theme swap. */
-.hero-haze {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  background:
-    radial-gradient(120% 42% at 50% 112%, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0) 70%),
-    linear-gradient(180deg, rgba(28, 58, 96, 0.14) 0%, rgba(28, 58, 96, 0) 26%),
-    linear-gradient(0deg, rgba(28, 58, 96, 0.2) 0%, rgba(28, 58, 96, 0) 30%);
-  transform: translate3d(
-    calc(var(--hero-px, 0) * -6px),
-    calc(var(--hero-py, 0) * -4px + var(--hero-sy, 0) * 16px),
-    0
-  );
-}
-
-/* Moonlight on the airframe — a faint cool band across the fuselage height,
- * night only. Tracks the photos' depth so it stays "painted on" the
- * aircraft while the scene drifts. */
-.hero-sheen {
-  position: absolute;
-  inset: 0;
-  z-index: 6;
-  background: linear-gradient(
-    198deg,
-    rgba(178, 203, 255, 0) 36%,
-    rgba(178, 203, 255, 0.13) 52%,
-    rgba(150, 180, 240, 0) 66%
-  );
-  opacity: 0;
-  transition: opacity 1.6s ease 0.6s;
-  transform: translate3d(
-    calc(var(--hero-px, 0) * -10px),
-    calc(var(--hero-py, 0) * -7px + var(--hero-sy, 0) * 20px),
-    0
-  );
-}
-
-.dark .hero-sheen {
-  opacity: 1;
-}
-
-/* Foreground cloud banks — the NEAREST depth plane: they drift in front of
- * the photographs (and the aircraft) at two different speeds. The bank
- * wrapper carries the parallax (near planes move the most, against the
- * camera); the drift element carries its slow oscillation; the night child
- * crossfades the masses to moonlit tones with the theme. */
-@keyframes bank-drift {
-  from {
-    transform: translateX(-2.2%);
-  }
-  to {
-    transform: translateX(2.2%);
-  }
-}
-
-.hero-bank {
-  position: absolute;
-  overflow: hidden;
-}
-
-.hero-bank--far {
-  inset: auto 0 14% 0;
-  height: 42%;
-  z-index: 7;
-  transform: translate3d(
-    calc(var(--hero-px, 0) * 12px),
-    calc(var(--hero-py, 0) * 8px + var(--hero-sy, 0) * 34px),
-    0
-  );
-}
-
-.hero-bank--near {
-  inset: auto 0 -4% 0;
-  height: 46%;
-  z-index: 8;
-  transform: translate3d(
-    calc(var(--hero-px, 0) * 24px),
-    calc(var(--hero-py, 0) * 16px + var(--hero-sy, 0) * 58px),
-    0
-  );
-}
-
-/* Oversized so the oscillation never exposes the bank's own edge. */
-.hero-bank__drift {
-  position: absolute;
-  inset: -18% -12%;
-}
-
-.hero-bank--far .hero-bank__drift {
-  opacity: 0.5;
-  background-image:
-    radial-gradient(48% 58% at 14% 80%, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0) 66%),
-    radial-gradient(54% 60% at 50% 100%, rgba(255, 255, 255, 0.65) 0%, rgba(255, 255, 255, 0) 64%),
-    radial-gradient(50% 56% at 84% 78%, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0) 66%);
-}
-
-.hero-bank--near .hero-bank__drift {
-  opacity: 0.62;
-  background-image:
-    radial-gradient(56% 64% at 12% 88%, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0) 60%),
-    radial-gradient(64% 70% at 48% 112%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 58%),
-    radial-gradient(60% 66% at 84% 96%, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0) 60%),
-    radial-gradient(34% 40% at 32% 58%, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 70%);
-}
-
-.hero-bank__night {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  transition: opacity 1.6s ease 0.3s;
-}
-
-.hero-bank--far .hero-bank__night {
-  background-image:
-    radial-gradient(48% 58% at 14% 80%, rgba(146, 178, 224, 0.5) 0%, rgba(146, 178, 224, 0) 66%),
-    radial-gradient(54% 60% at 50% 100%, rgba(128, 160, 210, 0.45) 0%, rgba(128, 160, 210, 0) 64%),
-    radial-gradient(50% 56% at 84% 78%, rgba(140, 172, 220, 0.48) 0%, rgba(140, 172, 220, 0) 66%);
-}
-
-.hero-bank--near .hero-bank__night {
-  background-image:
-    radial-gradient(56% 64% at 12% 88%, rgba(120, 152, 205, 0.55) 0%, rgba(120, 152, 205, 0) 60%),
-    radial-gradient(64% 70% at 48% 112%, rgba(104, 136, 190, 0.5) 0%, rgba(104, 136, 190, 0) 58%),
-    radial-gradient(60% 66% at 84% 96%, rgba(112, 144, 198, 0.55) 0%, rgba(112, 144, 198, 0) 60%),
-    radial-gradient(34% 40% at 32% 58%, rgba(90, 120, 175, 0.4) 0%, rgba(90, 120, 175, 0) 70%);
-}
-
-.dark .hero-bank__night {
-  opacity: 1;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .hero-bank__drift {
-    animation: bank-drift 84s ease-in-out infinite alternate;
-  }
-
-  .hero-bank--near .hero-bank__drift {
-    animation-duration: 52s;
-    animation-delay: -21s;
-    animation-direction: alternate-reverse;
-  }
-}
-
-/* The portrait framings have less sky to spare — keep the banks low so
- * they frame the headline instead of filling it. */
-@media (max-width: 767px) {
-  .hero-bank--far {
-    inset: auto 0 10% 0;
-    height: 30%;
-  }
-
-  .hero-bank--near {
-    height: 34%;
-  }
-}
-
 /* Soft, theme-aware veil so the white copy stays readable over a busy
  * photographic sky (bright cumulus by day, lit fuselage by night). The
  * centre radial keeps the headline zone calm; the edge bands ground the
@@ -806,26 +519,17 @@ textarea:focus-visible,
  * headline invisible for ~0.4 s — `animation: none` removes that).
  * Placed last so it wins the transform tie at equal specificity. */
 @media (prefers-reduced-motion: reduce) {
+  /* The 3D scene renders a single static frame in JS (hero-flight.tsx);
+   * this flattens the CSS fallback sky + scrim + star transitions to a short
+   * fade and keeps the entrance stagger from hiding the headline (the global
+   * kill-switch below leaves animation-delays behind — `animation: none`
+   * removes those). */
   .sky-hero,
-  .hero-photo,
   .hero-scrim,
   .hero-stars,
-  .hero-glow,
-  .hero-sheen,
-  .hero-bank__night {
+  .hero-fallback-sky,
+  .hero-fallback-cloud {
     transition-duration: 0.4s;
-  }
-
-  .hero-photo--night,
-  .dark .hero-photo--day,
-  .dark .hero-photo--night,
-  .hero-glow,
-  .hero-haze,
-  .hero-sheen,
-  .hero-stars,
-  .hero-bank--far,
-  .hero-bank--near {
-    transform: none;
   }
 
   .sky-hero .anim-fade-up {
