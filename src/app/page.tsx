@@ -16,6 +16,7 @@ import { getServerT } from "@/lib/i18n/server";
 import { SiteHeader } from "@/components/landing/site-header";
 import { SiteFooter } from "@/components/landing/site-footer";
 import { LandingFaq } from "@/components/landing/landing-faq";
+import { HeroParallax } from "@/components/landing/hero-parallax";
 import { HeroScene } from "@/components/landing/sky";
 
 /**
@@ -70,29 +71,38 @@ export default async function Home() {
     <main className="min-h-screen bg-background text-ink">
       {/* ---------------------------------------------------------- hero -- */}
       <div className="sky-hero relative isolate">
-        <HeroScene />
+        <HeroParallax>
+          <HeroScene />
+        </HeroParallax>
         <SiteHeader />
 
         <section className="relative z-10 mx-auto flex max-w-4xl flex-col items-center px-4 pb-20 pt-24 text-center [min-height:86svh] sm:px-6 sm:pb-28 sm:pt-28">
-          <span className="inline-flex items-center gap-2 rounded-full bg-white/20 px-3.5 py-1.5 text-[11px] font-bold text-white ring-1 ring-white/35 backdrop-blur-sm sm:text-xs">
+          <span className="anim-fade-up inline-flex items-center gap-2 rounded-full bg-white/20 px-3.5 py-1.5 text-[11px] font-bold text-white ring-1 ring-white/35 backdrop-blur-sm sm:text-xs">
             <span className="h-1.5 w-1.5 rounded-full bg-[var(--green-lime)]" />
             {t("v2.hero.badge")}
           </span>
 
-          <h1 className="display-title hero-shadow mt-6 text-balance text-[clamp(2.25rem,8vw,4.5rem)] text-white">
+          <h1
+            className="display-title hero-shadow mt-6 text-balance text-[clamp(2.25rem,8vw,4.5rem)] text-white anim-fade-up"
+            style={{ animationDelay: "90ms" }}
+          >
             {t("v2.hero.lead")}{" "}
             <span className="text-[var(--green-lime)]">{t("v2.hero.accent")}</span>{" "}
             {t("v2.hero.tail")}
           </h1>
 
-          <p className="hero-shadow mt-5 max-w-xl text-pretty text-sm leading-6 text-white/95 sm:text-base sm:leading-7">
+          <p
+            className="hero-shadow mt-5 max-w-xl text-pretty text-sm leading-6 text-white/95 sm:text-base sm:leading-7 anim-fade-up"
+            style={{ animationDelay: "180ms" }}
+          >
             {t("v2.hero.subtitle")}
           </p>
 
           <form
             action="/opportunities"
             method="get"
-            className="mt-8 flex w-full max-w-2xl items-center gap-2 rounded-full bg-white p-2 shadow-[0_18px_40px_-18px_rgba(11,31,51,0.55)]"
+            className="hero-search anim-fade-up mt-8 flex w-full max-w-2xl items-center gap-2 rounded-full bg-white/95 p-2 shadow-[0_22px_48px_-20px_rgba(11,31,51,0.6)] ring-1 ring-white/40 backdrop-blur-md"
+            style={{ animationDelay: "270ms" }}
           >
             <label htmlFor="hero-keyword" className="sr-only">
               {t("v2.hero.searchPlaceholder")}
@@ -120,7 +130,10 @@ export default async function Home() {
             </button>
           </form>
 
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+          <div
+            className="anim-fade-up mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2"
+            style={{ animationDelay: "340ms" }}
+          >
             <Link
               href="/opportunities"
               className="inline-flex items-center gap-1.5 text-sm font-bold text-white underline decoration-white/40 underline-offset-4 transition-colors hover:decoration-white"
@@ -129,7 +142,10 @@ export default async function Home() {
             </Link>
           </div>
 
-          <ul className="mt-9 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[11px] font-semibold text-white/90 sm:text-xs">
+          <ul
+            className="anim-fade-up mt-9 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[11px] font-semibold text-white/90 sm:text-xs"
+            style={{ animationDelay: "420ms" }}
+          >
             {TRUST.map((key) => (
               <li key={key} className="inline-flex items-center gap-1.5">
                 <Check size={13} strokeWidth={3} className="text-[var(--green-lime)]" />
