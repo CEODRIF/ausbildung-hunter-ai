@@ -1,8 +1,10 @@
 "use client";
 
 /**
- * The 3D flight hero: a continuously animated passenger aircraft (CC0 Grab3D
- * model, generic German livery) crossing a real-time sky — day or night.
+ * The 3D flight hero: a continuously animated passenger aircraft (NASA Boeing
+ * 777, public domain — re-liveried to a generic German scheme in
+ * src/lib/flight/aircraft.ts) crossing a physically-lit sky (Preetham
+ * atmospheric sky + image-based lighting) — day or night.
  *
  * Layering (inside the .sky-hero wrapper):
  *   HeroFallbackSky (CSS)  — first paint, model load, and the complete
@@ -86,18 +88,21 @@ export function HeroFlight() {
           powerPreference: "high-performance",
         });
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.05;
+        renderer.toneMappingExposure = 1.0;
 
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(42, 1, 0.5, 400);
-        // Pulled back to 40 m so the full airframe (12.3 m to the fin top)
-        // always fits in frame — see the altitude note in lib/flight/path.ts.
-        const camBase = new THREE.Vector3(0, 2.2, 40);
-        const lookBase = new THREE.Vector3(0, 5.0, 0);
+        // Chase-plane composition: nearly level with the fuselage, offset to
+        // the nose side for a subtle 3/4 angle — the port wing sweeps towards
+        // the camera like a real in-flight photograph, while the fin +
+        // GERMANY wordmark stay fully readable. Pulled to 42 m so the full
+        // 777 airframe (fin top ~16 m) fits with header clearance.
+        const camBase = new THREE.Vector3(7, 3.6, 42);
+        const lookBase = new THREE.Vector3(0, 6.4, 0);
         camera.position.copy(camBase);
         camera.lookAt(lookBase);
 
-        const env = createEnvironment(scene);
+        const env = createEnvironment(scene, renderer);
         const aircraft = await loadAircraft(scene, MODEL_URL);
         if (disposed) {
           aircraft.dispose();
@@ -274,8 +279,10 @@ export function HeroFlight() {
           env.dispose();
           renderer.dispose();
         };
-      } catch {
+      } catch (err) {
         // Model or engine failure: the CSS sky remains — never a blank hero.
+        // Surface the cause to the console for diagnosis (no visual change).
+        console.error("[hero-init] failed, CSS fallback stays:", err);
       }
     })();
 

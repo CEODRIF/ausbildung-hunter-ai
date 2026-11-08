@@ -94,14 +94,14 @@ describe("CSP Supabase origin derivation", () => {
     expect(directive(value, "connect-src")).not.toContain("/some/path");
   });
 
-  it("falls back to 'self' only when the env var is absent", () => {
-    expect(directive(csp(), "connect-src")).toBe("'self'");
-    expect(directive(csp(undefined), "connect-src")).toBe("'self'");
+  it("falls back to 'self' + blob: (GLB texture fetches) when the env var is absent", () => {
+    expect(directive(csp(), "connect-src")).toBe("'self' blob:");
+    expect(directive(csp(undefined), "connect-src")).toBe("'self' blob:");
   });
 
   it("fails safe on a malformed URL (no crash, no broken directive)", () => {
-    expect(directive(csp("not a url"), "connect-src")).toBe("'self'");
-    expect(directive(csp("https://"), "connect-src")).toBe("'self'");
+    expect(directive(csp("not a url"), "connect-src")).toBe("'self' blob:");
+    expect(directive(csp("https://"), "connect-src")).toBe("'self' blob:");
   });
 
   it("does not duplicate an origin equal to self-like scheme handling", () => {
