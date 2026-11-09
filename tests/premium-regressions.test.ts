@@ -235,17 +235,20 @@ describe("mobile shell: drawer, bottom nav, header fit", () => {
     expect(shell).toContain("pb-24 lg:pb-0");
   });
 
-  it("the mobile header brand is overflow-safe (built-in wordmark truncate)", () => {
+  it("the mobile header brand is overflow-safe (shrink-safe wordmark wrapper, un-stretchable image)", () => {
     // v2 header: the full brand lives in a constrained pill on phones
-    // (lg:hidden); overflow is guarded by the wordmark's built-in
-    // `min-w-0 truncate` inside BrandLogo, not by hiding the wordmark.
+    // (lg:hidden). The wordmark is now official artwork (fixed px
+    // dimensions + object-contain — never stretched), so overflow safety
+    // comes from the wrapper: `min-w-0` lets it shrink inside the flex
+    // lockup and the `wordmarkClassName` passthrough lets a caller add
+    // clipping (e.g. `truncate`) in tight containers.
     expect(shell).toContain(
       '<span className="lg:hidden">\n                <BrandLogo size={30} href="/dashboard" />',
     );
     const logo = read("src/components/brand-logo.tsx");
-    expect(logo).toContain("min-w-0 truncate text-sm font-bold");
+    expect(logo).toContain("object-contain");
     expect(logo).toContain("wordmarkClassName?: string;");
-    expect(logo).toContain("${wordmarkClass} ${wordmarkClassName}");
+    expect(logo).toContain("min-w-0 ${wordmarkClassName}");
   });
 
   it("landing hero typography scales down and wraps on narrow screens", () => {
