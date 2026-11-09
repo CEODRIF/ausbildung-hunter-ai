@@ -3,30 +3,43 @@ import Link from "next/link";
 /**
  * Centralized brand logo — the SINGLE source of the AusbildungsWeg identity.
  *
- * The official artwork (delivered brand image) lives in `public/`:
- *   - `public/logo-mark.jpg` — the compact mark (A whose right stroke is a
- *     road leading up to a graduation cap); rendered here as the tile.
- *   - `public/logo.jpg` — full logo (mark + wordmark) for static contexts
- *     (downloads, social cards).
+ * The official brand artwork (delivered 2026-11 logo: graduation cap with
+ * aircraft and the Berlin skyline over an open book, "AusbildungsWeg"
+ * wordmark) lives in `public/branding/`:
+ *   - `logo-emblem.jpg`   — the emblem (mark + tricolor swoosh + tassel)
+ *   - `logo-wordmark.jpg` — the official wordmark (navy "Ausbildungs" + gold "Weg")
+ *   - `logo-full.jpg`     — the complete stacked lockup (static contexts)
+ *   - `icon-512.png`      — the compact square symbol (favicon, PWA, "mark")
  *
- * Every surface that uses `<BrandLogo />` (sidebar, auth, dashboard, AI
- * assistant, scanner, search, opportunities, applications, settings, mobile
- * nav, empty states) picks up the identity from this one component. The
- * wordmark is HTML text — not CSS art — so it stays crisp, theme-aware and
- 
+ * The wordmark is official artwork cropped from the delivered logo — it is
+ * NEVER re-typed as HTML text or re-drawn. Every surface that uses
+ * `<BrandLogo />` (landing header/footer, legal, auth, app sidebar, AI
+ * assistant, mobile nav) picks up the identity from this one component.
+ *
+ * The artwork carries a white background (its own white silhouettes make
+ * clean background removal impossible), so on dark surfaces the white chip
+ * reads as an intentional badge; on light surfaces it sits on a
+ * white/near-white panel and carries a hairline boundary — the system
+ * border token (theme-aware, subtle in both themes).
  */
-export const BRAND_LOGO_URL = "/logo-mark.jpg";
+export const BRAND_LOGO_URL = "/branding/logo-emblem.jpg";
+export const BRAND_LOGO_WORDMARK_URL = "/branding/logo-wordmark.jpg";
+export const BRAND_LOGO_MARK_URL = "/branding/icon-512.png";
 
-/** Brand accent for the "Weg" part of the wordmark — the green of the
- *  "Aircraft Green" identity (deep enough for AA on white; the bright
- *  variant on the dark auth panel and on the sky hero). */
-const WEG_CLASS = "text-[#0C7F45] dark:text-[#35C288]";
-const WEG_CLASS_LIGHT = "text-[#C9F56D]";
+/* Official artwork aspect ratios (1174x648 emblem, 1174x132 wordmark) —
+ * explicit dimensions below so the lockup never shifts layout. */
+const EMBLEM_RATIO = 1174 / 648;
+const WORDMARK_RATIO = 1174 / 132;
+/* Wordmark height relative to the emblem height in a horizontal lockup —
+ * tuned so the official typeface reads at header scale (~14px at size 32). */
+const WORDMARK_SCALE = 0.45;
+
+const CHIP_CLASS = "shrink-0 bg-white object-contain ring-1 ring-line-strong dark:ring-black/5";
 
 export interface BrandLogoProps {
-  /** "full" = mark + wordmark, "mark" = compact icon only. */
+  /** "full" = emblem + official wordmark, "mark" = compact square symbol. */
   variant?: "full" | "mark";
-  /** Rendered mark size in px (default 36). */
+  /** Emblem height in px (default 36). */
   size?: number;
   className?: string;
   /** Optional link target (defaults to the landing page). */
@@ -34,32 +47,28 @@ export interface BrandLogoProps {
   /** Accessible label. */
   label?: string;
   /**
-   * "light" forces a light wordmark for placement on dark brand surfaces
-   * (the auth panel is dark in both themes). Default follows the theme.
+   * "light" is kept for API compatibility: the white logo chip already reads
+   * as an intentional badge on dark brand surfaces (the dark auth panel),
+   * so both tones render identically today.
    */
   tone?: "auto" | "light";
   /**
-   * Extra classes for the wordmark text only (e.g. `hidden sm:inline` to
-   * collapse to the mark on narrow headers). Never affects the mark.
+   * Extra classes for the wordmark image only (e.g. `truncate` to clip in a
+   * narrow container). Never affects the emblem.
    */
   wordmarkClassName?: string;
 }
 
-function Mark({ size }: { size: number }) {
-  // The official mark artwork carries a white background. On dark surfaces
-  // the white tile reads as an intentional badge (near-invisible dark ring,
-  // unchanged); on light surfaces the tile sits on a white/near-white panel
-  // and needs a visible hairline boundary — the system border token
-  // (theme-aware, so it stays subtle in both themes).
+function Symbol({ size }: { size: number }) {
   return (
     // eslint-disable-next-line @next/next/no-img-element -- brand asset, fixed dimensions
     <img
-      src={BRAND_LOGO_URL}
+      src={BRAND_LOGO_MARK_URL}
       alt=""
       width={size}
       height={size}
       style={{ width: size, height: size }}
-      className="shrink-0 rounded-xl bg-white object-contain ring-1 ring-line-strong dark:ring-black/5"
+      className={`${CHIP_CLASS} rounded-xl`}
     />
   );
 }
@@ -70,22 +79,35 @@ export function BrandLogo({
   className = "",
   href = "/",
   label = "AusbildungsWeg",
-  tone = "auto",
   wordmarkClassName = "",
 }: BrandLogoProps) {
-  const wordmarkClass = tone === "light" ? "text-white" : "text-ink";
-  const wegClass = tone === "light" ? WEG_CLASS_LIGHT : WEG_CLASS;
+  const emblemW = Math.round(size * EMBLEM_RATIO);
+  const wordmarkH = Math.max(10, Math.round(size * WORDMARK_SCALE));
+  const wordmarkW = Math.round(wordmarkH * WORDMARK_RATIO);
   const content =
     variant === "mark" ? (
-      <Mark size={size} />
+      <Symbol size={size} />
     ) : (
       <span className="flex min-w-0 items-center gap-2.5">
-        <Mark size={size} />
-        <span
-          className={`min-w-0 truncate text-sm font-bold tracking-[-0.02em] ${wordmarkClass} ${wordmarkClassName}`}
-          style={{ lineHeight: 1 }}
-        >
-          Ausbildungs<span className={wegClass}>Weg</span>
+        {/* eslint-disable-next-line @next/next/no-img-element -- brand asset, fixed dimensions */}
+        <img
+          src={BRAND_LOGO_URL}
+          alt=""
+          width={emblemW}
+          height={size}
+          style={{ width: emblemW, height: size }}
+          className={`${CHIP_CLASS} rounded-xl`}
+        />
+        <span className={`min-w-0 ${wordmarkClassName}`}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- brand asset, fixed dimensions */}
+          <img
+            src={BRAND_LOGO_WORDMARK_URL}
+            alt="AusbildungsWeg"
+            width={wordmarkW}
+            height={wordmarkH}
+            style={{ width: wordmarkW, height: wordmarkH }}
+            className={`${CHIP_CLASS} rounded-md`}
+          />
         </span>
       </span>
     );

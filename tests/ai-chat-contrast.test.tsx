@@ -304,7 +304,7 @@ describe("AIChat rendered markup (light + dark class pairs)", () => {
 
   it("brand mark chip carries the theme-aware ring (visible in light)", () => {
     expect(html).toContain("ring-line-strong dark:ring-black/5");
-    expect(html).toContain("/logo-mark.jpg");
+    expect(html).toContain("/branding/logo-emblem.jpg");
     expect(html).toContain("Ausbildungs");
     expect(html).toContain("Weg");
   });
@@ -368,7 +368,7 @@ describe("ai-chat.tsx source contract", () => {
     expect(src).toContain('import { BrandLogo } from "@/components/brand-logo"');
     expect(src).toContain("<BrandLogo size={36}");
     // The duplicated inline wordmark markup is gone.
-    expect(src).not.toContain('src="/logo-mark.jpg"');
+    expect(src).not.toContain('src="/branding/logo-emblem.jpg"');
   });
 });
 
