@@ -90,7 +90,18 @@ const reconRoute =
 const USER_A = "a0000000-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // session user
 const USER_B = "b0000000-bbbb-4bbb-8bbb-bbbbbbbbbbbb"; // other account
 const NOW = Date.parse("2026-10-15T12:00:00.000Z");
-const FUTURE_END = "2026-11-15T00:00:00.000Z";
+// MUST be a genuinely FUTURE instant at test-run time: several routes and
+// the reconciliation endpoint classify subscriptions against the REAL clock
+// (Date.now()), while the classify tests below also compare against the
+// fixed injected NOW (2026-10-15). A wall-clock-relative date satisfies
+// BOTH domains forever; a hardcoded "future" date (the old 2026-11-15)
+// expired and silently turned every "active" fixture expired (CI #482).
+const FUTURE_END = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+// Deliberately FIXED (not Date.now()-relative): it must stay in the past for
+// BOTH clock domains — the injected NOW (2026-10-15, used by the classify
+// tests below) AND the real wall clock. A fixed past date can never rot
+// (time only moves forward); `Date.now() - 30d` would land AFTER the fixed
+// NOW and flip those injected-clock tests from "expired" to "active".
 const PAST_END = "2026-10-14T00:00:00.000Z";
 
 const RESTRICTED_FEATURES = [

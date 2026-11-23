@@ -53,7 +53,12 @@ const NOW = Date.parse("2026-10-15T12:00:00.000Z");
 const NEXT_MIDNIGHT = nextUtcMidnightMs(NOW);
 const RUN = "22222222-2222-4222-8222-222222222222";
 const ONE_MB = 1024 * 1024;
-const MONTHLY_END = "2026-11-15T00:00:00.000Z";
+// MUST be a genuinely FUTURE instant at test-run time: the service under
+// test (assertSavedApplicationCapacity & co.) classifies the default
+// subRow() against the REAL clock (Date.now()). A hardcoded "future" date
+// (the old 2026-11-15) expired and silently turned the "active" fixture
+// expired — CAPACITY_EXCEEDED where the tests expect 'ok' (CI #482).
+const MONTHLY_END = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
 // ---------------------------------------------------------------------------
 // Mock harness (call-recording Supabase clients)
