@@ -225,10 +225,48 @@ export function Step7Review() {
   const historySentCount = history.filter((h) => h.status === "sent").length;
   const historyFailedCount = history.filter((h) => (h.status as string) === "failed").length;
 
-  /** One honest result line per company of the last accepted batch.
-   *  Provider/document failures get the ACTUAL cause in plain language
-   *  (the raw internal code stays visible as a fallback) — a bare
-   *  "failed (reconnect_required)" told the user nothing they could act on. */
+  /** The ACTUAL, actionable text for a persisted failure code — the ONE
+   *  mapping shared by the results panel, the active list (where the
+   *  engine-persisted `last_failure_code` survives refresh) and the
+   *  pre-validation error list. A bare "failed (reconnect_required)" told
+   *  the user nothing they could act on.
+   *
+   *  Semantics verified against src/lib/email-providers.ts:
+   *  - `token_invalid` = "OAuth access token rejected" (Gmail 401/403 with
+   *    a refresh path) — NOT a rate limit. By the time the code is persisted
+   *    (terminal), the provider's one-shot refresh AND the engine's
+   *    automatic retry budget (3 attempts, 2/4/8 min backoff) are exhausted,
+   *    so the remedy is reconnecting the account.
+   *  - `gmail_scope_missing` = the send permission was never granted —
+   *    reconnecting the account grants it (the provider's own wording).
+   *  - `provider_rate_limited` / `provider_temporary` are retried
+   *    AUTOMATICALLY by the engine (2/4/8 min backoff, max 3 attempts); a
+   *    code that reaches the user has used up those retries — hence
+   *    "please send again later", never "will be retried automatically". */
+  const failureCodeText = (code: string): string => {
+    switch (code) {
+      case "already_sent": return t("autoBewerb.alreadySentNote");
+      case "no_email_account":
+      case "reconnect_required":
+      case "token_invalid":
+      case "gmail_scope_missing":
+        return t("autoBewerb.sendFailedReconnect");
+      case "provider_rejected": return t("autoBewerb.sendFailedProviderRejected");
+      case "provider_rate_limited": return t("autoBewerb.sendFailedRateLimited");
+      case "provider_temporary": return t("autoBewerb.sendFailedProviderTemporary");
+      case "provider_not_configured": return t("autoBewerb.sendFailedNotConfigured");
+      case "attachment_unavailable": return t("autoBewerb.sendFailedAttachment");
+      case "cv_render_failed":
+      case "cv_upload_failed":
+        return t("autoBewerb.sendFailedCv");
+      case "letter_render_failed":
+      case "letter_upload_failed":
+        return t("autoBewerb.sendFailedLetter");
+      default: return t("autoBewerb.resultFailed", { code });
+    }
+  };
+
+  /** One honest result line per company of the last accepted batch. */
   const resultText = (r: AutoBewerbBatchItemResult): string => {
     if (r.ok) {
       if (r.scheduledAt) return t("autoBewerb.resultScheduled", { time: fmtTime(r.scheduledAt) });
@@ -237,26 +275,21 @@ export function Step7Review() {
       if (r.dispatchStatus === "queued" || r.dispatchStatus === "skipped") return t("autoBewerb.resultQueued");
       return t("autoBewerb.resultSent");
     }
-    const code = r.failureCode ?? r.code ?? "";
-    if (code === "already_sent") return t("autoBewerb.alreadySentNote");
-    if (code === "no_email_account" || code === "reconnect_required") return t("autoBewerb.sendFailedReconnect");
-    if (code === "provider_rejected") return t("autoBewerb.sendFailedProviderRejected");
-    if (code === "provider_rate_limited" || code === "token_invalid") return t("autoBewerb.sendFailedRateLimited");
-    if (code === "provider_temporary") return t("autoBewerb.sendFailedProviderTemporary");
-    if (code === "attachment_unavailable") return t("autoBewerb.sendFailedAttachment");
-    if (code === "cv_render_failed" || code === "cv_upload_failed") return t("autoBewerb.sendFailedCv");
-    if (code === "letter_render_failed" || code === "letter_upload_failed") return t("autoBewerb.sendFailedLetter");
-    return t("autoBewerb.resultFailed", { code });
+    return failureCodeText(r.failureCode ?? r.code ?? "");
   };
 
-  /** Account-related codes get a direct CTA to the e-mail settings. */
+  /** Account/token-related codes get a direct CTA to the e-mail settings. */
   const isAccountFailureCode = (code: string | null | undefined) =>
-    code === "no_email_account" || code === "reconnect_required";
+    code === "no_email_account" ||
+    code === "reconnect_required" ||
+    code === "token_invalid" ||
+    code === "gmail_scope_missing";
 
-  /** Actionable per-company gap text for batch pre-validation failures. */
+  /** Actionable per-company gap text for batch pre-validation failures.
+   *  Provider/document codes (already_sent, reconnect, render/attachment…)
+   *  delegate to the ONE shared failureCodeText mapping. */
   const itemErrorText = (code: string): string => {
     switch (code) {
-      case "already_sent": return t("autoBewerb.alreadySentNote");
       case "invalid_recipient": return t("autoBewerb.invalidRecipient");
       case "missing_cv": return t("autoBewerb.missingCv");
       case "missing_letter": return t("autoBewerb.missingLetter");
@@ -264,12 +297,7 @@ export function Step7Review() {
       case "schedule_outside_window": return t("autoBewerb.scheduleWindowInvalid");
       case "send_in_progress": return t("autoBewerb.sendInProgress");
       case "not_found": return t("autoBewerb.companyNotFound");
-      case "reconnect_required": return t("autoBewerb.sendFailedReconnect");
-      case "cv_render_failed": case "cv_upload_failed": return t("autoBewerb.sendFailedCv");
-      case "letter_render_failed": case "letter_upload_failed": return t("autoBewerb.sendFailedLetter");
-      case "attachment_unavailable": return t("autoBewerb.sendFailedAttachment");
-      case "provider_rejected": return t("autoBewerb.sendFailedProviderRejected");
-      default: return t("autoBewerb.resultFailed", { code });
+      default: return failureCodeText(code);
     }
   };
 
@@ -564,8 +592,21 @@ export function Step7Review() {
                           {cfg.dest || t("autoBewerb.unavailable")}
                         </span>
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
+                       <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
                         {statusPill(r.status, t)}
+                        {/* The ENGINE-persisted failure cause (survives refresh,
+                            unlike the last-batch results): a failed company shows
+                            WHY it failed — never just a red "failed" pill. */}
+                        {r.status === "failed" && r.last_failure_code && (
+                          <span className="flex min-w-0 items-center gap-1 font-semibold text-danger">
+                            <span className="truncate">{failureCodeText(r.last_failure_code)}</span>
+                            {isAccountFailureCode(r.last_failure_code) && (
+                              <Link href="/settings/email" className="shrink-0 font-bold underline underline-offset-2">
+                                {t("autoBewerb.emailAccountNoneCta")}
+                              </Link>
+                            )}
+                          </span>
+                        )}
                         {selection.has(r.id) &&
                           (isReady ? (
                             <span className="rounded-full border border-success/30 bg-success-soft/50 px-2 py-0.5 text-[10px] font-bold text-success">
@@ -771,7 +812,7 @@ export function Step7Review() {
                     return (
                       <li key={e.companyId} className="rounded-2xl border border-danger/25 bg-danger-soft/50 px-4 py-3 text-sm text-danger">
                         {/* cv_overflow carries the actionable guidance in its message */}
-                        <span className="font-bold">{label}:</span> {e.code === "cv_overflow" ? e.message : itemErrorText(e.code)}
+                        <span className="font-bold">{label}:</span> <span>{e.code === "cv_overflow" ? e.message : itemErrorText(e.code)}</span>
                       </li>
                     );
                   })}
@@ -786,7 +827,7 @@ export function Step7Review() {
                     const text = resultText(r);
                     return (
                       <li key={r.companyId} className={`rounded-2xl border px-4 py-3 text-sm ${tone === "success" ? "border-success/25 bg-success-soft/50 text-success" : "border-danger/25 bg-danger-soft/50 text-danger"}`}>
-                        <span className="font-bold">{label}:</span> {text}
+                        <span className="font-bold">{label}:</span> <span>{text}</span>
                         {/* Account-related failures: the actionable fix is the
                             e-mail settings — a direct link, never just text. */}
                         {!r.ok && isAccountFailureCode(r.failureCode ?? r.code) && (
