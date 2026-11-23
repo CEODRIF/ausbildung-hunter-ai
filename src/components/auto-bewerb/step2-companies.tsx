@@ -183,13 +183,17 @@ export function Step2Companies() {
     }
   };
 
-  const duplicateOf =
-    pending?.extract.company &&
-    ws.companies.find(
-      (c) =>
-        normalizeCompanyKey(c.company.company || c.company.ad_extracted?.company || "") ===
-        normalizeCompanyKey(pending.extract!.company),
-    );
+  // Mirror of the SERVER's dedupe (createAutoBewerbCompany): a KNOWN company
+  // name is matched against the stored dedupe key (company_key); an UNKNOWN
+  // company (the ad names no employer) is a duplicate only when the
+  // IDENTICAL ad text was already added — different ads that share a common
+  // job title are NOT duplicates.
+  const pendingKey = pending ? normalizeCompanyKey(pending.extract.company ?? "") : "";
+  const duplicateOf = pending
+    ? pendingKey
+      ? ws.companies.find((c) => normalizeCompanyKey(c.company.company_key) === pendingKey)
+      : ws.companies.find((c) => c.company.ad_raw === adText.trim().slice(0, 30_000))
+    : undefined;
 
   const addCompany = async () => {
     if (!pending) return;

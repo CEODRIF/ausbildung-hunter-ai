@@ -64,6 +64,13 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
    *  index (slot_no > 0) is modeled — the finite capacity arbiter — plus the
    *  ab_companies_release_slot trigger semantics on update. */
   const slotUnique = new Set<string>();
+  /** OPT-IN (default OFF): tables where the (user_id, company_key) partial
+   *  UNIQUE index (company_key <> '') is modeled — migration 20261215000000
+   *  (`auto_bewerb_companies_user_company_unique`). EMPTY keys (unknown
+   *  companies) are exempt from name-dedupe by design. Modeled on BOTH insert
+   *  and update, like Postgres (a rename into an owned name aborts the
+   *  statement and leaves the row untouched). */
+  const companyKeyUnique = new Set<string>();
   /** Inject a PostgREST-style select error for queries that REQUEST A
    *  SPECIFIC COLUMN (e.g. a stale schema missing slot_no). Column-aware so
    *  unrelated selects on the same table (schema probe selects "id") pass. */
@@ -106,6 +113,13 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
           typeof r.status === "string" &&
           ["draft", "ready", "scheduled", "sending", "failed"].includes(r.status),
       );
+    }
+    // OPT-IN mirror of auto_bewerb_companies_user_company_unique
+    // (20261215000000): (user_id, company_key) WHERE company_key <> '' —
+    // the same employer is stored once per user, in ANY status (the index has
+    // no status predicate). Empty keys never conflict.
+    if (companyKeyUnique.has(table) && typeof vals.company_key === "string" && vals.company_key !== "") {
+      return rows(table).some((r) => r.user_id === vals.user_id && r.company_key === vals.company_key && r.id !== vals.id);
     }
     if (table === "studio_send_attempts" && vals.idempotency_key != null) {
       return rows(table).some((r) => r.idempotency_key === vals.idempotency_key && r.id !== vals.id);
@@ -182,11 +196,13 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
               ? "studio_applications_user_slot_unique"
               : slotUnique.has(table) && typeof st.pending.vals.slot_no === "number" && st.pending.vals.slot_no > 0
                 ? `${table}_user_slot_unique`
-                : table === "studio_send_attempts"
-                ? "studio_send_attempts_idempotency_key_key"
-                : table === "studio_documents"
-                  ? "studio_documents_application_id_doc_type_version_key"
-                  : "unknown_unique";
+                : companyKeyUnique.has(table)
+                  ? "auto_bewerb_companies_user_company_unique"
+                  : table === "studio_send_attempts"
+                  ? "studio_send_attempts_idempotency_key_key"
+                  : table === "studio_documents"
+                    ? "studio_documents_application_id_doc_type_version_key"
+                    : "unknown_unique";
           return {
             data: null,
             error: { message: `duplicate key value violates unique constraint "${constraint}"` },
@@ -255,6 +271,21 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
           const effStatus = typeof vals.status === "string" ? vals.status : (r.status as string | undefined);
           if (slotUnique.has(table) && (effStatus === "sent" || effStatus === "cancelled")) {
             vals.slot_no = 0;
+          }
+          // OPT-IN mirror of (user_id, company_key) WHERE company_key <> ''
+          // (20261215000000): a rename into a name the same user already owns
+          // violates the constraint — the statement aborts BEFORE the write,
+          // the row stays untouched (Postgres semantics).
+          if (
+            companyKeyUnique.has(table) &&
+            typeof vals.company_key === "string" &&
+            vals.company_key !== "" &&
+            rows(table).some((o) => o.id !== r.id && o.user_id === r.user_id && o.company_key === vals.company_key)
+          ) {
+            return {
+              data: null,
+              error: { message: `duplicate key value violates unique constraint "auto_bewerb_companies_user_company_unique"` },
+            };
           }
           Object.assign(r, vals, { updated_at: new Date().toISOString() });
         }
@@ -350,6 +381,10 @@ export function createStudioDb(seed: Record<string, Record<string, unknown>[]> =
     /** OPT-IN: model the (user_id, slot_no) partial unique index (slot_no > 0)
      *  + the release trigger for a table (capacity concurrency tests). */
     enableSlotUnique: (table: string) => void slotUnique.add(table),
+    /** OPT-IN: model the (user_id, company_key) partial unique index
+     *  (company_key <> '') — the same-employer-per-user arbiter (insert AND
+     *  update, like Postgres). */
+    enableCompanyKeyUnique: (table: string) => void companyKeyUnique.add(table),
     setRpc: (impl: NonNullable<typeof rpcImpl>) => (rpcImpl = impl),
     setUploadError: (e: unknown) => (uploadError = e),
     /** Place a pre-existing object into the in-memory store (seed files the

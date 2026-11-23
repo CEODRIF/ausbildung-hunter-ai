@@ -753,9 +753,18 @@ export async function createAutoBewerbCompany(
   if (!(await hasAutoBewerbSchema())) return fail("schema_pending", "Die Datenbank der Bewerbungszentrale wird vorbereitet.");
   const adRaw = input.adRaw.trim().slice(0, 30_000);
   if (adRaw.length < 1) return fail("invalid_recipient", "Bitte einen Anzeigentext eingeben.");
-  const displayName = (input.company ?? input.extract?.company ?? input.extract?.jobTitle ?? "").trim().slice(0, 200);
-  const company = displayName || "Unternehmen";
-  const companyKey = normalizeCompanyKey(displayName);
+  // DEDUPE KEY — derived ONLY from the actually-known company name.
+  // Portal ads frequently name no employer, and the job title is a common
+  // position name shared by hundreds of employers — keying on it made every
+  // SECOND ad with the same position collide as "company_duplicate" (the
+  // "only one company gets added" bug). The database design exempts unknown
+  // companies from name-dedupe (empty keys are not deduped — migration
+  // 20261215000000): the job title stays a DISPLAY fallback only, and the
+  // identical-ad check below still prevents the same ad being added twice
+  // (same employer would receive a second, identical application).
+  const knownCompany = (input.company ?? input.extract?.company ?? "").trim().slice(0, 200);
+  const company = knownCompany || (input.extract?.jobTitle ?? "").trim().slice(0, 200) || "Unternehmen";
+  const companyKey = normalizeCompanyKey(knownCompany);
 
   const admin = createAdminClient();
   // Duplicate check (upfront, for a friendly message + existing card):
@@ -770,6 +779,25 @@ export async function createAutoBewerbCompany(
       return fail(
         "company_duplicate",
         `„${(dup as { company: string }).company}“ ist bereits in Ihrem Workflow. Bitte eine bestehende Karte bearbeiten.`,
+      );
+    }
+  } else {
+    // Unknown company (the ad names no employer): different ads are different
+    // campaigns and must stay addable — only an IDENTICAL ad text is a
+    // duplicate (the same employer + position + recipient would receive a
+    // second, identical application). Mirrors the key check: all rows of the
+    // user (any status), so a finished campaign cannot be silently re-added.
+    const { data: dupAd } = await admin
+      .from("auto_bewerb_companies")
+      .select("id, company")
+      .eq("user_id", userId)
+      .eq("ad_raw", adRaw)
+      .limit(1);
+    const dupRow = (dupAd ?? [])[0] as { company?: string } | undefined;
+    if (dupRow) {
+      return fail(
+        "company_duplicate",
+        `„${dupRow.company ?? "Diese Anzeige"}“ ist bereits in Ihrem Workflow. Bitte eine bestehende Karte bearbeiten.`,
       );
     }
   }

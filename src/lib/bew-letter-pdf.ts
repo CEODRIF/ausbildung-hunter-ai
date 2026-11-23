@@ -258,7 +258,14 @@ const SIGNATURE_IMAGE_GAP = 6;
 async function renderLetterDoc(folio: LetterFolio, bodySize: number): Promise<PDFDocument> {
   const lineH = bodySize + 4.5; // 15.5 at the reference 11 pt
 
-  const doc = await PDFDocument.create();
+  // `updateMetadata: false` — the pdf-lib DEFAULT stamps the wall clock into
+  // the info dict on create() (`/CreationDate` + `/ModDate` = `new Date()`,
+  // plus Producer/Creator). Two renders of the same folio a second apart
+  // (exactly what the preview request and the export request are) then
+  // differ in those bytes, so the letter must be a PURE function of its
+  // folio to keep preview/export/send-path artifacts byte-identical.
+  // Title + Author below are set explicitly and are unaffected.
+  const doc = await PDFDocument.create({ updateMetadata: false });
   doc.setTitle(folio.subject || "Anschreiben");
   if (folio.senderName) doc.setAuthor(folio.senderName);
 
