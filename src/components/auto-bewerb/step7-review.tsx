@@ -225,7 +225,10 @@ export function Step7Review() {
   const historySentCount = history.filter((h) => h.status === "sent").length;
   const historyFailedCount = history.filter((h) => (h.status as string) === "failed").length;
 
-  /** One honest result line per company of the last accepted batch. */
+  /** One honest result line per company of the last accepted batch.
+   *  Provider/document failures get the ACTUAL cause in plain language
+   *  (the raw internal code stays visible as a fallback) — a bare
+   *  "failed (reconnect_required)" told the user nothing they could act on. */
   const resultText = (r: AutoBewerbBatchItemResult): string => {
     if (r.ok) {
       if (r.scheduledAt) return t("autoBewerb.resultScheduled", { time: fmtTime(r.scheduledAt) });
@@ -236,9 +239,19 @@ export function Step7Review() {
     }
     const code = r.failureCode ?? r.code ?? "";
     if (code === "already_sent") return t("autoBewerb.alreadySentNote");
-    if (code === "no_email_account") return t("autoBewerb.emailAccountNoneBody");
+    if (code === "no_email_account" || code === "reconnect_required") return t("autoBewerb.sendFailedReconnect");
+    if (code === "provider_rejected") return t("autoBewerb.sendFailedProviderRejected");
+    if (code === "provider_rate_limited" || code === "token_invalid") return t("autoBewerb.sendFailedRateLimited");
+    if (code === "provider_temporary") return t("autoBewerb.sendFailedProviderTemporary");
+    if (code === "attachment_unavailable") return t("autoBewerb.sendFailedAttachment");
+    if (code === "cv_render_failed" || code === "cv_upload_failed") return t("autoBewerb.sendFailedCv");
+    if (code === "letter_render_failed" || code === "letter_upload_failed") return t("autoBewerb.sendFailedLetter");
     return t("autoBewerb.resultFailed", { code });
   };
+
+  /** Account-related codes get a direct CTA to the e-mail settings. */
+  const isAccountFailureCode = (code: string | null | undefined) =>
+    code === "no_email_account" || code === "reconnect_required";
 
   /** Actionable per-company gap text for batch pre-validation failures. */
   const itemErrorText = (code: string): string => {
@@ -251,6 +264,11 @@ export function Step7Review() {
       case "schedule_outside_window": return t("autoBewerb.scheduleWindowInvalid");
       case "send_in_progress": return t("autoBewerb.sendInProgress");
       case "not_found": return t("autoBewerb.companyNotFound");
+      case "reconnect_required": return t("autoBewerb.sendFailedReconnect");
+      case "cv_render_failed": case "cv_upload_failed": return t("autoBewerb.sendFailedCv");
+      case "letter_render_failed": case "letter_upload_failed": return t("autoBewerb.sendFailedLetter");
+      case "attachment_unavailable": return t("autoBewerb.sendFailedAttachment");
+      case "provider_rejected": return t("autoBewerb.sendFailedProviderRejected");
       default: return t("autoBewerb.resultFailed", { code });
     }
   };
@@ -769,6 +787,16 @@ export function Step7Review() {
                     return (
                       <li key={r.companyId} className={`rounded-2xl border px-4 py-3 text-sm ${tone === "success" ? "border-success/25 bg-success-soft/50 text-success" : "border-danger/25 bg-danger-soft/50 text-danger"}`}>
                         <span className="font-bold">{label}:</span> {text}
+                        {/* Account-related failures: the actionable fix is the
+                            e-mail settings — a direct link, never just text. */}
+                        {!r.ok && isAccountFailureCode(r.failureCode ?? r.code) && (
+                          <>
+                            {" · "}
+                            <Link href="/settings/email" className="font-bold underline underline-offset-2">
+                              {t("autoBewerb.emailAccountNoneCta")}
+                            </Link>
+                          </>
+                        )}
                       </li>
                     );
                   })}
