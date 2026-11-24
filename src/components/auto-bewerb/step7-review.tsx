@@ -1102,11 +1102,24 @@ export function Step7Review() {
         title={t("autoBewerb.confirmTitle")}
         size="sheet"
         footer={
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={sending}>
+          /* Mobile: stacked FULL-WIDTH buttons (primary send on top, cancel
+             below) — the organized, thumb-friendly action layout. lg+ keeps
+             the previous side-by-side right-aligned row (desktop unchanged). */
+          <div className="flex flex-col-reverse gap-2 lg:flex-row lg:justify-end">
+            <Button
+              variant="secondary"
+              className="w-full lg:w-auto"
+              onClick={() => setConfirmOpen(false)}
+              disabled={sending}
+            >
               {t("common.cancel")}
             </Button>
-            <Button variant="primary" onClick={() => void doSend()} disabled={sending}>
+            <Button
+              variant="primary"
+              className="w-full lg:w-auto"
+              onClick={() => void doSend()}
+              disabled={sending}
+            >
               <Send size={14} />
               {sending ? t("autoBewerb.sendingNote") : t("autoBewerb.confirmSendButton", { count: readyViews.length })}
             </Button>
