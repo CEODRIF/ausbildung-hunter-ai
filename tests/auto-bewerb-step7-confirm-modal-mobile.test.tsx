@@ -387,6 +387,33 @@ describe("Step 7 confirm modal — mobile behavior", () => {
     expect(body.contains(confirm)).toBe(false);
   });
 
+  it("mobile action layout: the send button is a FULL-WIDTH primary row (top), cancel below it; lg+ keeps the side-by-side row", async () => {
+    mountStep7(2);
+    const dialog = await openConfirmModal(2);
+    const confirm = within(dialog).getByRole("button", { name: "Jetzt senden (2)" });
+    const cancel = within(dialog).getByRole("button", { name: "Abbrechen" });
+    // The two buttons share ONE row container:
+    const row = confirm.parentElement as HTMLElement;
+    expect(row).toBeTruthy();
+    expect(row.contains(cancel)).toBe(true);
+    const cls = row.className as string;
+    // Mobile: stacked (column, reversed so the primary send is ON TOP),
+    // both buttons full-width — the organized full-bleed action layout.
+    expect(cls).toContain("flex-col-reverse");
+    expect(cls).toContain("gap-2");
+    expect(cls).toContain("lg:flex-row"); // desktop: back to the row
+    expect(cls).toContain("lg:justify-end");
+    expect(confirm.className).toContain("w-full");
+    expect(confirm.className).toContain("lg:w-auto");
+    expect(cancel.className).toContain("w-full");
+    expect(cancel.className).toContain("lg:w-auto");
+    // DOM order keeps cancel first → in the reversed mobile column the
+    // PRIMARY send renders on top, cancel beneath it.
+    expect(Array.from(row.children).indexOf(cancel)).toBeLessThan(
+      Array.from(row.children).indexOf(confirm),
+    );
+  });
+
   it("one confirm tap closes the modal and sends EXACTLY once — repeated taps cannot double-send", async () => {
     (createBatchAction as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
