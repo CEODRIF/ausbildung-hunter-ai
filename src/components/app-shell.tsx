@@ -86,6 +86,7 @@ import { useI18n } from "@/lib/i18n";
 import { Icon, type IconName } from "@/components/icon";
 import { BrandLogo } from "@/components/brand-logo";
 import { GradientMesh } from "@/components/ui/surfaces";
+import { subscribeModalOpen } from "@/components/ui";
 import { LegalFooter } from "@/components/legal-footer";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { ThemeSwitcher } from "@/components/theme-switcher";
@@ -456,6 +457,13 @@ export function AppShell({
   const pathname = usePathname();
   const { t } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
+  // While ANY <Modal> is open, the fixed glass bottom nav below is hidden
+  // (display:none) and restored automatically when the last modal closes —
+  // the modal portals to document.body (root-level stacking, z-50 > z-30)
+  // and the nav must never overlap it or its pinned footer (see the modal-
+  // open registry in @/components/ui).
+  const [modalOpen, setModalOpen] = useState(false);
+  useEffect(() => subscribeModalOpen(setModalOpen), []);
   // The Admin entry exists in the NAV DATA only for the platform admin — the
   // flag is the SERVER-computed profile field (stable session user id), never
   // CSS hiding, never a client claim. Ordinary users never receive the
@@ -693,10 +701,15 @@ export function AppShell({
         </div>
       </aside>
 
-      {/* ------------------------------------------------ bottom nav ------- */}
+      {/* ------------------------------------------------ bottom nav -------
+          Hidden (display:none) while ANY modal is open — the modal is
+          portaled to document.body and this nav must not overlap it (the
+          old z-30/z-50 paint order across the content wrapper's stacking
+          context is exactly what covered the confirm footer on Android).
+          Restored on close via the modal-open registry (ui.tsx). */}
       <nav
         aria-label={t("nav.workspace")}
-        className="glass fixed inset-x-3 bottom-3 z-30 flex items-center justify-around rounded-3xl px-2 py-2 lg:hidden"
+        className={`glass fixed inset-x-3 bottom-3 z-30 ${modalOpen ? "hidden" : "flex"} items-center justify-around rounded-3xl px-2 py-2 lg:hidden`}
         style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
       >
         {MOBILE_NAV.map((item) => {

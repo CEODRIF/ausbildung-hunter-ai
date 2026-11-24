@@ -1,37 +1,44 @@
 // @vitest-environment jsdom
 /**
- * AUTO BEWERB — Step 7 "Senden bestätigen" modal: MOBILE contract.
+ * AUTO BEWERB — Step 7 "Senden bestätigen" modal: MOBILE contract (v2).
  *
- * Production bug (screenshot repro, phones): the confirmation modal used the
- * default "md" card — NO max-height, NO internal scroll. With several
- * recipients the card grew past the viewport; the centered flex overlay then
- * clipped the card's BOTTOM, so the Cancel/Confirm row sat below the visible
- * area and the fixed glass bottom nav (app-shell, `z-30 lg:hidden`) painted
- * over that zone — the confirm button was unreachable.
+ * WHY v1 (PR #154) FAILED on real devices — two independent, VERIFIED causes
+ * (reproduced from the SHIPPED source + the actual Tailwind v4-compiled CSS):
+ *  1. STACKING TRAP (always in effect): the shell content wrapper
+ *     (`relative z-10`, app-shell) is a stacking context that TRAPPED the
+ *     overlay's `z-50`, while the bottom nav (`z-30`) is a SIBLING of the
+ *     wrapper at the shell root — the nav therefore ALWAYS painted above the
+ *     whole modal subtree and intercepted taps in its zone. No in-context
+ *     z-index bump can escape a stacking context.
+ *  2. WRONG-EDGE RESERVATION (deterministic on every phone): the v1 CSS was
+ *     fully valid (verified in the f35dd52 build's compiled output — Tailwind
+ *     v4 normalizes calc whitespace, `pb-[calc(6rem+env(…))]` ships as
+ *     `padding-bottom: calc(6rem + env(…))`), so the 96px reservation DID
+ *     apply — but it reserved space for the CARD BOTTOM (y = 96+envB), which
+ *     clears the nav TOP (y = 70+max(8,envB)) by only ~17–26px. The send
+ *     BUTTON sits 12+envB (footer pb) + ~40px (button) above the card
+ *     bottom → a CONSTANT band at y ∈ [44, 84] from the viewport bottom
+ *     (envB cancels in both terms) — below the nav top on EVERY phone:
+ *     85% of the button under the glass with a 3-button nav (envB=0), 100%
+ *     with gesture nav / iPhone (envB≥8). The #154 regression test compared
+ *     the card edge to the nav top ("25px clearance") — the wrong edge — so
+ *     CI was green while the button stayed covered and unpressable.
  *
- * Fix contract (same geometric solution as the cover-letter AI modal, see
- * tests/cover-letter-ai-modal-mobile.test.tsx — the bottom nav PAINTS above
- * the modal overlay because the shell content wrapper is a `relative z-10`
- * stacking context that traps the overlay's z-50, so a z-index bump alone can
- * never work):
- *
- *  1. The overlay reserves the nav's FULL footprint (+ margin) below `lg`
- *     via `pb-[calc(6rem+env(safe-area-inset-bottom))]` and the iOS
- *     status-bar/home-indicator areas via the env() inset terms; `lg:p-4`
- *     restores the desktop layout (no nav on desktop).
- *  2. The card is a flex column capped at the overlay's free area
- *     (`min(100%, calc(100dvh−2.5rem))`, vh fallback) — it never extends
- *     past the safe areas or into the nav.
- *  3. The review content scrolls INSIDE the card (single scroll region —
- *     the per-company list loses its inner `max-h-64` cap below `lg`).
- *  4. The action row is a PINNED footer sibling of the scroll body (opaque
- *     background + top divider + `env(safe-area-inset-bottom)` padding),
- *     so the confirm button is ALWAYS visible and tappable.
- *  5. At `lg+` the card renders exactly like the previous "md" dialog
- *     (desktop design unchanged) and other Modal sizes are untouched.
- *  6. Sending behavior is untouched: one explicit confirmation, the modal
- *     closes on the first tap (button gone + `sending` state) → repeated
- *     taps cannot double-send.
+ * v2 CONTRACT (this file):
+ *  1. EVERY <Modal> portals to document.body (root-level stacking).
+ *  2. The shell HIDES the bottom nav (display:none) while any modal is open —
+ *     modal-open registry in @/components/ui — and restores it on close.
+ *  3. The sheet card is BOTTOM-PINNED (`bottom: 1rem + env(bottom)`) and capped
+ *     by the DYNAMIC viewport (`100dvh − 2rem − env(top) − env(bottom)`, vh
+ *     fallback). The derivation below proves the card — footer included — stays
+ *     inside the currently visible viewport on Android (chrome on top) and iOS
+ *     (chrome on bottom) for ANY layout/dynamic viewport relationship.
+ *  4. Content scrolls INSIDE the card (single scroll region); the footer is a
+ *     stable `shrink-0` sibling — the confirm button never scrolls away.
+ *  5. At lg+ the sheet renders EXACTLY like the previous "md" dialog
+ *     (desktop unchanged); the md/form/wide sizes are untouched.
+ *  6. Sending behavior untouched: one explicit confirmation, the modal closes
+ *     on the first tap (button gone + `sending` state) → no double-send.
  */
 import "@testing-library/jest-dom/vitest";
 import { readFileSync } from "node:fs";
@@ -39,10 +46,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
 import { I18nProvider } from "@/lib/i18n";
-import { Modal } from "@/components/ui";
+import { isAnyModalOpen, Modal, subscribeModalOpen } from "@/components/ui";
+import { AppShell } from "@/components/app-shell";
 import { Step7Review } from "@/components/auto-bewerb/step7-review";
 import { createBatchAction, sendCompaniesAction } from "@/app/auto-bewerb/actions";
 
+// jsdom has no matchMedia (ThemeSwitcher, rendered inside AppShell, uses it
+// for the system-theme listener) — minimal stub, this file only.
+if (typeof window !== "undefined" && !window.matchMedia) {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }),
+  });
+}
+
+vi.mock("next/navigation", () => ({ usePathname: () => "/dashboard" }));
 vi.mock("@/app/auto-bewerb/actions", () => ({
   cancelSendAction: vi.fn(),
   createBatchAction: vi.fn(),
@@ -165,52 +192,263 @@ async function openConfirmModal(count = 6) {
   return screen.findByRole("dialog");
 }
 
+const footerEl = (
+  <div className="flex justify-end gap-2">
+    <button>Abbrechen</button>
+    <button type="submit">Jetzt senden</button>
+  </div>
+);
+
+/** A sheet modal whose `open` state is driven from outside. */
+function ModalHarness({ open }: { open: boolean }) {
+  return (
+    <Modal open={open} onClose={() => {}} title="T" size="sheet" footer={footerEl}>
+      <p>content</p>
+    </Modal>
+  );
+}
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  // Canary: no test may leak an open modal into the shared registry —
+  // a leaked count would hide the bottom nav for every later test.
+  expect(isAnyModalOpen()).toBe(false);
 });
 
 /* ------------------------------------------------------------------ *
- * 1. Geometry contract (derivation, same math as the precedent)
+ * 1. Sheet geometry contract (derivation of the v2 pin/cap)
  * ------------------------------------------------------------------ */
-describe("nav geometry contract (derivation of the overlay reservation)", () => {
-  const NAV_BOTTOM_OFFSET = 12; // bottom-3
-  const NAV_TOP_PADDING = 8; // py-2
-  const NAV_LINK_ROW = 51; // py-1.5 (6+6) + 20px icon + gap-1 (4) + label (~15)
-  const NAV_MIN_BOTTOM_PADDING = 8; // max(0.5rem, env(safe-area-inset-bottom))
-  const iPhoneSafeInset = 34;
-  const RESERVATION_BASE = 96; // 6rem
+describe("sheet geometry contract (derivation, v2)", () => {
+  /**
+   * The card is pinned `bottom: 1rem + envB` from the viewport (layout)
+   * bottom and capped at `100dvh − 2rem − envT − envB`. In the WORST case
+   * (card at max height) its top is at
+   *   (H − 1rem − envB) − (dvh − 2rem − envT − envB) = (H − dvh) + 1rem + envT,
+   * i.e. exactly `visible top + 1rem` because `H − dvh` is precisely the
+   * chrome area (Android: the expanded top omnibox; iOS: the status-bar
+   * safe area — the Safari toolbar is excluded from H itself).
+   */
+  function cardBounds(H: number, dvh: number, envT: number, envB: number) {
+    const bottomOffset = 16 + envB; // 1rem
+    const maxH = dvh - 32 - envT - envB; // 100dvh − 2rem − envT − envB
+    const cardBottom = H - bottomOffset; // pinned
+    const cardTop = cardBottom - maxH; // worst case: card at max height
+    return { cardTop, cardBottom };
+  }
 
-  it("the overlay's mobile bottom reservation clears the nav, with AND without a home indicator", () => {
-    const withoutInset = NAV_BOTTOM_OFFSET + NAV_TOP_PADDING + NAV_LINK_ROW + NAV_MIN_BOTTOM_PADDING;
-    const withInset = NAV_BOTTOM_OFFSET + NAV_TOP_PADDING + NAV_LINK_ROW + iPhoneSafeInset;
-    expect(RESERVATION_BASE).toBeGreaterThan(withoutInset); // 96 > 79
-    expect(RESERVATION_BASE + iPhoneSafeInset).toBeGreaterThan(withInset); // 130 > 105
+  it("Android Chrome (omnibox on TOP, bottom edge always visible): card stays inside the visible region", () => {
+    const H = 844; // layout viewport (inset-0 overlay height)
+    const omnibox = 134; // expanded top browser UI
+    const envT = 0;
+    const envB = 0;
+    const dvh = H - omnibox; // dynamic viewport = visible region
+    const { cardTop, cardBottom } = cardBounds(H, dvh, envT, envB);
+    expect(cardTop).toBeGreaterThanOrEqual(omnibox + 16); // ≥ visible top + 1rem
+    expect(cardBottom).toBeLessThanOrEqual(H); // never below the layout bottom
+    // Toolbar collapsed (dvh = H): still inside.
+    const collapsed = cardBounds(H, H, envT, envB);
+    expect(collapsed.cardTop).toBeGreaterThanOrEqual(16);
   });
 
-  it("the bottom nav itself is unchanged (the contract the reservation is derived from)", () => {
+  it("iPhone Safari (toolbar on BOTTOM, status bar + home indicator safe areas): card stays inside the visible region", () => {
+    const H = 766; // layout viewport (screen − Safari toolbar; cover adds the safe areas)
+    const envT = 47; // status bar
+    const envB = 34; // home indicator
+    const dvh = H - envT; // visible region (below the status bar)
+    const { cardTop, cardBottom } = cardBounds(H, dvh, envT, envB);
+    expect(cardTop).toBeGreaterThanOrEqual(envT + 16); // ≥ visible top + 1rem
+    expect(cardBottom).toBeLessThanOrEqual(H - 16 - envB); // ≥ 1rem + envB above the home indicator
+  });
+
+  it("reproduces the v1 failure deterministically: the 96px reservation cleared the CARD edge but not the BUTTON (all phones)", () => {
+    /**
+     * v1 as SHIPPED (verified in the f35dd52 build's compiled CSS — every
+     * declaration was valid and present): overlay `fixed inset-0` with
+     * `pb: 96+envB` (6rem reservation), centered card capped at
+     * `min(100%, 100dvh−40)`; with tall review content the card fills the
+     * padded box → card bottom at y = 96+envB from the viewport bottom.
+     *
+     * Bottom-nav footprint (app-shell): bottom-3 (12) + py-2 top (8) +
+     * row (icon 20 + gap 4 + label ~14 + py-1.5 ×2 = 50) +
+     * paddingBottom max(8, envB) → nav TOP at y = 70+max(8, envB).
+     *
+     * The v1 #154 regression test compared CARD BOTTOM (96/130) vs NAV TOP
+     * (78/104) → "25px clearance" ✓ CI green. But the send BUTTON is a
+     * ~40px row sitting 12+envB (footer pb) above the card bottom → the
+     * button occupies y ∈ [44, 84] — a CONSTANT band (envB cancels out in
+     * both terms) — entirely below the nav top (≥78) on every phone.
+     */
+    const FOOTER_PB = 12; // v1 footer: pb-[calc(0.75rem+envB)]
+    const BUTTON_H = 40;
+    const NAV_TOP = (envB: number) => 12 + 8 + 50 + Math.max(8, envB); // 70+max(8,envB)
+    function v1ButtonBand(envB: number): [number, number] {
+      const cardBottom = 96 + envB; // 6rem reservation (shipped, valid)
+      const buttonBottom = cardBottom - (FOOTER_PB + envB);
+      return [buttonBottom - BUTTON_H, buttonBottom]; // y from viewport bottom
+    }
+    for (const envB of [0, 24, 34]) {
+      const [top, bottom] = v1ButtonBand(envB);
+      expect(top).toBe(44);
+      expect(bottom).toBe(84); // CONSTANT — envB cancels out
+      // The v1 test's comparison (card edge vs nav top) PASSED…
+      expect(96 + envB).toBeGreaterThan(NAV_TOP(envB));
+      // …yet the button band was INSIDE the nav zone (paint order: nav on
+      // top via the stacking trap) → 85–100% of the button covered:
+      const covered = Math.min(bottom, NAV_TOP(envB)) - top;
+      expect(covered / BUTTON_H).toBeGreaterThanOrEqual(0.85);
+    }
+    // v2: the nav is HIDDEN while the modal is open → no zone exists; and
+    // the pinned card puts the button bottom at a deterministic
+    // 4+envB px above the viewport bottom (16+envB card − 12 footer pb):
+    for (const envB of [0, 24, 34]) {
+      expect(16 + envB - 12).toBeGreaterThanOrEqual(4); // visible, uncovered
+    }
+    // The v2 pin/cap use the codebase's valid underscore calc form:
+    const ui = readFileSync("src/components/ui.tsx", "utf8");
+    expect(ui).toContain("bottom-[calc(1rem_+_env(safe-area-inset-bottom))]");
+    expect(ui).toContain("max-h-[calc(100vh_-_2rem_-_env(safe-area-inset-top)_-_env(safe-area-inset-bottom))]");
+    expect(ui).toContain(
+      "supports-[height:100dvh]:max-h-[calc(100dvh_-_2rem_-_env(safe-area-inset-top)_-_env(safe-area-inset-bottom))]",
+    );
+  });
+
+  it("the bottom nav itself is unchanged — it gets hidden, not re-sized", () => {
     const shell = readFileSync("src/components/app-shell.tsx", "utf8");
-    expect(shell).toContain("glass fixed inset-x-3 bottom-3 z-30 flex items-center justify-around rounded-3xl px-2 py-2 lg:hidden");
+    expect(shell).toContain(
+      'glass fixed inset-x-3 bottom-3 z-30 ${modalOpen ? "hidden" : "flex"} items-center justify-around rounded-3xl px-2 py-2 lg:hidden',
+    );
     expect(shell).toContain('paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))"');
   });
 });
 
 /* ------------------------------------------------------------------ *
- * 2. The Modal "sheet" size — structural contract
+ * 2. Modal open-state registry + portal (root-level stacking)
  * ------------------------------------------------------------------ */
-describe('Modal size="sheet" — structural contract', () => {
-  const footerEl = (
-    <div className="flex justify-end gap-2">
-      <button>Abbrechen</button>
-      <button type="submit">Jetzt senden</button>
-    </div>
-  );
+describe("modal open-state registry + portal", () => {
+  it("an open sheet modal is PORTALED to document.body — not inside the caller's container", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    render(
+      <I18nProvider>
+        <ModalHarness open />
+      </I18nProvider>,
+      { container: host },
+    );
+    const dialog = screen.getByRole("dialog");
+    // The overlay escaped the (potentially stacking-trapping) parent tree:
+    expect(host.contains(dialog)).toBe(false);
+    expect(dialog.parentElement).toBe(document.body);
+    expect(isAnyModalOpen()).toBe(true);
+    host.remove();
+  });
 
+  it("the registry reports open → closed across a full open/close cycle", async () => {
+    const states: boolean[] = [];
+    const unsubscribe = subscribeModalOpen((open) => states.push(open));
+    const { rerender } = render(
+      <I18nProvider>
+        <ModalHarness open />
+      </I18nProvider>,
+    );
+    expect(isAnyModalOpen()).toBe(true);
+    expect(states).toContain(true);
+    rerender(
+      <I18nProvider>
+        <ModalHarness open={false} />
+      </I18nProvider>,
+    );
+    await waitFor(() => expect(isAnyModalOpen()).toBe(false));
+    expect(states[states.length - 1]).toBe(false);
+    unsubscribe();
+  });
+
+  it("overlapping modals: the registry stays open until the LAST modal closes", async () => {
+    const a = render(
+      <I18nProvider>
+        <ModalHarness open />
+      </I18nProvider>,
+    );
+    const b = render(
+      <I18nProvider>
+        <ModalHarness open />
+      </I18nProvider>,
+    );
+    expect(screen.getAllByRole("dialog")).toHaveLength(2);
+    expect(isAnyModalOpen()).toBe(true);
+    a.rerender(
+      <I18nProvider>
+        <ModalHarness open={false} />
+      </I18nProvider>,
+    );
+    expect(isAnyModalOpen()).toBe(true); // b is still open
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
+    b.rerender(
+      <I18nProvider>
+        <ModalHarness open={false} />
+      </I18nProvider>,
+    );
+    await waitFor(() => expect(isAnyModalOpen()).toBe(false));
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 3. App-shell bottom nav — hidden while a modal is open, restored on close
+ * ------------------------------------------------------------------ */
+describe("app-shell bottom nav — hidden while a modal is open", () => {
+  function ShellWithModal({ open }: { open: boolean }) {
+    return (
+      <I18nProvider>
+        <AppShell profile={null}>
+          <Modal open={open} onClose={() => {}} title="T" size="sheet" footer={footerEl}>
+            <p>content</p>
+          </Modal>
+        </AppShell>
+      </I18nProvider>
+    );
+  }
+
+  it("the nav is display:none while a modal is open and restored (flex) on close", () => {
+    const { rerender } = render(<ShellWithModal open={false} />);
+    // The shell has several <nav> elements (NavSectionList groups) — the
+    // BOTTOM nav is the glass one (class marker, not tag).
+    const nav = document.querySelector('nav[class*="glass"]') as HTMLElement;
+    expect(nav, "the fixed glass bottom nav").toBeTruthy();
+    // (Token-precise: `lg:hidden` is a DIFFERENT class token than `hidden`.)
+    // Closed state: the nav is visible (its normal flex row).
+    expect(nav.classList.contains("flex")).toBe(true);
+    expect(nav.classList.contains("hidden")).toBe(false);
+
+    // Open the modal: the registry flips the shell state → nav hidden.
+    rerender(<ShellWithModal open />);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(nav.classList.contains("hidden")).toBe(true);
+    expect(nav.classList.contains("flex")).toBe(false);
+
+    // Close the modal: the nav is restored.
+    rerender(<ShellWithModal open={false} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(nav.classList.contains("flex")).toBe(true);
+    expect(nav.classList.contains("hidden")).toBe(false);
+  });
+
+  it("the nav consumes the registry (wiring pin)", () => {
+    const shell = readFileSync("src/components/app-shell.tsx", "utf8");
+    expect(shell).toContain('import { subscribeModalOpen } from "@/components/ui";');
+    expect(shell).toContain("const [modalOpen, setModalOpen] = useState(false);");
+    expect(shell).toContain("useEffect(() => subscribeModalOpen(setModalOpen), []);");
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 4. The Modal "sheet" size — structural contract (v2)
+ * ------------------------------------------------------------------ */
+describe('Modal size="sheet" — structural contract (v2)', () => {
   function findCard(dialog: HTMLElement) {
     const card = Array.from(dialog.querySelectorAll("div")).find((d) =>
-      (d.className as string).includes("max-h-[min(100%"),
+      (d.className as string).includes("bottom-[calc(1rem_+_env"),
     );
-    expect(card, "the capped flex-column card").toBeTruthy();
+    expect(card, "the bottom-pinned sheet card").toBeTruthy();
     return card as HTMLElement;
   }
   function findBody(card: HTMLElement) {
@@ -221,7 +459,7 @@ describe('Modal size="sheet" — structural contract', () => {
     return body as HTMLElement;
   }
 
-  it("the overlay reserves the nav footprint + safe areas below lg and restores p-4 at lg", () => {
+  it("the mobile overlay is BACKDROP-ONLY (the card positions itself); lg restores the exact md overlay", () => {
     render(
       <I18nProvider>
         <Modal open onClose={() => {}} title="T" size="sheet" footer={footerEl}>
@@ -232,12 +470,19 @@ describe('Modal size="sheet" — structural contract', () => {
     const overlay = screen.getByRole("dialog");
     const cls = overlay.className as string;
     expect(cls).toContain("fixed inset-0 z-50");
-    expect(cls).toContain("pt-[calc(1rem+env(safe-area-inset-top))]");
-    expect(cls).toContain("pb-[calc(6rem+env(safe-area-inset-bottom))]");
-    expect(cls).toContain("lg:p-4"); // desktop unchanged
+    expect(cls).toContain("lg:flex");
+    expect(cls).toContain("lg:items-center");
+    expect(cls).toContain("lg:justify-center");
+    expect(cls).toContain("lg:p-4");
+    // No mobile padding/centering that could mis-size the card against the
+    // overlay, and no dead unspaced calc():
+    expect(cls).not.toContain("pt-[calc");
+    expect(cls).not.toContain("pb-[calc");
+    // Portaled to the document root (see registry/portal tests):
+    expect(overlay.parentElement).toBe(document.body);
   });
 
-  it("the card is a flex column capped at the safe area (dvh + vh fallback), lg restores the md card", () => {
+  it("the card is BOTTOM-PINNED with the dynamic-viewport cap (vh fallback); lg restores the md card", () => {
     render(
       <I18nProvider>
         <Modal open onClose={() => {}} title="T" size="sheet" footer={footerEl}>
@@ -247,13 +492,27 @@ describe('Modal size="sheet" — structural contract', () => {
     );
     const card = findCard(screen.getByRole("dialog"));
     const cls = card.className as string;
+    expect(cls).toContain("absolute");
+    expect(cls).toContain("inset-x-4");
+    expect(cls).toContain("bottom-[calc(1rem_+_env(safe-area-inset-bottom))]");
+    expect(cls).toContain("z-10");
     expect(cls).toContain("flex");
     expect(cls).toContain("flex-col");
     expect(cls).toContain("overflow-hidden");
-    expect(cls).toContain("max-w-md");
-    expect(cls).toContain("max-h-[min(100%,calc(100vh_-_2.5rem))]");
-    expect(cls).toContain("supports-[height:100dvh]:max-h-[min(100%,calc(100dvh_-_2.5rem))]");
-    expect(cls).toContain("lg:max-h-none"); // no cap on desktop (previous md behavior)
+    // The v2 cap — dynamic viewport minus ALL safe areas (valid calc, `_` form):
+    expect(cls).toContain("max-h-[calc(100vh_-_2rem_-_env(safe-area-inset-top)_-_env(safe-area-inset-bottom))]");
+    expect(cls).toContain(
+      "supports-[height:100dvh]:max-h-[calc(100dvh_-_2rem_-_env(safe-area-inset-top)_-_env(safe-area-inset-bottom))]",
+    );
+    // The v1 cap is gone (it assumed overlay height == visible viewport):
+    expect(cls).not.toContain("max-h-[min(100%");
+    // At lg the card becomes exactly the "md" card:
+    expect(cls).toContain("lg:static");
+    expect(cls).toContain("lg:inset-x-auto");
+    expect(cls).toContain("lg:bottom-auto");
+    expect(cls).toContain("lg:w-full");
+    expect(cls).toContain("lg:max-w-md");
+    expect(cls).toContain("lg:max-h-none");
     expect(cls).toContain("lg:p-5");
   });
 
@@ -276,7 +535,7 @@ describe('Modal size="sheet" — structural contract', () => {
     expect(cls).toContain("lg:p-0");
   });
 
-  it("the footer is PINNED: a stable sibling of the scroll body, opaque, safe-area padded, lg-transparent", () => {
+  it("the footer is PINNED: a stable sibling of the scroll body, opaque, simple padding (the card owns the safe area)", () => {
     render(
       <I18nProvider>
         <Modal open onClose={() => {}} title="T" size="sheet" footer={footerEl}>
@@ -296,11 +555,12 @@ describe('Modal size="sheet" — structural contract', () => {
     expect(cls).toContain("shrink-0");
     expect(cls).toContain("border-t"); // clear separation from the scrolling content
     expect(cls).toContain("bg-surface/95"); // opaque background — no visual bleed-through
-    expect(cls).toContain("pb-[calc(0.75rem+env(safe-area-inset-bottom))]"); // iPhone home indicator
+    expect(cls).toContain("pb-3"); // the card's bottom offset owns the safe area (no double env)
+    expect(cls).not.toContain("pb-[calc"); // the v1 double-counted env() form is gone
     expect(cls).toContain("lg:border-0 lg:bg-transparent lg:px-0 lg:pb-0 lg:pt-5"); // desktop = previous md look
   });
 
-  it("size=\"md\" is UNCHANGED (other dialogs keep their exact legacy card)", () => {
+  it('size="md" is UNCHANGED (other dialogs keep their exact legacy card; the portal is DOM-only)', () => {
     render(
       <I18nProvider>
         <Modal open onClose={() => {}} title="T">
@@ -319,9 +579,11 @@ describe('Modal size="sheet" — structural contract', () => {
     expect(cls).not.toContain("max-h");
     expect(screen.queryByRole("button", { name: "Jetzt senden" })).toBeNull();
     expect(overlay.className).toBe("fixed inset-0 z-50 flex items-center justify-center p-4");
+    // …and it portals to the document root too (no visual change):
+    expect(overlay.parentElement).toBe(document.body);
   });
 
-  it("size=\"form\" and size=\"wide\" are UNCHANGED", () => {
+  it('size="form" and size="wide" are UNCHANGED', () => {
     render(
       <I18nProvider>
         <Modal open onClose={() => {}} title="T" size="form">
@@ -350,7 +612,7 @@ describe('Modal size="sheet" — structural contract', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * 3. Step 7 confirmation modal — behavior + layout integration
+ * 5. Step 7 confirmation modal — behavior + layout integration
  * ------------------------------------------------------------------ */
 describe("Step 7 confirm modal — mobile behavior", () => {
   it("shows ALL recipients/attachments/e-mail for review, with the confirm button pinned below the scroll region", async () => {
@@ -366,10 +628,13 @@ describe("Step 7 confirm modal — mobile behavior", () => {
     expect(within(dialog).getByText("mail@example.de")).toBeInTheDocument();
     expect(within(dialog).getByText(/Lebenslauf_Firma 3 GmbH\.pdf/)).toBeInTheDocument();
 
-    // The overlay applies the geometric reservation on THIS dialog:
+    // The overlay is the portaled, backdrop-only v2 shell on THIS dialog:
     const overlayCls = dialog.className as string;
-    expect(overlayCls).toContain("pb-[calc(6rem+env(safe-area-inset-bottom))]");
+    expect(overlayCls).toContain("fixed inset-0 z-50");
     expect(overlayCls).toContain("lg:p-4");
+    expect(dialog.parentElement).toBe(document.body);
+    // …and it drives the bottom-nav hide while open:
+    expect(isAnyModalOpen()).toBe(true);
 
     // The per-company list no longer scrollsWithin-scrolls on mobile
     // (single scroll region = the sheet body); desktop keeps its cap:
@@ -439,8 +704,10 @@ describe("Step 7 confirm modal — mobile behavior", () => {
       null,
       true,
     );
-    // The modal is gone after the FIRST tap (no button left to hit):
+    // The modal is gone after the FIRST tap (no button left to hit) and the
+    // registry (→ bottom nav) is released:
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(isAnyModalOpen()).toBe(false);
   });
 
   it("while the batch request is in flight the modal is already closed (the sending state guards the page)", async () => {
@@ -473,12 +740,15 @@ describe("Step 7 confirm modal — mobile behavior", () => {
     });
   });
 
-  it("cancel closes the modal without sending", async () => {
+  it("cancel closes the modal without sending and restores the bottom nav", async () => {
     mountStep7(2);
     const dialog = await openConfirmModal(2);
+    expect(isAnyModalOpen()).toBe(true);
     fireEvent.click(within(dialog).getByRole("button", { name: "Abbrechen" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(createBatchAction).not.toHaveBeenCalled();
     expect(sendCompaniesAction).not.toHaveBeenCalled();
+    // Registry released → the shell shows the nav again:
+    expect(isAnyModalOpen()).toBe(false);
   });
 });

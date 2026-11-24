@@ -63,7 +63,7 @@ describe("nav geometry contract (derivation of the reservation)", () => {
 
   it("the bottom nav itself is unchanged (the contract the reservation is derived from)", () => {
     expect(shell).toContain(
-      'glass fixed inset-x-3 bottom-3 z-30 flex items-center justify-around rounded-3xl px-2 py-2 lg:hidden',
+      'glass fixed inset-x-3 bottom-3 z-30 ${modalOpen ? "hidden" : "flex"} items-center justify-around rounded-3xl px-2 py-2 lg:hidden',
     );
     expect(shell).toContain(
       'paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))"',

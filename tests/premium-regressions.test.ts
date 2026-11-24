@@ -229,7 +229,9 @@ describe("mobile shell: drawer, bottom nav, header fit", () => {
     expect(shell).toContain(
       'style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}',
     );
-    expect(shell).toContain("fixed inset-x-3 bottom-3 z-30 flex items-center justify-around rounded-3xl px-2 py-2 lg:hidden");
+    // The nav also toggles `hidden`/`flex` while any <Modal> is open
+    // (registry in @/components/ui — see auto-bewerb-step7-confirm-modal-mobile).
+    expect(shell).toContain('fixed inset-x-3 bottom-3 z-30 ${modalOpen ? "hidden" : "flex"} items-center justify-around rounded-3xl px-2 py-2 lg:hidden');
     // main content AND the footer (which sits outside main) clear the nav.
     expect(shell).toContain('<main className="flex-1 pb-28 lg:pb-0">');
     expect(shell).toContain("pb-24 lg:pb-0");
