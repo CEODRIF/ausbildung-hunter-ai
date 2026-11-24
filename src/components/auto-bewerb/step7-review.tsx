@@ -1091,7 +1091,28 @@ export function Step7Review() {
 
       {/* Explicit confirmation — the EXACT shared e-mail configuration +
           the verified delivery destination for EVERY recipient */}
-      <Modal open={confirmOpen} onClose={() => !sending && setConfirmOpen(false)} title={t("autoBewerb.confirmTitle")}>
+      {/* `size="sheet"`: on phones the card fits the real viewport (100dvh minus
+          safe areas + the bottom nav's reserved footprint), the review list
+          scrolls INSIDE it, and the action row stays pinned below the scroll —
+          the confirm button is always visible and tappable. lg+ renders the
+          previous "md" dialog unchanged. */}
+      <Modal
+        open={confirmOpen}
+        onClose={() => !sending && setConfirmOpen(false)}
+        title={t("autoBewerb.confirmTitle")}
+        size="sheet"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={sending}>
+              {t("common.cancel")}
+            </Button>
+            <Button variant="primary" onClick={() => void doSend()} disabled={sending}>
+              <Send size={14} />
+              {sending ? t("autoBewerb.sendingNote") : t("autoBewerb.confirmSendButton", { count: readyViews.length })}
+            </Button>
+          </div>
+        }
+      >
         <p className="text-sm leading-6 text-muted">{t("autoBewerb.confirmIntro")}</p>
         <p className="mt-2 text-xs text-muted">{t("autoBewerb.confirmBodySharedNote")}</p>
 
@@ -1144,7 +1165,11 @@ export function Step7Review() {
 
         {/* Per-company breakdown (verified, read-only): each company's own
             recipient + its OWN CV/letter filenames, plus the shared subject/docs. */}
-        <div className="mt-3 max-h-64 space-y-2 overflow-auto">
+        {/* Mobile/tablet (<lg): no inner cap — the sheet's body IS the single
+            scroll region (a capped inner list would scroll-within-scroll and
+            hide rows behind the pinned footer). lg+ keeps the previous
+            16rem internal cap (desktop unchanged). */}
+        <div className="mt-3 max-h-64 space-y-2 overflow-auto max-lg:max-h-none max-lg:overflow-visible">
           {readyViews.map((v) => {
             const { name, job } = companyLabel(v.company);
             const cfg = emailCfg(v);
@@ -1176,15 +1201,8 @@ export function Step7Review() {
             );
           })}
         </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={sending}>
-            {t("common.cancel")}
-          </Button>
-          <Button variant="primary" onClick={() => void doSend()} disabled={sending}>
-            <Send size={14} />
-            {sending ? t("autoBewerb.sendingNote") : t("autoBewerb.confirmSendButton", { count: readyViews.length })}
-          </Button>
-        </div>
+        {/* The action row lives in the sheet's pinned `footer` prop (above) —
+            it is NOT part of the scrollable body. */}
       </Modal>
     </div>
   );
