@@ -57,6 +57,44 @@ class InvalidModelOutput extends Error {
 }
 
 /**
+ * IN-FLIGHT TRANSIENT RETRY — the production failure mode this guards
+ * against (2026-11-24 incident): ONE upstream fault (an Azure 5xx blip or a
+ * dropped connection) failed the whole user operation, surfacing as the
+ * generic "Le service IA est momentanément injoignable" even though the
+ * provider layer had classified the fault as transient/retryable.
+ *
+ * Retried in-flight: exactly the FAST-failing transient faults — a 5xx
+ * blip (provider_unavailable), a dropped/reset connection (provider_network)
+ * and an unreadable 2xx (provider_invalid_response). Each of them fails in
+ * milliseconds, so one short-paused retry adds negligible latency and cures
+ * single glitches that a full user retry (re-clicking "Analyser") would
+ * also have cured.
+ *
+ * Deliberately NOT retried in-flight:
+ *  - provider_timeout: the 120 s budget already ran out — re-running it
+ *    would double the worst-case latency to ~4 minutes;
+ *  - provider_rate_limited: the provider asked for BACK-OFF; hammering it
+ *    immediately fights the throttle (the user-visible retry path respects
+ *    the 429 semantics);
+ *  - every non-retryable code (auth / quota / rejected / not_configured):
+ *    a retry cannot fix a misconfiguration or exhausted credits.
+ *
+ * Exported so the classification table is unit-testable in isolation.
+ */
+const INFLIGHT_RETRYABLE_CODES = new Set<AIProviderError["code"]>([
+  "provider_unavailable",
+  "provider_network",
+  "provider_invalid_response",
+]);
+
+export function shouldRetryInFlight(error: unknown): boolean {
+  return error instanceof AIProviderError && INFLIGHT_RETRYABLE_CODES.has(error.code);
+}
+
+/** Pause between the failed attempt and its in-flight retry. */
+const INFLIGHT_RETRY_DELAY_MS = 500;
+
+/**
  * Map a caught analysis failure to the browser response:
  *  - an HTTP status with correct semantics (5xx provider faults are server
  *    errors, NOT 400 client errors — the old flat-400 made every provider
@@ -198,8 +236,14 @@ export async function POST(request: Request) {
   let work = inFlight.get(sfKey);
   if (!work) {
     work = (async () => {
-      // BOUNDED RETRY: one nudge attempt when the model breaks its JSON
-      // contract (max 2 provider calls per user operation, same quota op).
+      // BOUNDED BUDGET per user operation (ONE quota reservation covers all):
+      //  - one IN-FLIGHT retry when the provider fails transiently
+      //    (5xx blip / dropped connection / unreadable 2xx — see
+      //    shouldRetryInFlight): the SAME prompt is re-sent, the JSON nudge
+      //    is NOT consumed,
+      //  - one JSON-nudge attempt when the model breaks its output contract.
+      //  → at most 3 provider calls; a persistent fault fails fast after 2.
+      let transientRetryUsed = false;
       for (let attempt = 0; ; attempt++) {
         const messages: Array<{ role: "user"; content: string }> = [
           {
@@ -210,10 +254,23 @@ export async function POST(request: Request) {
                 : `${prompt}\n\nWICHTIG: Deine vorherige Antwort war kein gültiges JSON-Objekt. Gib NUR das JSON-Objekt aus — ohne Markdown, ohne Anführungszeichen, ohne Kommentar.`,
           },
         ];
-        const raw = await provider().generateText(messages, 120_000, {
-          temperature: 0,
-          systemPrompt: AD_ANALYSIS_SYSTEM_PROMPT,
-        });
+        const gen = () =>
+          provider().generateText(messages, 120_000, {
+            temperature: 0,
+            systemPrompt: AD_ANALYSIS_SYSTEM_PROMPT,
+          });
+        let raw: string;
+        try {
+          raw = await gen();
+        } catch (error) {
+          if (shouldRetryInFlight(error) && !transientRetryUsed) {
+            transientRetryUsed = true;
+            await new Promise((r) => setTimeout(r, INFLIGHT_RETRY_DELAY_MS));
+            raw = await gen(); // one retry, same prompt, same budget
+          } else {
+            throw error;
+          }
+        }
         const checked = outputSchema.safeParse(parseJsonObject(raw));
         if (checked.success) return checked.data;
         if (attempt >= 1) throw new InvalidModelOutput();

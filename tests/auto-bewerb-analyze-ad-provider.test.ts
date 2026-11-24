@@ -16,10 +16,16 @@
  *       provider quota 402/429-credits, timeout, 500/503, network, invalid
  *       JSON, unexpected schema, missing configuration),
  *   3.  the failed request is released from the quota (never charged),
- *   4.  transient failures are RETRYABLE: an identical second request goes
- *       through (the single-flight table does not cache the failure),
- *   5.  concurrent identical requests still share ONE provider call — even
- *       on failure (no duplicate AI requests, no duplicate quota settlement),
+ *   4. transient failures are RETRYABLE: a single fast-failing blip (5xx /
+ *       connection drop / unreadable 2xx) is retried IN-FLIGHT once, so one
+ *       upstream glitch no longer fails the user operation; a persistent
+ *       fault still fails after the bounded retry, and an identical second
+ *       user request goes through (the single-flight table never caches a
+ *       failure). Budget: max 3 provider calls per operation (one transient
+ *       retry + one JSON nudge), one quota reservation,
+ *   5. concurrent identical requests still share ONE failed/successful
+ *       operation — including its in-flight retry (no duplicate AI requests,
+ *       no duplicate quota settlement),
  *   6.  the provider's error detail (status body) is classified and logged
  *       server-side with credentials REDACTED — and never forwarded to the
  *       browser,
@@ -516,15 +522,20 @@ describe("app-side gating never reaches the provider", () => {
 // 12. retry after a transient provider failure
 // ---------------------------------------------------------------------------
 describe("retry after a transient provider failure", () => {
-  it("an identical second request succeeds after a 503 (failure is not cached)", async () => {
-    queue = [{ status: 503, body: JSON.stringify({ error: { message: "upstream unavailable" } }) }];
+  it("an identical second request succeeds after a PERSISTENT failure window (failure is not cached)", async () => {
+    // The provider is DOWN for the whole first operation (initial call AND
+    // its bounded in-flight retry both hit the 503) — the op fails…
+    fallback = { status: 503, body: JSON.stringify({ error: { message: "upstream unavailable" } }) };
     const first = await postRoute(SHOPVISION_AD);
     const firstData = await first.json();
     expect(first.status).toBe(503);
     expect(firstData.code).toBe("provider_unavailable");
+    expect(requests).toHaveLength(2); // blip + its bounded in-flight retry
     expect(releaseFeatureOp).toHaveBeenCalledTimes(1); // the failed op is refunded
 
-    // The user retries (no re-entry needed) — the same vacancy goes through.
+    // …the provider recovers. The user retries (no re-entry needed) — the
+    // same vacancy goes through; the single-flight table cached NOTHING.
+    fallback = { status: 200, body: openaiEnvelope(JSON.stringify(SUCCESS_PAYLOAD)) };
     const second = await postRoute(SHOPVISION_AD);
     const secondData = (await second.json()) as {
       extract: { company: string };
@@ -533,16 +544,130 @@ describe("retry after a transient provider failure", () => {
     expect(second.status).toBe(200);
     expect(secondData.extract.company).toBe("ShopVision Digital GmbH");
     expect(secondData.reused).toBe(false);
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(3);
     expect(completeFeatureOp).toHaveBeenCalledTimes(1); // only the successful op
   });
 });
 
-// ---------------------------------------------------------------------------
-// 13. single-flight (duplicate-request protection) — even on failure
-// ---------------------------------------------------------------------------
+ // ---------------------------------------------------------------------------
+ // 12b. IN-FLIGHT retry — a single transient provider blip must not fail the
+ //      whole user operation (production 2026-11-24: one upstream fault
+ //      surfaced as "Le service IA est momentanément injoignable" because
+ //      the route marked these codes retryable but never retried itself).
+ //      Budget: at most ONE transient retry + the existing ONE JSON nudge
+ //      = max 3 provider calls per user operation; one quota reservation.
+ // ---------------------------------------------------------------------------
+ describe("in-flight retry for a transient provider fault", () => {
+   it("a single 503 blip is retried in-flight: the operation SUCCEEDS (no user-visible failure)", async () => {
+     queue = [{ status: 503, body: JSON.stringify({ error: { message: "upstream unavailable" } }) }];
+     // fallback = healthy 200 (the mock's default)
+     const res = await postRoute(SHOPVISION_AD);
+     const data = (await res.json()) as { extract: { company: string }; reused: boolean };
+     expect(res.status).toBe(200);
+     expect(data.extract.company).toBe("ShopVision Digital GmbH");
+     expect(requests).toHaveLength(2); // blip + successful retry
+     // The retry re-sends the SAME prompt (it is NOT the JSON nudge).
+     const first = requests[0].body?.messages as Array<{ content: string }>;
+     const second = requests[1].body?.messages as Array<{ content: string }>;
+     expect(second.map((m) => m.content)).toEqual(first.map((m) => m.content));
+     expect(completeFeatureOp).toHaveBeenCalledTimes(1); // charged exactly once
+     expect(releaseFeatureOp).not.toHaveBeenCalled();
+   });
+
+   it("a single connection-drop (network error) is retried in-flight: the operation SUCCEEDS", async () => {
+     queue = [{ networkError: true }];
+     const res = await postRoute(SHOPVISION_AD);
+     expect(res.status).toBe(200);
+     expect(requests).toHaveLength(2);
+     expect(completeFeatureOp).toHaveBeenCalledTimes(1);
+     expect(releaseFeatureOp).not.toHaveBeenCalled();
+   });
+
+   it("a PERSISTENT 503 (retry also fails) still reports provider_unavailable — after exactly 2 calls", async () => {
+     fallback = { status: 503, body: JSON.stringify({ error: { message: "upstream unavailable" } }) };
+     const res = await postRoute(SHOPVISION_AD);
+     const data = await res.json();
+     expect(res.status).toBe(503);
+     expect(data.code).toBe("provider_unavailable");
+     expect(data.retryable).toBe(true);
+     expect(requests).toHaveLength(2); // one bounded retry, then give up
+     expect(releaseFeatureOp).toHaveBeenCalledTimes(1); // never charged
+   });
+
+   it("a NON-retryable fault (401 auth) is NOT retried in-flight — exactly 1 call", async () => {
+     fallback = { status: 401, body: JSON.stringify({ error: { message: "Invalid API key" } }) };
+     const res = await postRoute(SHOPVISION_AD);
+     const data = await res.json();
+     expect(res.status).toBe(502);
+     expect(data.code).toBe("provider_auth");
+     expect(requests).toHaveLength(1);
+   });
+
+   it("provider 429 THROTTLING is NOT retried in-flight (the provider asked for back-off) — exactly 1 call", async () => {
+     fallback = { status: 429, body: JSON.stringify({ error: { message: "Rate limit reached" } }) };
+     const res = await postRoute(SHOPVISION_AD);
+     const data = await res.json();
+     expect(res.status).toBe(429);
+     expect(data.code).toBe("provider_rate_limited");
+     expect(requests).toHaveLength(1);
+   });
+
+   it("the retry decision covers EXACTLY the fast-failing transient faults (classification table)", async () => {
+     const { shouldRetryInFlight } = await import("@/app/api/auto-bewerb/analyze-ad/route");
+     const err = (code: string, retryable = true) =>
+       new AIProviderError(code as never, "msg", { retryable });
+     // In-flight retried: fast-failing transient upstream faults.
+     expect(shouldRetryInFlight(err("provider_unavailable"))).toBe(true);
+     expect(shouldRetryInFlight(err("provider_network"))).toBe(true);
+     expect(shouldRetryInFlight(err("provider_invalid_response"))).toBe(true);
+     // NOT retried in-flight:
+     expect(shouldRetryInFlight(err("provider_timeout"))).toBe(false); // 120 s budget — re-running doubles latency
+     expect(shouldRetryInFlight(err("provider_rate_limited"))).toBe(false); // provider asked for back-off
+     expect(shouldRetryInFlight(err("provider_auth", false))).toBe(false); // a retry cannot fix credentials
+     expect(shouldRetryInFlight(err("provider_quota", false))).toBe(false);
+     expect(shouldRetryInFlight(err("provider_request_rejected", false))).toBe(false);
+     expect(shouldRetryInFlight(err("provider_not_configured", false))).toBe(false);
+     // Non-provider errors are never retried in-flight.
+     expect(shouldRetryInFlight(new Error("something else"))).toBe(false);
+     expect(shouldRetryInFlight(undefined)).toBe(false);
+   });
+
+   it("call budget: transient blip + two invalid-JSON answers = exactly 3 provider calls, then invalid_ai_output", async () => {
+     const invalid = {
+       status: 200,
+       body: JSON.stringify({ choices: [{ message: { content: "Kein JSON, nur Prosa." } }] }),
+     };
+     queue = [
+       { status: 503, body: JSON.stringify({ error: { message: "blip" } }) },
+       invalid, // the transient retry answers with broken JSON
+       invalid, // the JSON nudge also fails
+     ];
+     const res = await postRoute(SHOPVISION_AD);
+     const data = await res.json();
+     expect(res.status).toBe(502);
+     expect(data.code).toBe("invalid_ai_output");
+     expect(requests).toHaveLength(3); // 1 blip + 1 transient retry + 1 nudge
+     expect(releaseFeatureOp).toHaveBeenCalledTimes(1);
+   });
+
+   it("single-flight: two CONCURRENT identical requests share the in-flight retry (2 calls, both succeed)", async () => {
+     queue = [
+       { status: 503, body: JSON.stringify({ error: { message: "blip" } }), delayMs: 100 },
+     ];
+     const [a, b] = await Promise.all([postRoute(SHOPVISION_AD), postRoute(SHOPVISION_AD)]);
+     expect(a.status).toBe(200);
+     expect(b.status).toBe(200);
+     expect(requests).toHaveLength(2); // ONE blip + ONE shared retry — not 4
+     expect(completeFeatureOp).toHaveBeenCalledTimes(2); // each own reservation settled
+     expect(releaseFeatureOp).not.toHaveBeenCalled();
+   });
+ });
+
+ // ---------------------------------------------------------------------------
+ // 13. single-flight (duplicate-request protection) — even on failure
+ // ---------------------------------------------------------------------------
 describe("single-flight", () => {
-  it("two CONCURRENT identical requests share ONE provider call when it fails", async () => {
+  it("two CONCURRENT identical requests share ONE failed operation (including its in-flight retry) when it fails", async () => {
     fallback = { status: 503, body: JSON.stringify({ error: { message: "down" } }), delayMs: 250 };
     const [a, b] = await Promise.all([postRoute(SHOPVISION_AD), postRoute(SHOPVISION_AD)]);
     const da = await a.json();
@@ -551,7 +676,7 @@ describe("single-flight", () => {
     expect(b.status).toBe(503);
     expect(da.code).toBe("provider_unavailable");
     expect(db.code).toBe("provider_unavailable");
-    expect(requests).toHaveLength(1); // ONE paid call, not two
+    expect(requests).toHaveLength(2); // ONE shared blip + ONE shared retry — never 2+2
     expect(releaseFeatureOp).toHaveBeenCalledTimes(2); // each own reservation refunded
   });
 });
