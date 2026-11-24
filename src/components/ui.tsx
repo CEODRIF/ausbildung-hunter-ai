@@ -183,11 +183,25 @@ type ModalProps = {
    *  must build their own `flex-1 min-h-0` chain with an
    *  `overflow-y-auto` body so the content scrolls INSIDE the dialog.
    *  "wide" = document-preview workspace: ~80vw (max 1200px) × up to
-   *  90vh, flex column so a viewer can fill the remaining height. */
-  size?: "md" | "form" | "wide";
+   *  90vh, flex column so a viewer can fill the remaining height.
+   *  "sheet" = confirmation dialog with tall variable content (e.g. a
+   *  per-recipient review list): on mobile/tablet (<lg) the card is a
+   *  flex column capped at the overlay's free area (100dvh minus the
+   *  top/bottom safe areas and the fixed bottom nav's reserved
+   *  footprint), the body scrolls INSIDE the card, and the `footer`
+   *  action row stays pinned at the card bottom (opaque bg + safe-area
+   *  padding) — the primary action can never scroll away or hide
+   *  behind the bottom nav. At lg+ it renders EXACTLY like "md"
+   *  (desktop design unchanged; the bottom nav does not exist there).
+   *  Same geometric contract as the cover-letter AI modal and the
+   *  applications confirm dialog (see tests/cover-letter-ai-modal-mobile.test.tsx). */
+  size?: "md" | "form" | "wide" | "sheet";
+  /** Pinned action row for `size="sheet"` (rendered OUTSIDE the
+   *  scrollable body). Ignored by the other sizes. */
+  footer?: ReactNode;
 };
 
-export function Modal({ open, onClose, title, children, size = "md" }: ModalProps) {
+export function Modal({ open, onClose, title, children, size = "md", footer }: ModalProps) {
   const { t } = useI18n();
   useEffect(() => {
     if (!open) return;
@@ -204,9 +218,25 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
   if (!open) return null;
   const wide = size === "wide";
   const form = size === "form";
+  const sheet = size === "sheet";
   return (
     <div
-      className={wide ? "fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-5" : form ? "fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5" : "fixed inset-0 z-50 flex items-center justify-center p-4"}
+      className={
+        wide
+          ? "fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-5"
+          : form
+            ? "fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5"
+            : sheet
+              ? /* The fixed glass bottom nav (app-shell, z-30 `lg:hidden`) PAINTS
+                 above this overlay — the shell content wrapper is a `relative z-10`
+                 stacking context that traps the overlay's z-50 — so the contract is
+                 GEOMETRIC, not z-index: below `lg` reserve the nav's full footprint
+                 (+ margin) via bottom padding, the iOS home-indicator inset via the
+                 env() terms, and restore plain `p-4` at `lg` (no nav on desktop →
+                 desktop layout unchanged). */
+                "fixed inset-0 z-50 flex items-center justify-center p-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-[calc(6rem+env(safe-area-inset-bottom))] lg:p-4"
+              : "fixed inset-0 z-50 flex items-center justify-center p-4"
+      }
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -222,10 +252,25 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
             ? "relative z-10 flex max-h-[94vh] w-[96vw] max-w-[1200px] flex-col overflow-hidden rounded-2xl border border-line bg-surface p-3 shadow-2xl sm:max-h-[90vh] sm:w-[82vw] sm:p-4"
             : form
               ? "relative z-10 flex max-h-[90vh] supports-[height:100dvh]:max-h-[90dvh] w-[94vw] flex-col overflow-hidden rounded-2xl border border-line bg-surface p-4 shadow-2xl sm:w-[90vw] sm:max-w-3xl sm:p-5"
-              : "relative z-10 w-full max-w-md rounded-2xl border border-line bg-surface p-5 shadow-2xl"
+              : sheet
+                ? /* Flex column capped at the overlay's free area (`min(100%, …)`
+                   re-bounds when iOS Safari shrinks the layout viewport under the
+                   keyboard; dvh cap where supported, vh fallback). Below `lg` the
+                   card can never extend past the safe area or into the bottom nav.
+                   At `lg` it becomes exactly the "md" card. */
+                  "relative z-10 flex w-full max-w-md flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl max-h-[min(100%,calc(100vh_-_2.5rem))] supports-[height:100dvh]:max-h-[min(100%,calc(100dvh_-_2.5rem))] lg:max-h-none lg:p-5"
+                : "relative z-10 w-full max-w-md rounded-2xl border border-line bg-surface p-5 shadow-2xl"
         }
       >
-        <div className={wide || form ? "mb-3 flex shrink-0 items-center justify-between gap-4" : "mb-4 flex items-start justify-between gap-4"}>
+        <div
+          className={
+            wide || form
+              ? "mb-3 flex shrink-0 items-center justify-between gap-4"
+              : sheet
+                ? "mb-0 flex shrink-0 items-start justify-between gap-4 p-4 pb-3 lg:mb-4 lg:p-0"
+                : "mb-4 flex items-start justify-between gap-4"
+          }
+        >
           <h2 className={wide || form ? "min-w-0 truncate text-base font-bold text-ink sm:text-lg" : "text-lg font-bold text-ink"}>{title}</h2>
           <button
             className="shrink-0 rounded-lg p-1.5 text-faint hover:bg-surface-2 hover:text-ink"
@@ -235,7 +280,20 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
             <CloseIcon />
           </button>
         </div>
-        {children}
+        {sheet ? (
+          <>
+            {/* Body scrolls INSIDE the card (single scroll region); the footer
+                below is a stable sibling, never part of the scroll. */}
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 lg:overflow-visible lg:p-0">{children}</div>
+            {footer && (
+              <div className="shrink-0 border-t border-line/70 bg-surface/95 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur-sm lg:border-0 lg:bg-transparent lg:px-0 lg:pb-0 lg:pt-5 lg:backdrop-blur-none">
+                {footer}
+              </div>
+            )}
+          </>
+        ) : (
+          children
+        )}
       </div>
     </div>
   );
